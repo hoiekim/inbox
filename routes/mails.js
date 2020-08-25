@@ -31,7 +31,7 @@ obj.getMails = async (req, res) => {
     "recieved GET request to /api/mails/:account",
     req.ip,
     "at",
-    new date(date.now())
+    new Date(Date.now())
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   const mails = await db.getMails(req.params.account);
@@ -43,7 +43,7 @@ obj.deleteMail = async (req, res) => {
     "recieved DELETE request to /api/mails/:id",
     req.ip,
     "at",
-    new date(date.now())
+    new Date(Date.now())
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   const result = db.deleteMail(req.params.id);
