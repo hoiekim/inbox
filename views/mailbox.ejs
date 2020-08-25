@@ -1,0 +1,102 @@
+<%- include('./partials/head') %>
+
+<body>
+  <h1>Mailbox </h1>
+  <button class="logout">Logout</button>
+  <div class="container"></div>
+</body>
+
+<script>
+  const logout = document.querySelector(".logout")
+  logout.addEventListener("click", () => {
+    fetch("/admin", { method: "DELETE" }).then((r) => {
+      location.href = "/"
+    })
+  })
+  const container = document.querySelector(".container")
+  fetch("/api/accounts").then(r => r.json()).then((r) => {
+    r.forEach((account, i) => {
+      const mailgroup = document.createElement("div")
+      container.append(mailgroup)
+      const mailgroup_head = document.createElement("h3")
+      mailgroup.append(mailgroup_head)
+      mailgroup_head.classList.add("header")
+      mailgroup_head.innerText = account
+      const mailgroup_body = document.createElement("div")
+      mailgroup_body.classList.add("hide", "mailbody")
+      mailgroup.append(mailgroup_body)
+      mailgroup_head.addEventListener("click", () => {
+        if (mailgroup_body.classList.contains("hide")) {
+          document.querySelectorAll(".mailbody").forEach((e) => {
+            e.classList.add("hide")
+          })
+          mailgroup_body.classList.remove("hide")
+          return
+        }
+        mailgroup_body.classList.add("hide")
+      })
+      fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
+        r.forEach((e, j) => {
+          const element = document.createElement("blockquote")
+          element.classList.add("mailcard")
+          mailgroup_body.prepend(element)
+          const header = document.createElement("div")
+          header.classList.add("header")
+          header.innerHTML = `
+	    <p class="mailcard-date content">${new Date(e.date)}</p>
+            <p class="mailcard-from content">${e.envelopeFrom.address}</p>
+            <p class="mailcard-subject content">${e.subject}</p>
+          `
+          element.append(header)
+          const text = document.createElement("iframe")
+          text.classList.add("hide", "text")
+          text.srcdoc = `<div style="font-family: Arial, Helvetica, sans-serif; background-color: #EBEBEB; color: #505050; padding: 1rem;">${e.html}</div>`
+          element.append(text)
+          header.addEventListener("click", () => {
+            if (text.classList.contains("hide")) {
+              document.querySelectorAll(".text").forEach((e) => {
+                e.classList.add("hide")
+              })
+              text.classList.remove("hide")
+              text.style.height = (text.contentWindow.document.body.scrollHeight+100) + 'px';
+              return
+            }
+            text.classList.add("hide")
+          })
+        })
+      })
+    })
+  })
+</script>
+
+<%- include('./partials/style') %>
+
+<style>
+  iframe {
+    box-sizing: border-box;
+    width: 100%;
+    overflow: hidden;
+    border: none;
+    overflow-x: scroll;
+    margin-top: 1rem;
+  }
+
+  .logout {
+    position: absolute;
+    top: 2rem;
+    right: 1rem;
+  }
+  .content {
+    margin: 0;
+  }
+  .header {
+    cursor: pointer;
+  }
+  .hide {
+    display: none;
+  }
+  .mailcard-from {
+    margin-top: 1rem;
+  }
+</style>
+

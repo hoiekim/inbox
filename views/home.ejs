@@ -1,0 +1,59 @@
+<%- include('./partials/head') %>
+
+<body>
+  <h1>Mailbox Home</h1>
+  <h3>Please log in</h3>
+  <div>
+    <% if (!admin) { %>
+    <input class="adminPw" placeholder="Admin Only" type="password"/>
+    <button class="goToMailbox">Go</button>
+    <% } %>
+    <% if (admin) { %>
+    <div class="disabledInput adminPw">Admin Logged In</div>
+    <button class="goToMailbox">Go</button>
+    <button class="logout">Logout</button>
+    <% } %>
+  </div>
+</body>
+
+<script>
+  <% if (admin) { %>
+  const logout = document.querySelector(".logout")
+  logout.addEventListener("click", () => {
+    fetch("/admin", { method: "DELETE" }).then((r) => {
+      location.href = "/"
+    })
+  })
+  <% } %>
+  const adminPw = document.querySelector(".adminPw")
+  document.querySelector(".goToMailbox").addEventListener("click", () => {
+    fetch("/admin", {
+      method: "POST",
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        password: adminPw.value 
+      })
+    }).then((r) => {
+      location.href = "/mailbox"
+    })
+  })
+</script>
+
+<%- include('./partials/style') %>
+
+<style>
+  .disabledInput {
+    color: grey;
+    font-size: 0.8rem;
+    text-align: center;
+    line-height: 40px;
+    display: inline-block;
+    border: dashed 0.5px grey;
+    box-sizing: border-box;
+    border-radius: 3px;
+    height: 40px;
+    width: 200px;
+  }
+</style>
