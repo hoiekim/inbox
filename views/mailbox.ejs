@@ -2,7 +2,10 @@
 
 <body>
   <h1>Mailbox </h1>
-  <button class="logout">Logout</button>
+  <div id="buttons">
+    <button id="refresh"><i class="fas fa-sync-alt"></i> Refresh</button>
+    <button id="logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
+  </div>
   <div id="container">
     <div id="container-accounts" class="container"></div>
     <div id="container-mails" class="container"></div>
@@ -12,11 +15,14 @@
 <script src="https://kit.fontawesome.com/0472eae8e7.js"></script>
 
 <script>
-  const logout = document.querySelector(".logout")
-  logout.addEventListener("click", () => {
+  document.getElementById("logout").addEventListener("click", () => {
     fetch("/admin", { method: "DELETE" }).then((r) => {
       location.href = "/"
     })
+  })
+
+  document.getElementById("refresh").addEventListener("click", () => {
+    start()
   })
 
   const container_accounts = document.getElementById("container-accounts")
@@ -27,17 +33,26 @@
     container_accounts.append(head)
     head.classList.add("header", "tag")
     head.innerText = account.split("@")[0]
+    let working
     head.addEventListener("click", () => {
+      if (working) return
+      working = true
       document.querySelectorAll(".clicked").forEach((e) => e.classList.remove("clicked"))
       head.classList.add("clicked")
-      console.log(container_mails.style.top)
       container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
-      console.log(container_mails.style.top)
-      console.log(container_mails.offsetHeight)
-      document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-      fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
-        r.forEach(renderMail)
-      })
+      container_mails.classList.add("clipped")
+      setTimeout(() => {
+        fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
+          document.querySelectorAll(".mailcard").forEach((e) => e.remove())
+          r.forEach(renderMail)
+          container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
+          setTimeout(() => {
+            container_mails.style.top = 0
+            container_mails.classList.remove("clipped")
+            working = false
+          }, 140)
+        })
+      }, 140)
     })
   }
 
@@ -100,11 +115,13 @@
     })
   }
 
-  fetch("/api/accounts").then(r => r.json()).then((r) => {
-    r.forEach((account) => {
-      renderAccount(account)
-    })
-  })
+  const start = () => {
+    document.querySelectorAll(".tag").forEach((e) => e.remove())
+    document.querySelectorAll(".mailcard").forEach((e) => e.remove())
+    fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount))
+  }
+
+  start()
 </script>
 
 <%- include('./partials/style') %>
@@ -120,29 +137,31 @@
   }
   
   i {
-    font-size: 15px;
+    font-size: 20px;
     transition: 0.1s;
   }
-  i:hover {
-    font-size: 18px;
+  .fa-trash:hover {
+    font-size: 24px;
   }
 
-  .container {
-  }
-  #container-accounts {
-    z-index: 10;
-  }
   #container-mails {
-    z-index: 1;
     position: relative;
-    transition: 0.2s
+    transition: 150ms;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  #container-mails.clipped {
+    clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
   }
   
-  .logout {
+  #buttons {
     position: absolute;
     top: 2rem;
     right: 1rem;
   }
+  button > i {
+    font-size: 13px;
+  }
+
   .content {
     margin: 0;
   }
@@ -157,6 +176,9 @@
   .tag:hover {
     background-color: rgb(100,100,100);
   }
+  .tag:active {
+    background-color: rgb(75,75,75);
+  }
   .tag.clicked {
     background-color: rgb(100,100,100);
   }
@@ -166,8 +188,9 @@
     cursor: pointer;
   }
   .trashbox {
-    height: 20px;
-    width: 20px;
+    height: 25px;
+    width: 25px;
+    line-height: 25px;
     position: absolute;
     right: 0;
     text-align: center;
