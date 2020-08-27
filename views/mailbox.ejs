@@ -31,7 +31,7 @@
   const renderAccount = (account) => {
     const head = document.createElement("h3")
     container_accounts.append(head)
-    head.classList.add("header", "tag")
+    head.classList.add("cursor", "tag")
     head.innerText = account.split("@")[0]
     let working
     head.addEventListener("click", () => {
@@ -60,18 +60,20 @@
     const element = document.createElement("blockquote")
     element.classList.add("mailcard")
     container_mails.prepend(element)
+    const headerBox = document.createElement("div")
+    element.append(headerBox)
     const header = document.createElement("div")
-    header.classList.add("header")
+    header.classList.add("header", "cursor")
     header.innerHTML = `
       <p class="mailcard-date content">${new Date(e.date)}</p>
       <p class="mailcard-from content">${e.envelopeFrom.address}</p>
       <p class="mailcard-subject content">${e.subject}</p>
     `
-    element.append(header)
+    headerBox.append(header)
     const text = document.createElement("iframe")
     text.classList.add("hide", "text")
     text.srcdoc = `
-    <div style="font-family: Open Sans; background-color: #EBEBEB; color: #505051; padding: 1rem;">
+    <div style="padding: 1rem;">
       ${e.html}
     </div>
     <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
@@ -80,6 +82,11 @@
         margin: 0;
         overflow-y: hidden;
       }
+      * {
+        font-family: 'Open Sans';
+        font-weight: 100;
+        color: rgb(50,50,50);
+      }
     </style>
     `
     text.style.height = 0 
@@ -87,10 +94,16 @@
     header.addEventListener("click", () => {
       if (text.classList.contains("hide")) {
         document.querySelectorAll(".text").forEach((e) => {
-          e.classList.add("hide")
+          if (e === text) return
+          e.style.height = 0
+          setTimeout(() => {
+            e.classList.add("hide")
+          }, 130)
         })
-        text.classList.remove("hide")
-        text.style.height = (text.contentWindow.document.body.scrollHeight) + 'px';
+        setTimeout(() => {
+          text.classList.remove("hide")
+          text.style.height = (text.contentWindow.document.body.scrollHeight) + 'px';
+        }, 130)
         return
       }
       text.style.height = 0
@@ -98,12 +111,15 @@
         text.classList.add("hide")
       }, 130)
     })
-    const trashbox = document.createElement("div")
-    trashbox.classList.add("trashbox")
+    const actionBox = document.createElement("div")
+    actionBox.classList.add("actionBox")
+    headerBox.append(actionBox)
+    const trashBox = document.createElement("div")
+    trashBox.classList.add("trashBox")
     const trash = document.createElement("i")
-    trash.classList.add("fas", "fa-trash")
-    trashbox.prepend(trash)
-    header.prepend(trashbox)
+    trash.classList.add("fas", "fa-trash", "cursor")
+    trashBox.prepend(trash)
+    actionBox.prepend(trashBox)
     trash.addEventListener("click", () => {
       event.stopPropagation()
       const sure = confirm("Do you want to delete this mail?")
@@ -128,6 +144,7 @@
 
 <style>
   iframe {
+    background-color: rgb(230,230,230);
     box-sizing: border-box;
     width: 100%;
     border: none;
@@ -170,32 +187,44 @@
     padding: 0.5rem;
     margin-right: 1rem;
     border-radius: 5px;
-    background-color: rgb(150,150,150);
+    background-color: rgb(100,100,100);
     color: white;
   }
   .tag:hover {
-    background-color: rgb(100,100,100);
+    background-color: rgb(80,80,80);
   }
   .tag:active {
-    background-color: rgb(75,75,75);
+    background-color: rgb(60,60,60);
   }
   .tag.clicked {
-    background-color: rgb(100,100,100);
+    background-color: rgb(70,70,70);
   }
 
-  .header {
+  .headerBox {
     position: relative;
-    cursor: pointer;
   }
-  .trashbox {
+  .actionBox {
+    position: absolute;
+    display: inline-block;
+    width: 2rem;
+    text-align: center;
+    right: 1rem;
+  }
+  .header {
+    display: inline-block;
+    width: calc(100% - 2.5rem);
+  }
+  .trashBox {
+    margin: auto;
     height: 25px;
     width: 25px;
     line-height: 25px;
-    position: absolute;
-    right: 0;
     text-align: center;
   }
 
+  .cursor {
+    cursor: pointer;
+  }
   .hide {
     display: none;
   }
