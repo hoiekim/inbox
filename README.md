@@ -19,7 +19,7 @@ sudo apt-get update && sudo apt-get install elasticsearch
 xpack.security.enabled: true
 ```
 2. Setup user passwords by running `/usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto`
-3. Note the password for the user `elastic`. This will be used when you connect to your Elasticsearch
+3. Save the password for the user `elastic`. This will be used when you connect to your Elasticsearch
 
 ### Start Elasticsearch
 1. Enter these commands to start Elasticsearch automatically when the system boots up
