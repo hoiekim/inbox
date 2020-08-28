@@ -2,55 +2,124 @@
 
 <body>
   <h1>Mailbox </h1>
-  <button class="logout">Logout</button>
-  <div id="container"></div>
+  <div id="buttons">
+    <button id="refresh"><i class="fas fa-sync-alt"></i> Refresh</button>
+    <button id="logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
+  </div>
+  <div id="container">
+    <div id="container-accounts" class="container"></div>
+    <div id="container-mails" class="container"></div>
+  </div>
 </body>
 
 <script src="https://kit.fontawesome.com/0472eae8e7.js"></script>
 
 <script>
-  const logout = document.querySelector(".logout")
-  logout.addEventListener("click", () => {
+  document.getElementById("logout").addEventListener("click", () => {
     fetch("/admin", { method: "DELETE" }).then((r) => {
       location.href = "/"
     })
   })
 
-  const container = document.getElementById("container")
+  document.getElementById("refresh").addEventListener("click", () => {
+    start()
+  })
 
-  const renderMail = (e, div) => {
+  const container_accounts = document.getElementById("container-accounts")
+  const container_mails = document.getElementById("container-mails")
+
+  const renderAccount = (account) => {
+    const head = document.createElement("h3")
+    container_accounts.append(head)
+    head.classList.add("cursor", "tag")
+    head.innerText = account.split("@")[0]
+    let working
+    head.addEventListener("click", () => {
+      if (working) return
+      working = true
+      document.querySelectorAll(".clicked").forEach((e) => e.classList.remove("clicked"))
+      head.classList.add("clicked")
+      container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
+      container_mails.classList.add("clipped")
+      setTimeout(() => {
+        fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
+          document.querySelectorAll(".mailcard").forEach((e) => e.remove())
+          r.forEach(renderMail)
+          container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
+          setTimeout(() => {
+            container_mails.style.top = 0
+            container_mails.classList.remove("clipped")
+            working = false
+          }, 140)
+        })
+      }, 140)
+    })
+  }
+
+  const renderMail = (e) => {
     const element = document.createElement("blockquote")
     element.classList.add("mailcard")
-    div.prepend(element)
+    container_mails.prepend(element)
+    const headerBox = document.createElement("div")
+    element.append(headerBox)
     const header = document.createElement("div")
-    header.classList.add("header")
+    header.classList.add("header", "cursor")
     header.innerHTML = `
       <p class="mailcard-date content">${new Date(e.date)}</p>
       <p class="mailcard-from content">${e.envelopeFrom.address}</p>
       <p class="mailcard-subject content">${e.subject}</p>
     `
-    element.append(header)
+    headerBox.append(header)
     const text = document.createElement("iframe")
     text.classList.add("hide", "text")
-    text.srcdoc = `<div style="font-family: Open Sans; background-color: #EBEBEB; color: #505050; padding: 1rem;">${e.html}<link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet"></div>` 
+    text.srcdoc = `
+    <div style="padding: 1rem;">
+      ${e.html}
+    </div>
+    <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
+    <style>
+      body {
+        margin: 0;
+        overflow-y: hidden;
+      }
+      * {
+        font-family: 'Open Sans';
+        font-weight: 100;
+        color: rgb(50,50,50);
+      }
+    </style>
+    `
+    text.style.height = 0 
     element.append(text)
     header.addEventListener("click", () => {
       if (text.classList.contains("hide")) {
         document.querySelectorAll(".text").forEach((e) => {
-          e.classList.add("hide")
+          if (e === text) return
+          e.style.height = 0
+          setTimeout(() => {
+            e.classList.add("hide")
+          }, 130)
         })
-        text.classList.remove("hide")
-        text.style.height = (text.contentWindow.document.body.scrollHeight) + 'px';
+        setTimeout(() => {
+          text.classList.remove("hide")
+          text.style.height = (text.contentWindow.document.body.scrollHeight) + 'px';
+        }, 130)
         return
       }
-      text.classList.add("hide")
+      text.style.height = 0
+      setTimeout(() => {
+        text.classList.add("hide")
+      }, 130)
     })
-    const trashbox = document.createElement("div")
-    trashbox.classList.add("trashbox")
+    const actionBox = document.createElement("div")
+    actionBox.classList.add("actionBox")
+    headerBox.append(actionBox)
+    const trashBox = document.createElement("div")
+    trashBox.classList.add("trashBox")
     const trash = document.createElement("i")
-    trash.classList.add("fas", "fa-trash")
-    trashbox.prepend(trash)
-    header.prepend(trashbox)
+    trash.classList.add("fas", "fa-trash", "cursor")
+    trashBox.prepend(trash)
+    actionBox.prepend(trashBox)
     trash.addEventListener("click", () => {
       event.stopPropagation()
       const sure = confirm("Do you want to delete this mail?")
@@ -62,76 +131,100 @@
     })
   }
 
-  fetch("/api/accounts").then(r => r.json()).then((r) => {
-    r.forEach((account, i) => {
-      const mailgroup = document.createElement("div")
-      container.append(mailgroup)
-      const mailgroup_head = document.createElement("h3")
-      mailgroup.append(mailgroup_head)
-      mailgroup_head.classList.add("header")
-      mailgroup_head.innerText = account
-      const mailgroup_body = document.createElement("div")
-      mailgroup_body.classList.add("hide", "mailbody")
-      mailgroup.append(mailgroup_body)
-      mailgroup_head.addEventListener("click", () => {
-        if (mailgroup_body.classList.contains("hide")) {
-          document.querySelectorAll(".mailbody").forEach((e) => {
-            e.classList.add("hide")
-          })
-          mailgroup_body.classList.remove("hide")
-          return
-        }
-        mailgroup_body.classList.add("hide")
-      })
-      fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
-        r.forEach((e, j) => {
-          if (i === 0 && j === 0) console.log(e)
-          renderMail(e, mailgroup_body)
-        })
-      })
-    })
-  })
+  const start = () => {
+    document.querySelectorAll(".tag").forEach((e) => e.remove())
+    document.querySelectorAll(".mailcard").forEach((e) => e.remove())
+    fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount))
+  }
+
+  start()
 </script>
 
 <%- include('./partials/style') %>
 
 <style>
   iframe {
+    background-color: rgb(230,230,230);
     box-sizing: border-box;
     width: 100%;
-    overflow-y: hidden;
     border: none;
     overflow-x: scroll;
     margin-top: 1rem;
-  }
-  i {
-    font-size: 15px;
-    transition: 0.1s;
-  }
-  i:hover {
-    font-size: 18px;
+    transition: 0.2s;
   }
   
-  .logout {
+  i {
+    font-size: 20px;
+    transition: 0.1s;
+  }
+  .fa-trash:hover {
+    font-size: 24px;
+  }
+
+  #container-mails {
+    position: relative;
+    transition: 150ms;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  #container-mails.clipped {
+    clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+  }
+  
+  #buttons {
     position: absolute;
     top: 2rem;
     right: 1rem;
   }
+  button > i {
+    font-size: 13px;
+  }
+
   .content {
     margin: 0;
   }
-  .header {
-    position: relative;
-    cursor: pointer;
+  .tag {
+    display: inline-block;
+    padding: 0.5rem;
+    margin-right: 1rem;
+    border-radius: 5px;
+    background-color: rgb(100,100,100);
+    color: white;
   }
-  .trashbox {
-    height: 20px;
-    width: 20px;
+  .tag:hover {
+    background-color: rgb(80,80,80);
+  }
+  .tag:active {
+    background-color: rgb(60,60,60);
+  }
+  .tag.clicked {
+    background-color: rgb(70,70,70);
+  }
+
+  .headerBox {
+    position: relative;
+  }
+  .actionBox {
     position: absolute;
-    right: 0;
+    display: inline-block;
+    width: 2rem;
+    text-align: center;
+    right: 1rem;
+  }
+  .header {
+    display: inline-block;
+    width: calc(100% - 2.5rem);
+  }
+  .trashBox {
+    margin: auto;
+    height: 25px;
+    width: 25px;
+    line-height: 25px;
     text-align: center;
   }
 
+  .cursor {
+    cursor: pointer;
+  }
   .hide {
     display: none;
   }
