@@ -48,7 +48,8 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ADMIN_PW= <password that will be used to login to Inbox>
     ELASTIC= <password for elasticsearch that you saved in previous step>
     ```
-3. Run the app
+3. Install necassary packages: `npm i`
+4. Run the app
     ```
     node index.js
     ```
