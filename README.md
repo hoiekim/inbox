@@ -68,7 +68,7 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
     node index.js
     ```
-
+    * Default port number is 3004. So you can connect to inbox at http://(your server ip):3004
 
 # Mail App Mockup
 * You can see current version [HERE](https://mail.hoie.kim)
