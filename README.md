@@ -49,10 +49,17 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ELASTIC=...    // Password for elasticsearch that you saved in previous step
     ```
 3. Install necassary packages: `npm i`
-4. Run the app
+
+### Initialize Database & Run
+1. Run `init.js` file.
+    * When you run this file, it will initialize your elasticsearch database.
+    * Which means it clear all data of mails index, and create it with mapped keys.
+    * This will allow you to search the mail receiver's email address in elasticsearch.
+2. Run the app
     ```
     node index.js
     ```
+
 
 # Mail App Mockup
 * You can see current version [HERE](https://mail.hoie.kim)
