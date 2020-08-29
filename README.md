@@ -33,8 +33,14 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
     xpack.security.enabled: true
     ```
-2. Since your configuration changed, restart elastice search: `sudo systemctl restart elasticsearch.service`
-3. Setup user passwords by running `sudo /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto`
+2. Since your configuration changed, restart elastice search using this command
+    ```
+    sudo systemctl restart elasticsearch.service
+    ```
+3. Setup user passwords by running
+    ```
+    sudo /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto
+    ```
 4. Save the password for the user `elastic`. This will be used when you connect to your Elasticsearch
 
 ### Install Inbox
