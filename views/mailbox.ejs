@@ -3,6 +3,7 @@
 <body>
   <h1>Mailbox </h1>
   <div id="buttons">
+    <button id="write"><i class="fas fa-pen"></i> New Mail</button>
     <button id="refresh"><i class="fas fa-sync-alt"></i> Refresh</button>
     <button id="logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
   </div>
@@ -34,24 +35,37 @@
     head.classList.add("cursor", "tag")
     head.innerText = account.split("@")[0]
     let working
+    let data
     head.addEventListener("click", () => {
+      if (head.classList.contains("clicked")) return
       if (working) return
       working = true
-      document.querySelectorAll(".clicked").forEach((e) => e.classList.remove("clicked"))
+      document.querySelectorAll(".clicked").forEach((e) => {
+        e.classList.remove("clicked")
+        e.classList.add("cursor")
+      })
       head.classList.add("clicked")
+      head.classList.remove("cursor")
       container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
       container_mails.classList.add("clipped")
+      const showMails = (r) => {
+        data = r
+        document.querySelectorAll(".mailcard").forEach((e) => e.remove())
+        r.forEach(renderMail)
+        container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
+        setTimeout(() => {
+          container_mails.style.top = 0
+          container_mails.classList.remove("clipped")
+          working = false
+        }, 140)
+      }
       setTimeout(() => {
-        fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
-          document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-          r.forEach(renderMail)
-          container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
-          setTimeout(() => {
-            container_mails.style.top = 0
-            container_mails.classList.remove("clipped")
-            working = false
-          }, 140)
-        })
+        if (!data) {
+          return fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
+            showMails(r)
+          })
+        }
+        showMails(data)
       }, 140)
     })
   }
@@ -66,7 +80,7 @@
     header.classList.add("header", "cursor")
     header.innerHTML = `
       <p class="mailcard-date content">${new Date(e.date)}</p>
-      <p class="mailcard-from content">${e.envelopeFrom.address}</p>
+      <p class="mailcard-from content">${e.from.text.replace("<", "&lt;").replace(">", "&gt;")}</p>
       <p class="mailcard-subject content">${e.subject}</p>
     `
     headerBox.append(header)
@@ -115,7 +129,7 @@
     actionBox.classList.add("actionBox")
     headerBox.append(actionBox)
     const trashBox = document.createElement("div")
-    trashBox.classList.add("trashBox")
+    trashBox.classList.add("iconBox")
     const trash = document.createElement("i")
     trash.classList.add("fas", "fa-trash", "cursor")
     trashBox.prepend(trash)
@@ -129,6 +143,13 @@
         })
       }
     })
+    const replyBox = document.createElement("div")
+    replyBox.classList.add("iconBox")
+    const reply = document.createElement("i")
+    reply.classList.add("fas", "fa-reply", "cursor")
+    replyBox.prepend(reply)
+    actionBox.prepend(replyBox)
+    reply.addEventListener("click", () => {})
   }
 
   const start = () => {
@@ -157,7 +178,7 @@
     font-size: 20px;
     transition: 0.1s;
   }
-  .fa-trash:hover {
+  i.cursor:hover {
     font-size: 24px;
   }
 
@@ -172,11 +193,11 @@
   
   #buttons {
     position: absolute;
-    top: 2rem;
+    top: 2.5rem;
     right: 1rem;
   }
   button > i {
-    font-size: 13px;
+    font-size: 10px;
   }
 
   .content {
@@ -214,15 +235,16 @@
     display: inline-block;
     width: calc(100% - 2.5rem);
   }
-  .trashBox {
+  .iconBox {
     margin: auto;
+    margin-bottom: 1rem;
     height: 25px;
     width: 25px;
     line-height: 25px;
     text-align: center;
   }
 
-  .cursor {
+  .cursor, .cursor > * {
     cursor: pointer;
   }
   .hide {
