@@ -5,28 +5,31 @@
   <h3>Please log in</h3>
   <div>
     <% if (!admin) { %>
-    <input class="adminPw" placeholder="Admin Only" type="password"/>
-    <button class="goToMailbox">Go</button>
+    <input id="adminPw" placeholder="Admin Only" type="password"/>
+    <button id="login">Login</button>
     <% } %>
     <% if (admin) { %>
-    <div class="disabledInput adminPw">Admin Logged In</div>
-    <button class="goToMailbox">Go</button>
-    <button class="logout">Logout</button>
+    <div class="disabledInput">Admin Logged In</div>
+    <button id="goToMailbox">Go</button>
+    <button id="logout">Logout</button>
     <% } %>
   </div>
 </body>
 
 <script>
   <% if (admin) { %>
-  const logout = document.querySelector(".logout")
-  logout.addEventListener("click", () => {
+  const logout = document.getElementById("logout").addEventListener("click", () => {
     fetch("/admin", { method: "DELETE" }).then((r) => {
       location.href = "/"
     })
   })
+  document.getElementById("goToMailbox").addEventListener("click", () => {
+    location.href = "/mailbox"
+  })
   <% } %>
-  const adminPw = document.querySelector(".adminPw")
-  document.querySelector(".goToMailbox").addEventListener("click", () => {
+  <% if (!admin) { %>
+  const adminPw = document.getElementById("adminPw")
+  document.getElementById("login").addEventListener("click", () => {
     fetch("/admin", {
       method: "POST",
       headers: {
@@ -36,9 +39,10 @@
         password: adminPw.value 
       })
     }).then((r) => {
-      location.href = "/mailbox"
+      location.href = "/"
     })
   })
+  <% } %>
 </script>
 
 <%- include('./partials/style') %>
@@ -48,12 +52,12 @@
     color: grey;
     font-size: 0.8rem;
     text-align: center;
-    line-height: 40px;
+    line-height: 30px;
     display: inline-block;
     border: dashed 0.5px grey;
     box-sizing: border-box;
     border-radius: 3px;
-    height: 40px;
+    height: 30px;
     width: 200px;
   }
 </style>
