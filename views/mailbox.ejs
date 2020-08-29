@@ -34,6 +34,14 @@
     container_accounts.append(head)
     head.classList.add("cursor", "tag")
     head.innerText = account.split("@")[0]
+    fetch(`/api/unreadNo/${account}`).then(r => r.json()).then((r) => {
+      if (r) {
+        const number = document.createElement("div")
+        number.classList.add("numberBall")
+        number.innerText = r
+        head.append(number)
+      }
+    })
     let working
     let data
     head.addEventListener("click", () => {
@@ -107,6 +115,7 @@
     element.append(text)
     header.addEventListener("click", () => {
       if (text.classList.contains("hide")) {
+        if (!e.read) fetch(`/api/markRead/${e.id}`)
         document.querySelectorAll(".text").forEach((e) => {
           if (e === text) return
           e.style.height = 0
@@ -204,6 +213,7 @@
     margin: 0;
   }
   .tag {
+    position: relative;
     display: inline-block;
     padding: 0.5rem;
     margin-right: 1rem;
@@ -219,6 +229,21 @@
   }
   .tag.clicked {
     background-color: rgb(70,70,70);
+  }
+  .numberBall {
+    position: absolute;
+    top: -5px;
+    right: -10px;
+    font-size: 16px;
+    display: inline-block;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-bottom: 1px;
+    text-align: center;
+    line-height: 19px;
+    border-radius: 10px;
+    background-color: rgb(200,20,20);
+    color: white; 
   }
 
   .headerBox {
