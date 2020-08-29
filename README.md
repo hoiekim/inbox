@@ -58,6 +58,9 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
 
 ### Initialize Database & Run
 1. Run `init.js` file.
+    ```
+    node init.js
+    ```
     * When you run this file, it will initialize your elasticsearch database.
     * Which means it clear all data of mails index, and create it with mapped keys.
     * This will allow you to search the mail receiver's email address in elasticsearch.
