@@ -33,8 +33,14 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
     xpack.security.enabled: true
     ```
-2. Since your configuration changed, restart elastice search: `sudo systemctl restart elasticsearch.service`
-3. Setup user passwords by running `sudo /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto`
+2. Since your configuration changed, restart elastice search using this command
+    ```
+    sudo systemctl restart elasticsearch.service
+    ```
+3. Setup user passwords by running
+    ```
+    sudo /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto
+    ```
 4. Save the password for the user `elastic`. This will be used when you connect to your Elasticsearch
 
 ### Install Inbox
@@ -52,6 +58,9 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
 
 ### Initialize Database & Run
 1. Run `init.js` file.
+    ```
+    node init.js
+    ```
     * When you run this file, it will initialize your elasticsearch database.
     * Which means it clear all data of mails index, and create it with mapped keys.
     * This will allow you to search the mail receiver's email address in elasticsearch.
@@ -59,7 +68,7 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
     node index.js
     ```
-
+    * Default port number is 3004. So you can connect to inbox at http://(your server ip):3004
 
 # Mail App Mockup
 * You can see current version [HERE](https://mail.hoie.kim)
