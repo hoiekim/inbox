@@ -34,9 +34,9 @@
     container_accounts.append(head)
     head.classList.add("cursor", "tag")
     head.innerText = account.split("@")[0]
+    const number = document.createElement("div")
     fetch(`/api/unreadNo/${account}`).then(r => r.json()).then((r) => {
       if (r) {
-        const number = document.createElement("div")
         number.classList.add("numberBall")
         number.innerText = r
         head.append(number)
@@ -59,7 +59,7 @@
       const showMails = (r) => {
         data = r
         document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-        r.forEach(renderMail)
+        r.forEach((e) => { renderMail(e, number) })
         container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
         setTimeout(() => {
           container_mails.style.top = 0
@@ -78,9 +78,10 @@
     })
   }
 
-  const renderMail = (e) => {
+  const renderMail = (e, number) => {
     const element = document.createElement("blockquote")
     element.classList.add("mailcard")
+    if (!e.read) element.classList.add("unread")
     container_mails.prepend(element)
     const headerBox = document.createElement("div")
     element.append(headerBox)
@@ -115,7 +116,13 @@
     element.append(text)
     header.addEventListener("click", () => {
       if (text.classList.contains("hide")) {
-        if (!e.read) fetch(`/api/markRead/${e.id}`)
+        if (!e.read) {
+          fetch(`/api/markRead/${e.id}`).then(() => {
+            element.classList.remove("unread")
+            number.innerText -= 1
+            if (number.innerText === 0) number.remove()
+          })
+        }
         document.querySelectorAll(".text").forEach((e) => {
           if (e === text) return
           e.style.height = 0
@@ -189,6 +196,10 @@
   }
   i.cursor:hover {
     font-size: 24px;
+  }
+
+  blockquote.unread {
+    border-color: rgb(200,20,20);
   }
 
   #container-mails {
