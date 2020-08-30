@@ -1,6 +1,13 @@
 # How to Setup
 If these instructions are outdated, please raise an issue or send us a Pull Request.
 
+### Setup Webhook
+1. Go to [m8l.me](https://m8l.me/), follow instruction steps
+2. In step2, setup webhook url to this.
+    ```
+    http://(your server ip)/api/mails
+    ```
+
 ### Install Elasticsearch
 This app uses Elasticsearch for database to save the email data. Refer this official site's install instruction [here](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html)
 or follow this steps. (Tested on Ubuntu)
