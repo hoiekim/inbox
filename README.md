@@ -60,6 +60,7 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     SECRET=...     // Value to encode session data. Any value works
     ADMIN_PW=...   // Password that will be used to login to Inbox
     ELASTIC=...    // Password for elasticsearch that you saved in previous step
+    ES_HOST=...    // The ip address of the computer you installed Elasticsearch. Default is http://127.0.0.1
     ```
 3. Install necassary packages: `npm i`
 
