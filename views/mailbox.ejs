@@ -117,11 +117,10 @@
     header.addEventListener("click", () => {
       if (text.classList.contains("hide")) {
         if (!e.read) {
-          fetch(`/api/markRead/${e.id}`).then(() => {
-            element.classList.remove("unread")
-            number.innerText -= 1
-            if (number.innerText === 0) number.remove()
-          })
+          fetch(`/api/markRead/${e.id}`)
+          element.classList.remove("unread")
+          number.innerText -= 1
+          if (number.innerText === "0") number.remove()
         }
         document.querySelectorAll(".text").forEach((e) => {
           if (e === text) return
