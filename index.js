@@ -30,13 +30,14 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/accounts", mails.getAccounts);
-app.post("/api/mails", mails.sendMail);
+app.post("/api/mails", mails.saveMail);
 app.get("/api/mails/:account", mails.getMails);
+app.get("/api/unreadNo/:account", mails.getUnreadNo);
+app.get("/api/markRead/:id", mails.markRead);
 app.delete("/api/mails/:id", mails.deleteMail);
 
 app.get("/mailbox", (req, res) => {
   if (req.session.admin) return res.render("mailbox");
-  console.log("Recived request to mailbox without session data");
   res.redirect("/");
 });
 
