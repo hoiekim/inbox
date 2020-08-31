@@ -5,7 +5,7 @@ If these instructions are outdated, please raise an issue or send us a Pull Requ
 1. Go to [m8l.me](https://m8l.me/), follow instruction steps
 2. In step2, setup webhook url to this.
     ```
-    http://(your server ip)/api/mails
+    http://(your server ip):3004/api/mails
     ```
 
 ### Install Elasticsearch
