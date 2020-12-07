@@ -3,7 +3,8 @@ If these instructions are outdated, please raise an issue or send us a Pull Requ
 
 ### Setup Sendmail
 In order to use this app to send mails, your server should be able to send mails and configured properly.
-Refer [this tutorial](https://github.com/garageScript/curriculum/issues/353)
+Refer [this tutorial](https://github.com/garageScript/curriculum/issues/353).
+
 If you want to use this app only for receiving mails, skip this step.
 
 ### Setup Webhook
