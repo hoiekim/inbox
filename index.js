@@ -26,7 +26,8 @@ app.use(
 app.set("view engine", "ejs");
 
 app.get("/", (req, res) => {
-  res.render("home", { admin: req.session.admin });
+  if (req.session.admin) return res.redirect("/mailbox");
+  res.render("home");
 });
 
 app.get("/api/accounts", mails.getAccounts);
