@@ -59,7 +59,10 @@
       const showMails = (r) => {
         data = r
         document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-        r.forEach((e) => { renderMail(e, { head: head, number: number }) })
+        r.forEach((e) => { 
+            console.log(e)
+            renderMail(e, { head: head, number: number })
+        })
         container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
         setTimeout(() => {
           container_mails.style.top = 0
@@ -99,10 +102,6 @@
     const text = document.createElement("iframe")
     text.classList.add("hide", "text")
     text.srcdoc = `
-    <div style="padding: 1rem;">
-      ${e.html}
-    </div>
-    <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     <style>
       body {
         margin: 0;
@@ -114,6 +113,10 @@
         color: rgb(30,30,30);
       }
     </style>
+    <div style="padding: 1rem;">
+      ${e.html}
+    </div>
+    <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     `
     text.style.height = 0 
     element.append(text)

@@ -10,7 +10,7 @@ obj.saveMail = async (req, res) => {
     "at",
     new Date(Date.now())
   );
-  await db.writeMail({ ...req.body, read: false, label: undefined });
+  await db.saveMail({ ...req.body, read: false, label: undefined });
   const envelopeTo = req.body.envelopeTo[0].address;
 };
 
@@ -72,6 +72,15 @@ obj.deleteMail = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   const result = db.deleteMail(req.params.id);
   res.json(result);
+};
+
+obj.sendMail = async (req, res) => {
+  console.log(
+    "recieved POST request to /api/send",
+    req.ip,
+    "at",
+    new Date(Date.now())
+  );
 };
 
 module.exports = obj;
