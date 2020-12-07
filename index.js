@@ -26,15 +26,18 @@ app.use(
 app.set("view engine", "ejs");
 
 app.get("/", (req, res) => {
-  res.render("home", { admin: req.session.admin });
+  if (req.session.admin) return res.redirect("/mailbox");
+  res.render("home");
 });
 
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/unreadNo/:account", mails.getUnreadNo);
 app.get("/api/markRead/:id", mails.markRead);
 app.get("/api/mails/:account", mails.getMails);
+
 app.post("/api/mails", mails.saveMail);
 app.post("/api/send", mails.sendMail);
+
 app.delete("/api/mails/:id", mails.deleteMail);
 
 app.get("/mailbox", (req, res) => {

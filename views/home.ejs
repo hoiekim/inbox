@@ -4,30 +4,12 @@
   <h1>Mailbox Home</h1>
   <h3>Please log in</h3>
   <div>
-    <% if (!admin) { %>
     <input id="adminPw" placeholder="Admin Only" type="password"/>
     <button id="login">Login</button>
-    <% } %>
-    <% if (admin) { %>
-    <div class="disabledInput">Admin Logged In</div>
-    <button id="goToMailbox">Go</button>
-    <button id="logout">Logout</button>
-    <% } %>
   </div>
 </body>
 
 <script>
-  <% if (admin) { %>
-  const logout = document.getElementById("logout").addEventListener("click", () => {
-    fetch("/admin", { method: "DELETE" }).then((r) => {
-      location.href = "/"
-    })
-  })
-  document.getElementById("goToMailbox").addEventListener("click", () => {
-    location.href = "/mailbox"
-  })
-  <% } %>
-  <% if (!admin) { %>
   const adminPw = document.getElementById("adminPw")
   document.getElementById("login").addEventListener("click", () => {
     fetch("/admin", {
@@ -42,7 +24,6 @@
       location.href = "/"
     })
   })
-  <% } %>
 </script>
 
 <%- include('./partials/style') %>
