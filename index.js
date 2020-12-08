@@ -9,6 +9,8 @@ app.use(express.json({ limit: "50mb" }));
 
 require("dotenv").config();
 
+const owner = process.env.OWNER || "My";
+
 app.use(express.json());
 app.use(
   session({
@@ -27,7 +29,7 @@ app.set("view engine", "ejs");
 
 app.get("/", (req, res) => {
   if (req.session.admin) return res.redirect("/mailbox");
-  res.render("home");
+  res.render("home", { owner: owner });
 });
 
 app.get("/api/accounts", mails.getAccounts);
@@ -41,7 +43,7 @@ app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
 app.get("/mailbox", (req, res) => {
-  if (req.session.admin) return res.render("mailbox");
+  if (req.session.admin) return res.render("mailbox", { owner: owner });
   res.redirect("/");
 });
 

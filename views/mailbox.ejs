@@ -2,8 +2,38 @@
 <%- include('./partials/style') %>
 
 <style>
+  @media (prefers-color-scheme: light) {
+    .tag {
+      background-color: rgb(200,200,200);
+      color: black;
+    }
+    .tag:hover {
+      background-color: rgb(180,180,180);
+    }
+    .tag:active {
+      background-color: rgb(160,160,160);
+    }
+    .tag.clicked {
+      background-color: rgb(170,170,170);
+    }
+  }
+  @media (prefers-color-scheme: dark) {
+    .tag {
+      background-color: rgb(100,100,100);
+      color: white;
+    }
+    .tag:hover {
+      background-color: rgb(80,80,80);
+    }
+    .tag:active {
+      background-color: rgb(60,60,60);
+    }
+    .tag.clicked {
+      background-color: rgb(70,70,70);
+    }
+  }
   iframe {
-    background-color: rgb(230,230,230);
+    background-color: white;
     box-sizing: border-box;
     width: 100%;
     border: none;
@@ -50,17 +80,6 @@
     padding: 0.5rem;
     margin-right: 1rem;
     border-radius: 5px;
-    background-color: rgb(100,100,100);
-    color: white;
-  }
-  .tag:hover {
-    background-color: rgb(80,80,80);
-  }
-  .tag:active {
-    background-color: rgb(60,60,60);
-  }
-  .tag.clicked {
-    background-color: rgb(70,70,70);
   }
   .numberBall {
     position: absolute;
@@ -142,7 +161,7 @@
 
 
 <body>
-  <h1>Hoie.Kim Mail</h1>
+  <h1><%= owner %> Mail</h1>
   <div id="buttons">
     <button id="write"><i class="fas fa-pen"></i> Write Mail</button>
     <button id="refresh"><i class="fas fa-sync-alt"></i> Get Mails</button>
@@ -202,7 +221,6 @@
         html
       })
     }).then(r => r.json())
-    console.log(result)
     if (result?.messageId) {
       alert("Your mail is sent successfully")
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
@@ -215,13 +233,15 @@
 <script>
   let writerIsShown
 
-  document.getElementById("write").addEventListener("click", () => {
+  const showWriter = () => {
     if (writerIsShown) return
     writerIsShown = true
     document.querySelectorAll(".tag").forEach((e) => e.remove())
     document.querySelectorAll(".mailcard").forEach((e) => e.remove())
     document.getElementById("container-writer").classList.remove("hide")
-  })
+  }
+
+  document.getElementById("write").addEventListener("click", showWriter)
   
   document.getElementById("logout").addEventListener("click", () => {
     fetch("/admin", { method: "DELETE" }).then((r) => {
@@ -230,7 +250,7 @@
   })
 
   document.getElementById("refresh").addEventListener("click", () => {
-    start()
+    getMails()
   })
 
   const container_accounts = document.getElementById("container-accounts")
@@ -381,10 +401,16 @@
     reply.classList.add("fas", "fa-reply", "cursor")
     replyBox.prepend(reply)
     actionBox.prepend(replyBox)
-    reply.addEventListener("click", () => {})
+    reply.addEventListener("click", () => {
+      document.getElementById("writer-from").value = e.envelopeTo[0].address.split("@")[0]
+      document.getElementById("writer-to").value = e.envelopeFrom.address
+      document.getElementById("writer-title").value = "RE: " + e.subject
+      document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + e.html
+      showWriter()
+    })
   }
 
-  const start = () => {
+  const getMails = () => {
     if (writerIsShown) {
       writerIsShown = false
       document.getElementById("container-writer").classList.add("hide")
@@ -394,5 +420,5 @@
     fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount))
   }
 
-  start()
+  getMails()
 </script>
