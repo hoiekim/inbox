@@ -1,31 +1,4 @@
 <%- include('./partials/head') %>
-
-<body>
-  <h1>Mailbox Home</h1>
-  <h3>Please log in</h3>
-  <div>
-    <input id="adminPw" placeholder="Admin Only" type="password"/>
-    <button id="login">Login</button>
-  </div>
-</body>
-
-<script>
-  const adminPw = document.getElementById("adminPw")
-  document.getElementById("login").addEventListener("click", () => {
-    fetch("/admin", {
-      method: "POST",
-      headers: {
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({
-        password: adminPw.value 
-      })
-    }).then((r) => {
-      location.href = "/"
-    })
-  })
-</script>
-
 <%- include('./partials/style') %>
 
 <style>
@@ -41,4 +14,46 @@
     height: 30px;
     width: 200px;
   }
+  #greeting {
+    text-align: center;
+    margin-top: 3rem;
+    margin-bottom: 2rem;
+  }
+  #adminPw, #login {
+    display: block;
+    margin: auto;
+    margin-top: 0.5rem;
+    width: 300px;
+  }
 </style>
+
+<body>
+  <h1>Hoie.Kim Mail</h1>
+  <h3 id="greeting">Please log in</h3>
+  <div>
+    <input id="adminPw" placeholder="Admin Only" type="password"/>
+    <button id="login">Login</button>
+  </div>
+</body>
+
+<script>
+  const adminPw = document.getElementById("adminPw")
+  const login = () => {
+    fetch("/admin", {
+      method: "POST",
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        password: adminPw.value 
+      })
+    }).then((r) => {
+      location.href = "/"
+    })
+  }
+
+  adminPw.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") login()
+  })
+  document.getElementById("login").addEventListener("click", login)
+</script>
