@@ -153,6 +153,7 @@
     display: block;
     margin: auto;
     margin-top: 1rem;
+    margin-bottom: 1rem;
     width: 200px;
     height: 40px;
     font-size: 20px;
@@ -168,7 +169,7 @@
     <button id="logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
   </div>
   <div id="container">
-    <div id="container-writer" class="container hide">
+    <blockquote id="container-writer" class="container hide">
       <div>
         <div class="fieldName">From: </div>
         <input id="writer-name" class="writer-short" placeholder="name" />
@@ -191,7 +192,7 @@
       <div>
         <button id="writer-send">Send</button>
       </div>
-    </div>
+    </blockquote>
     <div id="container-accounts" class="container"></div>
     <div id="container-mails" class="container"></div>
   </div>
@@ -234,11 +235,14 @@
   let writerIsShown
 
   const showWriter = () => {
-    if (writerIsShown) return
-    writerIsShown = true
-    document.querySelectorAll(".tag").forEach((e) => e.remove())
-    document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-    document.getElementById("container-writer").classList.remove("hide")
+    const writer = document.getElementById("container-writer")
+    if (writerIsShown) {
+      writerIsShown = false
+      writer.classList.add("hide")
+    } else {
+      writerIsShown = true
+      writer.classList.remove("hide")
+    }
   }
 
   document.getElementById("write").addEventListener("click", showWriter)
@@ -411,10 +415,6 @@
   }
 
   const getMails = () => {
-    if (writerIsShown) {
-      writerIsShown = false
-      document.getElementById("container-writer").classList.add("hide")
-    }
     document.querySelectorAll(".tag").forEach((e) => e.remove())
     document.querySelectorAll(".mailcard").forEach((e) => e.remove())
     fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount))
