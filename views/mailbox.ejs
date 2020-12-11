@@ -53,6 +53,18 @@
     border-color: rgb(200,20,20);
   }
 
+  #container {
+    position: absolute;
+    width: 100%;
+    transition: 150ms;
+  }
+  #container-writer {
+    transition: 150ms;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+  #container-writer.clipped {
+    clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+  }
   #container-mails {
     position: relative;
     transition: 150ms;
@@ -64,11 +76,15 @@
   
   #buttons {
     position: absolute;
-    top: 2.5rem;
-    right: 1rem;
+    top: 0.5rem;
+    right: 0.5rem;
   }
   button > i {
     font-size: 10px;
+  }
+  
+  .container-wrap {
+    position: relative;
   }
 
   .content {
@@ -121,6 +137,38 @@
     text-align: center;
   }
 
+  .attachmentBox {
+    margin-top: 1rem;
+    transition: 0.2s;
+  }
+  .attachment {
+    display: inline-block;
+    margin-right: 0.4rem;
+    padding: 0.4rem;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .attachment > i {
+    font-size: 14px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    .attachment {
+      background-color: rgb(200,200,200)
+    }
+    .attachment:hover {
+      background-color: rgb(180,180,180)
+    }
+  }
+  @media (prefers-color-scheme: dark) {
+    .attachment {
+      background-color: rgb(75,75,75)
+    }
+    .attachment:hover {
+      background-color: rgb(65,65,65)
+    }
+  }
+
   .cursor, .cursor > * {
     cursor: pointer;
   }
@@ -135,24 +183,23 @@
     margin-top: 0.5rem;
   }
 
-  .fieldName {
-    margin-top: 1rem;
-  }
   input.writer-short {
     width: 100px;
+    margin-bottom: 1rem;
   }
   input.writer-long {
     width: 100%;
     text-align: left;
+    margin-bottom: 1rem;
   }
   textarea.writer-fat {
     width: 100%;
     height: 500px;
+    margin-bottom: 1rem;
   }
   #writer-send {
     display: block;
     margin: auto;
-    margin-top: 1rem;
     margin-bottom: 1rem;
     width: 200px;
     height: 40px;
@@ -163,38 +210,40 @@
 
 <body>
   <h1><%= owner %> Mail</h1>
-  <div id="buttons">
-    <button id="write"><i class="fas fa-pen"></i> Write Mail</button>
-    <button id="refresh"><i class="fas fa-sync-alt"></i> Get Mails</button>
-    <button id="logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
+  <div class="container-wrap">
+    <div id="container" style="top: -855px">
+      <blockquote id="container-writer" class="container clipped">
+        <div>
+          <div class="fieldName">From: </div>
+          <input id="writer-name" class="writer-short" placeholder="name" />
+          <span class="helper-text"> < </span>
+          <input id="writer-from" class="writer-short" placeholder="account" />
+          <span class="helper-text">@hoie.kim ></span>
+        </div>
+        <div>
+          <div class="fieldName">To: </div>
+          <input id="writer-to" class="writer-long" placeholder="example@email.com" />
+        </div>
+        <div>
+          <div class="fieldName">Subject: </div>
+          <input id="writer-title" class="writer-long" placeholder="This is the mail subject" />
+        </div>
+        <div>
+          <div class="fieldName">Content: </div>
+          <textarea id="writer-body" class="writer-fat" placeholder="Say something really cool here!"></textarea>
+        </div>
+        <div>
+          <button id="writer-send">Send</button>
+        </div>
+      </blockquote>
+      <div id="container-accounts" class="container"></div>
+      <div id="container-mails" class="container"></div>
+    </div>
   </div>
-  <div id="container">
-    <blockquote id="container-writer" class="container hide">
-      <div>
-        <div class="fieldName">From: </div>
-        <input id="writer-name" class="writer-short" placeholder="name" />
-        <span class="helper-text"> < </span>
-        <input id="writer-from" class="writer-short" placeholder="account" />
-        <span class="helper-text">@hoie.kim ></span>
-      </div>
-      <div>
-        <div class="fieldName">To: </div>
-        <input id="writer-to" class="writer-long" placeholder="example@email.com" />
-      </div>
-      <div>
-        <div class="fieldName">Subject: </div>
-        <input id="writer-title" class="writer-long" placeholder="This is the mail subject" />
-      </div>
-      <div>
-        <div class="fieldName">Content: </div>
-        <textarea id="writer-body" class="writer-fat" placeholder="Say something really cool here!"></textarea>
-      </div>
-      <div>
-        <button id="writer-send">Send</button>
-      </div>
-    </blockquote>
-    <div id="container-accounts" class="container"></div>
-    <div id="container-mails" class="container"></div>
+  <div id="buttons">
+    <button id="write"><i class="fas fa-pen"></i>&nbsp;&nbsp;Write Mail</button>
+    <button id="refresh"><i class="fas fa-sync-alt"></i>&nbsp;&nbsp;Get Mails</button>
+    <button id="logout"><i class="fas fa-sign-out-alt"></i>&nbsp;&nbsp;Logout</button>
   </div>
 </body>
 
@@ -235,13 +284,16 @@
   let writerIsShown
 
   const showWriter = () => {
+    const container = document.getElementById("container")
     const writer = document.getElementById("container-writer")
     if (writerIsShown) {
       writerIsShown = false
-      writer.classList.add("hide")
+      container.style.top = (-20 - writer.offsetHeight) + "px"
+      writer.classList.add("clipped")
     } else {
       writerIsShown = true
-      writer.classList.remove("hide")
+      writer.classList.remove("clipped")
+      container.style.top = 0
     }
   }
 
@@ -256,10 +308,15 @@
   document.getElementById("refresh").addEventListener("click", () => {
     getMails()
   })
+</script>
 
+<script>
   const container_accounts = document.getElementById("container-accounts")
   const container_mails = document.getElementById("container-mails")
 
+  const cache = {}
+
+  let working
   const renderAccount = (account) => {
     const head = document.createElement("h3")
     container_accounts.append(head)
@@ -273,8 +330,6 @@
         head.append(number)
       }
     })
-    let working
-    let data
     head.addEventListener("click", () => {
       if (head.classList.contains("clicked")) return
       if (working) return
@@ -287,12 +342,11 @@
       head.classList.remove("cursor")
       container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
       container_mails.classList.add("clipped")
-      const showMails = (r) => {
-        data = r
+      const showMails = () => {
+        const r = cache[account]
         document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-        r.forEach((e) => { 
-            console.log(e)
-            renderMail(e, { head: head, number: number })
+        r.forEach((e, i) => { 
+            r[i].mailcard = renderMail(i, account, { head: head, number: number })
         })
         container_mails.style.top = (0 - container_mails.offsetHeight) + "px"
         setTimeout(() => {
@@ -302,37 +356,50 @@
         }, 140)
       }
       setTimeout(() => {
-        if (!data) {
+        if (!cache[account]) {
           return fetch(`/api/mails/${account}`).then(r => r.json()).then((r) => {
-            showMails(r)
+            cache[account] = r
+            showMails()
           })
+        } else {
+          showMails()
         }
-        showMails(data)
       }, 140)
     })
   }
 
-  const renderMail = (e, head) => {
-    const element = document.createElement("blockquote")
-    element.classList.add("mailcard")
-    if (!e.read) element.classList.add("unread")
-    container_mails.prepend(element)
-    const headerBox = document.createElement("div")
-    element.append(headerBox)
-    const header = document.createElement("div")
-    header.classList.add("header", "cursor")
-    header.innerHTML = `
-      <div class="mailcard-small content">${new Date(e.date)}</div>
-      <div class="mailcard-small content">${e.from.text.replace("<", "&lt;").replace(">", "&gt;")}</div>
-    `
-    headerBox.append(header)
-    const subject = document.createElement("div")
-    subject.classList.add("mailcard-subject", "content")
-    subject.innerText = e.subject
-    element.append(subject)
-    const text = document.createElement("iframe")
+  const createMailContent = (mailcard, html, attachments) => {
+    const text = document.createElement("div")
     text.classList.add("hide", "text")
-    text.srcdoc = `
+    const attachmentBox = document.createElement("div")
+    attachmentBox.classList.add("attachmentBox")
+    text.append(attachmentBox)
+    if (attachments) {
+      attachments.forEach((e) => {
+        const attachment = document.createElement("div")
+        attachment.innerHTML = `<i class="fas fa-file"></i>&nbsp;&nbsp;` + e.filename
+        attachment.classList.add("attachment")
+        attachmentBox.append(attachment)
+        let link
+        attachment.addEventListener("click", () => {
+          if (!link) {
+            fetch(`/api/attachment/${e.content.data}`).then((r) => r.arrayBuffer()).then((r) => {
+              link = document.createElement("a");
+              const blob = new Blob([r], {type: e.contentType});
+              const objectUrl = URL.createObjectURL(blob);
+              link.href = objectUrl
+              link.target = "_black"
+              link.download = e.filename;
+              link.click();
+            })
+          } else {
+            link.click();
+          }
+        })
+      })
+    }
+    const iframe = document.createElement("iframe")
+    iframe.srcdoc = `
     <style>
       body {
         margin: 0;
@@ -345,13 +412,55 @@
       }
     </style>
     <div style="padding: 1rem;">
-      ${e.html}
+      ${html}
     </div>
     <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     `
-    text.style.height = 0 
-    element.append(text)
-    header.addEventListener("click", () => {
+    iframe.style.height = 0 
+    attachmentBox.style.maxHeight = 0
+    attachmentBox.style.overflowY = "hidden"
+    text.append(iframe)
+    mailcard.append(text)
+    return new Promise((res, rej) => {
+      iframe.addEventListener("load", () => {
+        res(text)
+      })
+    })
+  }
+
+  const renderMail = (i, account, head) => {
+    if (cache[account][i].mailcard) {
+      container_mails.prepend(cache[account][i].mailcard)
+      return cache[account][i].mailcard 
+    }
+    const e = cache[account][i]
+    const element = document.createElement("blockquote")
+    element.classList.add("mailcard")
+    if (!e.read) element.classList.add("unread")
+    container_mails.prepend(element)
+    const headerBox = document.createElement("div")
+    element.append(headerBox)
+    const header = document.createElement("div")
+    header.classList.add("header", "cursor")
+    const date = new Date(e.date).toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+    const time = new Date(e.date).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })
+    let duration = (Number(Date.now()) - Number(new Date(e.date))) / (1000*60*60)
+    if (duration > 48) {
+      duration = `(${Math.floor(duration / 24)} days ago)`
+    } else {
+      duration = `(${Math.floor(duration)} hours ago)`
+    }
+    header.innerHTML = `
+      <div class="mailcard-small content">${date}, ${time} ${duration}</div>
+      <div class="mailcard-small content">${e.from.text.replace("<", "&lt;").replace(">", "&gt;")}</div>
+    `
+    headerBox.append(header)
+    const subject = document.createElement("div")
+    subject.classList.add("mailcard-subject", "content")
+    subject.innerText = e.subject
+    element.append(subject)
+
+    const onClickHeader = (text) => {
       if (text.classList.contains("hide")) {
         if (!e.read) {
           fetch(`/api/markRead/${e.id}`)
@@ -360,24 +469,53 @@
           head.number.innerText -= 1
           if (head.number.innerText === "0") head.number.remove()
         }
-        document.querySelectorAll(".text").forEach((e) => {
+        const openTexts = Array.from(document.querySelectorAll(".text")).filter((e) => {
+          return !e.classList.contains("hide")
+        })
+        openTexts.forEach((e) => {
           if (e === text) return
-          e.style.height = 0
+          e.children[0].style.maxHeight = 0
+          e.children[0].style.overflowY = "hidden"
+          e.children[1].style.height = 0
           setTimeout(() => {
             e.classList.add("hide")
           }, 130)
         })
+        const duration = openTexts.length? 130 : 0
         setTimeout(() => {
           text.classList.remove("hide")
-          text.style.height = (text.contentWindow.document.body.scrollHeight) + 'px';
-        }, 130)
+          text.children[0].style.maxHeight = "200px"
+          text.children[0].style.overflowY = "scroll"
+          text.children[1].style.height = (text.children[1].contentWindow.document.body.scrollHeight) + 'px';
+        }, duration)
         return
       }
-      text.style.height = 0
+      text.children[0].style.maxHeight = 0
+      text.children[0].style.overflowY = "hidden"
+      text.children[1].style.height = 0
       setTimeout(() => {
         text.classList.add("hide")
       }, 130)
+    }
+
+    header.addEventListener("click", () => {
+      if (!e.text) {
+        fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
+          return createMailContent(element, r.html, r.attachments)
+        }).then((r) => {
+          e.text = r
+          onClickHeader(e.text)
+        })
+      } else if (!e.text.parentElement) {
+        element.append(e.text)
+        e.text.children[1].addEventListener("load", () => {
+          onClickHeader(e.text)
+        })
+      } else {
+        onClickHeader(e.text)
+      }
     })
+
     const actionBox = document.createElement("div")
     actionBox.classList.add("actionBox")
     headerBox.append(actionBox)
@@ -394,7 +532,6 @@
         fetch(`/api/mails/${e.id}`, { method: "DELETE" }).then((r) => {
           element.remove()
           const mailcards = document.querySelectorAll(".mailcard")
-          console.log(mailcards)
           if (!mailcards.length) head.head.remove()
         })
       }
@@ -406,12 +543,24 @@
     replyBox.prepend(reply)
     actionBox.prepend(replyBox)
     reply.addEventListener("click", () => {
-      document.getElementById("writer-from").value = e.envelopeTo[0].address.split("@")[0]
-      document.getElementById("writer-to").value = e.envelopeFrom.address
+      document.getElementById("writer-from").value = account.split("@")[0]
+      document.getElementById("writer-to").value = e.from.text
       document.getElementById("writer-title").value = "RE: " + e.subject
-      document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + e.html
-      showWriter()
+      if (!e.text) {
+        fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
+          cache[account][i].html = r.html
+          cache[account][i].attachments = r.attachments
+          return createMailContent(element, r.html, r.attachments)
+        }).then((r) => {
+          e.text = r
+          document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + `<blockquote>${e.html}</blockquote>`
+        })
+      } else {
+        document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + `<blockquote>${e.html}</blockquote>`
+      }
+      if (!writerIsShown) showWriter()
     })
+    return element
   }
 
   const getMails = () => {

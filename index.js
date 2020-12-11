@@ -32,10 +32,12 @@ app.get("/", (req, res) => {
   res.render("home", { owner: owner });
 });
 
+app.get("/api/attachment/:id", mails.getAttachment);
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/unreadNo/:account", mails.getUnreadNo);
 app.get("/api/markRead/:id", mails.markRead);
 app.get("/api/mails/:account", mails.getMails);
+app.get("/api/mailContent/:id", mails.getMailContent);
 
 app.post("/api/mails", mails.saveMail);
 app.post("/api/send", mails.sendMail);
