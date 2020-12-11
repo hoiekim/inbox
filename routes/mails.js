@@ -15,6 +15,17 @@ obj.saveMail = async (req, res) => {
   const envelopeTo = req.body.envelopeTo[0].address;
 };
 
+obj.getAttachment = async (req, res) => {
+  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  try {
+    const attachment = await db.getAttachment(req.params.id);
+    res.send(attachment);
+  } catch (err) {
+    console.log(err);
+    res.json(new Error("Failed to get attachment data"));
+  }
+};
+
 obj.getAccounts = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   const accounts = await db.getAccounts();
@@ -37,6 +48,12 @@ obj.getMails = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   const mails = await db.getMails(req.params.account);
   res.json(mails);
+};
+
+obj.getMailContent = async (req, res) => {
+  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  const mail = await db.getMailContent(req.params.id);
+  res.json(mail);
 };
 
 obj.deleteMail = async (req, res) => {
