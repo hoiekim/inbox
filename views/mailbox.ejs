@@ -139,8 +139,8 @@
 
   .attachmentBox {
     position: relative;
-    transition: 0.2s;
-    overflowY: scroll;
+    margin-top: 0.2rem;
+    margin-bottom: 0.5rem;
   }
   .attachment {
     position: relative;
@@ -160,19 +160,23 @@
   .attachment-text {
     z-index: 1;
     position: relative;
+    overflow: hidden;
+    transition: 0.2s;
+    white-space: nowrap;
   }
   .attachment-preview {
     z-index: 2;
     position: absolute;
     width: 300px;
     height: 200px;
-    left: 0;
+    left: 4px;
     padding: 0.5rem;
-    border-radius: 8px;
-    top: 16px;
+    border-radius: 4px;
+    top: 12px;
     clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
   }
   .attachment-preview.clipped {
+    pointer-events: none;
     top: -184px;
     clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
   }
@@ -328,29 +332,29 @@
     fileInput.multiple = true
     fileInput.click()
     fileInput.addEventListener("change", () => {
+      console.log(fileInput.files.item(0))
       const files = Array.from(fileInput.files)
-      files.forEach(async (e) => {
+      files.forEach(async (e, i) => {
+        if (!cache.writer) cache.writer = { attachments: {} }
+        const timeStamp = `${Date.now()}-${i}`
+        cache.writer.attachments[timeStamp] = { filename: e.name, content: e }
         let attachmentBox = document.querySelector("#writer-content > .attachmentBox")
         if (!attachmentBox) {
           attachmentBox = document.createElement("div")
           attachmentBox.classList.add("attachmentBox")
-          attachmentBox.style.maxHeight = 0
           document.getElementById("writer-content").prepend(attachmentBox)
-          setTimeout(() => {
-            attachmentBox.style.maxHeight = "200px"
-          }, 10)
         }
         const attachment = document.createElement("div")
-        attachment.classList.add("attachment", "cursor")
+        attachment.classList.add("attachment")
         const attachmentText = document.createElement("div")
         attachmentText.innerHTML = `<i class="fas fa-file"></i>&nbsp;&nbsp;` + e.name
-        attachmentText.classList.add("attachment-text")
-        attachment.append(attachmentText)
+        attachmentText.classList.add("attachment-text", "cursor")
         const url = await getUrl(e)
-        attachment.setAttribute("data-url", url)
         const preview = document.createElement("iframe")
         preview.classList.add("attachment-preview", "clipped")
-        if (e.type) {
+        if (e.type.includes("image")) {
+          preview.srcdoc = `<img src="${url}" width="100%"/>`
+        } else if (e.type) {
           preview.src = url
         } else {
           e.text().then((r) => {
@@ -358,12 +362,24 @@
           })
         }
         attachment.append(preview)
+        attachment.append(attachmentText)
         attachment.addEventListener("mouseover", () => {
           preview.classList.remove("clipped")
         })
         attachment.addEventListener("mouseleave", () => {
           preview.classList.add("clipped")
         })
+        attachment.addEventListener("click", () => {
+          preview.classList.add("clipped")
+          attachmentText.style.width = attachmentText.offsetWidth + "px";
+          attachmentText.style.height = attachmentText.offsetHeight + "px";
+          attachmentText.style.width = 0;
+          delete cache.writer.attachments[timeStamp]
+          setTimeout(() => {
+            attachment.remove()
+          }, 150)
+        })
+        attachment.setAttribute("title", "Click to remove")
         attachmentBox.append(attachment)
       })
     })
@@ -378,6 +394,7 @@
     const bcc = bccInput.classList.contains("hide")? null : bccInput.value
     const subject = document.getElementById("writer-title").value
     const html = marked(document.getElementById("writer-body").value);
+    const attachments = Object.values(cache.writer?.attachments)
     const result = await fetch("/api/send", {
       method: "POST",
       headers: {
@@ -390,12 +407,15 @@
         cc,
         bcc,
         subject,
+        attachments,
         html
       })
     }).then(r => r.json())
     if (result?.messageId) {
       alert("Your mail is sent successfully")
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
+      document.querySelector("#writer-content.attachmentBox").innerHTML = ""
+      cache.writer = null
       onClickWriter()
     } else {
       alert("Email delivery has failed. Please try again.")
