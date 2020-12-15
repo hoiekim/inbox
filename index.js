@@ -1,4 +1,5 @@
 const express = require("express");
+const fileupload = require("express-fileupload");
 const session = require("express-session");
 const mails = require("./routes/mails");
 const users = require("./routes/users");
@@ -12,6 +13,7 @@ require("dotenv").config();
 const owner = process.env.OWNER || "My";
 
 app.use(express.json());
+app.use(fileupload());
 app.use(
   session({
     secret: process.env.SECRET,

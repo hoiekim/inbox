@@ -332,12 +332,11 @@
     fileInput.multiple = true
     fileInput.click()
     fileInput.addEventListener("change", () => {
-      console.log(fileInput.files.item(0))
       const files = Array.from(fileInput.files)
       files.forEach(async (e, i) => {
         if (!cache.writer) cache.writer = { attachments: {} }
         const timeStamp = `${Date.now()}-${i}`
-        cache.writer.attachments[timeStamp] = { filename: e.name, content: e }
+        cache.writer.attachments[timeStamp] = e
         let attachmentBox = document.querySelector("#writer-content > .attachmentBox")
         if (!attachmentBox) {
           attachmentBox = document.createElement("div")
@@ -387,6 +386,8 @@
 
   document.getElementById("writer-send").addEventListener("click", async () => {
     if (!confirm("Do you want to send it?")) return
+    const formData = new FormData()
+
     const name = document.getElementById("writer-name").value
     const sender = document.getElementById("writer-from").value
     const to = document.getElementById("writer-to").value
@@ -394,27 +395,33 @@
     const bcc = bccInput.classList.contains("hide")? null : bccInput.value
     const subject = document.getElementById("writer-title").value
     const html = marked(document.getElementById("writer-body").value);
+    const mailData = {
+      name,
+      sender,
+      to,
+      cc,
+      bcc,
+      subject,
+      html
+    }
+    Object.keys(mailData).forEach((e) => {
+      formData.append(e, mailData[e])
+    })
+
     const attachments = Object.values(cache.writer?.attachments)
+    attachments.forEach((e) => {
+      formData.append('attachments', e)
+    })
+    
     const result = await fetch("/api/send", {
       method: "POST",
-      headers: {
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({
-        name,
-        sender,
-        to,
-        cc,
-        bcc,
-        subject,
-        attachments,
-        html
-      })
+      headers: {},
+      body: formData
     }).then(r => r.json())
     if (result?.messageId) {
       alert("Your mail is sent successfully")
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
-      document.querySelector("#writer-content.attachmentBox").innerHTML = ""
+      document.querySelector("#writer-content > attachmentBox").innerHTML = ""
       cache.writer = null
       onClickWriter()
     } else {
