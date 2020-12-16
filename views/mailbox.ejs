@@ -79,7 +79,7 @@
     top: 0.5rem;
     right: 1rem;
   }
-  button > i {
+  #buttons > button > i {
     font-size: 10px;
   }
   
@@ -215,12 +215,18 @@
   .fieldName {
     display: flex;
     justify-content: space-between;
+    font-size: 12px;
+    height: 20px;
+    margin-bottom: 3px;
   }
   .fieldName i {
     font-size: 18px;
   }
   .fieldName i:hover {
     font-size: 20px;
+  }
+  .helper-text {
+    font-size: 12px;
   }
   input.writer-short {
     width: 100px;
@@ -236,24 +242,52 @@
     display: block;
     width: 0;
   }
-  textarea.writer-fat {
-    width: 100%;
-    height: 400px;
-    margin-bottom: 1rem;
-  }
   .inputBox-flex {
     display: flex;
   }
   #writer-cc {
     margin: 0 0.5rem;
   }
-  #writer-send {
-    display: block;
-    margin: auto;
+  #writer-content-wrap {
+    width: 100%;
+    height: 400px;
+    perspective: 4000px;
+  }
+  #writer-content {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transition: transform 600ms;
+    transform-style: preserve-3d;
+  }
+  #writer-content.flip {
+    transform: rotateY(180deg);
+  }
+  #writer-content > * {
+    position: absolute;
+    width: 100%;
+    height: 100%;
     margin-bottom: 1rem;
-    width: 200px;
-    height: 40px;
-    font-size: 20px;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+  }
+  #writer-preview {
+    margin: 0;
+    transform: rotateY(180deg);
+  }
+  #writer-buttons-wrap {
+    width: 350px;
+    margin: auto
+  }
+  .writer-buttons {
+    display: inline-block;
+    margin: 1rem 0.5rem;
+    width: 150px;
+    height: 35px;
+    font-size: 16px;
+  }
+  .writer-buttons > i {
+    font-size: 14px;
   }
 </style>
 
@@ -284,12 +318,16 @@
         </div>
         <div>
           <div class="fieldName"><span>Content: </span><span><i id="writer-paperclip" class="fas fa-paperclip cursor"></i></span></div>
-          <div id="writer-content">
-            <textarea id="writer-body" class="writer-fat" placeholder="Say something really cool here!"></textarea>
+          <div id="writer-content-wrap">
+            <div id="writer-content">
+              <textarea id="writer-body" class="writer-fat" placeholder="Say something really cool here!"></textarea>
+              <iframe id="writer-preview"></iframe>
+            </div>
           </div>
         </div>
-        <div>
-          <button id="writer-send">Send</button>
+        <div id="writer-buttons-wrap">
+          <button id="writer-previewBtn" class="writer-buttons"><i class="fab fa-markdown"></i>&nbsp;&nbsp;Preview</button>
+          <button id="writer-send" class="writer-buttons"><i class="fas fa-paper-plane"></i>&nbsp;&nbsp;Send</button>
         </div>
       </blockquote>
       <div id="container-accounts" class="container"></div>
@@ -297,8 +335,8 @@
     </div>
   </div>
   <div id="buttons">
-    <button id="write"><i class="fas fa-pen"></i>&nbsp;&nbsp;Write Mail</button>
-    <button id="refresh"><i class="fas fa-sync-alt"></i>&nbsp;&nbsp;Get Mails</button>
+    <button id="write"><i class="fas fa-pen"></i>&nbsp;&nbsp;Write</button>
+    <button id="refresh"><i class="fas fa-sync-alt"></i>&nbsp;&nbsp;Refresh</button>
     <button id="logout"><i class="fas fa-sign-out-alt"></i>&nbsp;&nbsp;Logout</button>
   </div>
 </body>
@@ -423,11 +461,42 @@
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
       document.querySelector("#writer-content > .attachmentBox").innerHTML = ""
       cache.writer = null
-      onClickWriter()
+      toggleWriter()
+      writerContent.classList.remove("flip")
     } else {
       alert("Email delivery has failed. Please try again.")
     }
   })
+
+  const writerContent = document.getElementById("writer-content")
+  document.getElementById("writer-previewBtn").addEventListener("click", () => {
+    writerContent.classList.toggle("flip")
+    if (!writerContent.classList.contains("flip")) return
+    const html = marked(document.getElementById("writer-body").value);
+    document.getElementById("writer-preview").srcdoc = `
+      <style>
+        body {
+          margin: 0;
+        }
+        * {
+          font-family: 'Open Sans';
+          font-weight: 100;
+          color: rgb(30,30,30);
+        }
+      </style>
+      <div style="padding: 1rem;">
+        ${html}
+      </div>
+      <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
+    `
+  })
+
+  const writerBody = document.getElementById("writer-body")
+  const writerContentWrap = document.getElementById("writer-content-wrap")
+  const writerResizer = new ResizeObserver((e) => {
+    writerContentWrap.style.height = e[0].target.style.height
+  })
+  writerResizer.observe(writerBody)
 </script>
 
 <script>
@@ -436,7 +505,8 @@
 
   let writerIsShown
 
-  const onClickWriter = () => {
+  const toggleWriter = () => {
+    writerContent.classList.remove("flip")
     if (writerIsShown) {
       writerIsShown = false
       container.style.top = (-20 - writer.offsetHeight) + "px"
@@ -448,7 +518,7 @@
     }
   }
 
-  document.getElementById("write").addEventListener("click", onClickWriter)
+  document.getElementById("write").addEventListener("click", toggleWriter)
   
   document.getElementById("logout").addEventListener("click", () => {
     fetch("/admin", { method: "DELETE" }).then((r) => {
@@ -568,7 +638,6 @@
     <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     `
     iframe.style.height = 0 
-    attachmentBox.style.maxHeight = 0
     text.append(iframe)
     mailcard.append(text)
     return new Promise((res, rej) => {
@@ -579,11 +648,11 @@
   }
 
   const renderMail = (i, account, head) => {
-    if (cache[account][i].mailcard) {
-      container_mails.prepend(cache[account][i].mailcard)
-      return cache[account][i].mailcard 
-    }
     const e = cache[account][i]
+    if (e.mailcard) {
+      container_mails.prepend(e.mailcard)
+      return e.mailcard 
+    }
     const element = document.createElement("blockquote")
     element.classList.add("mailcard")
     if (!e.read) element.classList.add("unread")
@@ -624,8 +693,7 @@
         })
         openTexts.forEach((e) => {
           if (e === text) return
-          e.children[0].style.maxHeight = 0
-          e.children[0].style.overflowY = "hidden"
+          e.children[0].classList.add("hide")
           e.children[1].style.height = 0
           setTimeout(() => {
             e.classList.add("hide")
@@ -634,14 +702,12 @@
         const duration = openTexts.length? 130 : 0
         setTimeout(() => {
           text.classList.remove("hide")
-          text.children[0].style.maxHeight = "200px"
-          text.children[0].style.overflowY = "scroll"
+          text.children[0].classList.remove("hide")
           text.children[1].style.height = (text.children[1].contentWindow.document.body.scrollHeight) + 'px';
         }, duration)
         return
       }
-      text.children[0].style.maxHeight = 0
-      text.children[0].style.overflowY = "hidden"
+      text.children[0].classList.add("hide")
       text.children[1].style.height = 0
       setTimeout(() => {
         text.classList.add("hide")
@@ -651,6 +717,7 @@
     header.addEventListener("click", () => {
       if (!e.text) {
         fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
+          e.html = r.html
           return createMailContent(element, r.html, r.attachments)
         }).then((r) => {
           e.text = r
@@ -693,25 +760,28 @@
     replyBox.prepend(reply)
     actionBox.prepend(replyBox)
     reply.addEventListener("click", () => {
+      writerContent.classList.remove("flip")
       document.getElementById("writer-from").value = account.split("@")[0]
-      document.getElementById("writer-to").value = e.from.value.reduce((acc, e, i) => {
+      document.getElementById("writer-to").value = e.from.value[0].address
+      document.getElementById("writer-cc").value = e.cc?.value.reduce((acc, e, i) => {
         if (!acc) return e.address
         return acc + ", " +  e.address
-      }, "")
+      }, "") || ""
       document.getElementById("writer-title").value = "RE: " + e.subject
       if (!e.text) {
         fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
-          cache[account][i].html = r.html
-          cache[account][i].attachments = r.attachments
+          e.html = r.html
+          const replyHTML =`\n\n\n<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+          document.getElementById("writer-body").value = replyHTML
           return createMailContent(element, r.html, r.attachments)
         }).then((r) => {
           e.text = r
-          document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + `<blockquote>${e.html}</blockquote>`
         })
       } else {
-        document.getElementById("writer-body").value = "\n\n\n\n\n----\n\n" + `<blockquote>${e.html}</blockquote>`
+        const replyHTML =`\n\n\n<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+        document.getElementById("writer-body").value = replyHTML
       }
-      if (!writerIsShown) onClickWriter()
+      if (!writerIsShown) toggleWriter()
     })
     return element
   }
