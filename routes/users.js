@@ -9,7 +9,7 @@ users.admin = (req, res) => {
     "at",
     new Date(Date.now())
   );
-  if (req.body.password === process.env.ADMIN_PW) req.session.admin = "hoie";
+  if (req.body.password === process.env.ADMIN_PW) req.session.admin = "admin";
   res.status(200).json("Done");
 };
 

@@ -33,6 +33,7 @@
     }
   }
   iframe {
+    padding: 1rem;
     background-color: white;
     box-sizing: border-box;
     width: 100%;
@@ -42,13 +43,6 @@
     transition: 0.2s;
   }
   
-  .actionBox i {
-    font-size: 20px;
-  }
-  .actionBox i:hover {
-    font-size: 24px;
-  }
-
   blockquote.unread {
     border-color: rgb(200,20,20);
   }
@@ -75,12 +69,13 @@
   }
   
   #buttons {
+    display: flex;
     position: absolute;
     top: 0.5rem;
     right: 1rem;
   }
-  #buttons > button > i {
-    font-size: 10px;
+  #buttons > button {
+    margin-right: 10px;
   }
   
   .container-wrap {
@@ -116,25 +111,32 @@
   .headerBox {
     position: relative;
   }
-  .actionBox {
-    position: absolute;
-    display: inline-block;
-    width: 5rem;
-    height: 2rem;
-    line-height: 2rem;
-    text-align: center;
-    right: 1rem;
-  }
   .header {
     display: inline-block;
     width: calc(100% - 5rem);
   }
+  .actionBox {
+    position: absolute;
+    display: flex;
+    text-align: center;
+    right: 1rem;
+  }
   .iconBox {
-    display: inline-block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     margin: 3px;
     height: 25px;
     width: 25px;
-    text-align: center;
+  }
+  .iconBox i {
+    font-size: 20px;
+  }
+  .iconBox i:hover {
+    font-size: 24px;
+  }
+  .iconBox i:active {
+    font-size: 22px;
   }
 
   .attachmentBox {
@@ -149,6 +151,10 @@
     margin-right: 0.4rem;
     padding: 0.4rem;
     font-size: 14px;
+  }
+  #container-writer .attachment {
+    margin-top: 0.2rem;
+    margin-bottom: 0.5rem;
   }
   #writer-content .attachment {
     margin-top: 0.2rem;
@@ -212,6 +218,9 @@
     margin-top: 0.5rem;
   }
 
+  #container-writer input {
+    margin-bottom: 1rem;
+  }
   .fieldName {
     display: flex;
     justify-content: space-between;
@@ -225,17 +234,18 @@
   .fieldName i:hover {
     font-size: 20px;
   }
+  .fieldName i:active {
+    font-size: 19px;
+  }
   .helper-text {
     font-size: 12px;
   }
   input.writer-short {
     width: 100px;
-    margin-bottom: 1rem;
   }
   input.writer-long {
     width: 100%;
     text-align: left;
-    margin-bottom: 1rem;
     transition: 150ms;
   }
   input.writer-long.hide {
@@ -286,14 +296,11 @@
     height: 35px;
     font-size: 16px;
   }
-  .writer-buttons > i {
-    font-size: 14px;
-  }
 </style>
 
 
 <body>
-  <h1><%= owner %> Mail</h1>
+  <h1><%= domain %> Mail</h1>
   <div class="container-wrap">
     <div id="container">
       <blockquote id="container-writer" class="container clipped">
@@ -302,7 +309,7 @@
           <input id="writer-name" class="writer-short" placeholder="name" />
           <span class="helper-text"> < </span>
           <input id="writer-from" class="writer-short" placeholder="account" />
-          <span class="helper-text">@<%= owner %> ></span>
+          <span class="helper-text">@<%= domain %> ></span>
         </div>
         <div>
           <div class="fieldName"><span>To: </span><span><i id="writer-eye" class="fas fa-eye cursor"></i></span></div>
@@ -318,16 +325,18 @@
         </div>
         <div>
           <div class="fieldName"><span>Content: </span><span><i id="writer-paperclip" class="fas fa-paperclip cursor"></i></span></div>
-          <div id="writer-content-wrap">
-            <div id="writer-content">
-              <textarea id="writer-body" class="writer-fat" placeholder="Say something really cool here!"></textarea>
-              <iframe id="writer-preview"></iframe>
+          <div id="writer-body">
+            <div id="writer-content-wrap">
+              <div id="writer-content">
+                <textarea id="writer-textarea" class="writer-fat" placeholder="Say something really cool here!"></textarea>
+                <iframe id="writer-preview"></iframe>
+              </div>
             </div>
           </div>
         </div>
         <div id="writer-buttons-wrap">
-          <button id="writer-previewBtn" class="writer-buttons"><i class="fab fa-markdown"></i>&nbsp;&nbsp;Preview</button>
-          <button id="writer-send" class="writer-buttons"><i class="fas fa-paper-plane"></i>&nbsp;&nbsp;Send</button>
+          <button id="writer-previewBtn" class="writer-buttons"><i class="fab fa-markdown cursor"></i>&nbsp;&nbsp;Preview</button>
+          <button id="writer-send" class="writer-buttons"><i class="fas fa-paper-plane cursor"></i>&nbsp;&nbsp;Send</button>
         </div>
       </blockquote>
       <div id="container-accounts" class="container"></div>
@@ -335,9 +344,9 @@
     </div>
   </div>
   <div id="buttons">
-    <button id="write"><i class="fas fa-pen"></i>&nbsp;&nbsp;Write</button>
-    <button id="refresh"><i class="fas fa-sync-alt"></i>&nbsp;&nbsp;Refresh</button>
-    <button id="logout"><i class="fas fa-sign-out-alt"></i>&nbsp;&nbsp;Logout</button>
+    <div id="write" class="iconBox"><i class="fas fa-pen cursor"></i></div>
+    <div id="refresh" class="iconBox"><i class="fas fa-sync-alt cursor"></i></div>
+    <div id="logout" class="iconBox"><i class="fas fa-sign-out-alt cursor"></i></div>
   </div>
 </body>
 
@@ -375,11 +384,11 @@
         if (!cache.writer) cache.writer = { attachments: {} }
         const timeStamp = `${Date.now()}-${i}`
         cache.writer.attachments[timeStamp] = e
-        let attachmentBox = document.querySelector("#writer-content > .attachmentBox")
+        let attachmentBox = document.querySelector("#writer-body > .attachmentBox")
         if (!attachmentBox) {
           attachmentBox = document.createElement("div")
           attachmentBox.classList.add("attachmentBox")
-          document.getElementById("writer-content").prepend(attachmentBox)
+          document.getElementById("writer-body").prepend(attachmentBox)
         }
         const attachment = document.createElement("div")
         attachment.classList.add("attachment")
@@ -432,7 +441,7 @@
     const cc = ccInput.classList.contains("hide")? null : ccInput.value
     const bcc = bccInput.classList.contains("hide")? null : bccInput.value
     const subject = document.getElementById("writer-title").value
-    const html = marked(document.getElementById("writer-body").value);
+    const { html, inReplyTo } = writerParser(document.getElementById("writer-textarea").value);
     const mailData = {
       name,
       sender,
@@ -440,17 +449,20 @@
       cc,
       bcc,
       subject,
-      html
+      html,
+      inReplyTo
     }
     Object.keys(mailData).forEach((e) => {
       formData.append(e, mailData[e])
     })
 
-    const attachments = Object.values(cache.writer?.attachments)
-    attachments.forEach((e) => {
-      formData.append('attachments', e)
-    })
-    
+    const attachments = cache.writer && Object.values(cache.writer.attachments)
+    if (attachments?.length) {
+      attachments.forEach((e) => {
+        formData.append('attachments', e)
+      })
+    }
+
     const result = await fetch("/api/send", {
       method: "POST",
       headers: {},
@@ -459,7 +471,7 @@
     if (result?.messageId) {
       alert("Your mail is sent successfully")
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
-      document.querySelector("#writer-content > .attachmentBox").innerHTML = ""
+      document.querySelector("#writer-body > .attachmentBox").innerHTML = ""
       cache.writer = null
       toggleWriter()
       writerContent.classList.remove("flip")
@@ -468,11 +480,19 @@
     }
   })
 
+  const writerParser = (html) => {
+    const htmlComponents = html.split("<in-reply-to>")
+    return {
+      html: marked(htmlComponents[0]) + (htmlComponents[2] || ""),
+      inReplyTo: htmlComponents[1]
+    }
+  }
+
   const writerContent = document.getElementById("writer-content")
   document.getElementById("writer-previewBtn").addEventListener("click", () => {
     writerContent.classList.toggle("flip")
     if (!writerContent.classList.contains("flip")) return
-    const html = marked(document.getElementById("writer-body").value);
+    const { html } = writerParser(document.getElementById("writer-textarea").value);
     document.getElementById("writer-preview").srcdoc = `
       <style>
         body {
@@ -480,23 +500,20 @@
         }
         * {
           font-family: 'Open Sans';
-          font-weight: 100;
-          color: rgb(30,30,30);
+          color: rgb(70,70,70);
         }
       </style>
-      <div style="padding: 1rem;">
-        ${html}
-      </div>
+      ${html}
       <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     `
   })
 
-  const writerBody = document.getElementById("writer-body")
+  const writerTextarea = document.getElementById("writer-textarea")
   const writerContentWrap = document.getElementById("writer-content-wrap")
   const writerResizer = new ResizeObserver((e) => {
     writerContentWrap.style.height = e[0].target.style.height
   })
-  writerResizer.observe(writerBody)
+  writerResizer.observe(writerTextarea)
 </script>
 
 <script>
@@ -628,13 +645,10 @@
       }
       * {
         font-family: 'Open Sans';
-        font-weight: 100;
-        color: rgb(30,30,30);
+        color: rgb(70,70,70);
       }
     </style>
-    <div style="padding: 1rem;">
-      ${html}
-    </div>
+    ${html}
     <link href="//fonts.googleapis.com/css?family=Open+Sans:300,400,600,700&amp;subset=latin" rel="stylesheet">
     `
     iframe.style.height = 0 
@@ -663,21 +677,23 @@
     header.classList.add("header", "cursor")
     const date = new Date(e.date).toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
     const time = new Date(e.date).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })
-    let duration = (Number(Date.now()) - Number(new Date(e.date))) / (1000*60*60)
-    if (duration > 48) {
-      duration = `(${Math.floor(duration / 24)} days ago)`
+    let duration = (Number(Date.now()) - Number(new Date(e.date))) / (1000*60)
+    if (duration > (2 * 24 * 60)) {
+      duration = `${Math.floor(duration / (60 * 24))} days ago`
+    } else if (duration > (2 * 60)) {
+      duration = `${Math.floor(duration / 60)} hours ago`
+    } else if (duration > 2) {
+      duration = `${Math.floor(duration)} minutes ago`
     } else {
-      duration = `(${Math.floor(duration)} hours ago)`
+      duration = "just now"
     }
     header.innerHTML = `
-      <div class="mailcard-small content">${date}, ${time} ${duration}</div>
+      <div class="mailcard-small content">${duration}</div>
+      <div class="mailcard-small content">${date}, ${time}</div>
       <div class="mailcard-small content">${e.from.text.replace("<", "&lt;").replace(">", "&gt;")}</div>
+      <div class="mailcard-subject content">${e.subject}</div>
     `
     headerBox.append(header)
-    const subject = document.createElement("div")
-    subject.classList.add("mailcard-subject", "content")
-    subject.innerText = e.subject
-    element.append(subject)
 
     const onClickHeader = (text) => {
       if (text.classList.contains("hide")) {
@@ -693,7 +709,6 @@
         })
         openTexts.forEach((e) => {
           if (e === text) return
-          e.children[0].classList.add("hide")
           e.children[1].style.height = 0
           setTimeout(() => {
             e.classList.add("hide")
@@ -702,12 +717,10 @@
         const duration = openTexts.length? 130 : 0
         setTimeout(() => {
           text.classList.remove("hide")
-          text.children[0].classList.remove("hide")
-          text.children[1].style.height = (text.children[1].contentWindow.document.body.scrollHeight) + 'px';
+          text.children[1].style.height = (text.children[1].contentWindow.document.body.scrollHeight) + 32 + 'px';
         }, duration)
         return
       }
-      text.children[0].classList.add("hide")
       text.children[1].style.height = 0
       setTimeout(() => {
         text.classList.add("hide")
@@ -718,6 +731,7 @@
       if (!e.text) {
         fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
           e.html = r.html
+          e.messageId = r.messageId
           return createMailContent(element, r.html, r.attachments)
         }).then((r) => {
           e.text = r
@@ -735,7 +749,7 @@
 
     const actionBox = document.createElement("div")
     actionBox.classList.add("actionBox")
-    headerBox.append(actionBox)
+    headerBox.prepend(actionBox)
     const trashBox = document.createElement("div")
     trashBox.classList.add("iconBox")
     const trash = document.createElement("i")
@@ -771,26 +785,31 @@
       if (!e.text) {
         fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
           e.html = r.html
-          const replyHTML =`\n\n\n<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
-          document.getElementById("writer-body").value = replyHTML
+          e.messageId = r.messageId
+          const replyHTML =`\n\n\n<in-reply-to>${e.messageId}<in-reply-to><blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+          document.getElementById("writer-textarea").value = replyHTML
           return createMailContent(element, r.html, r.attachments)
         }).then((r) => {
           e.text = r
         })
       } else {
-        const replyHTML =`\n\n\n<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
-        document.getElementById("writer-body").value = replyHTML
+        const replyHTML =`\n\n\n<in-reply-to>${e.messageId}<in-reply-to><blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+        document.getElementById("writer-textarea").value = replyHTML
       }
       if (!writerIsShown) toggleWriter()
     })
     return element
   }
 
+  let gettingMail
+
   const getMails = () => {
+    if (gettingMail) return
+    gettingMail = true
     cache = {}
     document.querySelectorAll(".tag").forEach((e) => e.remove())
     document.querySelectorAll(".mailcard").forEach((e) => e.remove())
-    fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount))
+    fetch("/api/accounts").then(r => r.json()).then((r) => r.forEach(renderAccount)).then(() => { gettingMail = false })
   }
 
   getMails()
