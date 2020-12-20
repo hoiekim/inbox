@@ -63,7 +63,7 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
 2. Setup environment variables in `.env` file
     ```
-    OWNER=...      // (Optional) Host name to show at the top of the page.
+    DOMAIN=...     // Domain name to use when sending mails.
     SECRET=...     // Value to encode session data. Any value works
     ADMIN_PW=...   // Password that will be used to login to Inbox
     ELASTIC=...    // Password for elasticsearch that you saved in previous step
