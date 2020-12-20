@@ -76,7 +76,7 @@ obj.sendMail = async (req, res) => {
     new Date(Date.now())
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const result = await mail.sendMail(req.body, req.files.attachments);
+  const result = await mail.sendMail(req.body, req.files?.attachments);
   res.status(200).json(result);
 };
 

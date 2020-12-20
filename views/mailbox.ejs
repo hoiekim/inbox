@@ -456,11 +456,13 @@
       formData.append(e, mailData[e])
     })
 
-    const attachments = Object.values(cache.writer?.attachments)
-    attachments.forEach((e) => {
-      formData.append('attachments', e)
-    })
-    
+    const attachments = cache.writer && Object.values(cache.writer.attachments)
+    if (attachments?.length) {
+      attachments.forEach((e) => {
+        formData.append('attachments', e)
+      })
+    }
+
     const result = await fetch("/api/send", {
       method: "POST",
       headers: {},
