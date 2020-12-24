@@ -89,7 +89,8 @@
     position: relative;
     display: inline-block;
     padding: 0.5rem;
-    margin-right: 1rem;
+    margin-top: 0.5rem;
+    margin-right: 0.75rem;
     border-radius: 5px;
   }
   .numberBall {
@@ -283,6 +284,7 @@
   }
   #writer-preview {
     margin: 0;
+    border-radius: 3px;
     transform: rotateY(180deg);
   }
   #writer-buttons-wrap {
@@ -329,7 +331,7 @@
             <div id="writer-content-wrap">
               <div id="writer-content">
                 <textarea id="writer-textarea" class="writer-fat" placeholder="Say something really cool here!"></textarea>
-                <iframe id="writer-preview"></iframe>
+                <iframe id="writer-preview" class="hide"></iframe>
               </div>
             </div>
           </div>
@@ -489,8 +491,18 @@
   }
 
   const writerContent = document.getElementById("writer-content")
+  const writerPreview = document.getElementById("writer-preview")
+  let flipping
   document.getElementById("writer-previewBtn").addEventListener("click", () => {
+    if (flipping) return
+    flipping = true
     writerContent.classList.toggle("flip")
+    setTimeout(() => {
+      writerPreview.classList.toggle("hide")
+    }, 150)
+    setTimeout(() => {
+      flipping = false
+    }, 600)
     if (!writerContent.classList.contains("flip")) return
     const { html } = writerParser(document.getElementById("writer-textarea").value);
     document.getElementById("writer-preview").srcdoc = `
@@ -786,14 +798,34 @@
         fetch(`/api/mailContent/${e.id}`).then(r => r.json()).then((r) => {
           e.html = r.html
           e.messageId = r.messageId
-          const replyHTML =`\n\n\n<in-reply-to>${e.messageId}<in-reply-to><blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+          const date = new Date(e.date).toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+          const time = new Date(e.date).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })
+          const replyHTML =`
+            \n\n\n
+            <in-reply-to>${e.messageId}<in-reply-to>
+            <br><br><br>
+            <p>On ${date} at ${time}, ${e.from.text.replace("<", "&lt;").replace(">", "&gt;")} wrote:</p>
+            <blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
+              ${e.html}
+            </blockquote>
+          ` 
           document.getElementById("writer-textarea").value = replyHTML
           return createMailContent(element, r.html, r.attachments)
         }).then((r) => {
           e.text = r
         })
       } else {
-        const replyHTML =`\n\n\n<in-reply-to>${e.messageId}<in-reply-to><blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">${e.html}</blockquote>` 
+        const date = new Date(e.date).toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+        const time = new Date(e.date).toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' })
+        const replyHTML =`
+          \n\n\n
+          <in-reply-to>${e.messageId}<in-reply-to>
+          <br><br><br>
+          <p>On ${date} at ${time}, ${e.from.text.replace("<", "&lt;").replace(">", "&gt;")} wrote:</p>
+          <blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
+            ${e.html}
+          </blockquote>
+        ` 
         document.getElementById("writer-textarea").value = replyHTML
       }
       if (!writerIsShown) toggleWriter()
