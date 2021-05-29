@@ -172,8 +172,8 @@
       method: "POST",
       headers: {},
       body: formData
-    }).then(r => r.json())
-    if (result?.messageId) {
+    }).then(r => r.text())
+    if (result === '"done"') {
       alert("Your mail is sent successfully")
       document.querySelectorAll("input, textarea").forEach((e) => { e.value = "" })
       document.querySelector("#writer-body > .attachmentBox").innerHTML = ""

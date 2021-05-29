@@ -22,7 +22,7 @@ app.use(
     rolling: true,
     cookie: {
       secure: false,
-      maxAge: 1000 * 60 * 60 * 24,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
 );
@@ -41,7 +41,6 @@ app.get("/api/markRead/:id", mails.markRead);
 app.get("/api/mails/:account", mails.getMails);
 app.get("/api/mailContent/:id", mails.getMailContent);
 
-app.post("/api/mails", mails.saveMail);
 app.post("/api/send", mails.sendMail);
 
 app.delete("/api/mails/:id", mails.deleteMail);
