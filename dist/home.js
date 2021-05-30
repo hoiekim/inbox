@@ -1,1 +1,0 @@
-(()=>{const e=document.getElementById("adminPw"),t=()=>{fetch("/admin",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({password:e.value})}).then((e=>{location.href="/"}))};e.addEventListener("keypress",(e=>{"Enter"===e.key&&t()})),document.getElementById("login").addEventListener("click",t)})();
