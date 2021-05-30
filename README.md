@@ -1,18 +1,16 @@
-# How to Setup
 If these instructions are outdated, please raise an issue or send us a Pull Request.
 
-### Setup Sendmail
-In order to use this app to send mails, your server should be able to send mails and configured properly.
-Refer [this tutorial](https://github.com/garageScript/curriculum/issues/353).
+# How to Setup
 
-If you want to use this app only for receiving mails, skip this step.
+You need these to use Inbox:
 
-### Setup Webhook
-1. Go to [m8l.me](https://m8l.me/), follow instruction steps
-2. In step2, setup webhook url to this.
-    ```
-    http://(your server ip):3004/api/mails
-    ```
+* Elasticsearch (Database to save and query emails)
+* Inbox (Backend & Frontend server)
+* A domain name
+
+If you want to send emails using inbox. You need a 3rd party email sending service.(Currently we're using [Sendgrid](https://sendgrid.com/))
+
+For detailed instruction, please keep reading this document.
 
 ### Install Elasticsearch
 This app uses Elasticsearch for database to save the email data. Refer this official site's install instruction [here](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html)
@@ -63,13 +61,30 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     ```
 2. Setup environment variables in `.env` file
     ```
-    DOMAIN=...     // Domain name to use when sending mails.
-    SECRET=...     // Value to encode session data. Any value works
-    ADMIN_PW=...   // Password that will be used to login to Inbox
-    ELASTIC=...    // Password for elasticsearch that you saved in previous step
-    ES_HOST=...    // The ip address of the computer you installed Elasticsearch. Default is http://127.0.0.1:9200
+    DOMAIN=...        // Domain name to use when sending mails.
+    SECRET=...        // Value to encode session data. Any value works
+    ADMIN_PW=...      // Password that will be used to login to Inbox
+    ELASTIC=...       // Password for elasticsearch that you saved in previous step
+    ES_HOST=...       // The ip address of the computer you installed Elasticsearch. Default is http://127.0.0.1:9200
+    SENDGRID_KEY=...  // API key that is issued by sendgrid and supposed to be used when sending email requests
     ```
 3. Install necassary packages: `npm i`
+
+### Setup Sendgrid
+1. Go to [Sendgrid](https://sendgrid.com/) and make an account.
+2. Go to [dashboard](https://app.sendgrid.com/guide/integrate/langs/nodejs) and get api key.
+3. Copy and paste api key in `.env` file.
+
+If you want to use this app only for receiving mails, skip this step.
+
+### Setup MX Record
+Make sure your domains MX record points to the server you're running Inbox. In order to setup your MX record, check your DNS settings in your domain's provider.
+* Exmaple:
+    |Type|Name|Key|
+    |----|----|---|
+    |A|mail|127.0.0.1|
+    |MX|@|mail.domain.com|
+In the example above, `A` record is pointing `mail.domain.com` to `127.0.0.1` and `MX` record is pointing emails to `mail.domain.com`. When some email is sent to `something@domain.com`, it will look up `domain.com`'s `MX` record and send the email data to where it points to. So it will be eventually delivered to `127.0.0.1`
 
 ### Initialize Database & Run
 1. Run `init.js` file.
@@ -84,6 +99,3 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
     node index.js
     ```
     * Default port number is 3004. So you can connect to inbox at http://(your server ip):3004
-
-# Mail App Mockup
-* You can see current version [HERE](https://mail.hoie.kim)
