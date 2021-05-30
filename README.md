@@ -107,10 +107,10 @@ Make sure your domains MX record points to the server you're running Inbox. In o
 
    ```
    (Production mode)
-   npm install --only=prod && npm build && npm start
+   sudo npm install --only=prod && sudo npm build && sudo npm start
 
    (Development mode with watch option)
-   npm install && npm run dev
+   sudo npm install && sudo npm run dev
    ```
 
    - Default port number is 3004. So you can connect to inbox at http://(your server ip):3004
