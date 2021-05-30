@@ -1,19 +1,7 @@
-const fs = require("fs");
 const db = require("../lib/db");
 const mail = require("../lib/mail");
 
 const obj = {};
-
-obj.saveMail = async (req, res) => {
-  console.log(
-    "Recieved POST request to save mail",
-    req.ip,
-    "at",
-    new Date(Date.now())
-  );
-  await db.saveMail({ ...req.body, read: false, label: undefined });
-  const envelopeTo = req.body.envelopeTo[0].address;
-};
 
 obj.getAttachment = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
@@ -21,39 +9,64 @@ obj.getAttachment = async (req, res) => {
     const attachment = await db.getAttachment(req.params.id);
     res.status(200).send(attachment);
   } catch (err) {
-    console.log(err);
+    console.error(err);
     res.status(500).json(new Error("Failed to get attachment data"));
   }
 };
 
 obj.getAccounts = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const accounts = await db.getAccounts();
-  res.status(200).json(accounts);
+  try {
+    const accounts = await db.getAccounts();
+    res.status(200).json(accounts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to get accounts data"));
+  }
 };
 
 obj.getUnreadNo = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const number = await db.getUnreadNo(req.params.account);
-  res.status(200).json(number);
+  try {
+    const number = await db.getUnreadNo(req.params.account);
+    res.status(200).json(number);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to get unread emails data"));
+  }
 };
 
 obj.markRead = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const result = await db.markRead(req.params.id);
-  res.status(200).json(result);
+  try {
+    const result = await db.markRead(req.params.id);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to request to mark as read"));
+  }
 };
 
 obj.getMails = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const mails = await db.getMails(req.params.account);
-  res.status(200).json(mails);
+  try {
+    const mails = await db.getMails(req.params.account);
+    res.status(200).json(mails);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to get emails data"));
+  }
 };
 
 obj.getMailContent = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const mail = await db.getMailContent(req.params.id);
-  res.status(200).json(mail);
+  try {
+    const mail = await db.getMailContent(req.params.id);
+    res.status(200).json(mail);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to get email content data"));
+  }
 };
 
 obj.deleteMail = async (req, res) => {
@@ -64,8 +77,13 @@ obj.deleteMail = async (req, res) => {
     new Date(Date.now())
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const result = await db.deleteMail(req.params.id);
-  res.status(200).json(result);
+  try {
+    const result = await db.deleteMail(req.params.id);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to request to delete email"));
+  }
 };
 
 obj.sendMail = async (req, res) => {
@@ -76,8 +94,13 @@ obj.sendMail = async (req, res) => {
     new Date(Date.now())
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  const result = await mail.sendMail(req.body, req.files?.attachments);
-  res.status(200).json(result);
+  try {
+    const result = await mail.sendMail(req.body, req.files?.attachments);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to request to send email"));
+  }
 };
 
 module.exports = obj;

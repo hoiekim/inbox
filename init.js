@@ -8,14 +8,14 @@ const initialize = async () => {
   await fetch(`http://127.0.0.1:9200/mails`, {
     method: "DELETE",
     headers: {
-      Authorization: authorization,
-    },
+      Authorization: authorization
+    }
   });
   await fetch("http://127.0.0.1:9200/mails", {
     method: "PUT",
     headers: {
       Authorization: authorization,
-      "content-type": "application/json",
+      "content-type": "application/json"
     },
     body: JSON.stringify({
       mappings: {
@@ -26,10 +26,10 @@ const initialize = async () => {
           "envelopeFrom.address": { type: "keyword" },
           "envelopeTo.address": { type: "keyword" },
           html: { type: "text" },
-          subject: { type: "text" },
-        },
-      },
-    }),
+          subject: { type: "text" }
+        }
+      }
+    })
   });
 };
 
