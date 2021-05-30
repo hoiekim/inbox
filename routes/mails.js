@@ -4,6 +4,17 @@ const mail = require("../lib/mail");
 
 const obj = {};
 
+obj.saveMail = async (req, res) => {
+  console.log(
+    "Recieved POST request to save mail",
+    req.ip,
+    "at",
+    new Date(Date.now())
+  );
+  await db.saveMail({ ...req.body, read: false, label: undefined });
+  const envelopeTo = req.body.envelopeTo[0].address;
+};
+
 obj.getAttachment = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
