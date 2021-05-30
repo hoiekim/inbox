@@ -91,6 +91,7 @@ Make sure your domains MX record points to the server you're running Inbox. In o
   |----|----|---|
   |A|mail|127.0.0.1|
   |MX|@|mail.domain.com|
+  
   In the example above, `A` record is pointing `mail.domain.com` to `127.0.0.1` and `MX` record is pointing emails to `mail.domain.com`. When some email is sent to `something@domain.com`, it will look up `domain.com`'s `MX` record and send the email data to where it points to. So it will be eventually delivered to `127.0.0.1`
 
 ### Initialize Database & Run
