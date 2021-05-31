@@ -5,9 +5,9 @@
   "private": false,
   "proxy": "http://localhost:3004",
   "scripts": {
-    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' --kill-others \"npm run front\" \"nodemon index.js\"",
+    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run front\" \"nodemon server.js\"",
     "start": "npm run build && npm run back",
-    "back": "node index.js",
+    "back": "node server.js",
     "front": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
@@ -17,8 +17,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "concurrently": "^6.2.0",
     "@sendgrid/mail": "^7.4.4",
+    "@testing-library/jest-dom": "^5.12.0",
+    "@testing-library/react": "^11.2.7",
+    "@testing-library/user-event": "^12.8.3",
+    "concurrently": "^6.2.0",
     "dotenv": "^8.2.0",
     "ejs": "^3.1.3",
     "express": "^4.17.1",
@@ -27,17 +30,16 @@
     "html-to-text": "^6.0.0",
     "node-fetch": "^2.6.1",
     "node-mailin": "^2.5.0",
-    "uuidv4": "^6.2.3",
-    "@testing-library/jest-dom": "^5.12.0",
-    "@testing-library/react": "^11.2.7",
-    "@testing-library/user-event": "^12.8.3",
     "react": "^17.0.2",
     "react-dom": "^17.0.2",
+    "react-router-dom": "^5.2.0",
     "react-scripts": "4.0.3",
+    "uuidv4": "^6.2.3",
     "web-vitals": "^1.1.2"
   },
   "devDependencies": {
-    "nodemon": "^2.0.7"
+    "nodemon": "^2.0.7",
+    "sass": "^1.34.0"
   },
   "eslintConfig": {
     "extends": [

@@ -1,0 +1,314 @@
+@media (prefers-color-scheme: light) {
+  .tag {
+    background-color: rgb(200, 200, 200);
+    color: black;
+  }
+  .tag:hover {
+    background-color: rgb(180, 180, 180);
+  }
+  .tag:active {
+    background-color: rgb(160, 160, 160);
+  }
+  .tag.clicked {
+    background-color: rgb(170, 170, 170);
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .tag {
+    background-color: rgb(100, 100, 100);
+    color: white;
+  }
+  .tag:hover {
+    background-color: rgb(80, 80, 80);
+  }
+  .tag:active {
+    background-color: rgb(60, 60, 60);
+  }
+  .tag.clicked {
+    background-color: rgb(70, 70, 70);
+  }
+}
+iframe {
+  padding: 1rem;
+  background-color: white;
+  box-sizing: border-box;
+  width: 100%;
+  border: none;
+  overflow-x: scroll;
+  margin-top: 1rem;
+  transition: 0.2s;
+}
+
+blockquote.unread {
+  border-color: rgb(200, 20, 20);
+}
+
+#container {
+  position: absolute;
+  width: 100%;
+  transition: 150ms;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+#container-writer {
+  transition: 150ms;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+#container-writer.clipped {
+  clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+}
+#container-mails {
+  position: relative;
+  transition: 150ms;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+#container-mails.clipped {
+  clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+}
+
+#title_bar {
+  position: fixed;
+  z-index: 10;
+  background-color: rgb(50, 50, 50);
+  width: 100%;
+  max-width: 1000px;
+  min-width: 400px;
+  padding: 10px 1rem;
+  box-sizing: border-box;
+}
+#title_bar > h1 {
+  margin: 0;
+}
+
+#buttons {
+  display: flex;
+  position: absolute;
+  z-index: 11;
+  top: 1.2rem;
+  right: 1rem;
+}
+#buttons > button {
+  margin-right: 10px;
+}
+
+.container-wrap {
+  position: relative;
+}
+
+.content {
+  margin: 0;
+}
+.tag {
+  position: relative;
+  display: inline-block;
+  padding: 0.5rem;
+  margin-top: 0.5rem;
+  margin-right: 0.75rem;
+  border-radius: 5px;
+}
+.numberBall {
+  position: absolute;
+  top: -5px;
+  right: -10px;
+  font-size: 16px;
+  display: inline-block;
+  padding-left: 6px;
+  padding-right: 6px;
+  padding-bottom: 1px;
+  text-align: center;
+  line-height: 19px;
+  border-radius: 10px;
+  background-color: rgb(200, 20, 20);
+  color: white;
+}
+
+.headerBox {
+  position: relative;
+}
+.header {
+  display: inline-block;
+  width: calc(100% - 5rem);
+}
+.actionBox {
+  position: absolute;
+  display: flex;
+  text-align: center;
+  right: 1rem;
+}
+.iconBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 3px;
+  height: 25px;
+  width: 25px;
+}
+.iconBox i {
+  font-size: 20px;
+}
+.iconBox i:hover {
+  font-size: 24px;
+}
+.iconBox i:active {
+  font-size: 22px;
+}
+
+.attachmentBox {
+  position: relative;
+  margin-top: 0.2rem;
+  margin-bottom: 0.5rem;
+}
+.attachment {
+  position: relative;
+  margin-top: 1rem;
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0.4rem;
+  font-size: 14px;
+}
+#container-writer .attachment {
+  margin-top: 0.2rem;
+  margin-bottom: 0.5rem;
+}
+#writer-content .attachment {
+  margin-top: 0.2rem;
+  margin-bottom: 0.5rem;
+}
+.attachment > i {
+  font-size: 14px;
+}
+.attachment-text {
+  z-index: 1;
+  position: relative;
+  overflow: hidden;
+  transition: 0.2s;
+  white-space: nowrap;
+}
+.attachment-preview {
+  z-index: 2;
+  position: absolute;
+  width: 300px;
+  height: 200px;
+  left: 4px;
+  padding: 0.5rem;
+  border-radius: 4px;
+  top: 12px;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+.attachment-preview.clipped {
+  pointer-events: none;
+  top: -184px;
+  clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+}
+
+@media (prefers-color-scheme: light) {
+  .attachment {
+    background-color: rgb(200, 200, 200);
+  }
+  .attachment:hover {
+    background-color: rgb(180, 180, 180);
+  }
+}
+@media (prefers-color-scheme: dark) {
+  .attachment {
+    background-color: rgb(75, 75, 75);
+  }
+  .attachment:hover {
+    background-color: rgb(65, 65, 65);
+  }
+}
+
+.cursor,
+.cursor > * {
+  cursor: pointer;
+}
+.hide {
+  display: none;
+}
+.mailcard-small {
+  font-size: 14px;
+}
+.mailcard-subject {
+  font-size: 20px;
+  margin-top: 0.5rem;
+}
+
+#container-writer input {
+  margin-bottom: 1rem;
+}
+.fieldName {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  height: 20px;
+  margin-bottom: 3px;
+}
+.fieldName i {
+  font-size: 18px;
+}
+.fieldName i:hover {
+  font-size: 20px;
+}
+.fieldName i:active {
+  font-size: 19px;
+}
+.helper-text {
+  font-size: 12px;
+}
+input.writer-short {
+  width: 100px;
+}
+input.writer-long {
+  width: 100%;
+  text-align: left;
+  transition: 150ms;
+}
+input.writer-long.hide {
+  display: block;
+  width: 0;
+}
+.inputBox-flex {
+  display: flex;
+}
+#writer-cc {
+  margin: 0 0.5rem;
+}
+#writer-content-wrap {
+  width: 100%;
+  height: 400px;
+  perspective: 4000px;
+}
+#writer-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 600ms;
+  transform-style: preserve-3d;
+}
+#writer-content.flip {
+  transform: rotateY(180deg);
+}
+#writer-content > * {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  margin-bottom: 1rem;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+#writer-preview {
+  margin: 0;
+  border-radius: 3px;
+  transform: rotateY(180deg);
+}
+#writer-buttons-wrap {
+  width: 350px;
+  margin: auto;
+}
+.writer-buttons {
+  display: inline-block;
+  margin: 1rem 0.5rem;
+  width: 150px;
+  height: 35px;
+  font-size: 16px;
+}

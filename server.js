@@ -15,7 +15,6 @@ require("dotenv").config();
 const domain = process.env.DOMAIN || "My Domain";
 
 app.use(express.static(path.join(__dirname, "build")));
-app.use("/dist", express.static("dist"));
 app.use(express.json());
 app.use(fileupload());
 app.use(
