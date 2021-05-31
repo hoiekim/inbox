@@ -1,0 +1,41 @@
+<%- include('./partials/head') %>
+<%- include('./partials/style') %>
+
+<style>
+  .disabledInput {
+    color: grey;
+    font-size: 0.8rem;
+    text-align: center;
+    line-height: 30px;
+    display: inline-block;
+    border: dashed 0.5px grey;
+    box-sizing: border-box;
+    border-radius: 3px;
+    height: 30px;
+    width: 200px;
+  }
+  #greeting {
+    text-align: center;
+    margin-top: 3rem;
+    margin-bottom: 2rem;
+  }
+  #adminPw, #login {
+    display: block;
+    margin: auto;
+    margin-top: 0.5rem;
+    width: 300px;
+  }
+</style>
+
+<body>
+  <h1><%= domain %> Mail</h1>
+  <h3 id="greeting">Please log in</h3>
+  <div>
+    <input id="adminPw" placeholder="Admin Only" type="password"/>
+    <button id="login"><i class="fas fa-sign-in-alt"></i>&nbsp;&nbsp;Login</button>
+  </div>
+</body>
+
+<script src="/dist/home.js"></script>
+
+<script src="https://kit.fontawesome.com/0472eae8e7.js"></script>

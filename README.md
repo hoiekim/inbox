@@ -1,70 +1,116 @@
-# Getting Started with Create React App
+If these instructions are outdated, please raise an issue or send us a Pull Request.
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+# How to Setup
 
-## Available Scripts
+You need these to use Inbox:
 
-In the project directory, you can run:
+- Elasticsearch (Database to save and query emails)
+- Inbox (Backend & Frontend server)
+- A domain name
 
-### `npm start`
+If you want to send emails using inbox. You need a 3rd party email sending service.(Currently we're using [Sendgrid](https://sendgrid.com/))
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+For detailed instruction, please keep reading this document.
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+### Install Elasticsearch
 
-### `npm test`
+This app uses Elasticsearch for database to save the email data. Refer this official site's install instruction [here](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html)
+or follow this steps. (Tested on Ubuntu)
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+1. Enter this command to import the Elasticsearch PGP key
+   ```
+   wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+   ```
+2. Enter these commands step by step to install Elasticsearch from APT repository
+   ```
+   sudo apt-get install apt-transport-https
+   echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+   sudo apt-get update && sudo apt-get install elasticsearch
+   ```
 
-### `npm run build`
+### Start Elasticsearch
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+1. Enter these commands to start Elasticsearch automatically when the system boots up
+   ```
+   sudo /bin/systemctl daemon-reload
+   sudo /bin/systemctl enable elasticsearch.service
+   ```
+2. Enter this command to start Elasticsearch
+   ```
+   sudo systemctl start elasticsearch.service
+   ```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### Setup Elasticsearch Password
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+By default, elasticsearch has no security. Since your email may contain sensitive data, you must enable security.
 
-### `npm run eject`
+1. As root user, open `/etc/elasticsearch/elasticsearch.yml` and add this line to enable security
+   ```
+   xpack.security.enabled: true
+   ```
+2. Since your configuration changed, restart elastice search using this command
+   ```
+   sudo systemctl restart elasticsearch.service
+   ```
+3. Setup user passwords by running
+   ```
+   sudo /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto
+   ```
+4. Save the password for the user `elastic`. This will be used when you connect to your Elasticsearch
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### Install Inbox
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+1. Clone this git repository
+   ```
+   git clone https://github.com/garageScript/inbox.git
+   ```
+2. Setup environment variables in `.env` file
+   ```
+   DOMAIN=...        // Domain name to use when sending mails.
+   SECRET=...        // Value to encode session data. Any value works
+   ADMIN_PW=...      // Password that will be used to login to Inbox
+   ELASTIC=...       // Password for elasticsearch that you saved in previous step
+   ES_HOST=...       // The ip address of the computer you installed Elasticsearch. Default is http://127.0.0.1:9200
+   SENDGRID_KEY=...  // API key that is issued by sendgrid and supposed to be used when sending email requests
+   ```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+### Setup Sendgrid
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+1. Go to [Sendgrid](https://sendgrid.com/) and make an account.
+2. Go to [dashboard](https://app.sendgrid.com/guide/integrate/langs/nodejs) and get api key.
+3. Copy and paste api key in `.env` file.
 
-## Learn More
+If you want to use this app only for receiving mails, skip this step.
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Setup MX Record
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Make sure your domains MX record points to the server you're running Inbox. In order to setup your MX record, check your DNS settings in your domain's provider.
 
-### Code Splitting
+- Exmaple:
+  |Type|Name|Key|
+  |----|----|---|
+  |A|mail|127.0.0.1|
+  |MX|@|mail.domain.com|
+  
+  In the example above, `A` record is pointing `mail.domain.com` to `127.0.0.1` and `MX` record is pointing emails to `mail.domain.com`. When some email is sent to `something@domain.com`, it will look up `domain.com`'s `MX` record and send the email data to where it points to. So it will be eventually delivered to `127.0.0.1`
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+### Initialize Database & Run
 
-### Analyzing the Bundle Size
+1. Run `init.js` file.
+   ```
+   node init.js
+   ```
+   - When you run this file, it will initialize your elasticsearch database.
+   - Which means it clear all data of mails index, and create it with mapped keys.
+   - This will allow you to search the mail receiver's email address in elasticsearch.
+2. Run the app
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+   ```
+   (Production mode)
+   sudo npm install --only=prod && sudo npm build && sudo npm start
 
-### Making a Progressive Web App
+   (Development mode with watch option)
+   sudo npm install && sudo npm run dev
+   ```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+   - Default port number is 3004. So you can connect to inbox at http://(your server ip):3004
