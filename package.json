@@ -5,10 +5,10 @@
   "private": false,
   "proxy": "http://localhost:3004",
   "scripts": {
-    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' --kill-others \"react-scripts start\" \"nodemon index.js\"",
+    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' --kill-others \"npm run front\" \"nodemon index.js\"",
+    "start": "npm run build && npm run back",
     "back": "node index.js",
     "front": "react-scripts start",
-    "start": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' --kill-others \"react-scripts start\" \"node index.js\"",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
