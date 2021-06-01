@@ -31,7 +31,6 @@ app.use(
 );
 
 app.get("/", (req, res) => {
-  if (req.session.admin) return res.redirect("/mailbox");
   res.sendFile(path.join(__dirname, "build", "index.html"));
 });
 
@@ -44,6 +43,7 @@ app.get("/api/mailContent/:id", mails.getMailContent);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
+app.get("/admin", users.check);
 app.post("/admin", users.admin);
 app.delete("/admin", users.logout);
 

@@ -1,19 +1,25 @@
-import React, { useState } from "react";
+import React, { useState, useContext } from "react";
 import { useHistory } from "react-router-dom";
+import { useMutation } from "react-query";
+import { Context } from "../index";
 import "./index.scss";
 
 const domainName = process.env.REACT_APP_DOMAIN || "My Domain";
 
 const Home = () => {
+  const { isLogin } = useContext(Context);
   const history = useHistory();
+
+  if (isLogin) history.push("/box");
+
   const [pwInput, setPwInput] = useState("");
 
   const onChangePw = (e) => {
     setPwInput(e.target.value);
   };
 
-  const login = () => {
-    fetch("/admin", {
+  const mutation = useMutation((input) => {
+    return fetch("/admin", {
       method: "POST",
       headers: {
         "content-type": "application/json"
@@ -21,9 +27,21 @@ const Home = () => {
       body: JSON.stringify({
         password: pwInput
       })
-    }).then((r) => {
-      history.push("/box");
-    });
+    }).then((r) => r.json());
+  });
+
+  let infoMessage;
+
+  if (mutation.isLoading) infoMessage = "🧐 Checking...";
+  if (mutation.isError) infoMessage = "🤯 Server error";
+  if (mutation.data === true) {
+    infoMessage = "🤗 Welcome!";
+    setTimeout(() => history.push("/box"), 500);
+  }
+  if (mutation.data === false) infoMessage = "🤔 Wrong Password";
+
+  const login = () => {
+    mutation.mutate(pwInput);
   };
 
   const onKeyDownInput = (e) => {
@@ -33,7 +51,8 @@ const Home = () => {
   return (
     <>
       <h1>{domainName} Inbox</h1>
-      <h3 id="greeting">Please log in</h3>
+      <h3 className="greeting">Please log in</h3>
+      <div className="info_message">{infoMessage}</div>
       <div>
         <input
           id="adminPw"
@@ -44,7 +63,7 @@ const Home = () => {
           onChange={onChangePw}
         />
         <button id="login" onClick={login}>
-          <i className="fas fa-sign-in-alt"></i>&nbsp;&nbsp;Login
+          Login
         </button>
       </div>
     </>
