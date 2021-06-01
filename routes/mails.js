@@ -123,7 +123,7 @@ obj.saveMail = async (connection, data) => {
     } else {
       console.warn("Not saved because address is wrong");
     }
-  } catch (errer) {
+  } catch (err) {
     console.error(err);
   }
 };
