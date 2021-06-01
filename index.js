@@ -66,7 +66,12 @@ nodeMailin.on("message", async (connection, data, content) => {
     `To: ${data.evelopeTo}`,
     new Date(Date.now())
   );
-  await db.saveMail({ ...data, read: false, label: undefined });
+  try {
+    await db.saveMail({ ...data, read: false, label: undefined });
+    console.info("Successfully saved an email");
+  } catch (errer) {
+    console.error(err);
+  }
 });
 
 nodeMailin.start({
