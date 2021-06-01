@@ -59,20 +59,7 @@ app.listen(3004, () => {
   console.log(`${domain} mail server is listening`);
 });
 
-nodeMailin.on("message", async (connection, data, content) => {
-  console.log(
-    "Reacieved an email",
-    `From: ${data.envelopeFrom}`,
-    `To: ${data.evelopeTo}`,
-    new Date(Date.now())
-  );
-  try {
-    await db.saveMail({ ...data, read: false, label: undefined });
-    console.info("Successfully saved an email");
-  } catch (errer) {
-    console.error(err);
-  }
-});
+nodeMailin.on("message", mails.saveMail);
 
 nodeMailin.start({
   port: 25,

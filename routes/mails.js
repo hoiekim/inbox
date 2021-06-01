@@ -103,4 +103,29 @@ obj.sendMail = async (req, res) => {
   }
 };
 
+obj.saveMail = async (connection, data) => {
+  console.log(
+    "Reacieved an email",
+    "From: ",
+    data.envelopeFrom,
+    "To: ",
+    data.evelopeTo,
+    new Date(Date.now())
+  );
+  try {
+    const correctAddress = data.envelopeTo.find((e) => {
+      const parsedAddress = e.address.split("@");
+      return parsedAddress[parsedAddress.length - 1] === domainName;
+    });
+    if (correctAddress) {
+      await db.saveMail({ ...data, read: false, label: undefined });
+      console.info("Successfully saved an email");
+    } else {
+      console.warn("Not saved because address is wrong");
+    }
+  } catch (errer) {
+    console.error(err);
+  }
+};
+
 module.exports = obj;
