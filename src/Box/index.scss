@@ -28,6 +28,7 @@
     background-color: rgb(70, 70, 70);
   }
 }
+
 iframe {
   padding: 1rem;
   background-color: white;
@@ -50,18 +51,22 @@ blockquote.unread {
   padding: 0 1rem;
   box-sizing: border-box;
 }
+
 #container-writer {
   transition: 150ms;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
 }
+
 #container-writer.clipped {
   clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
 }
+
 #container-mails {
   position: relative;
   transition: 150ms;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
 }
+
 #container-mails.clipped {
   clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
 }
@@ -76,6 +81,7 @@ blockquote.unread {
   padding: 10px 1rem;
   box-sizing: border-box;
 }
+
 #title_bar > h1 {
   margin: 0;
 }
@@ -87,6 +93,7 @@ blockquote.unread {
   top: 1.2rem;
   right: 1rem;
 }
+
 #buttons > button {
   margin-right: 10px;
 }
@@ -98,6 +105,7 @@ blockquote.unread {
 .content {
   margin: 0;
 }
+
 .tag {
   position: relative;
   display: inline-block;
@@ -106,6 +114,7 @@ blockquote.unread {
   margin-right: 0.75rem;
   border-radius: 5px;
 }
+
 .numberBall {
   position: absolute;
   top: -5px;
@@ -125,16 +134,19 @@ blockquote.unread {
 .headerBox {
   position: relative;
 }
+
 .header {
   display: inline-block;
   width: calc(100% - 5rem);
 }
+
 .actionBox {
   position: absolute;
   display: flex;
   text-align: center;
   right: 1rem;
 }
+
 .iconBox {
   display: flex;
   align-items: center;
@@ -142,15 +154,22 @@ blockquote.unread {
   margin: 3px;
   height: 25px;
   width: 25px;
+
+  svg {
+    height: 20px;
+
+    &:hover {
+      height: 24px;
+    }
+
+    &:active {
+      height: 22px;
+    }
+  }
 }
-.iconBox i {
-  font-size: 20px;
-}
-.iconBox i:hover {
-  font-size: 24px;
-}
-.iconBox i:active {
-  font-size: 22px;
+
+svg {
+  height: 1rem;
 }
 
 .attachmentBox {

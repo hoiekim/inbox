@@ -24,7 +24,7 @@ users.check = (req, res) => {
     "at",
     new Date(Date.now())
   );
-  res.status(200).json(req.session.adim === "admin");
+  res.status(200).json(req.session.admin === "admin");
 };
 
 users.logout = (req, res) => {

@@ -12,7 +12,7 @@ app.use(express.json({ limit: "50mb" }));
 
 require("dotenv").config();
 
-const domain = process.env.DOMAIN || "My Domain";
+const domainName = process.env.DOMAIN || "My Domain";
 
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json());
@@ -48,18 +48,10 @@ app.post("/admin", users.admin);
 app.delete("/admin", users.logout);
 
 app.listen(3004, () => {
-  console.log(`${domain} mail server is listening`);
+  console.log(`${domainName} mail server is listening`);
 });
 
-nodeMailin.on("message", async (connection, data, content) => {
-  console.log(
-    "Reacieved an email",
-    `From: ${data.envelopeFrom}`,
-    `To: ${data.evelopeTo}`,
-    new Date(Date.now())
-  );
-  await db.saveMail({ ...data, read: false, label: undefined });
-});
+nodeMailin.on("message", mails.saveMail);
 
 nodeMailin.start({
   port: 25,
