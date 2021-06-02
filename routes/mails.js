@@ -109,9 +109,9 @@ obj.saveMail = async (connection, data) => {
   console.log(
     "Reacieved an email",
     "from:",
-    data.from,
+    data.from?.text,
     "to:",
-    data.to,
+    data.to?.text,
     new Date(Date.now())
   );
   try {
