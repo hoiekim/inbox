@@ -16,10 +16,7 @@ const Menu = () => {
     })
       .then((r) => r.json())
       .then((r) => {
-        if (r) {
-          setIsLogin(false);
-          document.location = "/";
-        }
+        if (r) setIsLogin(false);
       });
   };
 

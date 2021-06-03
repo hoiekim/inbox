@@ -1,4 +1,4 @@
-import React, { useRef, useContext } from "react";
+import React, { useContext } from "react";
 import CcIcon from "./components/CcIcon";
 import PreviewIcon from "./components/PreviewIcon";
 import SendIcon from "./components/SendIcon";
@@ -9,26 +9,16 @@ const domainName = process.env.REACT_APP_DOMAIN || "domain.box";
 
 const Writer = () => {
   const { isWriterOpen } = useContext(Context);
-  const containerRef = useRef(null);
-  const containerHeight = containerRef.current?.offsetHeight;
 
   const classes = ["container"];
-  let containerTop;
 
   if (isWriterOpen) {
-    containerTop = 27.5 - containerHeight + "px";
   } else {
-    containerTop = 27.5 - containerHeight + "px";
     classes.push("clipped");
   }
 
   return (
-    <blockquote
-      id="container-writer"
-      className={classes.join(" ")}
-      style={{ top: containerTop }}
-      ref={containerRef}
-    >
+    <blockquote id="container-writer" className={classes.join(" ")}>
       <div>
         <div className="fieldName">From: </div>
         <input id="writer-name" className="writer-short" placeholder="name" />

@@ -40,7 +40,6 @@ const Home = () => {
     if (mutation.data && setIsLogin) {
       setTimeout(() => {
         setIsLogin(true);
-        document.location = "/box";
       }, 500);
     }
   }, [mutation.data, setIsLogin]);
