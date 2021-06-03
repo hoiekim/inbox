@@ -1,6 +1,8 @@
 const db = require("../lib/db");
 const mail = require("../lib/mail");
 
+const domainName = process.env.DOMAIN || "My Domain";
+
 const obj = {};
 
 obj.getAttachment = async (req, res) => {
@@ -106,10 +108,10 @@ obj.sendMail = async (req, res) => {
 obj.saveMail = async (connection, data) => {
   console.log(
     "Reacieved an email",
-    "From: ",
-    data.envelopeFrom,
-    "To: ",
-    data.evelopeTo,
+    "from:",
+    data.from?.text,
+    "to:",
+    data.to?.text,
     new Date(Date.now())
   );
   try {
@@ -123,7 +125,7 @@ obj.saveMail = async (connection, data) => {
     } else {
       console.warn("Not saved because address is wrong");
     }
-  } catch (errer) {
+  } catch (err) {
     console.error(err);
   }
 };
