@@ -35,7 +35,7 @@ users.logout = (req, res) => {
     new Date(Date.now())
   );
   req.session.admin = "";
-  res.status(200).json("Done");
+  res.status(200).json(true);
 };
 
 module.exports = users;

@@ -18,9 +18,11 @@ const Context = createContext();
 const AppBody = () => {
   // defines states used for UI control
   const [isLogin, setIsLogin] = useState(false);
-  const [isWriterOpen, setIsWriterOpen] = useState(false);
+  const [isWriterOpen, setIsWriterOpen] = useState(true);
   const [isCategoryOpen, setIsCategoryOpen] = useState(false);
   const [isAccountsOpen, setIsAccountsOpen] = useState(false);
+  const [queryEnabled, setQueryEnabled] = useState(true);
+  const [refetchAccounts, setRefetchAccounts] = useState(() => {});
 
   // stores states to export with `Context`
   const contextValue = {
@@ -31,16 +33,24 @@ const AppBody = () => {
     isCategoryOpen,
     setIsCategoryOpen,
     isAccountsOpen,
-    setIsAccountsOpen
+    setIsAccountsOpen,
+    refetchAccounts,
+    setRefetchAccounts
   };
 
   // checks session data from backend server and set `isLogin` state
   const checkLogin = () => fetch("/admin").then((r) => r.json());
-  const queryData = useQuery("checkLogin", checkLogin, { cacheTime: 0 });
+  const queryData = useQuery("checkLogin", checkLogin, {
+    cacheTime: 0,
+    enabled: queryEnabled
+  });
 
   useEffect(() => {
-    setIsLogin(queryData.data);
-  }, [queryData.data]);
+    if (queryData.isSuccess) {
+      setIsLogin(queryData.data);
+      setQueryEnabled(false);
+    }
+  }, [queryData]);
 
   const ConditionalSwitch = () => {
     // returns components conditionally: checking session
@@ -96,8 +106,8 @@ const AppBody = () => {
 
   return (
     <Context.Provider value={contextValue}>
-      <Header />
       <BrowserRouter>
+        <Header />
         <ConditionalSwitch />
       </BrowserRouter>
     </Context.Provider>

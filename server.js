@@ -3,7 +3,6 @@ const fileupload = require("express-fileupload");
 const session = require("express-session");
 const mails = require("./routes/mails");
 const users = require("./routes/users");
-const db = require("./lib/db");
 const nodeMailin = require("node-mailin");
 const path = require("path");
 
@@ -12,7 +11,7 @@ app.use(express.json({ limit: "50mb" }));
 
 require("dotenv").config();
 
-const domainName = process.env.DOMAIN || "My Domain";
+const domainName = process.env.DOMAIN || "mydomain";
 
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json());

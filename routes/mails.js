@@ -1,7 +1,7 @@
 const db = require("../lib/db");
 const mail = require("../lib/mail");
 
-const domainName = process.env.DOMAIN || "My Domain";
+const domainName = process.env.DOMAIN || "mydomain";
 
 const obj = {};
 

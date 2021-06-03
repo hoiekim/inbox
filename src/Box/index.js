@@ -1,5 +1,7 @@
 import React from "react";
 import Writer from "./components/Writer";
+import Accounts from "./components/Accounts";
+import Mails from "./components/Mails";
 import "./index.scss";
 
 const Box = () => {
@@ -7,8 +9,8 @@ const Box = () => {
     <div className="container-wrap">
       <div id="container">
         <Writer />
-        <div id="container-accounts" className="container"></div>
-        <div id="container-mails" className="container"></div>
+        <Accounts />
+        <Mails />
       </div>
     </div>
   );

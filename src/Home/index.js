@@ -1,12 +1,13 @@
 import React, { useState, useContext, useEffect } from "react";
-import { useHistory } from "react-router-dom";
 import { useMutation } from "react-query";
-import { Context } from "..";
+
 import LoginIcon from "./components/LoginIcon";
+
+import { Context } from "..";
+
 import "./index.scss";
 
 const Home = () => {
-  const history = useHistory();
   const { setIsLogin } = useContext(Context);
   const [pwInput, setPwInput] = useState("");
 
@@ -36,13 +37,13 @@ const Home = () => {
   if (mutation.data === false) infoMessage = "🤔 Wrong Password";
 
   useEffect(() => {
-    if (mutation.data && history && setIsLogin) {
+    if (mutation.data && setIsLogin) {
       setTimeout(() => {
-        history.push("/box");
-        setIsLogin(mutation.data);
+        setIsLogin(true);
+        document.location = "/box";
       }, 500);
     }
-  }, [mutation.data, history, setIsLogin]);
+  }, [mutation.data, setIsLogin]);
 
   const onClickLogin = () => {
     mutation.mutate(pwInput);
