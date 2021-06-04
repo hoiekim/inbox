@@ -44,21 +44,11 @@ blockquote.unread {
   border-color: rgb(200, 20, 20);
 }
 
-.container {
+.pane {
   padding: 0 0.5rem 0 1rem;
   box-sizing: border-box;
   overflow-y: scroll;
-}
-
-#container-accounts {
-  width: 200px;
-
-  .tag {
-    position: relative;
-    padding: 0.5rem;
-    margin-top: 0.5rem;
-    border-radius: 5px;
-  }
+  overflow-x: hidden;
 }
 
 #container-mails {
@@ -127,62 +117,6 @@ svg {
     svg {
       margin-right: 0.3rem;
     }
-  }
-}
-
-#container-writer {
-  width: calc(100vw - 200px);
-
-  .attachment {
-    margin-top: 0.2rem;
-    margin-bottom: 0.5rem;
-  }
-}
-#writer-content .attachment {
-  margin-top: 0.2rem;
-  margin-bottom: 0.5rem;
-}
-.attachment > i {
-  font-size: 14px;
-}
-.attachment-text {
-  z-index: 1;
-  position: relative;
-  overflow: hidden;
-  transition: 0.2s;
-  white-space: nowrap;
-}
-.attachment-preview {
-  z-index: 2;
-  position: absolute;
-  width: 300px;
-  height: 200px;
-  left: 4px;
-  padding: 0.5rem;
-  border-radius: 4px;
-  top: 12px;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
-}
-.attachment-preview.clipped {
-  pointer-events: none;
-  top: -184px;
-  clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
-}
-
-@media (prefers-color-scheme: light) {
-  .attachment {
-    background-color: rgb(200, 200, 200);
-  }
-  .attachment:hover {
-    background-color: rgb(180, 180, 180);
-  }
-}
-@media (prefers-color-scheme: dark) {
-  .attachment {
-    background-color: rgb(75, 75, 75);
-  }
-  .attachment:hover {
-    background-color: rgb(65, 65, 65);
   }
 }
 
@@ -279,4 +213,13 @@ input.writer-long.hide {
   width: 150px;
   height: 35px;
   font-size: 16px;
+}
+
+.main_pane {
+  z-index: 0;
+  position: fixed;
+  left: 200px;
+  top: 70px;
+  height: calc(100vh - 80px);
+  display: flex;
 }

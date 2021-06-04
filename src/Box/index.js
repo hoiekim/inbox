@@ -6,17 +6,14 @@ import "./index.scss";
 
 const Box = () => {
   const [selectedAccount, setSelectedAccount] = useState("");
+
   return (
     <>
       <Accounts setSelectedAccount={setSelectedAccount} />
-      {selectedAccount ? (
+      <div className="main_pane pane">
         <Mails selectedAccount={selectedAccount} />
-      ) : (
-        <div id="container-mails" className="container">
-          Please Select Account
-        </div>
-      )}
-      <Writer />
+        <Writer />
+      </div>
     </>
   );
 };

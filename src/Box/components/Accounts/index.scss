@@ -1,0 +1,11 @@
+.side_pane {
+  z-index: 10;
+  width: 200px;
+
+  .tag {
+    position: relative;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    border-radius: 5px;
+  }
+}

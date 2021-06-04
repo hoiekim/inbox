@@ -3,7 +3,15 @@ import { useQuery } from "react-query";
 
 import MailBody from "./components/MailBody";
 
-const Mails = ({ selectedAccount }) => {
+const MailsNotRendered = () => {
+  return (
+    <div id="container-mails" className="container">
+      Please Select Account
+    </div>
+  );
+};
+
+const MailsRendered = ({ selectedAccount }) => {
   const [activeMailId, setActiveMailId] = useState("");
   const getMails = () => {
     return fetch(`/api/mails/${selectedAccount}`).then((r) => r.json());
@@ -29,7 +37,7 @@ const Mails = ({ selectedAccount }) => {
   if (queryData.isSuccess) {
     const mails = queryData.data || [];
 
-    const Mails = () => {
+    const MailsList = () => {
       const result = mails.map((mail, i) => {
         const date = new Date(mail.date).toLocaleDateString("en-US", {
           weekday: "long",
@@ -79,11 +87,23 @@ const Mails = ({ selectedAccount }) => {
     };
 
     return (
-      <div id="container-mails" className="container">
-        <Mails />
+      <div id="container-mails">
+        <MailsList />
       </div>
     );
   }
+};
+
+const Mails = ({ selectedAccount }) => {
+  return (
+    <>
+      {selectedAccount ? (
+        <MailsRendered selectedAccount={selectedAccount} />
+      ) : (
+        <MailsNotRendered />
+      )}
+    </>
+  );
 };
 
 export default Mails;

@@ -4,21 +4,23 @@ import PreviewIcon from "./components/PreviewIcon";
 import SendIcon from "./components/SendIcon";
 import AttachIcon from "./components/AttachIcon";
 import { Context } from "../../..";
+import "./index.scss";
 
 const domainName = process.env.REACT_APP_DOMAIN || "domain.box";
 
 const Writer = () => {
-  const { isWriterOpen } = useContext(Context);
+  const { isLogin, isWriterOpen } = useContext(Context);
 
-  const classes = ["container"];
+  const swiperStyle = {};
 
-  if (isWriterOpen) {
-  } else {
-    classes.push("clipped");
-  }
+  if (!isLogin) {
+    swiperStyle.left = 0;
+  } else if (isWriterOpen) {
+    swiperStyle.left = "calc(400px - 100vw)";
+  } else swiperStyle.left = 0;
 
   return (
-    <blockquote id="container-writer" className={classes.join(" ")}>
+    <blockquote id="container-writer" style={swiperStyle}>
       <div>
         <div className="fieldName">From: </div>
         <input id="writer-name" className="writer-short" placeholder="name" />

@@ -41,18 +41,12 @@ const App = () => {
     setIsHamburgerMenuOpen
   };
 
-  const swiperStyle = {
-    left: !isLogin ? 0 : isWriterOpen ? "calc(200px - 100vw)" : 0
-  };
-
   return (
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
           <Header />
-          <div className="swiper" style={swiperStyle}>
-            {isLogin ? <Box /> : <Home />}
-          </div>
+          <div className="under_header">{isLogin ? <Box /> : <Home />}</div>
         </Context.Provider>
       </QueryClientProvider>
     </React.StrictMode>
