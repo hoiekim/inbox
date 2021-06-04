@@ -2,13 +2,11 @@ import React, { useContext } from "react";
 
 import WriteIcon from "./components/WriteIcon";
 import LogoutIcon from "./components/LogoutIcon";
-import RefreshIcon from "./components/RefreshIcon";
 
 import { Context } from "../../..";
 
 const Menu = () => {
-  const { setIsLogin, isWriterOpen, setIsWriterOpen, refetchAccounts } =
-    useContext(Context);
+  const { setIsLogin, isWriterOpen, setIsWriterOpen } = useContext(Context);
 
   const logout = () => {
     return fetch("/admin", {
@@ -25,12 +23,9 @@ const Menu = () => {
   };
 
   return (
-    <div id="buttons">
+    <div className="menu">
       <div id="write" className="iconBox">
         <WriteIcon className="cursor" onClick={onClickWriter} />
-      </div>
-      <div id="refresh" className="iconBox">
-        <RefreshIcon className="cursor" onClick={() => {}} />
       </div>
       <div id="logout" className="iconBox">
         <LogoutIcon className="cursor" onClick={logout} />

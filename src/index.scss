@@ -9,6 +9,7 @@ body {
   * {
     font-weight: 100;
     cursor: default;
+    box-sizing: border-box;
   }
 }
 
@@ -82,9 +83,6 @@ iframe::-webkit-scrollbar-thumb:hover {
     background-color: rgb(220, 220, 220);
     border-left: 3px solid rgb(200, 200, 200);
   }
-  h1 {
-    border-bottom: 1px solid rgb(200, 200, 200);
-  }
   input,
   textarea {
     background-color: white;
@@ -100,9 +98,6 @@ iframe::-webkit-scrollbar-thumb:hover {
     background-color: rgb(55, 55, 55);
     border-left: 3px solid rgb(75, 75, 75);
   }
-  h1 {
-    border-bottom: 1px solid rgb(75, 75, 75);
-  }
   input,
   textarea {
     background-color: rgb(235, 235, 235);
@@ -110,9 +105,8 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
 }
 body {
-  overflow-y: scroll;
+  overflow: hidden;
   position: relative;
-  max-width: 1000px;
   min-width: 400px;
   margin: auto;
 }
@@ -184,4 +178,12 @@ button:hover {
 }
 button:active {
   background-color: rgb(45, 20, 220);
+}
+
+.swiper {
+  transition: 150ms;
+  position: fixed;
+  top: 70px;
+  height: calc(100vh - 80px);
+  display: flex;
 }

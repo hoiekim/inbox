@@ -53,7 +53,7 @@ const Home = () => {
   };
 
   return (
-    <>
+    <div className="container_login">
       <h3 className="greeting">Please log in</h3>
       <div className="info_message">{infoMessage}</div>
       <div>
@@ -70,7 +70,7 @@ const Home = () => {
           <span>Login</span>
         </button>
       </div>
-    </>
+    </div>
   );
 };
 

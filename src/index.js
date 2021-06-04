@@ -13,39 +13,10 @@ const Context = createContext();
 
 let session = false;
 
-const AppBody = () => {
-  // defines states used for UI control
-  const [isLogin, setIsLogin] = useState(session);
-  const [isWriterOpen, setIsWriterOpen] = useState(true);
-  const [isCategoryOpen, setIsCategoryOpen] = useState(false);
-  const [isAccountsOpen, setIsAccountsOpen] = useState(false);
-  const [refetchAccounts, setRefetchAccounts] = useState(() => {});
-
-  // stores states to export with `Context`
-  const contextValue = {
-    isLogin,
-    setIsLogin,
-    isWriterOpen,
-    setIsWriterOpen,
-    isCategoryOpen,
-    setIsCategoryOpen,
-    isAccountsOpen,
-    setIsAccountsOpen,
-    refetchAccounts,
-    setRefetchAccounts
-  };
-
-  return (
-    <Context.Provider value={contextValue}>
-      <Header />
-      {isLogin ? <Box /> : <Home />}
-    </Context.Provider>
-  );
-};
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
+      cacheTime: Infinity,
       refetchOnWindowFocus: false,
       refetchOnmount: false,
       refetchOnReconnect: false,
@@ -55,10 +26,34 @@ const queryClient = new QueryClient({
 });
 
 const App = () => {
+  // defines states used for UI control
+  const [isLogin, setIsLogin] = useState(session);
+  const [isWriterOpen, setIsWriterOpen] = useState(false);
+  const [isHamburgerMenuOpen, setIsHamburgerMenuOpen] = useState(false);
+
+  // stores states to export with `Context`
+  const contextValue = {
+    isLogin,
+    setIsLogin,
+    isWriterOpen,
+    setIsWriterOpen,
+    isHamburgerMenuOpen,
+    setIsHamburgerMenuOpen
+  };
+
+  const swiperStyle = {
+    left: !isLogin ? 0 : isWriterOpen ? "calc(200px - 100vw)" : 0
+  };
+
   return (
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <AppBody />
+        <Context.Provider value={contextValue}>
+          <Header />
+          <div className="swiper" style={swiperStyle}>
+            {isLogin ? <Box /> : <Home />}
+          </div>
+        </Context.Provider>
       </QueryClientProvider>
     </React.StrictMode>
   );

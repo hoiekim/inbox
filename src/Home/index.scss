@@ -14,8 +14,14 @@ div.info_message {
 
 #adminPw,
 #login {
-  display: block;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   margin: auto;
   margin-top: 0.5rem;
   width: 250px;
+}
+
+.container_login {
+  width: 100vw;
 }

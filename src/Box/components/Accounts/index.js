@@ -1,48 +1,54 @@
-import React, { useState, useContext, useEffect } from "react";
+import React from "react";
 import { useQuery } from "react-query";
 
-import { Context } from "../../..";
-
-const Accounts = () => {
-  const [queryEnabled, setQueryEnabled] = useState(true);
-
+const Accounts = ({ selectedAccount, setSelectedAccount }) => {
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
-  const queryData = useQuery("getAccounts", getAccounts, {
-    cacheTime: 0,
-    enabled: queryEnabled
-  });
+  const queryData = useQuery("getAccounts", getAccounts);
 
-  //   const { setRefetchAccounts } = useContext(Context);
+  if (queryData.isLoading) {
+    return (
+      <div id="container-accounts" className="container">
+        Loading Accounts List...
+      </div>
+    );
+  }
 
-  //   useEffect(() => {
-  //     if (queryData.refetch && setRefetchAccounts) {
-  //       setRefetchAccounts(queryData.refetch);
-  //     }
-  //   }, [queryData.refetch, setRefetchAccounts]);
+  if (queryData.error) {
+    return (
+      <div id="container-accounts" className="container">
+        Accounts List Request Failed
+      </div>
+    );
+  }
 
-  if (queryData.isLoading || queryData.error) return <></>;
+  if (queryData.isSuccess) {
+    const accounts = Array.isArray(queryData.data) ? queryData.data : null;
 
-  const accounts = Array.isArray(queryData.data) ? queryData.data : null;
+    const Accounts = () => {
+      const result = accounts?.map((data, i) => {
+        const accountName = data.split("@")[0];
 
-  const Accounts = () => {
-    const result = accounts?.map((data, i) => {
-      const accountName = data.split("@")[0];
-      return (
-        <h3 key={i} className="tag cursor">
-          <span>{accountName}</span>
-          {/* <div className="numberBall">{unreadNo}</div> */}
-        </h3>
-      );
-    });
+        const onClickAccount = () => {
+          if (selectedAccount !== data) setSelectedAccount(data);
+        };
 
-    return result || <></>;
-  };
+        return (
+          <h3 key={i} className="tag cursor" onClick={onClickAccount}>
+            <span>{accountName}</span>
+            {/* <div className="numberBall">{unreadNo}</div> */}
+          </h3>
+        );
+      });
 
-  return (
-    <div id="container-accounts" className="container">
-      <Accounts />
-    </div>
-  );
+      return result || <></>;
+    };
+
+    return (
+      <div id="container-accounts" className="container">
+        <Accounts />
+      </div>
+    );
+  }
 };
 
 export default Accounts;
