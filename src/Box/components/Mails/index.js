@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useContext } from "react";
 import { useQuery } from "react-query";
 
 import MailBody from "./components/MailBody";
+
+import { Context } from "../../..";
 
 const MailsNotRendered = () => {
   return (
@@ -95,14 +97,22 @@ const MailsRendered = ({ selectedAccount }) => {
 };
 
 const Mails = ({ selectedAccount }) => {
+  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
+  const onClickCurtain = () => {
+    setIsWriterOpen(false);
+  };
   return (
-    <>
+    <div className="pane main_pane">
       {selectedAccount ? (
         <MailsRendered selectedAccount={selectedAccount} />
       ) : (
         <MailsNotRendered />
       )}
-    </>
+      <div
+        className={isWriterOpen ? "curtain on" : "curtain"}
+        onClick={onClickCurtain}
+      />
+    </div>
   );
 };
 

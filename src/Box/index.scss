@@ -52,7 +52,7 @@ blockquote.unread {
 }
 
 #container-mails {
-  width: calc(100vw - 200px);
+  width: calc(100vw - 250px);
   position: relative;
 }
 
@@ -221,5 +221,6 @@ input.writer-long.hide {
   left: 200px;
   top: 70px;
   height: calc(100vh - 80px);
+  width: calc(100vw - 320px);
   display: flex;
 }

@@ -1,7 +1,9 @@
-#container-writer {
+.writer {
   width: calc(100vw - 400px);
+  height: calc(100vh - 70px);
   transition: 150ms;
-  position: relative;
+  position: fixed;
+  margin-top: 0;
 
   .attachment {
     margin-top: 0.2rem;

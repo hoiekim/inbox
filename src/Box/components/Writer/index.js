@@ -9,18 +9,20 @@ import "./index.scss";
 const domainName = process.env.REACT_APP_DOMAIN || "domain.box";
 
 const Writer = () => {
-  const { isLogin, isWriterOpen } = useContext(Context);
+  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
 
   const swiperStyle = {};
 
-  if (!isLogin) {
-    swiperStyle.left = 0;
-  } else if (isWriterOpen) {
-    swiperStyle.left = "calc(400px - 100vw)";
-  } else swiperStyle.left = 0;
+  if (isWriterOpen) {
+    swiperStyle.right = 0;
+  } else swiperStyle.right = "calc(500px - 100vw)";
+
+  const onClickCurtain = () => {
+    setIsWriterOpen(true);
+  };
 
   return (
-    <blockquote id="container-writer" style={swiperStyle}>
+    <blockquote className="writer" style={swiperStyle}>
       <div>
         <div className="fieldName">From: </div>
         <input id="writer-name" className="writer-short" placeholder="name" />
@@ -101,6 +103,10 @@ const Writer = () => {
           <span>Send</span>
         </button>
       </div>
+      <div
+        className={isWriterOpen ? "curtain" : "curtain on"}
+        onClick={onClickCurtain}
+      />
     </blockquote>
   );
 };

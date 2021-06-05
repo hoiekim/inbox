@@ -1,26 +1,21 @@
-import React from "react";
+import React, { useContext } from "react";
 import { useQuery } from "react-query";
+
+import { Context } from "../../..";
 
 import "./index.scss";
 
 const Accounts = ({ selectedAccount, setSelectedAccount }) => {
+  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const queryData = useQuery("getAccounts", getAccounts);
 
   if (queryData.isLoading) {
-    return (
-      <div id="container-accounts" className="container">
-        Loading Accounts List...
-      </div>
-    );
+    return <div className="container">Loading Accounts List...</div>;
   }
 
   if (queryData.error) {
-    return (
-      <div id="container-accounts" className="container">
-        Accounts List Request Failed
-      </div>
-    );
+    return <div className="container">Accounts List Request Failed</div>;
   }
 
   if (queryData.isSuccess) {
@@ -47,9 +42,17 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
       return result || <></>;
     };
 
+    const onClickCurtain = () => {
+      setIsWriterOpen(false);
+    };
+
     return (
-      <div id="container-accounts" className="pane side_pane">
+      <div className="pane side_pane">
         <Accounts />
+        <div
+          className={isWriterOpen ? "curtain on" : "curtain"}
+          onClick={onClickCurtain}
+        />
       </div>
     );
   }
