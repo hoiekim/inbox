@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useQuery } from "react-query";
 
-import FileIcon from "./components/FileIcon";
+import FileIcon from "../../../FileIcon";
 
 const MailBody = ({ mailId }) => {
   const [iframeDom, setIframeDom] = useState(null);

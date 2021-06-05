@@ -108,7 +108,7 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
 
   .curtain.on {
-    background-color: rgba(230, 230, 230, 0.8);
+    background-color: rgba(230, 230, 230, 0.6);
   }
 }
 
@@ -137,10 +137,10 @@ iframe::-webkit-scrollbar-thumb:hover {
     background-color: rgb(50, 35, 180);
 
     &:hover {
-      background-color: rgb(50, 25, 230);
+      background-color: rgb(60, 50, 230);
     }
     &:active {
-      background-color: rgb(45, 20, 220);
+      background-color: rgb(55, 45, 220);
     }
   }
   blockquote {
@@ -149,9 +149,9 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
   input,
   textarea {
-    color: white;
-    background-color: rgb(70, 70, 70);
-    box-shadow: 2px 2px 2px rgb(60, 60, 60) inset;
+    color: rgb(230, 230, 230);
+    background-color: rgb(50, 50, 50);
+    box-shadow: 2px 2px 2px rgb(40, 40, 40) inset;
   }
 
   .attachment {
@@ -180,7 +180,7 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
 
   .curtain.on {
-    background-color: rgba(50, 50, 50, 0.8);
+    background-color: rgba(50, 50, 50, 0.6);
   }
 }
 

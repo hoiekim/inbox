@@ -10,7 +10,7 @@ const Header = () => {
   const { isLogin } = useContext(Context);
   return (
     <div id="title_bar">
-      <h1>{domainName} Mail</h1>
+      <h1>@{domainName}</h1>
       {isLogin ? <RightMenu /> : null}
     </div>
   );
