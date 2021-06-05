@@ -9,8 +9,12 @@ const Box = () => {
 
   return (
     <>
-      <Accounts setSelectedAccount={setSelectedAccount} />
-      <Mails selectedAccount={selectedAccount} />
+      <div className="pane side_pane">
+        <Accounts setSelectedAccount={setSelectedAccount} />
+      </div>
+      <div className="pane main_pane">
+        <Mails selectedAccount={selectedAccount} />
+      </div>
       <Writer />
     </>
   );

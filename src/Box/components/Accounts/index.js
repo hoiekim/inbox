@@ -47,13 +47,13 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
     };
 
     return (
-      <div className="pane side_pane">
+      <>
         <Accounts />
         <div
           className={isWriterOpen ? "curtain on" : "curtain"}
           onClick={onClickCurtain}
         />
-      </div>
+      </>
     );
   }
 };

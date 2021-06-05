@@ -69,27 +69,25 @@ const Writer = () => {
           placeholder="This is the mail subject"
         />
       </div>
-      <div>
+      <div className="writer-body">
         <div className="fieldName">
           <span>Content: </span>
           <span>
             <AttachIcon className="cursor" />
           </span>
         </div>
-        <div id="writer-body">
-          <div id="writer-content-wrap">
-            <div id="writer-content">
-              <textarea
-                id="writer-textarea"
-                className="writer-fat"
-                placeholder="Say something really cool here!"
-              ></textarea>
-              <iframe
-                id="writer-preview"
-                title="writer-preview"
-                className="hide"
-              ></iframe>
-            </div>
+        <div id="writer-content-wrap">
+          <div id="writer-content">
+            <textarea
+              id="writer-textarea"
+              className="writer-fat"
+              placeholder="Say something really cool here!"
+            ></textarea>
+            <iframe
+              id="writer-preview"
+              title="writer-preview"
+              className="hide"
+            ></iframe>
           </div>
         </div>
       </div>
@@ -104,6 +102,7 @@ const Writer = () => {
         </button>
       </div>
       <div
+        style={{ left: "-3px" }}
         className={isWriterOpen ? "curtain" : "curtain on"}
         onClick={onClickCurtain}
       />

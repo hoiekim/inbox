@@ -5,12 +5,10 @@ import MailBody from "./components/MailBody";
 
 import { Context } from "../../..";
 
+import "./index.scss";
+
 const MailsNotRendered = () => {
-  return (
-    <div id="container-mails" className="container">
-      Please Select Account
-    </div>
-  );
+  return <div className="mails_container">Please Select Account</div>;
 };
 
 const MailsRendered = ({ selectedAccount }) => {
@@ -21,19 +19,11 @@ const MailsRendered = ({ selectedAccount }) => {
   const queryData = useQuery("getMails_" + selectedAccount, getMails);
 
   if (queryData.isLoading) {
-    return (
-      <div id="container-mails" className="container">
-        Loading Mails List...
-      </div>
-    );
+    return <div className="mails_container">Loading Mails List...</div>;
   }
 
   if (queryData.error) {
-    return (
-      <div id="container-mails" className="container">
-        Mails List Request Failed
-      </div>
-    );
+    return <div className="mails_container">Mails List Request Failed</div>;
   }
 
   if (queryData.isSuccess) {
@@ -89,7 +79,7 @@ const MailsRendered = ({ selectedAccount }) => {
     };
 
     return (
-      <div id="container-mails">
+      <div className="mails_container">
         <MailsList />
       </div>
     );
@@ -102,7 +92,7 @@ const Mails = ({ selectedAccount }) => {
     setIsWriterOpen(false);
   };
   return (
-    <div className="pane main_pane">
+    <>
       {selectedAccount ? (
         <MailsRendered selectedAccount={selectedAccount} />
       ) : (
@@ -112,7 +102,7 @@ const Mails = ({ selectedAccount }) => {
         className={isWriterOpen ? "curtain on" : "curtain"}
         onClick={onClickCurtain}
       />
-    </div>
+    </>
   );
 };
 
