@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import React, { useContext, useState } from "react";
 import CcIcon from "./components/CcIcon";
 import PreviewIcon from "./components/PreviewIcon";
 import SendIcon from "./components/SendIcon";
@@ -6,7 +6,7 @@ import AttachIcon from "./components/AttachIcon";
 import { Context } from "../../..";
 import "./index.scss";
 
-const domainName = process.env.REACT_APP_DOMAIN || "domain.box";
+const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
 const Writer = () => {
   const { isWriterOpen, setIsWriterOpen } = useContext(Context);
