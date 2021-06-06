@@ -98,7 +98,8 @@ obj.sendMail = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
     const result = await mail.sendMail(req.body, req.files?.attachments);
-    res.status(200).json(result);
+    if (result === true) res.status(200).json(result);
+    else throw new Error("Sendgrid request failed");
   } catch (err) {
     console.error(err);
     res.status(500).json(new Error("Failed to request to send email"));

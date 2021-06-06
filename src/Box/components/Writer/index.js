@@ -111,7 +111,11 @@ const Writer = () => {
   };
 
   useEffect(() => {
-    if (mutation.status === "success") {
+    if (
+      setIsWriterOpen &&
+      mutation.status === "success" &&
+      mutation.data === true
+    ) {
       alert("Your mail is sent successfully");
       setIsWriterOpen(false);
       setName("");
@@ -123,7 +127,7 @@ const Writer = () => {
       setTextarea("");
       setAttachments({});
     }
-  }, [mutation.status]);
+  }, [mutation.status, mutation.data, setIsWriterOpen]);
 
   const Attachments = () => {
     const result = Object.keys(attachments).map((key, i) => {
@@ -149,7 +153,11 @@ const Writer = () => {
         </div>
       );
     });
-    return result ? <div className="attachmentBox">{result}</div> : <></>;
+    return result.length ? (
+      <div className="attachmentBox">{result}</div>
+    ) : (
+      <></>
+    );
   };
 
   return (

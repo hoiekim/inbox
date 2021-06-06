@@ -5,23 +5,33 @@ h3.greeting {
 }
 
 div.info_message {
-  margin: 0.5rem;
+  margin: 3rem 0 1rem;
   display: flex;
   justify-content: center;
   align-items: center;
   height: 1rem;
+  font-size: 14px;
 }
 
-#adminPw,
-#login {
+.login_ui {
   display: flex;
   justify-content: center;
   align-items: center;
   margin: auto;
   margin-top: 0.5rem;
   width: 250px;
+
+  &:last-child {
+    margin-bottom: 2rem;
+  }
 }
 
 .container_login {
   width: 100vw;
+  padding: 3rem;
+
+  .login_card {
+    max-width: 800px;
+    margin: auto;
+  }
 }

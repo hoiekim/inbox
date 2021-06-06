@@ -54,22 +54,22 @@ const Home = () => {
 
   return (
     <div className="container_login">
-      <h3 className="greeting">Please log in</h3>
-      <div className="info_message">{infoMessage}</div>
-      <div>
+      <blockquote className="login_card">
+        <h3 className="greeting">Please log in</h3>
+        <div className="info_message">{infoMessage}</div>
         <input
-          id="adminPw"
+          className="login_ui"
           placeholder="Admin Only"
           type="password"
           value={pwInput}
           onKeyDown={onKeyDownInput}
           onChange={onChangePw}
         />
-        <button id="login" onClick={onClickLogin}>
+        <button className="login_ui" onClick={onClickLogin}>
           <LoginIcon />
           <span>Login</span>
         </button>
-      </div>
+      </blockquote>
     </div>
   );
 };

@@ -1,17 +1,27 @@
 .pane {
+  position: fixed;
   padding: 0 0.5rem 0 1rem;
   box-sizing: border-box;
   overflow-y: scroll;
   overflow-x: hidden;
-  height: 100%;
+
+  &,
+  & > .curtain {
+    height: 100%;
+  }
 }
+
 .main_pane {
-  left: 200px;
-  top: 70px;
-  height: calc(100vh - 80px);
-  width: calc(100vw - 320px);
-  display: flex;
+  left: 202px;
+  &,
+  & > .curtain {
+    width: calc(100vw - 320px);
+  }
 }
+
 .side_pane {
-  width: 200px;
+  &,
+  & > .curtain {
+    width: 200px;
+  }
 }

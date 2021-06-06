@@ -1,7 +1,9 @@
-import React, { useState, useContext } from "react";
-import { useQuery } from "react-query";
+import React, { useState, useContext, useEffect } from "react";
+import { useQuery, useMutation } from "react-query";
 
 import MailBody from "./components/MailBody";
+import ReplyIcon from "./components/ReplyIcon";
+import TrashIcon from "./components/TrashIcon";
 
 import { Context } from "../../..";
 
@@ -12,11 +14,19 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = ({ selectedAccount }) => {
-  const [activeMailId, setActiveMailId] = useState("");
+  const [activeMailId, setActiveMailId] = useState({});
   const getMails = () => {
     return fetch(`/api/mails/${selectedAccount}`).then((r) => r.json());
   };
   const queryData = useQuery("getMails_" + selectedAccount, getMails);
+
+  const deleteMail = (mailId) =>
+    fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
+  const mutation = useMutation(deleteMail);
+
+  useEffect(() => {
+    if (mutation.status === "success" && queryData.refetch) queryData.refetch();
+  }, [mutation.status, queryData.refetch]);
 
   if (queryData.isLoading) {
     return <div className="mails_container">Loading Mails List...</div>;
@@ -56,8 +66,21 @@ const MailsRendered = ({ selectedAccount }) => {
         }
 
         const onClickMailcard = () => {
-          if (activeMailId === mail.id) setActiveMailId("");
-          else setActiveMailId(mail.id);
+          if (activeMailId[mail.id]) {
+            const clonedActiveMailId = { ...activeMailId };
+            delete clonedActiveMailId[mail.id];
+            setActiveMailId(clonedActiveMailId);
+          } else {
+            const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+            setActiveMailId(clonedActiveMailId);
+          }
+        };
+
+        const onClickTrash = () => {
+          const sure = window.confirm("Do you want to delete this mail?");
+          if (sure) {
+            mutation.mutate(mail.id);
+          }
         };
 
         return (
@@ -70,7 +93,15 @@ const MailsRendered = ({ selectedAccount }) => {
               <div className="mailcard-small content">{mail.from?.text}</div>
               <div className="mailcard-subject content">{mail.subject}</div>
             </div>
-            {activeMailId === mail.id ? <MailBody mailId={mail.id} /> : null}
+            {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}
+            <div className="actionBox">
+              <div className="iconBox">
+                <ReplyIcon className="cursor" />
+              </div>
+              <div className="iconBox">
+                <TrashIcon className="cursor" onClick={onClickTrash} />
+              </div>
+            </div>
           </blockquote>
         );
       });
@@ -93,15 +124,15 @@ const Mails = ({ selectedAccount }) => {
   };
   return (
     <>
+      <div
+        className={isWriterOpen ? "curtain on" : "curtain"}
+        onClick={onClickCurtain}
+      />
       {selectedAccount ? (
         <MailsRendered selectedAccount={selectedAccount} />
       ) : (
         <MailsNotRendered />
       )}
-      <div
-        className={isWriterOpen ? "curtain on" : "curtain"}
-        onClick={onClickCurtain}
-      />
     </>
   );
 };

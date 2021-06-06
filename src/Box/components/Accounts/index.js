@@ -39,7 +39,7 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
         );
       });
 
-      return result || <></>;
+      return result ? <div>{result}</div> : <></>;
     };
 
     const onClickCurtain = () => {
@@ -48,11 +48,11 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
 
     return (
       <>
-        <Accounts />
         <div
           className={isWriterOpen ? "curtain on" : "curtain"}
           onClick={onClickCurtain}
         />
+        <Accounts />
       </>
     );
   }
