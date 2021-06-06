@@ -1,37 +1,35 @@
-import React, { useState, useEffect } from "react";
+import React, { useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import FileIcon from "../../../FileIcon";
 
-const MailBody = ({ mailId }) => {
-  const [iframeDom, setIframeDom] = useState(null);
+import { Context } from "../../../../..";
 
-  useEffect(() => {
-    if (iframeDom) {
-      iframeDom.addEventListener("load", () => {
-        const iframeContent = iframeDom.contentWindow;
-        const iframeContentHeight = iframeContent.document.body.scrollHeight;
-        iframeDom.style.height = iframeContentHeight + 32 + "px";
-      });
-    }
-  }, [iframeDom]);
+const MailBody = ({ mailId }) => {
+  const { replyData, setReplyData } = useContext(Context);
 
   const getMail = () => {
     return fetch(`/api/mailContent/${mailId}`).then((r) => r.json());
   };
-  const queryData = useQuery(`getMail_${mailId}`, getMail);
+  const query = useQuery(`getMail_${mailId}`, getMail);
 
-  if (queryData.isLoading) {
+  useEffect(() => {
+    if (replyData.id && query.data.html && replyData.html !== query.data.html) {
+      setReplyData(query.data.html);
+    }
+  }, [replyData, setReplyData, query]);
+
+  if (query.isLoading) {
     return <div className="text">Loading Mail Data...</div>;
   }
 
-  if (queryData.error) {
+  if (query.error) {
     return <div className="text">Mail Data Request Failed</div>;
   }
 
-  const data = queryData.data;
+  const data = query.data;
 
-  if (queryData.isSuccess && data) {
+  if (query.isSuccess && data) {
     const Attachments = () => {
       const result = data.attachments?.map((attachment, i) => {
         const onClickAttachment = () => {
@@ -62,26 +60,33 @@ const MailBody = ({ mailId }) => {
       return <div className="attachmentBox">{result}</div> || <></>;
     };
 
+    const iframeSrcDoc = `
+      <style>
+          body {
+              margin: 0;
+              overflow-y: hidden;
+          }
+          * {
+              font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+              "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+              "Helvetica Neue", sans-serif;
+              color: rgb(70,70,70);
+          }
+      </style>
+      ${data.html}
+    `;
+
+    const onLoadIframe = (e) => {
+      const iframeDom = e.target;
+      const iframeContent = iframeDom.contentWindow;
+      const iframeContentHeight = iframeContent.document.body.scrollHeight;
+      iframeDom.style.height = iframeContentHeight + 32 + "px";
+    };
+
     return (
       <div className="text">
         <Attachments />
-        <iframe
-          title={data.id}
-          ref={(e) => e && setIframeDom(e)}
-          srcDoc={`<style>
-                body {
-                    margin: 0;
-                    overflow-y: hidden;
-                }
-                * {
-                    font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-                    "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
-                    "Helvetica Neue", sans-serif;
-                    color: rgb(70,70,70);
-                }
-            </style>
-            ${queryData.data.html}`}
-        />
+        <iframe title={data.id} srcDoc={iframeSrcDoc} onLoad={onLoadIframe} />
       </div>
     );
   }

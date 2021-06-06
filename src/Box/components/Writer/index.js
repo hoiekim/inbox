@@ -15,20 +15,6 @@ import marked from "marked";
 
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
-const getUrl = (file) => {
-  return new Promise((res) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.addEventListener(
-      "load",
-      () => {
-        res(reader.result);
-      },
-      false
-    );
-  });
-};
-
 const writerParser = (html) => {
   const htmlComponents = html.split("<in-reply-to>");
   return {
@@ -38,7 +24,9 @@ const writerParser = (html) => {
 };
 
 const Writer = () => {
-  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
+  const { isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
+    useContext(Context);
+
   const [isCcOpen, setIsCcOpen] = useState(false);
 
   const [name, setName] = useState("");
@@ -51,13 +39,67 @@ const Writer = () => {
 
   const [attachments, setAttachments] = useState({});
 
-  const mutation = useMutation((data) => {
+  useEffect(() => {
+    if (replyData.id && setReplyData && isWriterOpen) {
+      const date = new Date(replyData.date).toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric"
+      });
+
+      const time = new Date(replyData.date).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+
+      const html = `
+        \n\n\n
+        <in-reply-to>${replyData.messageId}<in-reply-to>
+        <br><br><br>
+        <p>On ${date} at ${time}, ${replyData.from.text
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")} wrote:</p>
+        <blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
+          ${replyData.html}
+        </blockquote>
+      `;
+
+      setName("");
+      setSender("");
+      setTo(replyData.from.value[0].address);
+      setCc("");
+      setBcc("");
+      setSubject("RE: " + replyData.subject);
+      setTextarea(html);
+      setAttachments({});
+
+      setReplyData({});
+    }
+  }, [replyData, setReplyData, isWriterOpen]);
+
+  const sendMail = (data) => {
     return fetch("/api/send", {
       method: "POST",
       headers: {},
       body: data
     }).then((r) => r.json());
-  });
+  };
+
+  const onSuccessSendMail = () => {
+    alert("Your mail is sent successfully");
+    setIsWriterOpen(false);
+    setName("");
+    setSender("");
+    setTo("");
+    setCc("");
+    setBcc("");
+    setSubject("");
+    setTextarea("");
+    setAttachments({});
+  };
+
+  const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
 
   const swiperStyle = {};
 
@@ -109,25 +151,6 @@ const Writer = () => {
 
     mutation.mutate(formData);
   };
-
-  useEffect(() => {
-    if (
-      setIsWriterOpen &&
-      mutation.status === "success" &&
-      mutation.data === true
-    ) {
-      alert("Your mail is sent successfully");
-      setIsWriterOpen(false);
-      setName("");
-      setSender("");
-      setTo("");
-      setCc("");
-      setBcc("");
-      setSubject("");
-      setTextarea("");
-      setAttachments({});
-    }
-  }, [mutation.status, mutation.data, setIsWriterOpen]);
 
   const Attachments = () => {
     const result = Object.keys(attachments).map((key, i) => {

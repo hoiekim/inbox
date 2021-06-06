@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import React, { useState, useContext } from "react";
 import { useQuery, useMutation } from "react-query";
 
 import MailBody from "./components/MailBody";
@@ -14,30 +14,28 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = ({ selectedAccount }) => {
+  const { setIsWriterOpen, setReplyData } = useContext(Context);
+
   const [activeMailId, setActiveMailId] = useState({});
-  const getMails = () => {
-    return fetch(`/api/mails/${selectedAccount}`).then((r) => r.json());
-  };
-  const queryData = useQuery("getMails_" + selectedAccount, getMails);
+
+  const getMails = () =>
+    fetch(`/api/mails/${selectedAccount}`).then((r) => r.json());
+  const query = useQuery("getMails_" + selectedAccount, getMails);
 
   const deleteMail = (mailId) =>
     fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
-  const mutation = useMutation(deleteMail);
+  const mutation = useMutation(deleteMail, { onSuccess: query.refetch });
 
-  useEffect(() => {
-    if (mutation.status === "success" && queryData.refetch) queryData.refetch();
-  }, [mutation.status, queryData.refetch]);
-
-  if (queryData.isLoading) {
+  if (query.isLoading) {
     return <div className="mails_container">Loading Mails List...</div>;
   }
 
-  if (queryData.error) {
+  if (query.error) {
     return <div className="mails_container">Mails List Request Failed</div>;
   }
 
-  if (queryData.isSuccess) {
-    const mails = queryData.data || [];
+  if (query.isSuccess) {
+    const mails = Array.isArray(query.data) ? query.data : [];
 
     const MailsList = () => {
       const result = mails.map((mail, i) => {
@@ -76,6 +74,11 @@ const MailsRendered = ({ selectedAccount }) => {
           }
         };
 
+        const onClickReply = () => {
+          setReplyData(mail);
+          setIsWriterOpen(true);
+        };
+
         const onClickTrash = () => {
           const sure = window.confirm("Do you want to delete this mail?");
           if (sure) {
@@ -96,7 +99,7 @@ const MailsRendered = ({ selectedAccount }) => {
             {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}
             <div className="actionBox">
               <div className="iconBox">
-                <ReplyIcon className="cursor" />
+                <ReplyIcon className="cursor" onClick={onClickReply} />
               </div>
               <div className="iconBox">
                 <TrashIcon className="cursor" onClick={onClickTrash} />

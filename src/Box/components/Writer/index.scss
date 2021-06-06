@@ -74,10 +74,11 @@
 
   .inputBox-flex {
     display: flex;
-  }
 
-  #cc {
-    margin: 0 0.5rem;
+    > :nth-child(2) {
+      margin-left: 0.5rem;
+      margin-right: 0.5rem;
+    }
   }
 
   .writer-body {

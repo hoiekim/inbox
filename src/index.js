@@ -29,13 +29,16 @@ const App = () => {
   // defines states used for UI control
   const [isLogin, setIsLogin] = useState(session);
   const [isWriterOpen, setIsWriterOpen] = useState(false);
+  const [replyData, setReplyData] = useState({});
 
   // stores states to export with `Context`
   const contextValue = {
     isLogin,
     setIsLogin,
     isWriterOpen,
-    setIsWriterOpen
+    setIsWriterOpen,
+    replyData,
+    setReplyData
   };
 
   return (
