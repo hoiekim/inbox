@@ -14,6 +14,11 @@ For detailed instruction, please keep reading this document.
 
 ### Install Elasticsearch
 
+> Setting up Elasticsearch is such a pain. <br/>
+> Sign up for [leardatabases](https://learndatabases.dev) and get Elasticsearch credentials in 1 second. <br/>
+> If you want to have your own db in your device, keep reading. <br/>
+> Otherwise, skip to `install inbox` chapter
+
 This app uses Elasticsearch for database to save the email data. Refer this official site's install instruction [here](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html)
 or follow this steps. (Tested on Ubuntu)
 
@@ -66,12 +71,18 @@ By default, elasticsearch has no security. Since your email may contain sensitiv
    ```
 2. Setup environment variables in `.env` file
    ```
-   DOMAIN=...        // Domain name to use when sending mails.
-   SECRET=...        // Value to encode session data. Any value works
-   ADMIN_PW=...      // Password that will be used to login to Inbox
-   ELASTIC=...       // Password for elasticsearch that you saved in previous step
-   ES_HOST=...       // The ip address of the computer you installed Elasticsearch. Default is http://127.0.0.1:9200
-   SENDGRID_KEY=...  // API key that is issued by sendgrid and supposed to be used when sending email requests
+   DOMAIN=                  // Domain name to use when sending mails.
+   REACT_APP_DOMAIN=        // Domain name to display in front UI
+
+   SECRET=                  // Value to encode session data. Any value works
+   ADMIN_PW=                // Password that will be used to login to Inbox
+
+   ELASTIC_USERNAME=        // Elasticsearch credentials
+   ELASTIC_PASSWORD=        // Elasticsearch credentials
+   ELASTIC_HOST=            // Elasticsearch credentials
+   ELASTIC_INDEX=           // Elasticsearch credentials
+
+   SENDGRID_KEY=            // API key that is issued by sendgrid and supposed to be used when sending email requests
    ```
 
 ### Setup Sendgrid
