@@ -6,6 +6,10 @@
   width: calc(100vw - 400px);
   height: calc(100vh - 80px);
 
+  &.shadow {
+    box-shadow: rgb(0 0 0 / 20%) -10px 10px 10px 10px;
+  }
+
   > .curtain {
     position: absolute;
     width: 100%;
@@ -19,6 +23,11 @@
   iframe {
     margin-top: 0.5rem;
     margin-bottom: 1rem;
+  }
+
+  iframe {
+    border: none;
+    background-color: white;
   }
 
   .attachment-text {

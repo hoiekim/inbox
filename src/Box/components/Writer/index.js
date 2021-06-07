@@ -202,7 +202,10 @@ const Writer = () => {
   };
 
   return (
-    <blockquote className="writer" style={swiperStyle}>
+    <blockquote
+      className={isWriterOpen ? "writer shadow" : "writer"}
+      style={swiperStyle}
+    >
       <div>
         <div className="fieldName">From: </div>
         <input

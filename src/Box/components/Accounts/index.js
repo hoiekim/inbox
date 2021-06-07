@@ -34,6 +34,7 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
         return (
           <h3 key={i} className={className} onClick={onClickAccount}>
             <span>{data.split("@")[0]}</span>
+            {/* TODO */}
             {/* <div className="numberBall">{unreadNo}</div> */}
           </h3>
         );
