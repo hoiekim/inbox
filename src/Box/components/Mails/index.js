@@ -14,7 +14,7 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = ({ selectedAccount }) => {
-  const { setReplyData } = useContext(Context);
+  const { setReplyData, fetchAccounts, setFetchAccounts } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
@@ -25,6 +25,9 @@ const MailsRendered = ({ selectedAccount }) => {
   const deleteMail = (mailId) =>
     fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
   const mutation = useMutation(deleteMail, { onSuccess: query.refetch });
+
+  const markRead = (mailId) =>
+    fetch(`/api/markRead/${mailId}`).then((r) => r.json());
 
   if (query.isLoading) {
     return <div className="mails_container">Loading Mails List...</div>;
@@ -69,6 +72,11 @@ const MailsRendered = ({ selectedAccount }) => {
             delete clonedActiveMailId[mail.id];
             setActiveMailId(clonedActiveMailId);
           } else {
+            if (!mail.read) {
+              markRead(mail.id);
+              mail.read = true;
+              setFetchAccounts(fetchAccounts + 1);
+            }
             const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
             setActiveMailId(clonedActiveMailId);
           }
@@ -90,7 +98,10 @@ const MailsRendered = ({ selectedAccount }) => {
         };
 
         return (
-          <blockquote key={i} className="mailcard">
+          <blockquote
+            key={i}
+            className={mail.read ? "mailcard" : "mailcard unread"}
+          >
             <div className="header cursor" onClick={onClickMailcard}>
               <div className="mailcard-small content">{duration}</div>
               <div className="mailcard-small content">

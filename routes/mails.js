@@ -27,17 +27,6 @@ obj.getAccounts = async (req, res) => {
   }
 };
 
-obj.getUnreadNo = async (req, res) => {
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  try {
-    const number = await db.getUnreadNo(req.params.account);
-    res.status(200).json(number);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json(new Error("Failed to get unread emails data"));
-  }
-};
-
 obj.markRead = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {

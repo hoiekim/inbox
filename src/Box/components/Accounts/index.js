@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import React, { useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import { Context } from "../../..";
@@ -6,9 +6,13 @@ import { Context } from "../../..";
 import "./index.scss";
 
 const Accounts = ({ selectedAccount, setSelectedAccount }) => {
-  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
+  const { isWriterOpen, setIsWriterOpen, fetchAccounts } = useContext(Context);
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const query = useQuery("getAccounts", getAccounts);
+
+  useEffect(() => {
+    if (fetchAccounts) query.refetch();
+  }, [fetchAccounts]);
 
   if (query.isLoading) {
     return <div className="container">Loading Accounts List...</div>;
@@ -23,19 +27,21 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
 
     const Accounts = () => {
       const result = accounts?.map((data, i) => {
+        const account = data.key;
+        const unreadNo = data.doc_count;
         const onClickAccount = () => {
-          if (selectedAccount !== data) setSelectedAccount(data);
+          if (selectedAccount !== account) setSelectedAccount(account);
         };
 
+        // TODO: below className is not working
         let className = "";
-        if (selectedAccount === data) className = "tag clicked";
+        if (selectedAccount === account) className = "tag clicked";
         else className = "tag cursor";
 
         return (
           <h3 key={i} className={className} onClick={onClickAccount}>
-            <span>{data.split("@")[0]}</span>
-            {/* TODO */}
-            {/* <div className="numberBall">{unreadNo}</div> */}
+            <span>{account.split("@")[0]}</span>
+            {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
           </h3>
         );
       });

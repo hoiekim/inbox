@@ -30,6 +30,7 @@ const App = () => {
   const [isLogin, setIsLogin] = useState(session);
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
+  const [fetchAccounts, setFetchAccounts] = useState(0);
 
   // stores states to export with `Context`
   const contextValue = {
@@ -38,7 +39,9 @@ const App = () => {
     isWriterOpen,
     setIsWriterOpen,
     replyData,
-    setReplyData
+    setReplyData,
+    fetchAccounts,
+    setFetchAccounts
   };
 
   return (
