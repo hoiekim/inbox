@@ -14,7 +14,7 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = ({ selectedAccount }) => {
-  const { setIsWriterOpen, setReplyData } = useContext(Context);
+  const { setReplyData } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
@@ -75,8 +75,11 @@ const MailsRendered = ({ selectedAccount }) => {
         };
 
         const onClickReply = () => {
-          setReplyData(mail);
-          setIsWriterOpen(true);
+          if (!activeMailId[mail.id]) {
+            const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+            setActiveMailId(clonedActiveMailId);
+          }
+          setReplyData({ ...mail, to: { address: selectedAccount } });
         };
 
         const onClickTrash = () => {

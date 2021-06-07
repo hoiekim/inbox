@@ -28,6 +28,8 @@ const Writer = () => {
     useContext(Context);
 
   const [isCcOpen, setIsCcOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState("");
 
   const [name, setName] = useState("");
   const [to, setTo] = useState("");
@@ -40,7 +42,7 @@ const Writer = () => {
   const [attachments, setAttachments] = useState({});
 
   useEffect(() => {
-    if (replyData.id && setReplyData && isWriterOpen) {
+    if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
       const date = new Date(replyData.date).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
@@ -65,8 +67,7 @@ const Writer = () => {
         </blockquote>
       `;
 
-      setName("");
-      setSender("");
+      setSender(replyData.to.address.split("@")[0]);
       setTo(replyData.from.value[0].address);
       setCc("");
       setBcc("");
@@ -89,7 +90,6 @@ const Writer = () => {
   const onSuccessSendMail = () => {
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
-    setName("");
     setSender("");
     setTo("");
     setCc("");
@@ -115,7 +115,25 @@ const Writer = () => {
     setIsCcOpen(!isCcOpen);
   };
 
-  const onClickPreview = () => {};
+  const onClickPreview = () => {
+    if (isPreviewOpen) setIsPreviewOpen(false);
+    else {
+      const { html } = writerParser(textarea);
+      setPreviewSrc(`
+        <style>
+          body {
+            padding: 0.5rem;
+            margin: 0;
+            font-family: "Open Sans", -apple-system, BlinkMacSystemFont,
+              "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell",
+              "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+          }
+        </style>
+        ${html}
+      `);
+      setIsPreviewOpen(true);
+    }
+  };
 
   const onClickAttach = () => {
     const fileInput = document.createElement("input");
@@ -256,7 +274,7 @@ const Writer = () => {
         </div>
         <div id="writer-content-wrap">
           <Attachments />
-          <div id="writer-content">
+          <div id="writer-content" className={isPreviewOpen ? "flip" : ""}>
             <textarea
               className="writer-fat"
               placeholder="Say something really cool here!"
@@ -267,22 +285,19 @@ const Writer = () => {
             <iframe
               id="writer-preview"
               title="writer-preview"
-              className="hide"
+              className={isPreviewOpen ? "" : "hide"}
+              srcDoc={previewSrc}
             ></iframe>
           </div>
         </div>
       </div>
-      <div id="writer-buttons-wrap">
-        <button id="writer-previewBtn" className="writer-buttons">
-          <PreviewIcon className="cursor" onClick={onClickPreview} />
+      <div className="writer-buttons">
+        <button onClick={onClickPreview}>
+          <PreviewIcon />
           <span>Preview</span>
         </button>
-        <button
-          id="writer-send"
-          className="writer-buttons"
-          onClick={onClickSend}
-        >
-          <SendIcon className="cursor" />
+        <button onClick={onClickSend}>
+          <SendIcon />
           <span>Send</span>
         </button>
       </div>

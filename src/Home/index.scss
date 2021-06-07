@@ -21,6 +21,10 @@ div.info_message {
   margin-top: 0.5rem;
   width: 250px;
 
+  svg {
+    margin-right: 0.5rem;
+  }
+
   &:last-child {
     margin-bottom: 2rem;
   }

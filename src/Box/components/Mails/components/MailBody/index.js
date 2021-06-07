@@ -6,7 +6,7 @@ import FileIcon from "../../../FileIcon";
 import { Context } from "../../../../..";
 
 const MailBody = ({ mailId }) => {
-  const { replyData, setReplyData } = useContext(Context);
+  const { setIsWriterOpen, replyData, setReplyData } = useContext(Context);
 
   const getMail = () => {
     return fetch(`/api/mailContent/${mailId}`).then((r) => r.json());
@@ -14,10 +14,19 @@ const MailBody = ({ mailId }) => {
   const query = useQuery(`getMail_${mailId}`, getMail);
 
   useEffect(() => {
-    if (replyData.id && query.data.html && replyData.html !== query.data.html) {
-      setReplyData(query.data.html);
+    if (
+      replyData.id &&
+      query.data?.html &&
+      replyData.messageId !== query.data.messageId
+    ) {
+      setReplyData({
+        ...replyData,
+        html: query.data.html,
+        messageId: query.data.messageId
+      });
+      setIsWriterOpen(true);
     }
-  }, [replyData, setReplyData, query]);
+  }, [setIsWriterOpen, replyData, setReplyData, query]);
 
   if (query.isLoading) {
     return <div className="text">Loading Mail Data...</div>;

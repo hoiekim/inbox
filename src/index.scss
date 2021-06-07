@@ -163,19 +163,19 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
 
   .tag {
-    background-color: rgb(100, 100, 100);
+    background-color: rgb(80, 80, 80);
     color: white;
 
     &:hover {
-      background-color: rgb(80, 80, 80);
+      background-color: rgb(100, 100, 100);
     }
 
     &:active {
-      background-color: rgb(60, 60, 60);
+      background-color: rgb(50, 50, 50);
     }
 
     &.clicked {
-      background-color: rgb(70, 70, 70);
+      background-color: rgb(60, 60, 60);
     }
   }
 
