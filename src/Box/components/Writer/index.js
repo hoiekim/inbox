@@ -23,7 +23,7 @@ const writerParser = (html) => {
   };
 };
 
-const Writer = () => {
+const Writer = ({ style }) => {
   const { isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
     useContext(Context);
 
@@ -100,12 +100,6 @@ const Writer = () => {
   };
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
-
-  const swiperStyle = {};
-
-  if (isWriterOpen) {
-    swiperStyle.right = 0;
-  } else swiperStyle.right = "calc(500px - 100vw)";
 
   const onClickCurtain = () => {
     setIsWriterOpen(true);
@@ -204,7 +198,7 @@ const Writer = () => {
   return (
     <blockquote
       className={isWriterOpen ? "writer shadow" : "writer"}
-      style={swiperStyle}
+      style={style}
     >
       <div>
         <div className="fieldName">From: </div>

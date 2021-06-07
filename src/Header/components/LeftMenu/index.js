@@ -4,14 +4,14 @@ import HamburgerIcon from "./components/HamburgerIcon";
 import { Context } from "../../..";
 
 const LeftMenu = () => {
-  const { isHamburgerMenuOpen, setIsHamburgerMenuOpen } = useContext(Context);
+  const { isAccountsOpen, setIsAccountsOpen } = useContext(Context);
 
   const onClickHamburger = () => {
-    setIsHamburgerMenuOpen(!isHamburgerMenuOpen);
+    setIsAccountsOpen(!isAccountsOpen);
   };
 
   return (
-    <div className="menu">
+    <div className="menu left">
       <div id="hamburger" className="iconBox">
         <HamburgerIcon className="cursor" onClick={onClickHamburger} />
       </div>

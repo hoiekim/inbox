@@ -1,4 +1,5 @@
 import React, { useContext } from "react";
+import LeftMenu from "./components/LeftMenu";
 import RightMenu from "./components/RightMenu";
 import { Context } from "..";
 
@@ -10,6 +11,7 @@ const Header = () => {
   const { isLogin } = useContext(Context);
   return (
     <div id="title_bar">
+      {isLogin ? <LeftMenu /> : null}
       <h1>@{domainName}</h1>
       {isLogin ? <RightMenu /> : null}
     </div>

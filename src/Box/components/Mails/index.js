@@ -139,23 +139,8 @@ const MailsRendered = ({ selectedAccount }) => {
 };
 
 const Mails = ({ selectedAccount }) => {
-  const { isWriterOpen, setIsWriterOpen } = useContext(Context);
-  const onClickCurtain = () => {
-    setIsWriterOpen(false);
-  };
-  return (
-    <>
-      <div
-        className={isWriterOpen ? "curtain on" : "curtain"}
-        onClick={onClickCurtain}
-      />
-      {selectedAccount ? (
-        <MailsRendered selectedAccount={selectedAccount} />
-      ) : (
-        <MailsNotRendered />
-      )}
-    </>
-  );
+  if (!selectedAccount) return <MailsNotRendered />;
+  else return <MailsRendered selectedAccount={selectedAccount} />;
 };
 
 export default Mails;

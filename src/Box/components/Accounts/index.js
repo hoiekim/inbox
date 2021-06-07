@@ -6,7 +6,7 @@ import { Context } from "../../..";
 import "./index.scss";
 
 const Accounts = ({ selectedAccount, setSelectedAccount }) => {
-  const { isWriterOpen, setIsWriterOpen, fetchAccounts } = useContext(Context);
+  const { fetchAccounts } = useContext(Context);
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const query = useQuery("getAccounts", getAccounts);
 
@@ -25,43 +25,27 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
   if (query.isSuccess) {
     const accounts = Array.isArray(query.data) ? query.data : null;
 
-    const Accounts = () => {
-      const result = accounts?.map((data, i) => {
-        const account = data.key;
-        const unreadNo = data.doc_count;
-        const onClickAccount = () => {
-          if (selectedAccount !== account) setSelectedAccount(account);
-        };
+    const result = accounts?.map((data, i) => {
+      const account = data.key;
+      const unreadNo = data.doc_count;
+      const onClickAccount = () => {
+        if (selectedAccount !== account) setSelectedAccount(account);
+      };
 
-        // TODO: below className is not working
-        let className = "";
-        if (selectedAccount === account) className = "tag clicked";
-        else className = "tag cursor";
+      // TODO: below className is not working
+      let className = "";
+      if (selectedAccount === account) className = "tag clicked";
+      else className = "tag cursor";
 
-        return (
-          <h3 key={i} className={className} onClick={onClickAccount}>
-            <span>{account.split("@")[0]}</span>
-            {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
-          </h3>
-        );
-      });
+      return (
+        <h3 key={i} className={className} onClick={onClickAccount}>
+          <span>{account.split("@")[0]}</span>
+          {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
+        </h3>
+      );
+    });
 
-      return result ? <div>{result}</div> : <></>;
-    };
-
-    const onClickCurtain = () => {
-      setIsWriterOpen(false);
-    };
-
-    return (
-      <>
-        <div
-          className={isWriterOpen ? "curtain on" : "curtain"}
-          onClick={onClickCurtain}
-        />
-        <Accounts />
-      </>
-    );
+    return result ? <div>{result}</div> : <></>;
   }
 };
 

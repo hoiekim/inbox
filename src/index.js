@@ -1,4 +1,4 @@
-import React, { useState, createContext } from "react";
+import React, { useState, createContext, useEffect } from "react";
 import ReactDOM from "react-dom";
 import { QueryClient, QueryClientProvider } from "react-query";
 
@@ -27,15 +27,29 @@ const queryClient = new QueryClient({
 
 const App = () => {
   // defines states used for UI control
+  const [viewSize, setViewSize] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight
+  });
   const [isLogin, setIsLogin] = useState(session);
+  const [isAccountsOpen, setIsAccountsOpen] = useState(true);
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
   const [fetchAccounts, setFetchAccounts] = useState(0);
 
+  useEffect(() => {
+    window.addEventListener("resize", () => {
+      setViewSize({ width: window.innerWidth, height: window.innerHeight });
+    });
+  }, []);
+
   // stores states to export with `Context`
   const contextValue = {
+    viewSize,
     isLogin,
     setIsLogin,
+    isAccountsOpen,
+    setIsAccountsOpen,
     isWriterOpen,
     setIsWriterOpen,
     replyData,

@@ -22,12 +22,19 @@
 
   .menu {
     position: absolute;
-    right: 1rem;
     width: 70px;
     height: 100%;
     display: flex;
     justify-content: space-between;
     align-items: center;
     z-index: 21;
+
+    &.right {
+      right: 1rem;
+    }
+
+    &.left {
+      left: 1rem;
+    }
   }
 }

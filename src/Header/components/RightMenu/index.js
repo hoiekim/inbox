@@ -5,16 +5,14 @@ import LogoutIcon from "./components/LogoutIcon";
 
 import { Context } from "../../..";
 
-const Menu = () => {
+const RightMenu = () => {
   const { setIsLogin, isWriterOpen, setIsWriterOpen } = useContext(Context);
 
   const logout = () => {
-    return fetch("/admin", {
-      method: "DELETE"
-    })
+    fetch("/admin", { method: "DELETE" })
       .then((r) => r.json())
       .then((r) => {
-        if (r) setIsLogin(false);
+        if (r === true) setIsLogin(false);
       });
   };
 
@@ -23,7 +21,7 @@ const Menu = () => {
   };
 
   return (
-    <div className="menu">
+    <div className="menu right">
       <div id="write" className="iconBox">
         <WriteIcon className="cursor" onClick={onClickWriter} />
       </div>
@@ -34,4 +32,4 @@ const Menu = () => {
   );
 };
 
-export default Menu;
+export default RightMenu;

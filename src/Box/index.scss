@@ -4,6 +4,7 @@
   box-sizing: border-box;
   overflow-y: scroll;
   overflow-x: hidden;
+  transition: 150ms;
 
   &,
   & > .curtain {
@@ -11,17 +12,6 @@
   }
 }
 
-.main_pane {
-  left: 202px;
-  &,
-  & > .curtain {
-    width: calc(100vw - 320px);
-  }
-}
-
 .side_pane {
-  &,
-  & > .curtain {
-    width: 200px;
-  }
+  z-index: 5;
 }

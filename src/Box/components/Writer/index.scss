@@ -3,7 +3,6 @@
   transition: 150ms;
   position: fixed;
   margin-top: 0;
-  width: calc(100vw - 400px);
   height: calc(100vh - 80px);
 
   &.shadow {
@@ -31,29 +30,11 @@
   }
 
   .attachment-text {
-    z-index: 1;
+    z-index: 11;
     position: relative;
     overflow: hidden;
     transition: 200ms;
     white-space: nowrap;
-  }
-
-  .attachment-preview {
-    z-index: 2;
-    position: absolute;
-    width: 300px;
-    height: 200px;
-    left: 4px;
-    padding: 0.5rem;
-    border-radius: 4px;
-    top: 12px;
-    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
-  }
-
-  .attachment-preview.clipped {
-    pointer-events: none;
-    top: -184px;
-    clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
   }
 
   .fieldName {
