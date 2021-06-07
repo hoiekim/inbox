@@ -75,10 +75,17 @@ iframe::-webkit-scrollbar-thumb:hover {
       background-color: rgb(45, 20, 220);
     }
   }
+
   blockquote {
     background-color: rgb(220, 220, 220);
     border-left: 3px solid rgb(200, 200, 200);
+
+    &.mailcard:hover {
+      background-color: rgb(200, 200, 200);
+      border-color: rgb(180, 180, 180);
+    }
   }
+
   input,
   textarea {
     color: black;
@@ -149,10 +156,17 @@ iframe::-webkit-scrollbar-thumb:hover {
       background-color: rgb(55, 45, 220);
     }
   }
+
   blockquote {
     background-color: rgb(55, 55, 55);
     border-left: 3px solid rgb(75, 75, 75);
+
+    &.mailcard:hover {
+      background-color: rgb(50, 50, 50);
+      border-color: rgb(70, 70, 70);
+    }
   }
+
   input,
   textarea {
     color: rgb(230, 230, 230);

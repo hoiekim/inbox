@@ -14,7 +14,8 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = ({ selectedAccount }) => {
-  const { setReplyData, fetchAccounts, setFetchAccounts } = useContext(Context);
+  const { isWriterOpen, setReplyData, fetchAccounts, setFetchAccounts } =
+    useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
@@ -97,11 +98,13 @@ const MailsRendered = ({ selectedAccount }) => {
           }
         };
 
+        const classes = ["mailcard"];
+
+        if (!mail.read) classes.push("unread");
+        if (!isWriterOpen) classes.push("shadow");
+
         return (
-          <blockquote
-            key={i}
-            className={mail.read ? "mailcard" : "mailcard unread"}
-          >
+          <blockquote key={i} className={classes.join(" ")}>
             <div className="header cursor" onClick={onClickMailcard}>
               <div className="mailcard-small content">{duration}</div>
               <div className="mailcard-small content">
