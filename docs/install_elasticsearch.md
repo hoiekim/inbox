@@ -2,7 +2,7 @@ All these instructions can be found this [official guide](https://www.elastic.co
 
 If these instructions are outdated, please raise an issue or send us a Pull Request.
 
-### Install Elasticsearch
+## 1. Install Elasticsearch
 
 1. Enter this command to import the Elasticsearch PGP key
    ```
@@ -15,7 +15,7 @@ If these instructions are outdated, please raise an issue or send us a Pull Requ
    sudo apt-get update && sudo apt-get install elasticsearch
    ```
 
-### Start Elasticsearch
+## 2. Start Elasticsearch
 
 1. Enter these commands to start Elasticsearch automatically when the system boots up
    ```
@@ -27,7 +27,7 @@ If these instructions are outdated, please raise an issue or send us a Pull Requ
    sudo systemctl start elasticsearch.service
    ```
 
-### Setup Elasticsearch Password
+## 3. Setup Elasticsearch Password
 
 By default, elasticsearch has no security. Since your email may contain sensitive data, you must enable security.
 
