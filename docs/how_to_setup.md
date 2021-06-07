@@ -52,7 +52,7 @@ In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and 
 ## 3. Get Elasticsearch
 
 - Option 1<br/>
-  It's such a pain to install & set up Elasticsearch. Sign up for [leardatabases](https://learndatabases.dev) and get Elasticsearch credentials in 1 second.
+  It's such a pain to install & set up Elasticsearch. Sign up for [learndatabases](https://learndatabases.dev) and get Elasticsearch credentials in 1 second.
 
 - Option 2<br/>
   If you want to have your own Elasticsearch in your device, refer [this document](install_elasticsearch.md).
