@@ -95,6 +95,7 @@ const MailsRendered = ({ selectedAccount }) => {
           const sure = window.confirm("Do you want to delete this mail?");
           if (sure) {
             mutation.mutate(mail.id);
+            if (mails.length === 1) setFetchAccounts(fetchAccounts + 1);
           }
         };
 
