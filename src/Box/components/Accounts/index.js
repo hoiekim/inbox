@@ -11,8 +11,8 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
   const query = useQuery("getAccounts", getAccounts);
 
   useEffect(() => {
-    if (fetchAccounts) query.refetch();
-  }, [fetchAccounts]);
+    if (fetchAccounts && query.refetch) query.refetch();
+  }, [fetchAccounts, query]);
 
   if (query.isLoading) {
     return <div className="container">Loading Accounts List...</div>;
