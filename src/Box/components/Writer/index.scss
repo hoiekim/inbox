@@ -1,0 +1,151 @@
+.writer {
+  z-index: 10;
+  transition: 150ms;
+  position: fixed;
+  margin-top: 0;
+  width: calc(100vw - 400px);
+  height: calc(100vh - 80px);
+
+  &.shadow {
+    box-shadow: rgb(0 0 0 / 20%) -10px 10px 10px 10px;
+  }
+
+  > .curtain {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+  }
+
+  input,
+  textarea,
+  iframe {
+    margin-top: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  iframe {
+    border: none;
+    background-color: white;
+  }
+
+  .attachment-text {
+    z-index: 1;
+    position: relative;
+    overflow: hidden;
+    transition: 200ms;
+    white-space: nowrap;
+  }
+
+  .attachment-preview {
+    z-index: 2;
+    position: absolute;
+    width: 300px;
+    height: 200px;
+    left: 4px;
+    padding: 0.5rem;
+    border-radius: 4px;
+    top: 12px;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  }
+
+  .attachment-preview.clipped {
+    pointer-events: none;
+    top: -184px;
+    clip-path: polygon(0 100%, 100% 100%, 100% 100%, 0 100%);
+  }
+
+  .fieldName {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    height: 20px;
+  }
+
+  .helper-text {
+    font-size: 12px;
+  }
+
+  input.writer-short {
+    width: 100px;
+  }
+
+  input.writer-long {
+    width: 100%;
+    text-align: left;
+    transition: 150ms;
+  }
+
+  input.writer-long.hide {
+    display: block;
+    width: 0;
+  }
+
+  .inputBox-flex {
+    display: flex;
+
+    > :nth-child(2) {
+      margin-left: 0.5rem;
+      margin-right: 0.5rem;
+    }
+  }
+
+  .writer-body {
+    height: calc(100% - 18rem);
+
+    #writer-content-wrap {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: calc(100% - 0.5rem - 20px);
+      perspective: 4000px;
+
+      #writer-content {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        transition: transform 600ms;
+        transform-style: preserve-3d;
+
+        &.flip {
+          transform: rotateY(180deg);
+        }
+
+        > * {
+          position: absolute;
+          width: 100%;
+          height: 100%;
+          -webkit-backface-visibility: hidden;
+          backface-visibility: hidden;
+        }
+
+        #writer-preview {
+          border-radius: 3px;
+          transform: rotateY(180deg);
+        }
+      }
+    }
+  }
+
+  .writer-buttons {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    margin-top: 1rem;
+
+    button {
+      margin: 0 0.5rem;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      width: 150px;
+      height: 35px;
+      font-size: 16px;
+
+      svg {
+        margin-right: 0.5rem;
+      }
+    }
+  }
+}

@@ -2,12 +2,16 @@
   "name": "inbox",
   "version": "1.0.0",
   "description": "",
-  "private": true,
+  "private": false,
+  "proxy": "http://localhost:3004",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "webpack",
-    "start": "node index.js",
-    "dev": "concurrently --names 'WEBPACK,SERVER' --prefix-colors 'blue,yellow' --kill-others \"webpack --watch\" \"nodemon index.js\""
+    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run front\" \"nodemon server.js\"",
+    "start": "npm run build && npm run back",
+    "back": "node server.js",
+    "front": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
   },
   "keywords": [],
   "author": "",
@@ -15,19 +19,45 @@
   "dependencies": {
     "@sendgrid/mail": "^7.4.4",
     "dotenv": "^8.2.0",
-    "ejs": "^3.1.3",
     "express": "^4.17.1",
     "express-fileupload": "^1.2.0",
     "express-session": "^1.17.1",
     "html-to-text": "^6.0.0",
+    "marked": "^2.0.7",
     "node-fetch": "^2.6.1",
     "node-mailin": "^2.5.0",
     "uuidv4": "^6.2.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^5.12.0",
+    "@testing-library/react": "^11.2.7",
+    "@testing-library/user-event": "^12.8.3",
     "concurrently": "^6.2.0",
     "nodemon": "^2.0.7",
-    "webpack": "^5.38.1",
-    "webpack-cli": "^4.7.0"
+    "sass": "^1.34.0",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "react-query": "^3.16.0",
+    "react-router-dom": "^5.2.0",
+    "react-scripts": "4.0.3",
+    "web-vitals": "^1.1.2"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }

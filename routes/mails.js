@@ -1,7 +1,7 @@
 const db = require("../lib/db");
 const mail = require("../lib/mail");
 
-const domainName = process.env.DOMAIN || "My Domain";
+const domainName = process.env.DOMAIN || "mydomain";
 
 const obj = {};
 
@@ -24,17 +24,6 @@ obj.getAccounts = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json(new Error("Failed to get accounts data"));
-  }
-};
-
-obj.getUnreadNo = async (req, res) => {
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
-  try {
-    const number = await db.getUnreadNo(req.params.account);
-    res.status(200).json(number);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json(new Error("Failed to get unread emails data"));
   }
 };
 
@@ -98,7 +87,8 @@ obj.sendMail = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
     const result = await mail.sendMail(req.body, req.files?.attachments);
-    res.status(200).json(result);
+    if (result === true) res.status(200).json(result);
+    else throw new Error("Sendgrid request failed");
   } catch (err) {
     console.error(err);
     res.status(500).json(new Error("Failed to request to send email"));

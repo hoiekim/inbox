@@ -1,0 +1,30 @@
+.tag {
+  display: inline-block;
+  position: relative;
+  max-width: 175px;
+  padding: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  margin-right: 15rem;
+  border-radius: 5px;
+  overflow-wrap: break-word;
+
+  &:nth-child(1) {
+    margin-top: 0;
+  }
+
+  .numberBall {
+    position: absolute;
+    top: -5px;
+    right: -10px;
+    font-size: 16px;
+    display: inline-block;
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-bottom: 1px;
+    text-align: center;
+    line-height: 19px;
+    border-radius: 10px;
+    background-color: rgb(200, 20, 20);
+    color: white;
+  }
+}

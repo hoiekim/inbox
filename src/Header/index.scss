@@ -1,0 +1,33 @@
+#title_bar {
+  position: fixed;
+  top: 0;
+  z-index: 20;
+  width: 100vw;
+  height: 70px;
+  padding: 10px 1rem;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  &.space-between {
+    justify-content: space-between;
+  }
+
+  h1 {
+    text-align: center;
+    margin: 0;
+    width: 300px;
+  }
+
+  .menu {
+    position: absolute;
+    right: 1rem;
+    width: 70px;
+    height: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 21;
+  }
+}
