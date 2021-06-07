@@ -12,7 +12,7 @@ If you want to send emails using Inbox. You need a 3rd party email sending servi
 
 For detailed instruction, please keep reading this document.
 
-### Install Inbox
+## 1. Install Inbox
 
 1. Clone this git repository
    ```
@@ -37,7 +37,7 @@ For detailed instruction, please keep reading this document.
 
    Please keep reading this document to get required env values.
 
-### Setup DNS Records
+## 2. Setup DNS Records
 
 Make sure your domain's MX record points to the server you're running Inbox. In order to setup your MX record, check your DNS settings in your domain's provider.
 
@@ -49,15 +49,15 @@ Make sure your domain's MX record points to the server you're running Inbox. In 
 
 In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and `MX` record is pointing emails to `mail.domain.com`. When some email is sent to `something@domain.com`, it will look up `domain.com`'s `MX` record and send the email data to where it points to. So it will be eventually delivered to `0.0.0.0`
 
-### Get Elasticsearch
+## 3. Get Elasticsearch
 
-- Option 1
+- Option 1<br/>
   It's such a pain to install & set up Elasticsearch. Sign up for [leardatabases](https://learndatabases.dev) and get Elasticsearch credentials in 1 second.
 
-- Option 2
+- Option 2<br/>
   If you want to have your own Elasticsearch in your device, refer [this document](install_elasticsearch.md).
 
-### Setup Sendgrid
+## 4. Setup Sendgrid
 
 1. Go to [Sendgrid](https://sendgrid.com/) and make an account.
 2. Go to [dashboard](https://app.sendgrid.com/guide/integrate/langs/nodejs) and get api key.
@@ -65,7 +65,7 @@ In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and 
 
 If you want to use this app only for receiving mails, skip this step.
 
-### Initialize Database & Run
+## 5. Initialize Database & Run
 
 1. Run `init.js` file.
 
