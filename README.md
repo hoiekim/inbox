@@ -6,4 +6,4 @@ Try Inbox by set it up in your server.
 
 # Instruction
 
-- [How To Setup](doc/how_to_setup.md)
+- [How To Setup](docs/how_to_setup.md)
