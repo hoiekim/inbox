@@ -1,4 +1,4 @@
-All these instructions can be found this [official guide](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html) as well. We tested with Elasticsearch v7.9 on ubuntu.
+All these instructions can be found in this [official guide](https://www.elastic.co/guide/en/elasticsearch/reference/7.9/deb.html) as well. We tested with Elasticsearch v7.9 on ubuntu.
 
 If these instructions are outdated, please raise an issue or send us a Pull Request.
 
