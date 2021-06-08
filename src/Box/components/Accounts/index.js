@@ -25,21 +25,29 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
   if (query.isSuccess) {
     const accounts = Array.isArray(query.data) ? query.data : null;
 
+    for (const i in accounts) {
+      const account = accounts[i];
+      if (account.key.split("@")[0] === "sent.by.me") {
+        accounts.splice(i, 1);
+        accounts.unshift(account);
+      }
+    }
+
     const result = accounts?.map((data, i) => {
-      const account = data.key;
+      const accountName = data.key;
       const unreadNo = data.doc_count;
       const onClickAccount = () => {
-        if (selectedAccount !== account) setSelectedAccount(account);
+        if (selectedAccount !== accountName) setSelectedAccount(accountName);
       };
 
       // TODO: below className is not working
       let className = "";
-      if (selectedAccount === account) className = "tag clicked";
+      if (selectedAccount === accountName) className = "tag clicked";
       else className = "tag cursor";
 
       return (
         <h3 key={i} className={className} onClick={onClickAccount}>
-          <span>{account.split("@")[0]}</span>
+          <span>{accountName.split("@")[0]}</span>
           {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
         </h3>
       );

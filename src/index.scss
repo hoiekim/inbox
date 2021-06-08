@@ -262,7 +262,7 @@ button {
   border-radius: 3px;
   height: 30px;
   width: 90px;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
   overflow: hidden;
   white-space: nowrap;
@@ -325,6 +325,12 @@ svg {
 }
 
 @media only screen and (max-width: 650px) {
+  body {
+    * {
+      font-weight: 500;
+    }
+  }
+
   .menu {
     .iconBox {
       height: 45px;

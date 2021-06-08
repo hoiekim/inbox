@@ -111,7 +111,12 @@ const MailsRendered = ({ selectedAccount }) => {
               <div className="mailcard-small content">
                 {date}, {time}
               </div>
-              <div className="mailcard-small content">{mail.from?.text}</div>
+              <div className="mailcard-small content">
+                {"from: " + mail.from?.text}
+              </div>
+              <div className="mailcard-small content">
+                {"to: " + mail.to?.text}
+              </div>
               <div className="mailcard-subject content">{mail.subject}</div>
             </div>
             {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}

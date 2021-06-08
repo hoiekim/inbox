@@ -55,7 +55,7 @@
       align-items: center;
       margin-right: 0.4rem;
       padding: 0.4rem;
-      font-size: 14px;
+      font-size: 16px;
 
       svg {
         margin-right: 0.3rem;
@@ -65,13 +65,14 @@
 
   .mailcard {
     position: relative;
-  }
 
-  .mailcard-small {
-    font-size: 14px;
-  }
-  .mailcard-subject {
-    font-size: 20px;
-    margin-top: 0.5rem;
+    .mailcard-small {
+      font-size: 16px;
+      opacity: 0.7;
+    }
+    .mailcard-subject {
+      font-size: 20px;
+      margin-top: 0.5rem;
+    }
   }
 }
