@@ -164,36 +164,29 @@ const Writer = ({ style }) => {
     mutation.mutate(formData);
   };
 
-  const Attachments = () => {
-    const result = Object.keys(attachments).map((key, i) => {
-      const file = attachments[key];
+  const attachmentComponents = Object.keys(attachments).map((key, i) => {
+    const file = attachments[key];
 
-      const onClickRemove = () => {
-        const clonedAttachments = { ...attachments };
-        delete clonedAttachments[key];
-        setAttachments(clonedAttachments);
-      };
+    const onClickRemove = () => {
+      const clonedAttachments = { ...attachments };
+      delete clonedAttachments[key];
+      setAttachments(clonedAttachments);
+    };
 
-      return (
-        <div
-          key={i}
-          className="attachment"
-          title="Click to remove"
-          onClick={onClickRemove}
-        >
-          <div className="attachment-text cursor">
-            <FileIcon />
-            <span>{file.name}</span>
-          </div>
+    return (
+      <div
+        key={i}
+        className="attachment"
+        title="Click to remove"
+        onClick={onClickRemove}
+      >
+        <div className="attachment-text cursor">
+          <FileIcon />
+          <span>{file.name}</span>
         </div>
-      );
-    });
-    return result.length ? (
-      <div className="attachmentBox">{result}</div>
-    ) : (
-      <></>
+      </div>
     );
-  };
+  });
 
   return (
     <blockquote
@@ -270,7 +263,11 @@ const Writer = ({ style }) => {
           </span>
         </div>
         <div id="writer-content-wrap">
-          <Attachments />
+          {attachmentComponents.length ? (
+            <div className="attachmentBox">{attachmentComponents}</div>
+          ) : (
+            <></>
+          )}
           <div id="writer-content" className={isPreviewOpen ? "flip" : ""}>
             <textarea
               className="writer-fat"

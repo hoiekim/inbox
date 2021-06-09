@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import React, { useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import FileIcon from "../../../FileIcon";
@@ -39,36 +39,28 @@ const MailBody = ({ mailId }) => {
   const data = query.data;
 
   if (query.isSuccess && data) {
-    const Attachments = () => {
-      const result = data.attachments?.map((attachment, i) => {
-        const onClickAttachment = () => {
-          fetch(`/api/attachment/${attachment.content.data}`)
-            .then((r) => r.arrayBuffer())
-            .then((r) => {
-              const link = document.createElement("a");
-              const blob = new Blob([r], { type: attachment.contentType });
-              const objectUrl = URL.createObjectURL(blob);
-              link.href = objectUrl;
-              link.target = "_black";
-              link.download = attachment.filename;
-              return link;
-            })
-            .then((link) => link.click());
-        };
-        return (
-          <div
-            key={i}
-            className="attachment cursor"
-            onClick={onClickAttachment}
-          >
-            <FileIcon />
-            <span>{attachment.filename}</span>
-          </div>
-        );
-      });
-
-      return <div className="attachmentBox">{result}</div> || <></>;
-    };
+    const attachments = data.attachments?.map((attachment, i) => {
+      const onClickAttachment = () => {
+        fetch(`/api/attachment/${attachment.content.data}`)
+          .then((r) => r.arrayBuffer())
+          .then((r) => {
+            const link = document.createElement("a");
+            const blob = new Blob([r], { type: attachment.contentType });
+            const objectUrl = URL.createObjectURL(blob);
+            link.href = objectUrl;
+            link.target = "_black";
+            link.download = attachment.filename;
+            return link;
+          })
+          .then((link) => link.click());
+      };
+      return (
+        <div key={i} className="attachment cursor" onClick={onClickAttachment}>
+          <FileIcon />
+          <span>{attachment.filename}</span>
+        </div>
+      );
+    });
 
     const iframeSrcDoc = `
       <style>
@@ -95,7 +87,11 @@ const MailBody = ({ mailId }) => {
 
     return (
       <div className="text">
-        <Attachments />
+        {attachments && attachments.length ? (
+          <div className="attachmentBox">{attachments}</div>
+        ) : (
+          <></>
+        )}
         <iframe title={mailId} srcDoc={iframeSrcDoc} onLoad={onLoadIframe} />
       </div>
     );

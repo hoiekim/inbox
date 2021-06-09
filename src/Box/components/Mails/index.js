@@ -46,123 +46,118 @@ const MailsRendered = () => {
   if (query.isSuccess) {
     const mails = Array.isArray(query.data) ? query.data : [];
 
-    const MailsList = () => {
-      const result = mails.map((mail, i) => {
-        const date = new Date(mail.date).toLocaleDateString("en-US", {
-          weekday: "long",
-          year: "numeric",
-          month: "long",
-          day: "numeric"
-        });
-
-        const time = new Date(mail.date).toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit"
-        });
-
-        let duration =
-          (Number(Date.now()) - Number(new Date(mail.date))) / (1000 * 60);
-        if (duration > 2 * 24 * 60) {
-          duration = `${Math.floor(duration / (60 * 24))} days ago`;
-        } else if (duration > 2 * 60) {
-          duration = `${Math.floor(duration / 60)} hours ago`;
-        } else if (duration > 2) {
-          duration = `${Math.floor(duration)} minutes ago`;
-        } else {
-          duration = "just now";
-        }
-
-        const onClickMailcard = () => {
-          if (activeMailId[mail.id]) {
-            const clonedActiveMailId = { ...activeMailId };
-            delete clonedActiveMailId[mail.id];
-            setActiveMailId(clonedActiveMailId);
-          } else {
-            if (!mail.read) {
-              markRead(mail.id);
-              mail.read = true;
-
-              const numberBall = Array.from(
-                document.querySelectorAll("h3.tag > span")
-              ).find(
-                (e) => e.innerText === selectedAccount.split("@")[0]
-              ).nextSibling;
-
-              const ballCount = +numberBall.innerText;
-
-              if (ballCount < 2) numberBall.remove();
-              else numberBall.innerText = ballCount - 1;
-            }
-            const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
-            setActiveMailId(clonedActiveMailId);
-          }
-        };
-
-        const onClickReply = () => {
-          if (!activeMailId[mail.id]) {
-            const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
-            setActiveMailId(clonedActiveMailId);
-          }
-          setReplyData({ ...mail, to: { address: selectedAccount } });
-        };
-
-        const onClickTrash = () => {
-          const sure = window.confirm("Do you want to delete this mail?");
-          if (sure) {
-            mutation.mutate(mail.id);
-            if (mails.length === 1) setFetchAccounts(fetchAccounts + 1);
-          }
-        };
-
-        const classes = ["mailcard"];
-
-        if (!mail.read) classes.push("unread");
-        if (!isWriterOpen) classes.push("shadow");
-
-        return (
-          <blockquote key={i} className={classes.join(" ")}>
-            <div className="header cursor" onClick={onClickMailcard}>
-              <div className="mailcard-small content">{duration}</div>
-              <div className="mailcard-small content">
-                {date}, {time}
-              </div>
-              <div className="mailcard-small content">
-                {"from: " + mail.from?.text}
-              </div>
-              <div className="mailcard-small content">
-                {"to: " + mail.to?.text}
-              </div>
-              <div className="mailcard-subject content">{mail.subject}</div>
-            </div>
-            {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}
-            <div className="actionBox">
-              <div className="iconBox">
-                <ReplyIcon className="cursor" onClick={onClickReply} />
-              </div>
-              <div className="iconBox">
-                <TrashIcon className="cursor" onClick={onClickTrash} />
-              </div>
-            </div>
-          </blockquote>
-        );
+    const result = mails.map((mail, i) => {
+      const date = new Date(mail.date).toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric"
       });
 
-      return result;
-    };
+      const time = new Date(mail.date).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
 
-    return (
-      <div className="mails_container">
-        <MailsList />
-      </div>
+      let duration =
+        (Number(Date.now()) - Number(new Date(mail.date))) / (1000 * 60);
+      if (duration > 2 * 24 * 60) {
+        duration = `${Math.floor(duration / (60 * 24))} days ago`;
+      } else if (duration > 2 * 60) {
+        duration = `${Math.floor(duration / 60)} hours ago`;
+      } else if (duration > 2) {
+        duration = `${Math.floor(duration)} minutes ago`;
+      } else {
+        duration = "just now";
+      }
+
+      const onClickMailcard = () => {
+        if (activeMailId[mail.id]) {
+          const clonedActiveMailId = { ...activeMailId };
+          delete clonedActiveMailId[mail.id];
+          setActiveMailId(clonedActiveMailId);
+        } else {
+          if (!mail.read) {
+            markRead(mail.id);
+            mail.read = true;
+
+            const numberBall = Array.from(
+              document.querySelectorAll("h3.tag > span")
+            ).find(
+              (e) => e.innerText === selectedAccount.split("@")[0]
+            ).nextSibling;
+
+            const ballCount = +numberBall.innerText;
+
+            if (ballCount < 2) numberBall.remove();
+            else numberBall.innerText = ballCount - 1;
+          }
+          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+          setActiveMailId(clonedActiveMailId);
+        }
+      };
+
+      const onClickReply = () => {
+        if (!activeMailId[mail.id]) {
+          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+          setActiveMailId(clonedActiveMailId);
+        }
+        setReplyData({ ...mail, to: { address: selectedAccount } });
+      };
+
+      const onClickTrash = () => {
+        const sure = window.confirm("Do you want to delete this mail?");
+        if (sure) {
+          mutation.mutate(mail.id);
+          if (mails.length === 1) setFetchAccounts(fetchAccounts + 1);
+        }
+      };
+
+      const classes = ["mailcard"];
+
+      if (!mail.read) classes.push("unread");
+      if (!isWriterOpen) classes.push("shadow");
+
+      return (
+        <blockquote key={i} className={classes.join(" ")}>
+          <div className="header cursor" onClick={onClickMailcard}>
+            <div className="mailcard-small content">{duration}</div>
+            <div className="mailcard-small content">
+              {date}, {time}
+            </div>
+            <div className="mailcard-small content">
+              {"from: " + mail.from?.text}
+            </div>
+            <div className="mailcard-small content">
+              {"to: " + mail.to?.text}
+            </div>
+            <div className="mailcard-subject content">{mail.subject}</div>
+          </div>
+          {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}
+          <div className="actionBox">
+            <div className="iconBox">
+              <ReplyIcon className="cursor" onClick={onClickReply} />
+            </div>
+            <div className="iconBox">
+              <TrashIcon className="cursor" onClick={onClickTrash} />
+            </div>
+          </div>
+        </blockquote>
+      );
+    });
+
+    return result && result.length ? (
+      <div className="mails_container">{result}</div>
+    ) : (
+      <></>
     );
   }
 };
 
 const Mails = () => {
   const { selectedAccount } = useContext(Context);
-
   if (!selectedAccount) return <MailsNotRendered />;
-  else return <MailsRendered selectedAccount={selectedAccount} />;
+  else return <MailsRendered />;
 };
 
 export default Mails;

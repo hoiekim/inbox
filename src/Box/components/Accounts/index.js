@@ -24,7 +24,7 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const accounts = Array.isArray(query.data) ? query.data : null;
+    const accounts = Array.isArray(query.data) ? query.data : [];
 
     for (const i in accounts) {
       const account = accounts[i];
@@ -34,7 +34,7 @@ const Accounts = () => {
       }
     }
 
-    const result = accounts?.map((data, i) => {
+    const result = accounts.map((data, i) => {
       const accountName = data.key;
       const unreadNo = data.doc_count;
       const onClickAccount = () => {
@@ -53,7 +53,7 @@ const Accounts = () => {
       );
     });
 
-    return result ? <div>{result}</div> : <></>;
+    return result && result.length ? <div>{result}</div> : <></>;
   }
 };
 
