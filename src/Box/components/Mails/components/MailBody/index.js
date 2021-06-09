@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo } from "react";
+import React, { useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import FileIcon from "../../../FileIcon";
@@ -15,8 +15,8 @@ const MailBody = ({ mailId }) => {
 
   useEffect(() => {
     if (
-      replyData.id &&
       query.data?.html &&
+      replyData.id === query.data.id &&
       replyData.messageId !== query.data.messageId
     ) {
       setReplyData({
@@ -95,10 +95,9 @@ const MailBody = ({ mailId }) => {
     return (
       <div className="text">
         <Attachments />
-        <iframe title={data.id} srcDoc={iframeSrcDoc} onLoad={onLoadIframe} />
+        <iframe title={mailId} srcDoc={iframeSrcDoc} onLoad={onLoadIframe} />
       </div>
     );
   }
 };
-
 export default MailBody;

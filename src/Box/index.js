@@ -94,3 +94,5 @@ const Box = () => {
 };
 
 export default Box;
+
+export const mailCache = {};

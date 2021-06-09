@@ -6,6 +6,7 @@ import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
 
 import { Context } from "../../..";
+import { mailCache } from "../..";
 
 import "./index.scss";
 
