@@ -1,4 +1,4 @@
-import React, { useState, useContext } from "react";
+import React, { useContext } from "react";
 import Writer from "./components/Writer";
 import Accounts from "./components/Accounts";
 import Mails from "./components/Mails";
@@ -6,8 +6,6 @@ import { Context } from "..";
 import "./index.scss";
 
 const Box = () => {
-  const [selectedAccount, setSelectedAccount] = useState("");
-
   const {
     viewSize,
     isAccountsOpen,
@@ -72,7 +70,7 @@ const Box = () => {
           className={isWriterOpen ? "curtain on" : "curtain"}
           onClick={onClickCurtain}
         />
-        <Accounts setSelectedAccount={setSelectedAccount} />
+        <Accounts />
       </div>
       <div style={mainPaneStyle} className="pane main_pane">
         <div
@@ -86,7 +84,7 @@ const Box = () => {
           }
           onClick={onClickCurtain}
         />
-        <Mails selectedAccount={selectedAccount} />
+        <Mails />
       </div>
       <Writer style={writerStyle} />
     </>
@@ -94,5 +92,3 @@ const Box = () => {
 };
 
 export default Box;
-
-export const mailCache = {};

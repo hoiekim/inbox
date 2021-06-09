@@ -1,4 +1,4 @@
-import React, { useContext, useEffect } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import FileIcon from "../../../FileIcon";
@@ -51,8 +51,9 @@ const MailBody = ({ mailId }) => {
               link.href = objectUrl;
               link.target = "_black";
               link.download = attachment.filename;
-              link.click();
-            });
+              return link;
+            })
+            .then((link) => link.click());
         };
         return (
           <div

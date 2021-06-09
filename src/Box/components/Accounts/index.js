@@ -5,8 +5,9 @@ import { Context } from "../../..";
 
 import "./index.scss";
 
-const Accounts = ({ selectedAccount, setSelectedAccount }) => {
-  const { fetchAccounts } = useContext(Context);
+const Accounts = () => {
+  const { fetchAccounts, selectedAccount, setSelectedAccount } =
+    useContext(Context);
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const query = useQuery("getAccounts", getAccounts);
 
@@ -40,7 +41,6 @@ const Accounts = ({ selectedAccount, setSelectedAccount }) => {
         if (selectedAccount !== accountName) setSelectedAccount(accountName);
       };
 
-      // TODO: below className is not working
       let className = "";
       if (selectedAccount === accountName) className = "tag clicked";
       else className = "tag cursor";

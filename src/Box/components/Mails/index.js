@@ -6,7 +6,6 @@ import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
 
 import { Context } from "../../..";
-import { mailCache } from "../..";
 
 import "./index.scss";
 
@@ -14,9 +13,14 @@ const MailsNotRendered = () => {
   return <div className="mails_container">Please Select Account</div>;
 };
 
-const MailsRendered = ({ selectedAccount }) => {
-  const { isWriterOpen, setReplyData, fetchAccounts, setFetchAccounts } =
-    useContext(Context);
+const MailsRendered = () => {
+  const {
+    isWriterOpen,
+    setReplyData,
+    fetchAccounts,
+    setFetchAccounts,
+    selectedAccount
+  } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
@@ -77,7 +81,17 @@ const MailsRendered = ({ selectedAccount }) => {
             if (!mail.read) {
               markRead(mail.id);
               mail.read = true;
-              setFetchAccounts(fetchAccounts + 1);
+
+              const numberBall = Array.from(
+                document.querySelectorAll("h3.tag > span")
+              ).find(
+                (e) => e.innerText === selectedAccount.split("@")[0]
+              ).nextSibling;
+
+              const ballCount = +numberBall.innerText;
+
+              if (ballCount < 2) numberBall.remove();
+              else numberBall.innerText = ballCount - 1;
             }
             const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
             setActiveMailId(clonedActiveMailId);
@@ -144,7 +158,9 @@ const MailsRendered = ({ selectedAccount }) => {
   }
 };
 
-const Mails = ({ selectedAccount }) => {
+const Mails = () => {
+  const { selectedAccount } = useContext(Context);
+
   if (!selectedAccount) return <MailsNotRendered />;
   else return <MailsRendered selectedAccount={selectedAccount} />;
 };

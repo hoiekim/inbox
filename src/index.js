@@ -36,6 +36,7 @@ const App = () => {
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
   const [fetchAccounts, setFetchAccounts] = useState(0);
+  const [selectedAccount, setSelectedAccount] = useState("");
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -55,7 +56,9 @@ const App = () => {
     replyData,
     setReplyData,
     fetchAccounts,
-    setFetchAccounts
+    setFetchAccounts,
+    selectedAccount,
+    setSelectedAccount
   };
 
   return (
