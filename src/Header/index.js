@@ -8,11 +8,18 @@ import "./index.scss";
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
 const Header = () => {
-  const { isLogin } = useContext(Context);
+  const { viewSize, isLogin, selectedAccount } = useContext(Context);
+
+  const title = !selectedAccount
+    ? "@" + domainName
+    : viewSize.width > 650
+    ? selectedAccount
+    : selectedAccount.split("@")[0];
+
   return (
     <div id="title_bar">
       {isLogin ? <LeftMenu /> : null}
-      <h1>@{domainName}</h1>
+      <h1>{title}</h1>
       {isLogin ? <RightMenu /> : null}
     </div>
   );

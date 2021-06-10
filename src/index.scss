@@ -1,3 +1,6 @@
+@use "sass:color";
+@import "./variables.scss";
+
 body {
   overflow: hidden;
   position: relative;
@@ -38,13 +41,6 @@ code {
 ::-webkit-scrollbar-thumb {
   border-radius: 10px;
 }
-iframe::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border: 7px solid white;
-}
-iframe::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.7);
-}
 
 @media (prefers-color-scheme: light) {
   ::-webkit-scrollbar-thumb {
@@ -58,68 +54,71 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
   input::-webkit-scrollbar-thumb,
   textarea::-webkit-scrollbar-thumb {
-    border: 7px solid white;
+    border: 7px solid $color-light;
   }
 
   body {
-    background-color: rgb(230, 230, 230);
-    color: rgb(50, 50, 50);
+    background-color: $color-light;
+    color: $color-dark;
   }
 
   button {
-    color: white;
-    background-color: rgb(60, 35, 250);
+    background-color: color.adjust($color-accent, $lightness: 17%);
+    color: $color-light;
 
     &:hover {
-      background-color: rgb(50, 25, 230);
+      background-color: color.adjust($color-accent, $lightness: 24%);
     }
+
     &:active {
-      background-color: rgb(45, 20, 220);
+      background-color: color.adjust($color-accent, $lightness: 22%);
     }
   }
 
   blockquote {
-    background-color: rgb(220, 220, 220);
-    border-left: 3px solid rgb(210, 210, 210);
+    background-color: color.adjust($color-light, $lightness: 3%);
+    border-left: 3px solid color.adjust($color-light, $lightness: 8%);
 
     &.mailcard:hover {
-      background-color: rgb(200, 200, 200);
+      background-color: color.adjust($color-light, $lightness: 4%);
     }
   }
 
   input,
   textarea {
-    color: black;
-    background-color: rgb(245, 245, 245);
-    box-shadow: 2px 2px 2px rgb(200, 200, 200) inset;
+    color: $color-dark;
+    background-color: color.adjust($color-light, $lightness: 10%);
+    box-shadow: 2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
+      -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
   }
+
   .attachment {
-    background-color: rgb(200, 200, 200);
+    background-color: color.adjust($color-light, $lightness: 8%);
 
     &:hover {
-      background-color: rgb(180, 180, 180);
+      background-color: color.adjust($color-light, $lightness: 10%);
     }
   }
 
   .tag {
-    background-color: rgb(200, 200, 200);
-    color: black;
+    background-color: color.adjust($color-light, $lightness: 17%);
+    color: $color-light;
 
     &:hover {
-      background-color: rgb(180, 180, 180);
+      background-color: color.adjust($color-light, $lightness: 24%);
     }
 
     &:active {
-      background-color: rgb(160, 160, 160);
+      background-color: color.adjust($color-light, $lightness: 22%);
     }
 
     &.clicked {
-      background-color: rgb(230, 230, 230);
+      background-color: color.adjust($color-light, $lightness: 7%);
     }
   }
 
   .curtain.on {
-    background-color: rgba(230, 230, 230, 0.6);
+    background-color: color.adjust($color-light, $alpha: -0.4);
   }
 }
 
@@ -144,65 +143,66 @@ iframe::-webkit-scrollbar-thumb:hover {
   }
 
   body {
-    background-color: rgb(50, 50, 50);
-    color: rgb(230, 230, 230);
+    background-color: $color-dark;
+    color: $color-light;
   }
 
   button {
-    color: rgb(210, 210, 210);
-    background-color: rgb(50, 35, 180);
+    color: $color-light;
+    background-color: color.adjust($color-accent, $lightness: 7%);
 
     &:hover {
-      background-color: rgb(60, 50, 230);
+      background-color: color.adjust($color-accent, $lightness: 14%);
     }
     &:active {
-      background-color: rgb(55, 45, 220);
+      background-color: color.adjust($color-accent, $lightness: 12%);
     }
   }
 
   blockquote {
-    background-color: rgb(55, 55, 55);
-    border-left: 3px solid rgb(75, 75, 75);
+    background-color: color.adjust($color-dark, $lightness: 3%);
+    border-left: 3px solid color.adjust($color-dark, $lightness: 10%);
 
     &.mailcard:hover {
-      background-color: rgb(60, 60, 60);
+      background-color: color.adjust($color-dark, $lightness: 4%);
     }
   }
 
   input,
   textarea {
-    color: rgb(230, 230, 230);
-    background-color: rgb(50, 50, 50);
-    box-shadow: 2px 2px 2px rgb(40, 40, 40) inset;
+    color: $color-light;
+    background-color: $color-dark;
+    box-shadow: 1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
+      -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
   }
 
   .attachment {
-    background-color: rgb(75, 75, 75);
+    background-color: color.adjust($color-dark, $lightness: 10%);
 
     &:hover {
-      background-color: rgb(65, 65, 65);
+      background-color: color.adjust($color-dark, $lightness: 13%);
     }
   }
 
   .tag {
-    background-color: rgb(80, 80, 80);
-    color: white;
+    background-color: color.adjust($color-dark, $lightness: 7%);
+    color: $color-light;
 
     &:hover {
-      background-color: rgb(100, 100, 100);
+      background-color: color.adjust($color-dark, $lightness: 14%);
     }
 
     &:active {
-      background-color: rgb(60, 60, 60);
+      background-color: color.adjust($color-dark, $lightness: 12%);
     }
 
     &.clicked {
-      background-color: rgb(50, 50, 50);
+      background-color: $color-dark;
     }
   }
 
   .curtain.on {
-    background-color: rgba(50, 50, 50, 0.6);
+    background-color: color.adjust($color-dark, $alpha: -0.4);
   }
 }
 
@@ -265,7 +265,7 @@ button {
   font-size: 16px;
   font-weight: 500;
   overflow: hidden;
-  white-space: nowrap;
+  $color-light-space: nowrap;
 }
 button:hover {
   cursor: pointer;
@@ -283,6 +283,7 @@ button:hover {
 .curtain {
   z-index: 1;
   position: fixed;
+  top: 70px;
   transition: 150ms;
   pointer-events: none;
 

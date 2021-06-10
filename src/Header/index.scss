@@ -15,9 +15,10 @@
   }
 
   h1 {
+    font-size: min(max(4vw, 30px), 35px);
     text-align: center;
     margin: 0;
-    width: 300px;
+    width: auto;
   }
 
   .menu {

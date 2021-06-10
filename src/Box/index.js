@@ -86,7 +86,12 @@ const Box = () => {
         />
         <Mails />
       </div>
-      <Writer style={writerStyle} />
+      <div
+        style={writerStyle}
+        className={isWriterOpen ? "writer_pane shadow" : "writer_pane"}
+      >
+        <Writer />
+      </div>
     </>
   );
 };

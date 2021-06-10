@@ -14,4 +14,13 @@
 
 .side_pane {
   z-index: 5;
+  padding-top: 0.5rem;
+}
+
+.writer_pane {
+  z-index: 10;
+  transition: 150ms;
+  position: fixed;
+  margin-top: 0;
+  height: calc(100vh - 80px);
 }

@@ -24,36 +24,63 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const accounts = Array.isArray(query.data) ? query.data : [];
+    const allAccounts = query.data?.received || [];
 
-    for (const i in accounts) {
-      const account = accounts[i];
-      if (account.key.split("@")[0] === "sent.by.me") {
-        accounts.splice(i, 1);
-        accounts.unshift(account);
-      }
-    }
+    const sentAccounts = query.data?.sent || [];
 
-    const result = accounts.map((data, i) => {
+    const unreadAccounts = [];
+
+    allAccounts.forEach((account, i) => {
+      if (account.unread_doc_count) unreadAccounts.push(account);
+    });
+
+    // TODO: how are we gonna fetch sent messages?
+    const renderAccount = (data, i) => {
       const accountName = data.key;
-      const unreadNo = data.doc_count;
+      const sent = accountName === "sent.by.me";
+      const unreadNo = sent ? 0 : data.unread_doc_count;
       const onClickAccount = () => {
         if (selectedAccount !== accountName) setSelectedAccount(accountName);
       };
 
-      let className = "";
-      if (selectedAccount === accountName) className = "tag clicked";
-      else className = "tag cursor";
+      const classes = ["tag"];
+      if (selectedAccount === accountName) classes.push("clicked");
+      else classes.push("cursor");
 
       return (
-        <h3 key={i} className={className} onClick={onClickAccount}>
-          <span>{accountName.split("@")[0]}</span>
+        <h3 key={i} className={classes.join(" ")} onClick={onClickAccount}>
+          <span>{sent ? "Sent" : accountName.split("@")[0]}</span>
           {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
         </h3>
       );
-    });
+    };
 
-    return result && result.length ? <div>{result}</div> : <></>;
+    const newCategory = unreadAccounts.map(renderAccount);
+    const sentCategory = sentAccounts.map(renderAccount);
+    const allCategory = allAccounts.map(renderAccount);
+
+    return (
+      <>
+        {newCategory.length ? (
+          <div>
+            <div>New</div>
+            <div>{newCategory}</div>
+          </div>
+        ) : null}
+        {sentCategory.length ? (
+          <div>
+            <div>Sent</div>
+            <div>{sentCategory}</div>
+          </div>
+        ) : null}
+        {allCategory.length ? (
+          <div>
+            <div>All</div>
+            <div>{allCategory}</div>
+          </div>
+        ) : null}
+      </>
+    );
   }
 };
 

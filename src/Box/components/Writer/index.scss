@@ -1,9 +1,5 @@
 .writer {
-  z-index: 10;
-  transition: 150ms;
-  position: fixed;
-  margin-top: 0;
-  height: calc(100vh - 80px);
+  height: 100%;
 
   &.shadow {
     box-shadow: rgb(0 0 0 / 10%) -10px 10px 10px 10px;

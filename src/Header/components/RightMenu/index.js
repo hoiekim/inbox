@@ -6,13 +6,17 @@ import LogoutIcon from "./components/LogoutIcon";
 import { Context } from "../../..";
 
 const RightMenu = () => {
-  const { setIsLogin, isWriterOpen, setIsWriterOpen } = useContext(Context);
+  const { setIsLogin, isWriterOpen, setIsWriterOpen, setSelectedAccount } =
+    useContext(Context);
 
   const logout = () => {
     fetch("/admin", { method: "DELETE" })
       .then((r) => r.json())
       .then((r) => {
-        if (r === true) setIsLogin(false);
+        if (r === true) {
+          setIsLogin(false);
+          setSelectedAccount("");
+        }
       });
   };
 

@@ -23,7 +23,7 @@ const writerParser = (html) => {
   };
 };
 
-const Writer = ({ style }) => {
+const Writer = () => {
   const { isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
     useContext(Context);
 
@@ -189,10 +189,7 @@ const Writer = ({ style }) => {
   });
 
   return (
-    <blockquote
-      className={isWriterOpen ? "writer shadow" : "writer"}
-      style={style}
-    >
+    <blockquote className="writer">
       <div>
         <div className="fieldName">From: </div>
         <input
