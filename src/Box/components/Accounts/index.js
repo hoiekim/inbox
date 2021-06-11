@@ -1,13 +1,9 @@
-import React, { useContext, useEffect } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import { Context, categories } from "../../..";
 
 import "./index.scss";
-
-let allAccounts = [];
-let sentAccounts = [];
-let unreadAccounts = [];
 
 const Accounts = () => {
   const {
@@ -17,6 +13,11 @@ const Accounts = () => {
     selectedCategory,
     setSelectedCategory
   } = useContext(Context);
+
+  const [unreadAccounts, setUnreadAccounts] = useState([]);
+  const [allAccounts, setAllAccounts] = useState([]);
+  const [sentAccounts, setSentAccounts] = useState([]);
+
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const query = useQuery("getAccounts", getAccounts);
 
@@ -25,16 +26,24 @@ const Accounts = () => {
   }, [fetchAccounts, query]);
 
   useEffect(() => {
-    allAccounts = query.data?.received || [];
-    sentAccounts = query.data?.sent || [];
-    unreadAccounts = [];
+    if (query.data && setSelectedCategory) {
+      const allAccounts = query.data.received;
+      const sentAccounts = query.data.sent;
+      setAllAccounts(allAccounts);
+      setSentAccounts(sentAccounts);
 
-    allAccounts.forEach((account, i) => {
-      if (account.unread_doc_count) unreadAccounts.push(account);
-    });
+      const unreadAccounts = [];
 
-    if (unreadAccounts.length) setSelectedCategory(0);
-  }, [query.data]);
+      allAccounts.forEach((account) => {
+        if (account.unread_doc_count) unreadAccounts.push(account);
+      });
+
+      if (unreadAccounts.length) {
+        setUnreadAccounts(unreadAccounts);
+        setSelectedCategory(0);
+      }
+    }
+  }, [query.data, setSelectedCategory]);
 
   if (query.isLoading) {
     return (
@@ -55,14 +64,6 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const allAccounts = query.data?.received || [];
-    const sentAccounts = query.data?.sent || [];
-    const unreadAccounts = [];
-
-    allAccounts.forEach((account, i) => {
-      if (account.unread_doc_count) unreadAccounts.push(account);
-    });
-
     const renderAccount = (data, i) => {
       const accountName = data.key;
       const sent = accountName === "sent.by.me";

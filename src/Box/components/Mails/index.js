@@ -156,10 +156,10 @@ const MailsRendered = () => {
       );
     });
 
-    return result && result.length ? (
-      <div className="mails_container">{result}</div>
-    ) : (
-      <></>
+    return (
+      <div className="mails_container">
+        {result && result.length ? result : null}
+      </div>
     );
   }
 };

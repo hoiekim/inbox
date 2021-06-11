@@ -6,6 +6,7 @@ import PreviewIcon from "./components/PreviewIcon";
 import SendIcon from "./components/SendIcon";
 import AttachIcon from "./components/AttachIcon";
 import FileIcon from "../FileIcon";
+import EraserIcon from "./components/EraserIcon";
 
 import { Context } from "../../..";
 
@@ -14,6 +15,8 @@ import "./index.scss";
 import marked from "marked";
 
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
+
+const cookieSenderName = localStorage.getItem("writer-senderName") || "";
 
 const writerParser = (html) => {
   const htmlComponents = html.split("<in-reply-to>");
@@ -31,7 +34,7 @@ const Writer = () => {
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewSrc, setPreviewSrc] = useState("");
 
-  const [name, setName] = useState("");
+  const [name, setName] = useState(cookieSenderName);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [bcc, setBcc] = useState("");
@@ -55,17 +58,15 @@ const Writer = () => {
         minute: "2-digit"
       });
 
-      const html = `
-        \n\n\n
-        <in-reply-to>${replyData.messageId}<in-reply-to>
-        <br><br><br>
-        <p>On ${date} at ${time}, ${replyData.from.text
+      const html = `\n\n\n
+<in-reply-to>${replyData.messageId}<in-reply-to>
+<br><br><br>
+<p>On ${date} at ${time}, ${replyData.from.text
         .replace("<", "&lt;")
         .replace(">", "&gt;")} wrote:</p>
-        <blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
-          ${replyData.html}
-        </blockquote>
-      `;
+<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
+${replyData.html}
+</blockquote>`;
 
       setSender(replyData.to.address.split("@")[0]);
       setTo(replyData.from.value[0].address);
@@ -101,8 +102,24 @@ const Writer = () => {
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
 
+  const onChangeName = (e) => {
+    const name = e.target.value;
+    setName(name);
+    localStorage.setItem("writer-senderName", name);
+  };
+
   const onClickCurtain = () => {
     setIsWriterOpen(true);
+  };
+
+  const onClickEraserIcon = () => {
+    setSender("");
+    setTo("");
+    setCc("");
+    setBcc("");
+    setSubject("");
+    setTextarea("");
+    setAttachments({});
   };
 
   const onClickCcIcon = () => {
@@ -191,13 +208,18 @@ const Writer = () => {
   return (
     <blockquote className="writer">
       <div>
-        <div className="fieldName">From: </div>
+        <div className="fieldName">
+          <span>From:</span>
+          <span>
+            <EraserIcon className="cursor" onClick={onClickEraserIcon} />
+          </span>
+        </div>
         <input
           className="writer-short"
           placeholder="name"
           autoComplete="off"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={onChangeName}
         />
         <span className="helper-text"> &lt; </span>
         <input
