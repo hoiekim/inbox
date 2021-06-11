@@ -105,11 +105,17 @@ obj.saveMail = async (connection, data) => {
     new Date(Date.now())
   );
   try {
-    const correctAddress = data.envelopeTo.find((e) => {
+    let isAddressCorrect = !!data.envelopeTo.find((e) => {
       const parsedAddress = e.address.split("@");
       return parsedAddress[parsedAddress.length - 1] === domainName;
     });
-    if (correctAddress) {
+    if (!isAddressCorrect) {
+      isAddressCorrect = !!data.to.value.find((e) => {
+        const parsedAddress = e.address.split("@");
+        return parsedAddress[parsedAddress.length - 1] === domainName;
+      });
+    }
+    if (isAddressCorrect) {
       await db.saveMail({ ...data, read: false, label: undefined });
       console.info("Successfully saved an email");
     } else {
