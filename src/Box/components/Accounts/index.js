@@ -17,17 +17,17 @@ const Accounts = () => {
   const queryUrl = "/api/accounts";
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getAccounts);
+  const query = useQuery(queryUrl, getAccounts, {
+    onSuccess: (data) => {
+      if (data.new && !data.new.length) {
+        setSelectedCategory(1);
+      }
+    }
+  });
 
   useEffect(() => {
     if (fetchAccounts && query.refetch) query.refetch();
   }, [fetchAccounts, query]);
-
-  useEffect(() => {
-    if (query.isSuccess && !query.data.new.length) {
-      setSelectedCategory(1);
-    }
-  }, [query, setSelectedCategory]);
 
   if (query.isLoading) {
     return (
