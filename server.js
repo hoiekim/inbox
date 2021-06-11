@@ -51,6 +51,8 @@ app.listen(3004, () => {
 
 nodeMailin.on("message", mails.saveMail);
 
+nodeMailin.on("error", console.error);
+
 nodeMailin.start({
   port: 25,
   logLevel: "info"
