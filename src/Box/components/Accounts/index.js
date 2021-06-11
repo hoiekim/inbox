@@ -18,8 +18,10 @@ const Accounts = () => {
   const [allAccounts, setAllAccounts] = useState([]);
   const [sentAccounts, setSentAccounts] = useState([]);
 
-  const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
-  const query = useQuery("getAccounts", getAccounts);
+  const queryUrl = "/api/accounts";
+
+  const getAccounts = () => fetch(queryUrl).then((r) => r.json());
+  const query = useQuery(queryUrl, getAccounts);
 
   useEffect(() => {
     if (fetchAccounts && query.refetch) query.refetch();

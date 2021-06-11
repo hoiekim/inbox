@@ -1,5 +1,5 @@
 import React, { useState, useContext } from "react";
-import { useQuery, useMutation } from "react-query";
+import { useQuery } from "react-query";
 
 import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
@@ -14,31 +14,26 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = () => {
-  const {
-    isWriterOpen,
-    setReplyData,
-    fetchAccounts,
-    setFetchAccounts,
-    selectedAccount,
-    selectedCategory
-  } = useContext(Context);
+  const { isWriterOpen, setReplyData, selectedAccount, selectedCategory } =
+    useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
-  let fetchUrl;
+  let queryUrl;
 
   if (categories[selectedCategory] === "sent") {
-    fetchUrl = `/api/mails/${selectedAccount}?sent=1`;
+    queryUrl = `/api/mails/${selectedAccount}?sent=1`;
+  } else if (categories[selectedCategory] === "new") {
+    queryUrl = `/api/mails/${selectedAccount}?new=1`;
   } else {
-    fetchUrl = `/api/mails/${selectedAccount}`;
+    queryUrl = `/api/mails/${selectedAccount}`;
   }
 
-  const getMails = () => fetch(fetchUrl).then((r) => r.json());
-  const query = useQuery("getMails_" + selectedAccount, getMails);
+  const getMails = () => fetch(queryUrl).then((r) => r.json());
+  const query = useQuery(queryUrl, getMails);
 
   const deleteMail = (mailId) =>
     fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
-  const mutation = useMutation(deleteMail, { onSuccess: query.refetch });
 
   const markRead = (mailId) =>
     fetch(`/api/markRead/${mailId}`).then((r) => r.json());
@@ -89,7 +84,7 @@ const MailsRendered = () => {
             markRead(mail.id);
             mail.read = true;
 
-            queryClient.setQueryData("getAccounts", (oldData) => {
+            queryClient.setQueryData("/api/accounts", (oldData) => {
               const newData = { ...oldData };
               newData.received.find((account) => {
                 return account.key === selectedAccount;
@@ -111,10 +106,37 @@ const MailsRendered = () => {
       };
 
       const onClickTrash = () => {
-        const sure = window.confirm("Do you want to delete this mail?");
-        if (sure) {
-          mutation.mutate(mail.id);
-          if (mails.length === 1) setFetchAccounts(fetchAccounts + 1);
+        if (window.confirm("Do you want to delete this mail?")) {
+          deleteMail(mail.id);
+
+          queryClient.setQueryData(queryUrl, (oldData) => {
+            const newData = [...oldData];
+            newData.splice(i, 1);
+
+            if (!newData.length) {
+              queryClient.setQueryData("/api/accounts", (oldData) => {
+                const newData = { ...oldData };
+
+                let searchField, foundIndex;
+
+                if (selectedCategory === "sent") searchField = selectedCategory;
+                else searchField = "received";
+
+                newData[searchField].find((account, i) => {
+                  const found = account.key === selectedAccount;
+                  if (found) foundIndex = i;
+                  return found;
+                });
+
+                if (foundIndex !== undefined)
+                  newData[searchField].splice(foundIndex, 1);
+
+                return newData;
+              });
+            }
+
+            return newData;
+          });
         }
       };
 

@@ -8,10 +8,10 @@ import { Context } from "../../../../..";
 const MailBody = ({ mailId }) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(Context);
 
-  const getMail = () => {
-    return fetch(`/api/mailContent/${mailId}`).then((r) => r.json());
-  };
-  const query = useQuery(`getMail_${mailId}`, getMail);
+  const queryUrl = `/api/mailContent/${mailId}`;
+
+  const getMail = () => fetch(queryUrl).then((r) => r.json());
+  const query = useQuery(queryUrl, getMail);
 
   useEffect(() => {
     if (
