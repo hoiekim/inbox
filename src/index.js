@@ -39,7 +39,7 @@ const App = () => {
   const [replyData, setReplyData] = useState({});
   const [fetchAccounts, setFetchAccounts] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState(1);
+  const [selectedCategory, setSelectedCategory] = useState(0);
 
   useEffect(() => {
     window.addEventListener("resize", () => {

@@ -19,11 +19,13 @@ const MailsRendered = () => {
 
   const [activeMailId, setActiveMailId] = useState({});
 
+  const selectedCategoryName = categories[selectedCategory];
+
   let queryUrl;
 
-  if (categories[selectedCategory] === "sent") {
+  if (selectedCategoryName === "sent") {
     queryUrl = `/api/mails/${selectedAccount}?sent=1`;
-  } else if (categories[selectedCategory] === "new") {
+  } else if (selectedCategoryName === "new") {
     queryUrl = `/api/mails/${selectedAccount}?new=1`;
   } else {
     queryUrl = `/api/mails/${selectedAccount}`;
@@ -31,12 +33,6 @@ const MailsRendered = () => {
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMails);
-
-  const deleteMail = (mailId) =>
-    fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
-
-  const markRead = (mailId) =>
-    fetch(`/api/markRead/${mailId}`).then((r) => r.json());
 
   if (query.isLoading) {
     return <div className="mails_container">Loading Mails List...</div>;
@@ -46,10 +42,60 @@ const MailsRendered = () => {
     return <div className="mails_container">Mails List Request Failed</div>;
   }
 
+  const requestDeleteMail = (mailId) =>
+    fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
+
+  const requestMarkRead = (mailId) =>
+    fetch(`/api/markRead/${mailId}`).then((r) => r.json());
+
+  const removeAccountFromQueryData = () => {
+    queryClient.setQueryData("/api/accounts", (oldData) => {
+      const newData = { ...oldData };
+      let foundIndex;
+
+      newData[selectedCategoryName].find((account, i) => {
+        const found = account.key === selectedAccount;
+        if (found) foundIndex = i;
+        return found;
+      });
+
+      if (foundIndex !== undefined)
+        newData[selectedCategoryName].splice(foundIndex, 1);
+
+      return newData;
+    });
+  };
+
+  const markReadInAccountsQueryData = () => {
+    queryClient.setQueryData("/api/accounts", (oldData) => {
+      const newData = { ...oldData };
+
+      const foundData = newData[selectedCategoryName].find((account) => {
+        return account.key === selectedAccount;
+      });
+
+      foundData.unread_doc_count -= 1;
+
+      if (!foundData.unread_doc_count) {
+        let foundIndex;
+
+        newData.new.find((account, i) => {
+          const found = account.key === selectedAccount;
+          if (found) foundIndex = i;
+          return found;
+        });
+
+        newData.new.splice(foundIndex, 1);
+      }
+
+      return newData;
+    });
+  };
+
   if (query.isSuccess) {
     const mails = Array.isArray(query.data) ? query.data : [];
 
-    const result = mails.map((mail, i) => {
+    const renderMail = (mail, i) => {
       const date = new Date(mail.date).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
@@ -81,16 +127,9 @@ const MailsRendered = () => {
           setActiveMailId(clonedActiveMailId);
         } else {
           if (!mail.read) {
-            markRead(mail.id);
+            requestMarkRead(mail.id);
             mail.read = true;
-
-            queryClient.setQueryData("/api/accounts", (oldData) => {
-              const newData = { ...oldData };
-              newData.received.find((account) => {
-                return account.key === selectedAccount;
-              }).unread_doc_count -= 1;
-              return newData;
-            });
+            markReadInAccountsQueryData();
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
@@ -107,34 +146,13 @@ const MailsRendered = () => {
 
       const onClickTrash = () => {
         if (window.confirm("Do you want to delete this mail?")) {
-          deleteMail(mail.id);
+          requestDeleteMail(mail.id);
+          if (!mail.read) markReadInAccountsQueryData();
 
           queryClient.setQueryData(queryUrl, (oldData) => {
             const newData = [...oldData];
             newData.splice(i, 1);
-
-            if (!newData.length) {
-              queryClient.setQueryData("/api/accounts", (oldData) => {
-                const newData = { ...oldData };
-
-                let searchField, foundIndex;
-
-                if (selectedCategory === "sent") searchField = selectedCategory;
-                else searchField = "received";
-
-                newData[searchField].find((account, i) => {
-                  const found = account.key === selectedAccount;
-                  if (found) foundIndex = i;
-                  return found;
-                });
-
-                if (foundIndex !== undefined)
-                  newData[searchField].splice(foundIndex, 1);
-
-                return newData;
-              });
-            }
-
+            if (!newData.length) removeAccountFromQueryData();
             return newData;
           });
         }
@@ -171,7 +189,9 @@ const MailsRendered = () => {
           </div>
         </blockquote>
       );
-    });
+    };
+
+    const result = mails.map(renderMail);
 
     return (
       <div className="mails_container">

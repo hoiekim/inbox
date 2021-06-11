@@ -14,10 +14,6 @@ const Accounts = () => {
     setSelectedCategory
   } = useContext(Context);
 
-  const [unreadAccounts, setUnreadAccounts] = useState([]);
-  const [allAccounts, setAllAccounts] = useState([]);
-  const [sentAccounts, setSentAccounts] = useState([]);
-
   const queryUrl = "/api/accounts";
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
@@ -28,24 +24,10 @@ const Accounts = () => {
   }, [fetchAccounts, query]);
 
   useEffect(() => {
-    if (query.data && setSelectedCategory) {
-      const allAccounts = query.data.received;
-      const sentAccounts = query.data.sent;
-      setAllAccounts(allAccounts);
-      setSentAccounts(sentAccounts);
-
-      const unreadAccounts = [];
-
-      allAccounts.forEach((account) => {
-        if (account.unread_doc_count) unreadAccounts.push(account);
-      });
-
-      if (unreadAccounts.length) {
-        setUnreadAccounts(unreadAccounts);
-        setSelectedCategory(0);
-      }
+    if (query.isSuccess && !query.data.new) {
+      setSelectedCategory(1);
     }
-  }, [query.data, setSelectedCategory]);
+  }, [query, setSelectedCategory]);
 
   if (query.isLoading) {
     return (
@@ -66,6 +48,16 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
+    const unreadAccounts = query.data?.new?.sort((a, b) =>
+      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
+    );
+    const allAccounts = query.data?.all?.sort((a, b) =>
+      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
+    );
+    const sentAccounts = query.data?.sent?.sort((a, b) =>
+      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
+    );
+
     const renderAccount = (data, i) => {
       const accountName = data.key;
       const sent = accountName === "sent.by.me";
@@ -91,11 +83,11 @@ const Accounts = () => {
     let accountComponents;
 
     if (categories[selectedCategory] === "new") {
-      accountComponents = unreadAccounts.map(renderAccount);
+      accountComponents = (unreadAccounts || []).map(renderAccount);
     } else if (categories[selectedCategory] === "sent") {
-      accountComponents = sentAccounts.map(renderAccount);
+      accountComponents = (sentAccounts || []).map(renderAccount);
     } else {
-      accountComponents = allAccounts.map(renderAccount);
+      accountComponents = (allAccounts || []).map(renderAccount);
     }
 
     const categoryComponents = categories.map((e, i) => {
