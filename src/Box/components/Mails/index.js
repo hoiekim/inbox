@@ -5,7 +5,7 @@ import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
 
-import { categories, Context } from "../../..";
+import { categories, Context, queryClient } from "../../..";
 
 import "./index.scss";
 
@@ -89,18 +89,13 @@ const MailsRendered = () => {
             markRead(mail.id);
             mail.read = true;
 
-            const numberBall = Array.from(
-              document.querySelectorAll("h3.tag > span")
-            ).find(
-              (e) => e.innerText === selectedAccount.split("@")[0]
-            ).nextSibling;
-
-            if (numberBall) {
-              const ballCount = +numberBall.innerText;
-
-              if (ballCount < 2) numberBall.remove();
-              else numberBall.innerText = ballCount - 1;
-            }
+            queryClient.setQueryData("getAccounts", (oldData) => {
+              const newData = { ...oldData };
+              newData.received.find((account) => {
+                return account.key === selectedAccount;
+              }).unread_doc_count -= 1;
+              return newData;
+            });
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);

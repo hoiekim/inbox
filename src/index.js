@@ -85,4 +85,4 @@ const mountApp = async () => {
 
 mountApp();
 
-export { Context, categories };
+export { Context, categories, queryClient };

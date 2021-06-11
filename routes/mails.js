@@ -62,7 +62,7 @@ obj.getMailContent = async (req, res) => {
 
 obj.deleteMail = async (req, res) => {
   console.log(
-    "recieved DELETE request to delete mail",
+    "received DELETE request to delete mail",
     req.ip,
     "at",
     new Date(Date.now())
@@ -79,7 +79,7 @@ obj.deleteMail = async (req, res) => {
 
 obj.sendMail = async (req, res) => {
   console.log(
-    "recieved POST request to send mail",
+    "received POST request to send mail",
     req.ip,
     "at",
     new Date(Date.now())
