@@ -24,7 +24,7 @@ const Accounts = () => {
   }, [fetchAccounts, query]);
 
   useEffect(() => {
-    if (query.isSuccess && !query.data.new) {
+    if (query.isSuccess && !query.data.new.length) {
       setSelectedCategory(1);
     }
   }, [query, setSelectedCategory]);
