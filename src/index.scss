@@ -100,19 +100,19 @@ code {
   }
 
   .tag {
-    background-color: adjust-color($color-light, $lightness: 17%);
+    background-color: adjust-color($color-light, $lightness: 8%);
     color: $color-dark;
 
     &:hover {
-      background-color: adjust-color($color-light, $lightness: 24%);
+      background-color: adjust-color($color-light, $lightness: 14%);
     }
 
     &:active {
-      background-color: adjust-color($color-light, $lightness: 22%);
+      background-color: adjust-color($color-light, $lightness: 12%);
     }
 
     &.clicked {
-      background-color: adjust-color($color-light, $lightness: 7%);
+      background-color: adjust-color($color-light, $lightness: -10%);
     }
   }
 

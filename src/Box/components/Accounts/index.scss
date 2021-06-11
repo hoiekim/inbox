@@ -1,5 +1,37 @@
 @import "../../../variables.scss";
 
+@media (prefers-color-scheme: light) {
+  .tab-holder {
+    .categories {
+      background-color: adjust-color($color-light, $lightness: -10%);
+
+      div.clicked {
+        background-color: adjust-color($color-light, $lightness: 0%);
+      }
+    }
+
+    .accounts {
+      background-color: adjust-color($color-light, $lightness: 0%);
+    }
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .tab-holder {
+    .categories {
+      background-color: adjust-color($color-dark, $lightness: -4%);
+
+      div.clicked {
+        background-color: adjust-color($color-dark, $lightness: 0%);
+      }
+    }
+
+    .accounts {
+      background-color: adjust-color($color-dark, $lightness: 0%);
+    }
+  }
+}
+
 .tab-holder {
   display: flex;
   height: 100%;
@@ -12,7 +44,6 @@
     padding: 70px 0 1rem 0.5rem;
     width: 80px;
     height: 100%;
-    background-color: adjust-color($color-dark, $lightness: -4%);
 
     div {
       cursor: pointer;
@@ -20,10 +51,6 @@
       padding: 1rem;
       border-top-left-radius: 10px;
       border-bottom-left-radius: 10px;
-
-      &.clicked {
-        background-color: adjust-color($color-dark, $lightness: 0%);
-      }
     }
   }
 
@@ -34,7 +61,6 @@
     height: calc(100vh - 70px);
     width: calc(100% - 80px);
     overflow-y: scroll;
-    background-color: adjust-color($color-dark, $lightness: 0%);
 
     .tag {
       display: inline-block;
