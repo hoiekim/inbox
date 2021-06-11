@@ -96,14 +96,13 @@ obj.sendMail = async (req, res) => {
 };
 
 obj.saveMail = async (connection, data) => {
-  console.log(
-    "Reacieved an email",
-    "from:",
-    data.from?.text,
-    "to:",
-    data.to?.text,
-    new Date(Date.now())
-  );
+  console.group();
+  console.log("Received an email at", new Date(Date.now()));
+  console.log("envelopeFrom:", JSON.stringify(data.envelopeFrom));
+  console.log("envelopeTo:", JSON.stringify(data.envelopeTo));
+  console.log("from:", data.from?.text);
+  console.log("to:", data.to?.text);
+  console.groupEnd();
   try {
     let isAddressCorrect = !!data.envelopeTo.find((e) => {
       const parsedAddress = e.address.split("@");
