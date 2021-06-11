@@ -19,7 +19,7 @@ const Accounts = () => {
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getAccounts, {
     onSuccess: (data) => {
-      if (data.new && !data.new.length) {
+      if (!data.new?.length) {
         setSelectedCategory(1);
       }
     }
