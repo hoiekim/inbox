@@ -1,13 +1,22 @@
 import React, { useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
-import { Context } from "../../..";
+import { Context, categories } from "../../..";
 
 import "./index.scss";
 
+let allAccounts = [];
+let sentAccounts = [];
+let unreadAccounts = [];
+
 const Accounts = () => {
-  const { fetchAccounts, selectedAccount, setSelectedAccount } =
-    useContext(Context);
+  const {
+    fetchAccounts,
+    selectedAccount,
+    setSelectedAccount,
+    selectedCategory,
+    setSelectedCategory
+  } = useContext(Context);
   const getAccounts = () => fetch("/api/accounts").then((r) => r.json());
   const query = useQuery("getAccounts", getAccounts);
 
@@ -15,26 +24,45 @@ const Accounts = () => {
     if (fetchAccounts && query.refetch) query.refetch();
   }, [fetchAccounts, query]);
 
+  useEffect(() => {
+    allAccounts = query.data?.received || [];
+    sentAccounts = query.data?.sent || [];
+    unreadAccounts = [];
+
+    allAccounts.forEach((account, i) => {
+      if (account.unread_doc_count) unreadAccounts.push(account);
+    });
+
+    if (unreadAccounts.length) setSelectedCategory(0);
+  }, [query.data]);
+
   if (query.isLoading) {
-    return <div className="container">Loading Accounts List...</div>;
+    return (
+      <div className="tab-holder">
+        <div className="categories"></div>
+        <div className="loading">Loading Accounts List...</div>
+      </div>
+    );
   }
 
   if (query.error) {
-    return <div className="container">Accounts List Request Failed</div>;
+    return (
+      <div className="tab-holder">
+        <div className="categories"></div>
+        <div className="loading">Accounts List Request Failed</div>
+      </div>
+    );
   }
 
   if (query.isSuccess) {
     const allAccounts = query.data?.received || [];
-
     const sentAccounts = query.data?.sent || [];
-
     const unreadAccounts = [];
 
     allAccounts.forEach((account, i) => {
       if (account.unread_doc_count) unreadAccounts.push(account);
     });
 
-    // TODO: how are we gonna fetch sent messages?
     const renderAccount = (data, i) => {
       const accountName = data.key;
       const sent = accountName === "sent.by.me";
@@ -48,38 +76,40 @@ const Accounts = () => {
       else classes.push("cursor");
 
       return (
-        <h3 key={i} className={classes.join(" ")} onClick={onClickAccount}>
-          <span>{sent ? "Sent" : accountName.split("@")[0]}</span>
-          {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
-        </h3>
+        <div key={i}>
+          <h3 className={classes.join(" ")} onClick={onClickAccount}>
+            <span>{sent ? "Sent" : accountName.split("@")[0]}</span>
+            {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
+          </h3>
+        </div>
       );
     };
 
-    const newCategory = unreadAccounts.map(renderAccount);
-    const sentCategory = sentAccounts.map(renderAccount);
-    const allCategory = allAccounts.map(renderAccount);
+    let accountComponents;
+
+    if (categories[selectedCategory] === "new") {
+      accountComponents = unreadAccounts.map(renderAccount);
+    } else if (categories[selectedCategory] === "sent") {
+      accountComponents = sentAccounts.map(renderAccount);
+    } else {
+      accountComponents = allAccounts.map(renderAccount);
+    }
+
+    const categoryComponents = categories.map((e, i) => {
+      const onClickCategory = () => setSelectedCategory(i);
+      const className = selectedCategory === i ? "clicked" : null;
+      return (
+        <div key={i} className={className} onClick={onClickCategory}>
+          {e[0].toUpperCase() + e.substring(1)}
+        </div>
+      );
+    });
 
     return (
-      <>
-        {newCategory.length ? (
-          <div>
-            <div>New</div>
-            <div>{newCategory}</div>
-          </div>
-        ) : null}
-        {sentCategory.length ? (
-          <div>
-            <div>Sent</div>
-            <div>{sentCategory}</div>
-          </div>
-        ) : null}
-        {allCategory.length ? (
-          <div>
-            <div>All</div>
-            <div>{allCategory}</div>
-          </div>
-        ) : null}
-      </>
+      <div className="tab-holder">
+        <div className="categories">{categoryComponents}</div>
+        <div className="accounts">{accountComponents}</div>
+      </div>
     );
   }
 };

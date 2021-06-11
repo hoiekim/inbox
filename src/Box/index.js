@@ -20,17 +20,17 @@ const Box = () => {
   };
 
   const mainPaneStyle = {};
-  const sidePaneStyle = { width: "200px" };
+  const sidePaneStyle = { width: "300px" };
   const writerStyle = {};
 
   if (viewSize.width > 900) {
-    mainPaneStyle.width = "calc(100vw - 320px)";
-    mainPaneStyle.left = "202px";
+    mainPaneStyle.width = "calc(100vw - 420px)";
+    mainPaneStyle.left = "302px";
     sidePaneStyle.left = 0;
     writerStyle.width = "calc(100vw - 400px)";
-  } else if (viewSize.width > 650) {
-    mainPaneStyle.width = "calc(100vw - 210px)";
-    mainPaneStyle.left = "202px";
+  } else if (viewSize.width > 750) {
+    mainPaneStyle.width = "calc(100vw - 302px)";
+    mainPaneStyle.left = "302px";
     sidePaneStyle.left = 0;
     writerStyle.width = "calc(100vw - 3rem)";
   } else {
@@ -41,17 +41,17 @@ const Box = () => {
   }
 
   if (isAccountsOpen) {
-    mainPaneStyle.left = "202px";
+    mainPaneStyle.left = "302px";
     sidePaneStyle.left = 0;
   } else {
     if (viewSize.width > 900) {
       mainPaneStyle.width = "calc(100vw - 118px)";
       mainPaneStyle.left = 0;
-    } else if (viewSize.width > 650) {
+    } else if (viewSize.width > 750) {
       mainPaneStyle.width = "100vw";
       mainPaneStyle.left = 0;
     }
-    sidePaneStyle.left = "-200px";
+    sidePaneStyle.left = "-300px";
   }
 
   if (isWriterOpen) {
@@ -78,7 +78,7 @@ const Box = () => {
           className={
             isWriterOpen
               ? "curtain on"
-              : isAccountsOpen && viewSize.width < 650
+              : isAccountsOpen && viewSize.width < 750
               ? "curtain on"
               : "curtain"
           }

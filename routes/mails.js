@@ -41,7 +41,7 @@ obj.markRead = async (req, res) => {
 obj.getMails = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const mails = await db.getMails(req.params.account);
+    const mails = await db.getMails(req.params.account, req.query);
     res.status(200).json(mails);
   } catch (err) {
     console.error(err);

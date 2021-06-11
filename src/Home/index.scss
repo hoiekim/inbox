@@ -32,7 +32,7 @@ div.info_message {
 
 .container_login {
   width: 100vw;
-  padding: 3rem;
+  padding-top: calc(70px + 3rem);
 
   .login_card {
     max-width: 800px;

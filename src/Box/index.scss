@@ -1,23 +1,33 @@
 .pane {
   position: fixed;
-  padding: 0 0.5rem 0 1rem;
   box-sizing: border-box;
   overflow-y: scroll;
   overflow-x: hidden;
   transition: 150ms;
+}
+
+.main_pane {
+  padding: 0 0.5rem 0.5rem 1rem;
 
   &,
   & > .curtain {
-    height: calc(100vh - 80px);
+    top: 70px;
+    height: calc(100vh - 70px);
   }
 }
 
 .side_pane {
   z-index: 5;
-  padding-top: 0.5rem;
+  overflow: hidden;
+
+  &,
+  & > .curtain {
+    height: 100vh;
+  }
 }
 
 .writer_pane {
+  top: 70px;
   z-index: 10;
   transition: 150ms;
   position: fixed;

@@ -25,6 +25,8 @@ const queryClient = new QueryClient({
   }
 });
 
+const categories = ["new", "all", "sent"];
+
 const App = () => {
   // defines states used for UI control
   const [viewSize, setViewSize] = useState({
@@ -37,6 +39,7 @@ const App = () => {
   const [replyData, setReplyData] = useState({});
   const [fetchAccounts, setFetchAccounts] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState(1);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -58,7 +61,9 @@ const App = () => {
     fetchAccounts,
     setFetchAccounts,
     selectedAccount,
-    setSelectedAccount
+    setSelectedAccount,
+    selectedCategory,
+    setSelectedCategory
   };
 
   return (
@@ -66,7 +71,7 @@ const App = () => {
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
           <Header />
-          <div className="under_header">{isLogin ? <Box /> : <Home />}</div>
+          {isLogin ? <Box /> : <Home />}
         </Context.Provider>
       </QueryClientProvider>
     </React.StrictMode>
@@ -80,4 +85,4 @@ const mountApp = async () => {
 
 mountApp();
 
-export { Context };
+export { Context, categories };

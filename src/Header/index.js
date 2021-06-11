@@ -12,7 +12,7 @@ const Header = () => {
 
   const title = !selectedAccount
     ? "@" + domainName
-    : viewSize.width > 650
+    : viewSize.width > 750
     ? selectedAccount
     : selectedAccount.split("@")[0];
 

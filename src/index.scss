@@ -1,4 +1,3 @@
-@use "sass:color";
 @import "./variables.scss";
 
 body {
@@ -63,62 +62,62 @@ code {
   }
 
   button {
-    background-color: color.adjust($color-accent, $lightness: 17%);
+    background-color: adjust-color($color-accent, $lightness: 17%);
     color: $color-light;
 
     &:hover {
-      background-color: color.adjust($color-accent, $lightness: 24%);
+      background-color: adjust-color($color-accent, $lightness: 24%);
     }
 
     &:active {
-      background-color: color.adjust($color-accent, $lightness: 22%);
+      background-color: adjust-color($color-accent, $lightness: 22%);
     }
   }
 
   blockquote {
-    background-color: color.adjust($color-light, $lightness: 3%);
-    border-left: 3px solid color.adjust($color-light, $lightness: 8%);
+    background-color: adjust-color($color-light, $lightness: 3%);
+    border-left: 3px solid adjust-color($color-light, $lightness: 8%);
 
     &.mailcard:hover {
-      background-color: color.adjust($color-light, $lightness: 4%);
+      background-color: adjust-color($color-light, $lightness: 4%);
     }
   }
 
   input,
   textarea {
     color: $color-dark;
-    background-color: color.adjust($color-light, $lightness: 10%);
-    box-shadow: 2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
-      -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
+    background-color: adjust-color($color-light, $lightness: 10%);
+    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
+      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
   }
 
   .attachment {
-    background-color: color.adjust($color-light, $lightness: 8%);
+    background-color: adjust-color($color-light, $lightness: 8%);
 
     &:hover {
-      background-color: color.adjust($color-light, $lightness: 10%);
+      background-color: adjust-color($color-light, $lightness: 10%);
     }
   }
 
   .tag {
-    background-color: color.adjust($color-light, $lightness: 17%);
-    color: $color-light;
+    background-color: adjust-color($color-light, $lightness: 17%);
+    color: $color-dark;
 
     &:hover {
-      background-color: color.adjust($color-light, $lightness: 24%);
+      background-color: adjust-color($color-light, $lightness: 24%);
     }
 
     &:active {
-      background-color: color.adjust($color-light, $lightness: 22%);
+      background-color: adjust-color($color-light, $lightness: 22%);
     }
 
     &.clicked {
-      background-color: color.adjust($color-light, $lightness: 7%);
+      background-color: adjust-color($color-light, $lightness: 7%);
     }
   }
 
   .curtain.on {
-    background-color: color.adjust($color-light, $alpha: -0.4);
+    background-color: adjust-color($color-light, $alpha: -0.4);
   }
 }
 
@@ -149,22 +148,22 @@ code {
 
   button {
     color: $color-light;
-    background-color: color.adjust($color-accent, $lightness: 7%);
+    background-color: adjust-color($color-accent, $lightness: 7%);
 
     &:hover {
-      background-color: color.adjust($color-accent, $lightness: 14%);
+      background-color: adjust-color($color-accent, $lightness: 14%);
     }
     &:active {
-      background-color: color.adjust($color-accent, $lightness: 12%);
+      background-color: adjust-color($color-accent, $lightness: 12%);
     }
   }
 
   blockquote {
-    background-color: color.adjust($color-dark, $lightness: 3%);
-    border-left: 3px solid color.adjust($color-dark, $lightness: 10%);
+    background-color: adjust-color($color-dark, $lightness: 3%);
+    border-left: 3px solid adjust-color($color-dark, $lightness: 10%);
 
     &.mailcard:hover {
-      background-color: color.adjust($color-dark, $lightness: 4%);
+      background-color: adjust-color($color-dark, $lightness: 4%);
     }
   }
 
@@ -172,37 +171,37 @@ code {
   textarea {
     color: $color-light;
     background-color: $color-dark;
-    box-shadow: 1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
-      -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
+    box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
+      -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
   }
 
   .attachment {
-    background-color: color.adjust($color-dark, $lightness: 10%);
+    background-color: adjust-color($color-dark, $lightness: 10%);
 
     &:hover {
-      background-color: color.adjust($color-dark, $lightness: 13%);
+      background-color: adjust-color($color-dark, $lightness: 13%);
     }
   }
 
   .tag {
-    background-color: color.adjust($color-dark, $lightness: 7%);
+    background-color: adjust-color($color-dark, $lightness: 7%);
     color: $color-light;
 
     &:hover {
-      background-color: color.adjust($color-dark, $lightness: 14%);
+      background-color: adjust-color($color-dark, $lightness: 14%);
     }
 
     &:active {
-      background-color: color.adjust($color-dark, $lightness: 12%);
+      background-color: adjust-color($color-dark, $lightness: 10%);
     }
 
     &.clicked {
-      background-color: $color-dark;
+      background-color: adjust-color($color-dark, $lightness: -4%);
     }
   }
 
   .curtain.on {
-    background-color: color.adjust($color-dark, $alpha: -0.4);
+    background-color: adjust-color($color-dark, $alpha: -0.4);
   }
 }
 
@@ -277,13 +276,11 @@ button:hover {
 
 .under_header {
   position: fixed;
-  top: 70px;
 }
 
 .curtain {
   z-index: 1;
   position: fixed;
-  top: 70px;
   transition: 150ms;
   pointer-events: none;
 
@@ -325,7 +322,7 @@ svg {
   }
 }
 
-@media only screen and (max-width: 650px) {
+@media only screen and (max-width: 750px) {
   body {
     * {
       font-weight: 500;

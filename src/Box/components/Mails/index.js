@@ -5,7 +5,7 @@ import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
 
-import { Context } from "../../..";
+import { categories, Context } from "../../..";
 
 import "./index.scss";
 
@@ -19,13 +19,21 @@ const MailsRendered = () => {
     setReplyData,
     fetchAccounts,
     setFetchAccounts,
-    selectedAccount
+    selectedAccount,
+    selectedCategory
   } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
-  const getMails = () =>
-    fetch(`/api/mails/${selectedAccount}`).then((r) => r.json());
+  let fetchUrl;
+
+  if (categories[selectedCategory] === "sent") {
+    fetchUrl = `/api/mails/${selectedAccount}?sent=1`;
+  } else {
+    fetchUrl = `/api/mails/${selectedAccount}`;
+  }
+
+  const getMails = () => fetch(fetchUrl).then((r) => r.json());
   const query = useQuery("getMails_" + selectedAccount, getMails);
 
   const deleteMail = (mailId) =>
@@ -87,10 +95,12 @@ const MailsRendered = () => {
               (e) => e.innerText === selectedAccount.split("@")[0]
             ).nextSibling;
 
-            const ballCount = +numberBall.innerText;
+            if (numberBall) {
+              const ballCount = +numberBall.innerText;
 
-            if (ballCount < 2) numberBall.remove();
-            else numberBall.innerText = ballCount - 1;
+              if (ballCount < 2) numberBall.remove();
+              else numberBall.innerText = ballCount - 1;
+            }
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
