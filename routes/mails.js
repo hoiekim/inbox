@@ -61,7 +61,7 @@ obj.getMailContent = async (req, res) => {
 };
 
 obj.deleteMail = async (req, res) => {
-  console.log(
+  console.info(
     "received DELETE request to delete mail",
     req.ip,
     "at",
@@ -78,7 +78,7 @@ obj.deleteMail = async (req, res) => {
 };
 
 obj.sendMail = async (req, res) => {
-  console.log(
+  console.info(
     "received POST request to send mail",
     req.ip,
     "at",
@@ -96,8 +96,8 @@ obj.sendMail = async (req, res) => {
 };
 
 obj.saveMail = async (connection, data) => {
+  console.info("Received an email at", new Date(Date.now()));
   console.group();
-  console.log("Received an email at", new Date(Date.now()));
   console.log("envelopeFrom:", JSON.stringify(data.envelopeFrom));
   console.log("envelopeTo:", JSON.stringify(data.envelopeTo));
   console.log("from:", data.from?.text);

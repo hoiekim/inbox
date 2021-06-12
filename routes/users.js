@@ -3,7 +3,7 @@ require("dotenv").config();
 const users = {};
 
 users.admin = (req, res) => {
-  console.log(
+  console.info(
     "Recieved POST request to /admin",
     req.ip,
     "at",
@@ -18,7 +18,7 @@ users.admin = (req, res) => {
 };
 
 users.check = (req, res) => {
-  console.log(
+  console.info(
     "Recieved GET request to /admin",
     req.ip,
     "at",
@@ -28,7 +28,7 @@ users.check = (req, res) => {
 };
 
 users.logout = (req, res) => {
-  console.log(
+  console.info(
     "Recieved DELETE request to /admin",
     req.ip,
     "at",

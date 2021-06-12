@@ -46,7 +46,7 @@ app.post("/admin", users.admin);
 app.delete("/admin", users.logout);
 
 app.listen(3004, () => {
-  console.log(`${domainName} mail server is listening`);
+  console.info(`${domainName} mail server is listening`);
 });
 
 nodeMailin.on("message", mails.saveMail);
