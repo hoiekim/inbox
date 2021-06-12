@@ -37,7 +37,6 @@ const App = () => {
   const [isAccountsOpen, setIsAccountsOpen] = useState(true);
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
-  const [fetchAccounts, setFetchAccounts] = useState(0);
   const [selectedAccount, setSelectedAccount] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(0);
 
@@ -58,8 +57,6 @@ const App = () => {
     setIsWriterOpen,
     replyData,
     setReplyData,
-    fetchAccounts,
-    setFetchAccounts,
     selectedAccount,
     setSelectedAccount,
     selectedCategory,

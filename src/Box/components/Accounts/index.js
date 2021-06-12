@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import React, { useContext } from "react";
 import { useQuery } from "react-query";
 
 import { Context, categories } from "../../..";
@@ -7,7 +7,6 @@ import "./index.scss";
 
 const Accounts = () => {
   const {
-    fetchAccounts,
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
@@ -24,10 +23,6 @@ const Accounts = () => {
       }
     }
   });
-
-  useEffect(() => {
-    if (fetchAccounts && query.refetch) query.refetch();
-  }, [fetchAccounts, query]);
 
   if (query.isLoading) {
     return (
