@@ -1,8 +1,10 @@
 import React, { useContext } from "react";
 import { useQuery } from "react-query";
 
-import { Context, categories } from "../../..";
 import SkeletonAccount from "./components/SkeletonAccount";
+import SkeletonCategory from "./components/SkeletonCategory";
+
+import { Context, categories } from "../../..";
 
 import "./index.scss";
 
@@ -25,15 +27,9 @@ const Accounts = () => {
     return (
       <div className="tab-holder">
         <div className="categories skeleton">
-          <div>
-            <div></div>
-          </div>
-          <div>
-            <div></div>
-          </div>
-          <div>
-            <div></div>
-          </div>
+          <SkeletonCategory />
+          <SkeletonCategory />
+          <SkeletonCategory />
         </div>
         <div className="accounts">
           <SkeletonAccount />

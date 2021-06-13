@@ -1,4 +1,4 @@
-import React, { useState, useContext } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import MailBody from "./components/MailBody";
@@ -10,16 +10,21 @@ import { categories, Context, queryClient } from "../../..";
 
 import "./index.scss";
 
+import getting_started from "./components/getting_started.md";
+import marked from "marked";
+
 const MailsNotRendered = () => {
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    fetch(getting_started)
+      .then((r) => r.text())
+      .then((r) => setMessage(marked(r)));
+  }, []);
+
   return (
     <div className="getting_started">
-      <div>
-        <h2>Welcome!</h2>
-        <p>
-          To browse emails, please select an account from your account tab on
-          the left.
-        </p>
-      </div>
+      <div dangerouslySetInnerHTML={{ __html: message }}></div>
     </div>
   );
 };
