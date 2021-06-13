@@ -25,8 +25,13 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = () => {
-  const { isWriterOpen, setReplyData, selectedAccount, selectedCategory } =
-    useContext(Context);
+  const {
+    isWriterOpen,
+    setReplyData,
+    selectedAccount,
+    setSelectedAccount,
+    selectedCategory
+  } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
 
@@ -42,8 +47,18 @@ const MailsRendered = () => {
     queryUrl = `/api/mails/${selectedAccount}`;
   }
 
+  const queryOptions = {};
+  const accountsData = queryClient.getQueryData("/api/accounts");
+
+  if (!accountsData[selectedCategoryName].length) queryOptions.enabled = false;
+
   const getMails = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getMails);
+  const query = useQuery(queryUrl, getMails, queryOptions);
+
+  if (query.isIdle) {
+    setSelectedAccount("");
+    return <></>;
+  }
 
   if (query.isLoading) {
     return (
