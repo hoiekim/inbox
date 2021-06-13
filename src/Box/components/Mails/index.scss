@@ -1,3 +1,22 @@
+@use "sass:math";
+@import "../../../variables.scss";
+
+.getting_started {
+  width: 100%;
+
+  div {
+    background-color: rgba(0, 0, 0, 0.1);
+    padding: 1rem 0.5rem;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-align: center;
+    color: $color-point;
+  }
+}
+
 .mails_container {
   width: 100%;
   position: relative;
@@ -73,6 +92,24 @@
     .mailcard-subject {
       font-size: 20px;
       margin-top: 0.5rem;
+    }
+
+    &.skeleton {
+      border: none;
+      width: 100%;
+      height: 152.5px;
+
+      div {
+        border-radius: 9px;
+        background-color: rgba(100, 100, 100, 0.2);
+        height: 16px;
+        margin: 0 0 0.3rem 0;
+
+        &:last-child {
+          margin-top: 1rem;
+          height: 24px;
+        }
+      }
     }
   }
 }

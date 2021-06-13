@@ -38,7 +38,7 @@ const App = () => {
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
   const [selectedAccount, setSelectedAccount] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState(0);
+  const [selectedCategory, setSelectedCategory] = useState(1);
 
   useEffect(() => {
     window.addEventListener("resize", () => {

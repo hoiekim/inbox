@@ -17,11 +17,7 @@ const Accounts = () => {
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getAccounts, {
-    onSuccess: (data) => {
-      if (!data.new?.length) {
-        setSelectedCategory(1);
-      }
-    }
+    onSuccess: (data) => data.new?.length && setSelectedCategory(0)
   });
 
   if (query.isLoading) {

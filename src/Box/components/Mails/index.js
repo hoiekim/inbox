@@ -4,13 +4,24 @@ import { useQuery } from "react-query";
 import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
+import SkeletonMails from "./components/SkeletonMails";
 
 import { categories, Context, queryClient } from "../../..";
 
 import "./index.scss";
 
 const MailsNotRendered = () => {
-  return <div className="mails_container">Please Select Account</div>;
+  return (
+    <div className="getting_started">
+      <div>
+        <h2>Welcome!</h2>
+        <p>
+          To browse your emails, please select an account from your account tab
+          on the left.
+        </p>
+      </div>
+    </div>
+  );
 };
 
 const MailsRendered = () => {
@@ -35,7 +46,13 @@ const MailsRendered = () => {
   const query = useQuery(queryUrl, getMails);
 
   if (query.isLoading) {
-    return <div className="mails_container">Loading Mails List...</div>;
+    return (
+      <div className="mails_container">
+        <SkeletonMails />
+        <SkeletonMails />
+        <SkeletonMails />
+      </div>
+    );
   }
 
   if (query.error) {
@@ -51,16 +68,21 @@ const MailsRendered = () => {
   const removeAccountFromQueryData = () => {
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
-      let foundIndex;
 
-      newData[selectedCategoryName].find((account, i) => {
-        const found = account.key === selectedAccount;
-        if (found) foundIndex = i;
-        return found;
-      });
+      const editByCategory = (category) => {
+        let foundIndex;
 
-      if (foundIndex !== undefined)
-        newData[selectedCategoryName].splice(foundIndex, 1);
+        newData[category].find((account, i) => {
+          const found = account.key === selectedAccount;
+          if (found) foundIndex = i;
+          return found;
+        });
+
+        if (foundIndex !== undefined) newData[category].splice(foundIndex, 1);
+      };
+
+      if (selectedCategoryName === "sent") editByCategory(selectedCategoryName);
+      else for (const key in newData) key !== "sent" && editByCategory(key);
 
       return newData;
     });
@@ -70,23 +92,28 @@ const MailsRendered = () => {
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
 
-      const foundData = newData[selectedCategoryName].find((account) => {
-        return account.key === selectedAccount;
-      });
-
-      foundData.unread_doc_count -= 1;
-
-      if (!foundData.unread_doc_count) {
-        let foundIndex;
-
-        newData.new.find((account, i) => {
-          const found = account.key === selectedAccount;
-          if (found) foundIndex = i;
-          return found;
+      const editByCategory = (category) => {
+        const foundData = newData[category].find((account) => {
+          return account.key === selectedAccount;
         });
 
-        newData.new.splice(foundIndex, 1);
-      }
+        foundData.unread_doc_count -= 1;
+
+        if (!foundData.unread_doc_count) {
+          let foundIndex;
+
+          newData.new.find((account, i) => {
+            const found = account.key === selectedAccount;
+            if (found) foundIndex = i;
+            return found;
+          });
+
+          newData.new.splice(foundIndex, 1);
+        }
+      };
+
+      if (selectedCategoryName === "sent") editByCategory(selectedCategoryName);
+      else for (const key in newData) key !== "sent" && editByCategory(key);
 
       return newData;
     });
