@@ -4,7 +4,7 @@ import { useQuery } from "react-query";
 import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
-import SkeletonMails from "./components/SkeletonMails";
+import SkeletonMails from "./components/SkeletonMail";
 
 import { categories, Context, queryClient } from "../../..";
 
@@ -16,8 +16,8 @@ const MailsNotRendered = () => {
       <div>
         <h2>Welcome!</h2>
         <p>
-          To browse your emails, please select an account from your account tab
-          on the left.
+          To browse emails, please select an account from your account tab on
+          the left.
         </p>
       </div>
     </div>

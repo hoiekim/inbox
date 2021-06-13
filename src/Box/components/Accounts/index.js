@@ -2,6 +2,7 @@ import React, { useContext } from "react";
 import { useQuery } from "react-query";
 
 import { Context, categories } from "../../..";
+import SkeletonAccount from "./components/SkeletonAccount";
 
 import "./index.scss";
 
@@ -23,8 +24,20 @@ const Accounts = () => {
   if (query.isLoading) {
     return (
       <div className="tab-holder">
-        <div className="categories"></div>
-        <div className="loading">Loading Accounts List...</div>
+        <div className="categories">
+          <div>
+            <div className="skeleton"></div>
+            <div className="skeleton"></div>
+            <div className="skeleton"></div>
+          </div>
+        </div>
+        <div className="accounts">
+          <SkeletonAccount />
+          <SkeletonAccount />
+          <SkeletonAccount />
+          <SkeletonAccount />
+          <SkeletonAccount />
+        </div>
       </div>
     );
   }
@@ -32,8 +45,14 @@ const Accounts = () => {
   if (query.error) {
     return (
       <div className="tab-holder">
-        <div className="categories"></div>
-        <div className="loading">Accounts List Request Failed</div>
+        <div className="categories">
+          <div>
+            <div className="skeleton"></div>
+            <div className="skeleton"></div>
+            <div className="skeleton"></div>
+          </div>
+        </div>
+        <div className="accounts">Accounts List Request Failed</div>
       </div>
     );
   }
