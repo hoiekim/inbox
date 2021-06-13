@@ -24,11 +24,15 @@ const Accounts = () => {
   if (query.isLoading) {
     return (
       <div className="tab-holder">
-        <div className="categories">
+        <div className="categories skeleton">
           <div>
-            <div className="skeleton"></div>
-            <div className="skeleton"></div>
-            <div className="skeleton"></div>
+            <div></div>
+          </div>
+          <div>
+            <div></div>
+          </div>
+          <div>
+            <div></div>
           </div>
         </div>
         <div className="accounts">
@@ -45,13 +49,7 @@ const Accounts = () => {
   if (query.error) {
     return (
       <div className="tab-holder">
-        <div className="categories">
-          <div>
-            <div className="skeleton"></div>
-            <div className="skeleton"></div>
-            <div className="skeleton"></div>
-          </div>
-        </div>
+        <div className="categories"></div>
         <div className="accounts">Accounts List Request Failed</div>
       </div>
     );

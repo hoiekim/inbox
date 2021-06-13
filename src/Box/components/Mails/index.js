@@ -4,7 +4,7 @@ import { useQuery } from "react-query";
 import MailBody from "./components/MailBody";
 import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
-import SkeletonMails from "./components/SkeletonMail";
+import SkeletonMail from "./components/SkeletonMail";
 
 import { categories, Context, queryClient } from "../../..";
 
@@ -48,15 +48,17 @@ const MailsRendered = () => {
   if (query.isLoading) {
     return (
       <div className="mails_container">
-        <SkeletonMails />
-        <SkeletonMails />
-        <SkeletonMails />
+        <SkeletonMail />
+        <SkeletonMail />
+        <SkeletonMail />
       </div>
     );
   }
 
   if (query.error) {
-    return <div className="mails_container">Mails List Request Failed</div>;
+    return (
+      <div className="mails_container error">Mails List Request Failed</div>
+    );
   }
 
   const requestDeleteMail = (mailId) =>
