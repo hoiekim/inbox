@@ -80,10 +80,10 @@ const Accounts = () => {
 
       return (
         <div key={i}>
-          <h3 className={classes.join(" ")} onClick={onClickAccount}>
+          <div className={classes.join(" ")} onClick={onClickAccount}>
             <span>{accountName.split("@")[0]}</span>
             {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
-          </h3>
+          </div>
         </div>
       );
     };
