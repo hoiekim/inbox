@@ -33,6 +33,7 @@ const Accounts = () => {
           <SkeletonCategory />
           <SkeletonCategory />
           <SkeletonCategory />
+          <SkeletonCategory />
         </div>
         <div className="accounts">
           <SkeletonAccount />
@@ -64,6 +65,7 @@ const Accounts = () => {
     const sentAccounts = query.data?.sent?.sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
+    const searchHistoreis = [];
 
     const renderAccount = (data, i) => {
       const accountName = data.key;
@@ -92,6 +94,8 @@ const Accounts = () => {
       accountComponents = (unreadAccounts || []).map(renderAccount);
     } else if (selectedCategoryName === "sent") {
       accountComponents = (sentAccounts || []).map(renderAccount);
+    } else if (selectedCategoryName === "search") {
+      accountComponents = (searchHistoreis || []).map(renderAccount);
     } else {
       accountComponents = (allAccounts || []).map(renderAccount);
     }
@@ -101,7 +105,13 @@ const Accounts = () => {
       const className = selectedCategory === i ? "clicked" : null;
       return (
         <div key={i} className={className} onClick={onClickCategory}>
-          {e[0].toUpperCase() + e.substring(1)}
+          {e === "search" ? (
+            <div className="flex">
+              <SearchIcon />
+            </div>
+          ) : (
+            e[0].toUpperCase() + e.substring(1)
+          )}
         </div>
       );
     });

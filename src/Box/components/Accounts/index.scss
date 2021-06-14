@@ -47,10 +47,26 @@
       padding: 1rem;
       border-top-left-radius: 10px;
       border-bottom-left-radius: 10px;
+      text-align: center;
+
+      .flex {
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100%;
+
+        svg {
+          height: 20px;
+        }
+      }
     }
 
     &:not(.skeleton) > div {
-      cursor: pointer;
+      &,
+      * {
+        cursor: pointer;
+      }
     }
 
     &.skeleton > div > div {

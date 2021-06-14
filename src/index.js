@@ -25,7 +25,7 @@ const queryClient = new QueryClient({
   }
 });
 
-const categories = ["new", "all", "sent"];
+const categories = ["new", "all", "sent", "search"];
 
 const App = () => {
   // defines states used for UI control
