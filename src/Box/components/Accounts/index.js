@@ -3,6 +3,7 @@ import { useQuery } from "react-query";
 
 import SkeletonAccount from "./components/SkeletonAccount";
 import SkeletonCategory from "./components/SkeletonCategory";
+import SearchIcon from "./components/SearchIcon";
 
 import { Context, categories } from "../../..";
 
