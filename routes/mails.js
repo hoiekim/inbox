@@ -65,7 +65,7 @@ obj.deleteMail = async (req, res) => {
     "received DELETE request to delete mail",
     req.ip,
     "at",
-    new Date(Date.now())
+    new Date()
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
@@ -78,12 +78,7 @@ obj.deleteMail = async (req, res) => {
 };
 
 obj.sendMail = async (req, res) => {
-  console.info(
-    "received POST request to send mail",
-    req.ip,
-    "at",
-    new Date(Date.now())
-  );
+  console.info("received POST request to send mail", req.ip, "at", new Date());
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
     const result = await mail.sendMail(req.body, req.files?.attachments);
@@ -96,7 +91,7 @@ obj.sendMail = async (req, res) => {
 };
 
 obj.saveMail = async (connection, data) => {
-  console.info("Received an email at", new Date(Date.now()));
+  console.info("Received an email at", new Date());
   console.group();
   console.log("envelopeFrom:", JSON.stringify(data.envelopeFrom));
   console.log("envelopeTo:", JSON.stringify(data.envelopeTo));
