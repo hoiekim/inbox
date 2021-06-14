@@ -1,5 +1,4 @@
-const db = require("../lib/db");
-const mail = require("../lib/mail");
+const Mail = require("../lib/mails");
 
 const domainName = process.env.DOMAIN || "mydomain";
 
@@ -8,7 +7,7 @@ const obj = {};
 obj.getAttachment = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const attachment = await db.getAttachment(req.params.id);
+    const attachment = await Mail.getAttachment(req.params.id);
     res.status(200).send(attachment);
   } catch (err) {
     console.error(err);
@@ -19,7 +18,7 @@ obj.getAttachment = async (req, res) => {
 obj.getAccounts = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const accounts = await db.getAccounts();
+    const accounts = await Mail.getAccounts();
     res.status(200).json(accounts);
   } catch (err) {
     console.error(err);
@@ -30,7 +29,7 @@ obj.getAccounts = async (req, res) => {
 obj.markRead = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const result = await db.markRead(req.params.id);
+    const result = await Mail.markRead(req.params.id);
     res.status(200).json(result);
   } catch (err) {
     console.error(err);
@@ -41,7 +40,7 @@ obj.markRead = async (req, res) => {
 obj.getMails = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const mails = await db.getMails(req.params.account, req.query);
+    const mails = await Mail.getMails(req.params.account, req.query);
     res.status(200).json(mails);
   } catch (err) {
     console.error(err);
@@ -52,7 +51,7 @@ obj.getMails = async (req, res) => {
 obj.getMailContent = async (req, res) => {
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const mail = await db.getMailContent(req.params.id);
+    const mail = await Mail.getMailContent(req.params.id);
     res.status(200).json(mail);
   } catch (err) {
     console.error(err);
@@ -69,7 +68,7 @@ obj.deleteMail = async (req, res) => {
   );
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const result = await db.deleteMail(req.params.id);
+    const result = await Mail.deleteMail(req.params.id);
     res.status(200).json(result);
   } catch (err) {
     console.error(err);
@@ -81,7 +80,7 @@ obj.sendMail = async (req, res) => {
   console.info("received POST request to send mail", req.ip, "at", new Date());
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const result = await mail.sendMail(req.body, req.files?.attachments);
+    const result = await Mail.sendMail(req.body, req.files?.attachments);
     if (result === true) res.status(200).json(result);
     else throw new Error("Sendgrid request failed");
   } catch (err) {
@@ -110,7 +109,7 @@ obj.saveMail = async (connection, data) => {
       });
     }
     if (isAddressCorrect) {
-      await db.saveMail({ ...data, read: false, label: undefined });
+      await Mail.saveMail({ ...data, read: false, label: undefined });
       console.info("Successfully saved an email");
     } else {
       console.warn("Not saved because address is wrong");
