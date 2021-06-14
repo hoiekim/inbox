@@ -42,24 +42,14 @@ const MailsRendered = () => {
 
   const selectedCategoryName = categories[selectedCategory];
 
-  let queryUrl;
-
-  if (selectedCategoryName === "sent") {
-    queryUrl = `/api/mails/${selectedAccount}?sent=1`;
-  } else if (selectedCategoryName === "new") {
-    queryUrl = `/api/mails/${selectedAccount}?new=1`;
-  } else {
-    queryUrl = `/api/mails/${selectedAccount}`;
-  }
-
   const queryOptions = {};
   const accountsData = queryClient.getQueryData("/api/accounts");
-
   const foundAccount = accountsData[selectedCategoryName].find((e) => {
     return e.key === selectedAccount;
   });
-
   if (!foundAccount) queryOptions.enabled = false;
+
+  const queryUrl = `/api/mails/${selectedAccount}?${selectedCategoryName}=1`;
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMails, queryOptions);
@@ -134,7 +124,7 @@ const MailsRendered = () => {
             return found;
           });
 
-          newData.new.splice(foundIndex, 1);
+          if (foundIndex !== undefined) newData.new.splice(foundIndex, 1);
         }
       };
 
@@ -186,8 +176,8 @@ const MailsRendered = () => {
         } else {
           if (!mail.read) {
             requestMarkRead(mail.id);
-            mail.read = true;
             markReadInAccountsQueryData();
+            mail.read = true;
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
