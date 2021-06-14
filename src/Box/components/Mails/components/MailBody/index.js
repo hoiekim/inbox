@@ -8,7 +8,7 @@ import { Context } from "../../../../..";
 const MailBody = ({ mailId }) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(Context);
 
-  const queryUrl = `/api/mailContent/${mailId}`;
+  const queryUrl = `/api/mail-body/${mailId}`;
 
   const getMail = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMail);
