@@ -164,7 +164,13 @@ const MailsRendered = () => {
 
       let duration =
         (Number(Date.now()) - Number(new Date(mail.date))) / (1000 * 60);
-      if (duration > 2 * 24 * 60) {
+      if (duration > 2 * 24 * 60 * 365) {
+        duration = `${Math.floor(duration / (60 * 24 * 365))} years ago`;
+      } else if (duration > 2 * 24 * 60 * 30.42) {
+        duration = `${Math.floor(duration / (60 * 24 * 30.42))} months ago`;
+      } else if (duration > 2 * 24 * 60 * 7) {
+        duration = `${Math.floor(duration / (60 * 24 * 7))} weeks ago`;
+      } else if (duration > 2 * 24 * 60) {
         duration = `${Math.floor(duration / (60 * 24))} days ago`;
       } else if (duration > 2 * 60) {
         duration = `${Math.floor(duration / 60)} hours ago`;
