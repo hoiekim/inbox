@@ -16,6 +16,8 @@ const Accounts = () => {
     setSelectedCategory
   } = useContext(Context);
 
+  const selectedCategoryName = categories[selectedCategory];
+
   const queryUrl = "/api/accounts";
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
@@ -64,8 +66,7 @@ const Accounts = () => {
 
     const renderAccount = (data, i) => {
       const accountName = data.key;
-      const sent = accountName === "sent.by.me";
-      const unreadNo = sent ? 0 : data.unread_doc_count;
+      const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
         if (selectedAccount !== accountName) setSelectedAccount(accountName);
       };
@@ -77,7 +78,7 @@ const Accounts = () => {
       return (
         <div key={i}>
           <h3 className={classes.join(" ")} onClick={onClickAccount}>
-            <span>{sent ? "Sent" : accountName.split("@")[0]}</span>
+            <span>{accountName.split("@")[0]}</span>
             {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
           </h3>
         </div>
@@ -86,9 +87,9 @@ const Accounts = () => {
 
     let accountComponents;
 
-    if (categories[selectedCategory] === "new") {
+    if (selectedCategoryName === "new") {
       accountComponents = (unreadAccounts || []).map(renderAccount);
-    } else if (categories[selectedCategory] === "sent") {
+    } else if (selectedCategoryName === "sent") {
       accountComponents = (sentAccounts || []).map(renderAccount);
     } else {
       accountComponents = (allAccounts || []).map(renderAccount);

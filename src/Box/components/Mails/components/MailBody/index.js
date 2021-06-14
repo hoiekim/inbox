@@ -74,6 +74,23 @@ const MailBody = ({ mailId }) => {
               "Helvetica Neue", sans-serif;
               color: rgb(70,70,70);
           }
+          ::-webkit-scrollbar {
+            width: 5px;
+            height: 10px;
+          }
+          ::-webkit-scrollbar-button {
+            height: 0;
+            width: 0;
+          }
+          ::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          ::-webkit-scrollbar-corner {
+            background: transparent;
+          }
+          ::-webkit-scrollbar-thumb {
+            border-radius: 10px;
+          }
       </style>
       ${data.html}
     `;
@@ -82,7 +99,8 @@ const MailBody = ({ mailId }) => {
       const iframeDom = e.target;
       const iframeContent = iframeDom.contentWindow;
       const iframeContentHeight = iframeContent.document.body.scrollHeight;
-      iframeDom.style.height = iframeContentHeight + 32 + "px";
+      iframeDom.style.height = `calc(2rem + ${iframeContentHeight + 32}px)`;
+      iframeDom.style.padding = "1rem";
     };
 
     return (

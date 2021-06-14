@@ -55,7 +55,11 @@ const MailsRendered = () => {
   const queryOptions = {};
   const accountsData = queryClient.getQueryData("/api/accounts");
 
-  if (!accountsData[selectedCategoryName].length) queryOptions.enabled = false;
+  const foundAccount = accountsData[selectedCategoryName].find((e) => {
+    return e.key === selectedAccount;
+  });
+
+  if (!foundAccount) queryOptions.enabled = false;
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMails, queryOptions);
@@ -134,8 +138,9 @@ const MailsRendered = () => {
         }
       };
 
-      if (selectedCategoryName === "sent") editByCategory(selectedCategoryName);
-      else for (const key in newData) key !== "sent" && editByCategory(key);
+      if (selectedCategoryName !== "sent") {
+        for (const key in newData) key !== "sent" && editByCategory(key);
+      }
 
       return newData;
     });
