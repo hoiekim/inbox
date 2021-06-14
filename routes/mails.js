@@ -128,7 +128,8 @@ mailsRouter.searchMail = async (req, res) => {
   console.info("received GET request to search mail", req.ip, "at", new Date());
   if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const result = await Mail.searchMail(req.params.value, req.query);
+    const value = decodeURIComponent(req.params.value);
+    const result = await Mail.searchMail(value, req.query);
     res.status(200).json(result);
   } catch (err) {
     console.error(err);
