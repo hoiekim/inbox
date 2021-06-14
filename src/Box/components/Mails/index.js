@@ -138,9 +138,7 @@ const MailsRendered = () => {
         }
       };
 
-      if (selectedCategoryName !== "sent") {
-        for (const key in newData) key !== "sent" && editByCategory(key);
-      }
+      for (const key in newData) key !== "sent" && editByCategory(key);
 
       return newData;
     });
