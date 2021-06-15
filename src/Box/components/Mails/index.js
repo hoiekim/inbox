@@ -221,10 +221,14 @@ const MailsRendered = () => {
       if (!mail.read) classes.push("unread");
       if (!isWriterOpen) classes.push("shadow");
 
-      const searchHighlight = Object.values(mail.highlight).map((e) => {
-        const __html = "..." + e.join("... ...") + "...";
-        return <div dangerouslySetInnerHTML={{ __html }}></div>;
-      });
+      let searchHighlight;
+
+      if (mail.highlight) {
+        searchHighlight = Object.values(mail.highlight).map((e) => {
+          const __html = "..." + e.join("... ...") + "...";
+          return <div dangerouslySetInnerHTML={{ __html }}></div>;
+        });
+      }
 
       return (
         <blockquote key={i} className={classes.join(" ")}>
@@ -243,7 +247,7 @@ const MailsRendered = () => {
           </div>
           {activeMailId[mail.id] ? (
             <MailBody mailId={mail.id} />
-          ) : mail.highlight ? (
+          ) : searchHighlight ? (
             <div className="search_highlight">{searchHighlight}</div>
           ) : null}
           <div className="actionBox">
