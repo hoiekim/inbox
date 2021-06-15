@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import SkeletonAccount from "./components/SkeletonAccount";
@@ -12,6 +12,8 @@ import "./index.scss";
 let searchDelay;
 
 const Accounts = () => {
+  const [searchInputDom, setSearchInputDom] = useState(null);
+
   const {
     selectedAccount,
     setSelectedAccount,
@@ -29,6 +31,10 @@ const Accounts = () => {
   const query = useQuery(queryUrl, getAccounts, {
     onSuccess: (data) => data.new?.length && setSelectedCategory(0)
   });
+
+  useEffect(() => {
+    if (searchInputDom) searchInputDom.focus();
+  }, [searchInputDom]);
 
   if (query.isLoading) {
     return (
@@ -153,7 +159,7 @@ const Accounts = () => {
                 spellCheck="false"
                 onChange={onChangeSearch}
                 onKeyDown={onKeyDownSearch}
-                ref={(e) => e && e.focus()}
+                ref={(e) => e && setSearchInputDom(e)}
               />
             </div>
           ) : null}

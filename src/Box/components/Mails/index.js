@@ -221,6 +221,11 @@ const MailsRendered = () => {
       if (!mail.read) classes.push("unread");
       if (!isWriterOpen) classes.push("shadow");
 
+      const searchHighlight = Object.values(mail.highlight).map((e) => {
+        const __html = "..." + e.join("... ...") + "...";
+        return <div dangerouslySetInnerHTML={{ __html }}></div>;
+      });
+
       return (
         <blockquote key={i} className={classes.join(" ")}>
           <div className="header cursor" onClick={onClickMailcard}>
@@ -236,7 +241,11 @@ const MailsRendered = () => {
             </div>
             <div className="mailcard-subject content">{mail.subject}</div>
           </div>
-          {activeMailId[mail.id] ? <MailBody mailId={mail.id} /> : null}
+          {activeMailId[mail.id] ? (
+            <MailBody mailId={mail.id} />
+          ) : mail.highlight ? (
+            <div className="search_highlight">{searchHighlight}</div>
+          ) : null}
           <div className="actionBox">
             <div className="iconBox">
               <ReplyIcon className="cursor" onClick={onClickReply} />

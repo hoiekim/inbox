@@ -128,5 +128,37 @@
         }
       }
     }
+
+    .search_highlight {
+      margin-top: 0.5rem;
+
+      div > em {
+        font-style: normal;
+        font-weight: 500;
+        padding: 0 2px;
+        border-radius: 2px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        div {
+          color: adjust-color($color-light, $lightness: -10%);
+
+          em {
+            color: adjust-color($color-point, $lightness: -10%);
+            background-color: rgba(255, 255, 255, 0.05);
+          }
+        }
+      }
+      @media (prefers-color-scheme: light) {
+        div {
+          color: adjust-color($color-dark, $lightness: 10%);
+
+          em {
+            color: adjust-color($color-point, $lightness: -10%);
+            background-color: rgba(0, 0, 0, 0.05);
+          }
+        }
+      }
+    }
   }
 }
