@@ -84,6 +84,14 @@
     width: calc(100% - 80px);
     overflow-y: scroll;
 
+    .search_container {
+      input {
+        width: calc(100% - 0.6rem);
+        margin: 0.5rem 0.1rem 1rem 0.5rem;
+        text-align: start;
+      }
+    }
+
     .tag {
       font-size: 18px;
       display: inline-block;

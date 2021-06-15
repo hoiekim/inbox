@@ -43,13 +43,23 @@ const MailsRendered = () => {
   const selectedCategoryName = categories[selectedCategory];
 
   const queryOptions = {};
-  const accountsData = queryClient.getQueryData("/api/accounts");
-  const foundAccount = accountsData[selectedCategoryName].find((e) => {
-    return e.key === selectedAccount;
-  });
-  if (!foundAccount) queryOptions.enabled = false;
 
-  const queryUrl = `/api/mails/${selectedAccount}?${selectedCategoryName}=1`;
+  let queryUrl;
+
+  if (selectedCategoryName === "search") {
+    queryUrl = `/api/search/${encodeURIComponent(selectedAccount)}`;
+  } else {
+    queryUrl = `/api/mails/${selectedAccount}?${selectedCategoryName}=1`;
+
+    const accountsData = queryClient.getQueryData("/api/accounts");
+    const foundAccount = accountsData[selectedCategoryName]?.find((e) => {
+      return e.key === selectedAccount;
+    });
+
+    if (!foundAccount) {
+      queryOptions.enabled = false;
+    }
+  }
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMails, queryOptions);

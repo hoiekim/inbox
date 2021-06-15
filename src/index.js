@@ -39,6 +39,7 @@ const App = () => {
   const [replyData, setReplyData] = useState({});
   const [selectedAccount, setSelectedAccount] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(1);
+  const [searchHistory, setSearchHistory] = useState([]);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -60,7 +61,9 @@ const App = () => {
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
-    setSelectedCategory
+    setSelectedCategory,
+    searchHistory,
+    setSearchHistory
   };
 
   return (

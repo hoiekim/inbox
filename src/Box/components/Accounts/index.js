@@ -9,12 +9,16 @@ import { Context, categories } from "../../..";
 
 import "./index.scss";
 
+let searchDelay;
+
 const Accounts = () => {
   const {
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
-    setSelectedCategory
+    setSelectedCategory,
+    searchHistory,
+    setSearchHistory
   } = useContext(Context);
 
   const selectedCategoryName = categories[selectedCategory];
@@ -56,16 +60,15 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const unreadAccounts = query.data?.new?.sort((a, b) =>
+    const unreadAccounts = query.data?.new.sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
-    const allAccounts = query.data?.all?.sort((a, b) =>
+    const allAccounts = query.data?.all.sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
-    const sentAccounts = query.data?.sent?.sort((a, b) =>
+    const sentAccounts = query.data?.sent.sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
-    const searchHistoreis = [];
 
     const renderAccount = (data, i) => {
       const accountName = data.key;
@@ -90,18 +93,21 @@ const Accounts = () => {
 
     let accountComponents;
 
-    if (selectedCategoryName === "new") {
-      accountComponents = (unreadAccounts || []).map(renderAccount);
-    } else if (selectedCategoryName === "sent") {
-      accountComponents = (sentAccounts || []).map(renderAccount);
-    } else if (selectedCategoryName === "search") {
-      accountComponents = (searchHistoreis || []).map(renderAccount);
-    } else {
-      accountComponents = (allAccounts || []).map(renderAccount);
+    if (selectedCategoryName === "new" && unreadAccounts) {
+      accountComponents = unreadAccounts.map(renderAccount);
+    } else if (selectedCategoryName === "all" && allAccounts) {
+      accountComponents = allAccounts.map(renderAccount);
+    } else if (selectedCategoryName === "sent" && sentAccounts) {
+      accountComponents = sentAccounts.map(renderAccount);
+    } else if (selectedCategoryName === "search" && searchHistory) {
+      accountComponents = searchHistory.map(renderAccount);
     }
 
     const categoryComponents = categories.map((e, i) => {
-      const onClickCategory = () => setSelectedCategory(i);
+      const onClickCategory = () => {
+        if (e === "search") setSelectedAccount("");
+        setSelectedCategory(i);
+      };
       const className = selectedCategory === i ? "clicked" : null;
       return (
         <div key={i} className={className} onClick={onClickCategory}>
@@ -116,10 +122,43 @@ const Accounts = () => {
       );
     });
 
+    const onChangeSearch = (e) => {
+      clearTimeout(searchDelay);
+      searchDelay = setTimeout(() => {
+        setSelectedAccount(e.target.value);
+      }, 500);
+    };
+
+    const onKeyDownSearch = (e) => {
+      if (e.key === "Enter") {
+        setSearchHistory([{ key: e.target.value }, ...searchHistory]);
+        setSelectedAccount(e.target.value);
+      }
+    };
+
     return (
       <div className="tab-holder">
         <div className="categories">{categoryComponents}</div>
-        <div className="accounts">{accountComponents}</div>
+        <div className="accounts">
+          {selectedCategoryName === "search" ? (
+            <div className="search_container">
+              <div className="fieldName">
+                <span>Search This:</span>
+              </div>
+              <input
+                type="search"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck="false"
+                onChange={onChangeSearch}
+                onKeyDown={onKeyDownSearch}
+                ref={(e) => e && e.focus()}
+              />
+            </div>
+          ) : null}
+          {accountComponents}
+        </div>
       </div>
     );
   }
