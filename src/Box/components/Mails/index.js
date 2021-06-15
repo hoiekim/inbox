@@ -6,7 +6,7 @@ import ReplyIcon from "./components/ReplyIcon";
 import TrashIcon from "./components/TrashIcon";
 import SkeletonMail from "./components/SkeletonMail";
 
-import { categories, Context, queryClient } from "../../..";
+import { Context, queryClient } from "../../..";
 
 import "./index.scss";
 
@@ -40,19 +40,17 @@ const MailsRendered = () => {
 
   const [activeMailId, setActiveMailId] = useState({});
 
-  const selectedCategoryName = categories[selectedCategory];
-
   const queryOptions = {};
 
   let queryUrl;
 
-  if (selectedCategoryName === "search") {
+  if (selectedCategory === "search") {
     queryUrl = `/api/search/${encodeURIComponent(selectedAccount)}`;
   } else {
-    queryUrl = `/api/mails/${selectedAccount}?${selectedCategoryName}=1`;
+    queryUrl = `/api/mails/${selectedAccount}?${selectedCategory}=1`;
 
     const accountsData = queryClient.getQueryData("/api/accounts");
-    const foundAccount = accountsData[selectedCategoryName]?.find((e) => {
+    const foundAccount = accountsData[selectedCategory]?.find((e) => {
       return e.key === selectedAccount;
     });
 
@@ -107,14 +105,14 @@ const MailsRendered = () => {
         if (foundIndex !== undefined) newData[category].splice(foundIndex, 1);
       };
 
-      if (selectedCategoryName === "sent") editByCategory(selectedCategoryName);
+      if (selectedCategory === "sent") editByCategory(selectedCategory);
       else for (const key in newData) key !== "sent" && editByCategory(key);
 
       return newData;
     });
   };
 
-  const markReadInAccountsQueryData = () => {
+  const markReadInQueryData = (mailId) => {
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
 
@@ -136,6 +134,17 @@ const MailsRendered = () => {
 
           if (foundIndex !== undefined) newData.new.splice(foundIndex, 1);
         }
+
+        const queryUrl = `/api/mails/${selectedAccount}?${category}=1`;
+
+        queryClient.setQueryData(queryUrl, (oldData) => {
+          if (!oldData) return oldData;
+
+          const newData = [...oldData];
+          newData.find((e) => e.id === mailId).read = true;
+
+          return newData;
+        });
       };
 
       for (const key in newData) key !== "sent" && editByCategory(key);
@@ -186,7 +195,7 @@ const MailsRendered = () => {
         } else {
           if (!mail.read) {
             requestMarkRead(mail.id);
-            markReadInAccountsQueryData();
+            markReadInQueryData(mail.id);
             mail.read = true;
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
@@ -205,7 +214,7 @@ const MailsRendered = () => {
       const onClickTrash = () => {
         if (window.confirm("Do you want to delete this mail?")) {
           requestDeleteMail(mail.id);
-          if (!mail.read) markReadInAccountsQueryData();
+          if (!mail.read) markReadInQueryData(mail.id);
 
           queryClient.setQueryData(queryUrl, (oldData) => {
             const newData = [...oldData];

@@ -23,8 +23,6 @@ const Accounts = () => {
     setSearchHistory
   } = useContext(Context);
 
-  const selectedCategoryName = categories[selectedCategory];
-
   const queryUrl = "/api/accounts";
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
@@ -102,22 +100,22 @@ const Accounts = () => {
 
     let accountComponents;
 
-    if (selectedCategoryName === "new" && unreadAccounts) {
+    if (selectedCategory === "new" && unreadAccounts) {
       accountComponents = unreadAccounts.map(renderAccount);
-    } else if (selectedCategoryName === "all" && allAccounts) {
+    } else if (selectedCategory === "all" && allAccounts) {
       accountComponents = allAccounts.map(renderAccount);
-    } else if (selectedCategoryName === "sent" && sentAccounts) {
+    } else if (selectedCategory === "sent" && sentAccounts) {
       accountComponents = sentAccounts.map(renderAccount);
-    } else if (selectedCategoryName === "search" && searchHistory) {
+    } else if (selectedCategory === "search" && searchHistory) {
       accountComponents = searchHistory.map(renderAccount);
     }
 
     const categoryComponents = categories.map((e, i) => {
       const onClickCategory = () => {
         if (e === "search") setSelectedAccount("");
-        setSelectedCategory(i);
+        setSelectedCategory(e);
       };
-      const className = selectedCategory === i ? "clicked" : null;
+      const className = selectedCategory === e ? "clicked" : null;
       return (
         <div key={i} className={className} onClick={onClickCategory}>
           {e === "search" ? (
@@ -149,7 +147,7 @@ const Accounts = () => {
       <div className="tab-holder">
         <div className="categories">{categoryComponents}</div>
         <div className="accounts">
-          {selectedCategoryName === "search" ? (
+          {selectedCategory === "search" ? (
             <div className="search_container">
               <div className="fieldName">
                 <span>Search This:</span>
