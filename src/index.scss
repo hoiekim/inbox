@@ -100,11 +100,11 @@ code {
     background-color: adjust-color($color-light, $lightness: 8%);
     color: $color-dark;
 
-    &:hover {
+    &:not(.skeleton):not(.clicked):hover {
       background-color: adjust-color($color-light, $lightness: 14%);
     }
 
-    &:active {
+    &:not(.skeleton):not(.clicked):active {
       background-color: adjust-color($color-light, $lightness: 12%);
     }
 
@@ -181,11 +181,11 @@ code {
     background-color: adjust-color($color-dark, $lightness: 7%);
     color: $color-light;
 
-    &:not(.skeleton):hover {
+    &:not(.skeleton):not(.clicked):hover {
       background-color: adjust-color($color-dark, $lightness: 14%);
     }
 
-    &:not(.skeleton):active {
+    &:not(.skeleton):not(.clicked):active {
       background-color: adjust-color($color-dark, $lightness: 10%);
     }
 
