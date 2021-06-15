@@ -23,7 +23,7 @@ const Box = () => {
   const sidePaneStyle = { width: "300px" };
   const writerStyle = {};
 
-  if (viewSize.width > 900) {
+  if (viewSize.width > 1050) {
     mainPaneStyle.width = "calc(100vw - 420px)";
     mainPaneStyle.left = "302px";
     sidePaneStyle.left = 0;
@@ -44,7 +44,7 @@ const Box = () => {
     mainPaneStyle.left = "302px";
     sidePaneStyle.left = 0;
   } else {
-    if (viewSize.width > 900) {
+    if (viewSize.width > 1050) {
       mainPaneStyle.width = "calc(100vw - 118px)";
       mainPaneStyle.left = 0;
     } else if (viewSize.width > 750) {
@@ -56,7 +56,7 @@ const Box = () => {
 
   if (isWriterOpen) {
     writerStyle.right = 0;
-  } else if (viewSize.width > 900) {
+  } else if (viewSize.width > 1050) {
     writerStyle.right = "calc(500px - 100vw)";
   } else {
     writerStyle.right = "calc(3rem - 100vw)";
