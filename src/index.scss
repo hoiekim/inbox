@@ -299,19 +299,22 @@ svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 5px;
-  height: 25px;
-  width: 25px;
+}
 
-  svg {
-    height: 20px;
+.menu {
+  .iconBox {
+    width: 72px;
 
-    &:hover {
-      height: 24px;
-    }
+    svg {
+      height: 40px;
 
-    &:active {
-      height: 22px;
+      &:hover {
+        height: 44px;
+      }
+
+      &:active {
+        height: 42px;
+      }
     }
   }
 }
@@ -320,25 +323,6 @@ svg {
   body {
     * {
       font-weight: 500;
-    }
-  }
-
-  .menu {
-    .iconBox {
-      height: 45px;
-      width: 45px;
-
-      svg {
-        height: 40px;
-
-        &:hover {
-          height: 44px;
-        }
-
-        &:active {
-          height: 42px;
-        }
-      }
     }
   }
 }

@@ -4,6 +4,7 @@ import { useQuery } from "react-query";
 import SkeletonAccount from "./components/SkeletonAccount";
 import SkeletonCategory from "./components/SkeletonCategory";
 import SearchIcon from "./components/SearchIcon";
+import LogoutIcon from "./components/LogoutIcon";
 
 import { Context, categories } from "../../..";
 
@@ -15,6 +16,7 @@ const Accounts = () => {
   const [searchInputDom, setSearchInputDom] = useState(null);
 
   const {
+    setIsLogin,
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
@@ -41,10 +43,12 @@ const Accounts = () => {
     return (
       <div className="tab-holder">
         <div className="categories skeleton">
-          <SkeletonCategory />
-          <SkeletonCategory />
-          <SkeletonCategory />
-          <SkeletonCategory />
+          <div>
+            <SkeletonCategory />
+            <SkeletonCategory />
+            <SkeletonCategory />
+            <SkeletonCategory />
+          </div>
         </div>
         <div className="accounts">
           <SkeletonAccount />
@@ -115,13 +119,13 @@ const Accounts = () => {
         if (e === "search") setSelectedAccount("");
         setSelectedCategory(e);
       };
-      const className = selectedCategory === e ? "clicked" : null;
+      const classes = [];
+      if (selectedCategory === e) classes.push("clicked");
+      if (e === "search") classes.push("flex");
       return (
-        <div key={i} className={className} onClick={onClickCategory}>
+        <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
           {e === "search" ? (
-            <div className="flex">
-              <SearchIcon />
-            </div>
+            <SearchIcon />
           ) : (
             e[0].toUpperCase() + e.substring(1)
           )}
@@ -143,9 +147,27 @@ const Accounts = () => {
       }
     };
 
+    const onClickLogout = () => {
+      fetch("/admin", { method: "DELETE" })
+        .then((r) => r.json())
+        .then((r) => {
+          if (r === true) {
+            setIsLogin(false);
+            setSelectedAccount("");
+          }
+        });
+    };
+
     return (
       <div className="tab-holder">
-        <div className="categories">{categoryComponents}</div>
+        <div className="categories">
+          <div>{categoryComponents}</div>
+          <div>
+            <div className="flex">
+              <LogoutIcon className="cursor" onClick={onClickLogout} />
+            </div>
+          </div>
+        </div>
         <div className="accounts">
           {selectedCategory === "search" ? (
             <div className="search_container">

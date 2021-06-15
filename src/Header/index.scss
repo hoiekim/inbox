@@ -5,7 +5,6 @@
   width: 100vw;
   min-width: 450px;
   height: 70px;
-  padding: 10px 1rem;
   box-sizing: border-box;
   display: flex;
   justify-content: center;
@@ -31,11 +30,11 @@
     z-index: 21;
 
     &.right {
-      right: 1rem;
+      right: 0.5rem;
     }
 
     &.left {
-      left: 1rem;
+      left: 0.5rem;
     }
   }
 }
