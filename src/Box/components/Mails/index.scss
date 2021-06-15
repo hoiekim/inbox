@@ -132,11 +132,15 @@
     .search_highlight {
       margin-top: 0.5rem;
 
-      div > em {
-        font-style: normal;
-        font-weight: 500;
-        padding: 0 2px;
-        border-radius: 2px;
+      div {
+        overflow-wrap: break-word;
+
+        em {
+          font-style: normal;
+          font-weight: 500;
+          padding: 0 3px;
+          border-radius: 2px;
+        }
       }
 
       @media (prefers-color-scheme: dark) {
