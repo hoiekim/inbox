@@ -169,8 +169,7 @@ const MailsRendered = () => {
         minute: "2-digit"
       });
 
-      let duration =
-        (Number(Date.now()) - Number(new Date(mail.date))) / (1000 * 60);
+      let duration = (Date.now() - new Date(mail.date)) / (1000 * 60);
       if (duration > 2 * 24 * 60 * 365) {
         duration = `${Math.floor(duration / (60 * 24 * 365))} years ago`;
       } else if (duration > 2 * 24 * 60 * 30.42) {
