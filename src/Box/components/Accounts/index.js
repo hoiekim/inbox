@@ -9,7 +9,7 @@ import { Context, categories } from "../../..";
 
 import "./index.scss";
 
-let searchDelay;
+let searchDelay, init;
 
 const Accounts = () => {
   const [searchInputDom, setSearchInputDom] = useState(null);
@@ -29,7 +29,10 @@ const Accounts = () => {
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getAccounts, {
-    onSuccess: (data) => data.new?.length && setSelectedCategory(0)
+    onSuccess: (data) => {
+      if (data.new?.length && !init) setSelectedCategory(0);
+      init = true;
+    }
   });
 
   useEffect(() => {
