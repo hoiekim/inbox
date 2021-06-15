@@ -37,7 +37,7 @@ const Box = () => {
     mainPaneStyle.width = "100vw";
     mainPaneStyle.left = 0;
     mainPaneStyle.padding = "0 0.5rem";
-    writerStyle.width = "calc(100vw - 3rem)";
+    writerStyle.width = "calc(100vw - 1rem)";
   }
 
   if (isAccountsOpen) {
@@ -59,7 +59,7 @@ const Box = () => {
   } else if (viewSize.width > 1050) {
     writerStyle.right = "calc(500px - 100vw)";
   } else {
-    writerStyle.right = "calc(3rem - 100vw)";
+    writerStyle.right = "calc(1rem - 100vw)";
   }
 
   return (
