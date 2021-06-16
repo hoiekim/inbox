@@ -39,6 +39,7 @@ app.get("/api/markRead/:id", mails.markRead);
 app.get("/api/mails/:account", mails.getMails);
 app.get("/api/mail-body/:id", mails.getMailBody);
 app.get("/api/search/:value", mails.searchMail);
+app.post("/api/mails", mails.savePostMail);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 

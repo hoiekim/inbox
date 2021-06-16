@@ -114,13 +114,29 @@ mailsRouter.saveMail = async (connection, data) => {
       });
     }
     if (isAddressCorrect) {
-      await Mail.saveMail({ ...data, read: false, label: undefined });
+      const result = await Mail.saveMail({
+        ...data,
+        read: false,
+        label: undefined
+      });
       console.info("Successfully saved an email");
+      return result;
     } else {
       console.warn("Not saved because address is wrong");
     }
   } catch (err) {
     console.error(err);
+  }
+};
+
+mailsRouter.savePostMail = async (req, res) => {
+  const data = req.body;
+  try {
+    const result = mailsRouter.saveMail(null, data);
+    res.status(200).json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to save email"));
   }
 };
 
