@@ -4,10 +4,14 @@ import HamburgerIcon from "./components/HamburgerIcon";
 import { Context } from "../../..";
 
 const LeftMenu = () => {
-  const { isAccountsOpen, setIsAccountsOpen } = useContext(Context);
+  const { isAccountsOpen, setIsAccountsOpen, isWriterOpen, setIsWriterOpen } =
+    useContext(Context);
 
   const onClickHamburger = () => {
-    setIsAccountsOpen(!isAccountsOpen);
+    if (isWriterOpen) {
+      setIsWriterOpen(false);
+      if (!isAccountsOpen) setIsAccountsOpen(true);
+    } else setIsAccountsOpen(!isAccountsOpen);
   };
 
   return (
