@@ -121,18 +121,20 @@ const MailsRendered = () => {
           return account.key === selectedAccount;
         });
 
-        foundData.unread_doc_count -= 1;
+        if (foundData) {
+          foundData.unread_doc_count -= 1;
 
-        if (!foundData.unread_doc_count) {
-          let foundIndex;
+          if (!foundData.unread_doc_count) {
+            let foundIndex;
 
-          newData.new.find((account, i) => {
-            const found = account.key === selectedAccount;
-            if (found) foundIndex = i;
-            return found;
-          });
+            newData.new.find((account, i) => {
+              const found = account.key === selectedAccount;
+              if (found) foundIndex = i;
+              return found;
+            });
 
-          if (foundIndex !== undefined) newData.new.splice(foundIndex, 1);
+            if (foundIndex !== undefined) newData.new.splice(foundIndex, 1);
+          }
         }
 
         const queryUrl = `/api/mails/${selectedAccount}?${category}=1`;
@@ -141,13 +143,14 @@ const MailsRendered = () => {
           if (!oldData) return oldData;
 
           const newData = [...oldData];
-          newData.find((e) => e.id === mailId).read = true;
+          const foundData = newData.find((e) => e.id === mailId);
+          if (foundData) foundData.read = true;
 
           return newData;
         });
       };
 
-      for (const key in newData) key !== "sent" && editByCategory(key);
+      for (const key in newData) editByCategory(key);
 
       return newData;
     });
