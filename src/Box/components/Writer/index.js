@@ -215,22 +215,26 @@ ${replyData.html}
             <EraserIcon className="cursor" onClick={onClickEraserIcon} />
           </span>
         </div>
-        <input
-          className="writer-short"
-          placeholder="name"
-          autoComplete="off"
-          value={name}
-          onChange={onChangeName}
-        />
-        <span className="helper-text"> &lt; </span>
-        <input
-          className="writer-short"
-          placeholder="account"
-          autoComplete="off"
-          value={sender}
-          onChange={(e) => setSender(e.target.value)}
-        />
-        <span className="helper-text">@{domainName} &gt;</span>
+        <div className="margin_box">
+          <input
+            className="writer-short from_name"
+            placeholder="name"
+            autoComplete="off"
+            value={name}
+            onChange={onChangeName}
+          />
+          <div className="from_address">
+            <span className="helper-text"> &lt; </span>
+            <input
+              className="writer-short"
+              placeholder="account"
+              autoComplete="off"
+              value={sender}
+              onChange={(e) => setSender(e.target.value)}
+            />
+            <span className="helper-text">@{domainName} &gt;</span>
+          </div>
+        </div>
       </div>
       <div>
         <div className="fieldName">
@@ -239,7 +243,7 @@ ${replyData.html}
             <CcIcon className="cursor" onClick={onClickCcIcon} />
           </span>
         </div>
-        <div className="inputBox-flex">
+        <div className="inputBox-flex margin_box">
           <input
             className="writer-long"
             placeholder="to@email.com"
@@ -267,13 +271,15 @@ ${replyData.html}
       </div>
       <div>
         <div className="fieldName">Subject: </div>
-        <input
-          className="writer-long"
-          placeholder="This is the mail subject"
-          autoComplete="off"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-        />
+        <div className="margin_box">
+          <input
+            className="writer-long"
+            placeholder="This is the mail subject"
+            autoComplete="off"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+          />
+        </div>
       </div>
       <div className="writer-body">
         <div className="fieldName">
@@ -282,13 +288,15 @@ ${replyData.html}
             <AttachIcon className="cursor" onClick={onClickAttach} />
           </span>
         </div>
-        <div id="writer-content-wrap">
+        <div className="writer-content-wrap margin_box">
           {attachmentComponents.length ? (
             <div className="attachmentBox">{attachmentComponents}</div>
           ) : (
             <></>
           )}
-          <div id="writer-content" className={isPreviewOpen ? "flip" : ""}>
+          <div
+            className={isPreviewOpen ? "writer-content flip" : "writer-content"}
+          >
             <textarea
               className="writer-fat"
               placeholder="Say something really cool here!"

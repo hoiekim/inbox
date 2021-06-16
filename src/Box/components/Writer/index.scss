@@ -13,11 +13,9 @@
     left: 0;
   }
 
-  input,
-  textarea,
-  iframe {
-    margin-top: 0.5rem;
-    margin-bottom: 1rem;
+  .margin_box {
+    margin-top: 0.3rem;
+    margin-bottom: 0.5rem;
   }
 
   iframe {
@@ -42,6 +40,15 @@
 
   .helper-text {
     font-size: 16px;
+  }
+
+  .from_name {
+    margin-right: 1rem;
+  }
+
+  .from_address {
+    display: inline-block;
+    margin: 0.2rem 0;
   }
 
   input.writer-short {
@@ -71,14 +78,14 @@
   .writer-body {
     height: calc(100% - 18rem);
 
-    #writer-content-wrap {
+    .writer-content-wrap {
       display: flex;
       flex-direction: column;
       width: 100%;
       height: calc(100% - 0.5rem - 20px);
       perspective: 4000px;
 
-      #writer-content {
+      .writer-content {
         position: relative;
         width: 100%;
         height: 100%;
