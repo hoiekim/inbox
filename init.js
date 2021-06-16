@@ -1,3 +1,3 @@
-const db = require("./lib/db");
+const db = require("./lib/mails");
 
 db.initialize();
