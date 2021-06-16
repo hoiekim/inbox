@@ -307,7 +307,6 @@ ${replyData.html}
             <iframe
               id="writer-preview"
               title="writer-preview"
-              className={isPreviewOpen ? "" : "hide"}
               srcDoc={previewSrc}
             ></iframe>
           </div>
