@@ -88,7 +88,8 @@ ${replyData.html}
     }).then((r) => r.json());
   };
 
-  const onSuccessSendMail = () => {
+  const onSuccessSendMail = (data) => {
+    if (data !== true) return alert("Failed to send. Please Try again");
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
     setSender("");
