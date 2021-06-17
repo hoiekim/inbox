@@ -36,7 +36,7 @@ const Box = () => {
   } else {
     mainPaneStyle.width = "100vw";
     mainPaneStyle.left = 0;
-    mainPaneStyle.padding = "0 0.5rem";
+    mainPaneStyle.padding = "0";
     writerStyle.width = "calc(100vw - 1rem)";
   }
 
@@ -51,7 +51,7 @@ const Box = () => {
       mainPaneStyle.width = "100vw";
       mainPaneStyle.left = 0;
     }
-    sidePaneStyle.left = "-300px";
+    sidePaneStyle.left = "-250px";
   }
 
   if (isWriterOpen) {
