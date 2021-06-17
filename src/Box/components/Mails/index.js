@@ -2,7 +2,9 @@ import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import MailBody from "./components/MailBody";
+import KebabIcon from "./components/KebabIcon";
 import ReplyIcon from "./components/ReplyIcon";
+import ShareIcon from "./components/ShareIcon";
 import TrashIcon from "./components/TrashIcon";
 import SkeletonMail from "./components/SkeletonMail";
 
@@ -39,6 +41,11 @@ const MailsRendered = () => {
   } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
+  const [openedKebab, setOpenedKebab] = useState("");
+
+  useEffect(() => {
+    setOpenedKebab("");
+  }, [selectedAccount]);
 
   const queryOptions = {};
 
@@ -213,6 +220,15 @@ const MailsRendered = () => {
         setReplyData({ ...mail, to: { address: selectedAccount } });
       };
 
+      const onClickShare = () => {
+        if (!activeMailId[mail.id]) {
+          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+          setActiveMailId(clonedActiveMailId);
+        }
+        // TODO: It shouldn't include `in-reply-to` property
+        setReplyData({ ...mail, to: { address: "" } });
+      };
+
       const onClickTrash = () => {
         if (window.confirm("Do you want to delete this mail?")) {
           requestDeleteMail(mail.id);
@@ -225,6 +241,10 @@ const MailsRendered = () => {
             return newData;
           });
         }
+      };
+
+      const onClickKebab = () => {
+        setOpenedKebab(openedKebab === mail.id ? "" : mail.id);
       };
 
       const classes = ["mailcard"];
@@ -262,11 +282,23 @@ const MailsRendered = () => {
             <div className="search_highlight">{searchHighlight}</div>
           ) : null}
           <div className="actionBox">
-            <div className="iconBox">
-              <ReplyIcon className="cursor" onClick={onClickReply} />
+            <div className="iconBox cursor" onClick={onClickKebab}>
+              <KebabIcon />
             </div>
-            <div className="iconBox">
-              <TrashIcon className="cursor" onClick={onClickTrash} />
+          </div>
+          <div
+            className={openedKebab === mail.id ? "popupBox" : "popupBox hide"}
+            onClick={onClickKebab}
+            onMouseLeave={onClickKebab}
+          >
+            <div className="iconBox cursor" onClick={onClickReply}>
+              <ReplyIcon />
+            </div>
+            <div className="iconBox cursor" onClick={onClickShare}>
+              <ShareIcon />
+            </div>
+            <div className="iconBox cursor" onClick={onClickTrash}>
+              <TrashIcon />
             </div>
           </div>
         </blockquote>

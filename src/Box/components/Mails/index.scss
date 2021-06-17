@@ -71,9 +71,65 @@
   .actionBox {
     position: absolute;
     display: flex;
-    text-align: center;
-    right: 1rem;
+    justify-content: center;
+    right: 0.5rem;
+    top: 0.5rem;
+    width: 40px;
+    height: 40px;
+
+    .iconBox {
+      width: 100%;
+
+      svg {
+        width: 20px;
+        height: 20px;
+      }
+
+      &:hover > svg {
+        width: 24px;
+        height: 24px;
+      }
+
+      &:active > svg {
+        width: 22px;
+        height: 22px;
+      }
+    }
+  }
+
+  .popupBox {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    background-color: $color-dark;
+    border-radius: 35px;
+    right: 3rem;
     top: 1rem;
+    width: 200px;
+    height: 70px;
+
+    &.hide {
+      display: none;
+    }
+
+    .iconBox {
+      width: 100%;
+
+      svg {
+        width: 25px;
+        height: 25px;
+      }
+
+      &:hover > svg {
+        width: 29px;
+        height: 29px;
+      }
+
+      &:active > svg {
+        width: 27px;
+        height: 27px;
+      }
+    }
   }
 
   .content {
