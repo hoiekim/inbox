@@ -15,9 +15,9 @@ const LeftMenu = () => {
   };
 
   return (
-    <div className="menu left">
+    <div className="menu left cursor" onClick={onClickHamburger}>
       <div id="hamburger" className="iconBox">
-        <HamburgerIcon className="cursor" onClick={onClickHamburger} />
+        <HamburgerIcon />
       </div>
     </div>
   );

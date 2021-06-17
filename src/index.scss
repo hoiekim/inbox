@@ -306,16 +306,16 @@ svg {
     width: 72px;
 
     svg {
-      height: 40px;
-
-      &:hover {
-        height: 44px;
-      }
-
-      &:active {
-        height: 42px;
-      }
+      height: 30px;
     }
+  }
+
+  &:hover > .iconBox > svg {
+    height: 34px;
+  }
+
+  &:active > .iconBox > svg {
+    height: 32px;
   }
 }
 

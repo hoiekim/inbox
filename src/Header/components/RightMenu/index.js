@@ -12,9 +12,9 @@ const RightMenu = () => {
   };
 
   return (
-    <div className="menu right">
+    <div className="menu right cursor" onClick={onClickWriter}>
       <div id="write" className="iconBox">
-        <WriteIcon className="cursor" onClick={onClickWriter} />
+        <WriteIcon />
       </div>
     </div>
   );
