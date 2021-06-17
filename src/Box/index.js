@@ -20,17 +20,17 @@ const Box = () => {
   };
 
   const mainPaneStyle = {};
-  const sidePaneStyle = { width: "300px" };
+  const sidePaneStyle = { width: "250px" };
   const writerStyle = {};
 
   if (viewSize.width > 1050) {
-    mainPaneStyle.width = "calc(100vw - 420px)";
-    mainPaneStyle.left = "302px";
+    mainPaneStyle.width = "calc(100vw - 370px)";
+    mainPaneStyle.left = "252px";
     sidePaneStyle.left = 0;
     writerStyle.width = "calc(100vw - 400px)";
   } else if (viewSize.width > 750) {
-    mainPaneStyle.width = "calc(100vw - 302px)";
-    mainPaneStyle.left = "302px";
+    mainPaneStyle.width = "calc(100vw - 252px)";
+    mainPaneStyle.left = "252px";
     sidePaneStyle.left = 0;
     writerStyle.width = "calc(100vw - 3rem)";
   } else {
@@ -41,7 +41,7 @@ const Box = () => {
   }
 
   if (isAccountsOpen) {
-    mainPaneStyle.left = "302px";
+    mainPaneStyle.left = "252px";
     sidePaneStyle.left = 0;
   } else {
     if (viewSize.width > 1050) {
