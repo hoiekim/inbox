@@ -22,7 +22,7 @@ const writerParser = (html) => {
   const htmlComponents = html.split("<in-reply-to>");
   return {
     html: marked(htmlComponents[0]) + (htmlComponents[2] || ""),
-    inReplyTo: htmlComponents[1]
+    inReplyTo: htmlComponents[1] || ""
   };
 };
 
@@ -72,7 +72,7 @@ ${replyData.html}
       setTo(replyData.from.value[0].address);
       setCc("");
       setBcc("");
-      setSubject("RE: " + replyData.subject);
+      setSubject(replyData.subject);
       setTextarea(html);
       setAttachments({});
 
@@ -169,7 +169,17 @@ ${replyData.html}
     const formData = new FormData();
 
     const { html, inReplyTo } = writerParser(textarea);
-    const mailData = { name, sender, to, cc, bcc, subject, html, inReplyTo };
+
+    const mailData = {
+      name,
+      sender,
+      to,
+      cc,
+      bcc,
+      subject,
+      html,
+      inReplyTo
+    };
 
     for (const key in mailData) {
       formData.append(key, mailData[key]);
@@ -246,14 +256,14 @@ ${replyData.html}
         <div className="inputBox-flex margin_box">
           <input
             className="writer-long"
-            placeholder="to@email.com"
+            placeholder="to-1@email.com, to-2@email.com"
             autoComplete="off"
             value={to}
             onChange={(e) => setTo(e.target.value)}
           />
           <input
             className={isCcOpen ? "writer-long" : "writer-long hide"}
-            placeholder="cc@email.com"
+            placeholder="cc-1@email.com, cc-2@email.com"
             autoComplete="off"
             disabled={isCcOpen ? false : true}
             value={cc}
@@ -261,7 +271,7 @@ ${replyData.html}
           />
           <input
             className={isCcOpen ? "writer-long" : "writer-long hide"}
-            placeholder="bcc@email.com"
+            placeholder="bcc-1@email.com, bcc-2@email.com"
             autoComplete="off"
             disabled={isCcOpen ? false : true}
             value={bcc}

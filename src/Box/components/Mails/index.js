@@ -217,7 +217,11 @@ const MailsRendered = () => {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
-        setReplyData({ ...mail, to: { address: selectedAccount } });
+        setReplyData({
+          ...mail,
+          subject: "RE: " + mail.subject,
+          to: { address: selectedAccount }
+        });
       };
 
       const onClickShare = () => {
@@ -225,8 +229,11 @@ const MailsRendered = () => {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
-        // TODO: It shouldn't include `in-reply-to` property
-        setReplyData({ ...mail, to: { address: "" } });
+        setReplyData({
+          ...mail,
+          subject: "FW: " + mail.subject,
+          to: { address: "" }
+        });
       };
 
       const onClickTrash = () => {
