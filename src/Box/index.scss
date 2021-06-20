@@ -12,17 +12,6 @@
   &,
   & > .curtain {
     top: 55px;
-    height: calc(100vh - 55px);
-  }
-}
-
-.side_pane {
-  z-index: 5;
-  overflow: hidden;
-
-  &,
-  & > .curtain {
-    height: 100vh;
   }
 }
 
@@ -32,5 +21,4 @@
   transition: 150ms;
   position: fixed;
   margin-top: 0;
-  height: calc(100vh - 65px);
 }

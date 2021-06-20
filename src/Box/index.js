@@ -19,9 +19,9 @@ const Box = () => {
     if (!isWriterOpen) setIsAccountsOpen(false);
   };
 
-  const mainPaneStyle = {};
-  const sidePaneStyle = { width: "250px" };
-  const writerStyle = {};
+  const mainPaneStyle = { height: viewSize.height - 55 + "px" };
+  const sidePaneStyle = { width: "250px", height: viewSize.height + "px" };
+  const writerStyle = { height: viewSize.height - 65 + "px" };
 
   if (viewSize.width > 1050) {
     mainPaneStyle.width = "calc(100vw - 370px)";
