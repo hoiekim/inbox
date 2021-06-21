@@ -1,5 +1,3 @@
-require("dotenv").config();
-
 const users = {};
 
 users.admin = (req, res) => {

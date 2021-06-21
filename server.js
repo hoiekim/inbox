@@ -1,3 +1,9 @@
+let envPath = ".env";
+const NODE_ENV = process.env.NODE_ENV;
+if (NODE_ENV) envPath += "." + NODE_ENV;
+
+require("dotenv").config({ path: envPath });
+
 const express = require("express");
 const fileupload = require("express-fileupload");
 const session = require("express-session");
@@ -8,8 +14,6 @@ const path = require("path");
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
-
-require("dotenv").config();
 
 const domainName = process.env.DOMAIN || "mydomain";
 
