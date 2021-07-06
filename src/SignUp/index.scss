@@ -1,0 +1,42 @@
+h3.greeting {
+  text-align: center;
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+}
+
+div.info_message {
+  margin: 3rem 0 1rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  height: 1rem;
+  font-size: 14px;
+}
+
+.login_ui {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: auto;
+  margin-top: 0.5rem;
+  width: 250px;
+
+  svg {
+    margin-right: 0.5rem;
+  }
+
+  &:last-child {
+    margin-bottom: 2rem;
+  }
+}
+
+.container_login {
+  width: 100vw;
+  padding-top: calc(55px + 3rem);
+
+  .login_card {
+    max-width: 800px;
+    margin: auto;
+  }
+}

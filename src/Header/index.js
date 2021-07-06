@@ -8,7 +8,7 @@ import "./index.scss";
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
 const Header = () => {
-  const { viewSize, isLogin, selectedAccount } = useContext(Context);
+  const { viewSize, userInfo, selectedAccount } = useContext(Context);
 
   const title = !selectedAccount
     ? "@" + domainName
@@ -18,9 +18,9 @@ const Header = () => {
 
   return (
     <div id="title_bar">
-      {isLogin ? <LeftMenu /> : null}
+      {userInfo ? <LeftMenu /> : null}
       <h1>{title}</h1>
-      {isLogin ? <RightMenu /> : null}
+      {userInfo ? <RightMenu /> : null}
     </div>
   );
 };

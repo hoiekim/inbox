@@ -1,8 +1,4 @@
-let envPath = ".env";
-const NODE_ENV = process.env.NODE_ENV;
-if (NODE_ENV) envPath += "." + NODE_ENV;
-
-require("dotenv").config({ path: envPath });
+require("./config")();
 
 const express = require("express");
 const fileupload = require("express-fileupload");
@@ -16,6 +12,7 @@ const app = express();
 app.use(express.json({ limit: "50mb" }));
 
 const domainName = process.env.DOMAIN || "mydomain";
+const port = process.env.PORT || 3004;
 
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json());
@@ -47,11 +44,13 @@ app.post("/api/mails", mails.savePostMail);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
-app.get("/admin", users.check);
-app.post("/admin", users.admin);
-app.delete("/admin", users.logout);
+app.get("/user", users.check);
+app.post("/user/sign-in", users.signIn);
+app.post("/user/sign-up", users.signUp);
+app.post("/user/set-info", users.setUserInfo);
+app.delete("/user", users.signOut);
 
-app.listen(3004, () => {
+app.listen(port, () => {
   console.info(`${domainName} mail server is listening`);
 });
 

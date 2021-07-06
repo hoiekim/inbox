@@ -18,9 +18,10 @@ mailsRouter.getAttachment = async (req, res) => {
 
 mailsRouter.getAccounts = async (req, res) => {
   console.info("Received GET request to accounts", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
   try {
-    const accounts = await Mail.getAccounts();
+    const { user } = req.session;
+    if (!user) return res.status(401).json(new Error("Not allowed"));
+    const accounts = await Mail.getAccounts(user);
     res.status(200).json(accounts);
   } catch (err) {
     console.error(err);

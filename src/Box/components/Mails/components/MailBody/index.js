@@ -63,25 +63,26 @@ const MailBody = ({ mailId }) => {
     });
 
     const iframeSrcDoc = `
-      <style>
-          body {
-              margin: 0;
-              overflow-y: hidden;
-          }
-          * {
-              font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-              "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
-              "Helvetica Neue", sans-serif;
-              color: rgb(70,70,70);
-          }
-      </style>
-      ${data.html}
-      <script>
-        Array.from(document.querySelectorAll("a")).forEach((e) => {
-          e.setAttribute("target", "_blank")
-        })
-      </script>
-    `;
+<style>
+    body {
+        margin: 0;
+        overflow-y: hidden;
+    }
+    * {
+        font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+        "Helvetica Neue", sans-serif;
+        color: rgb(70,70,70);
+    }
+</style>
+${data.html}
+<script>
+  Array.from(document.querySelectorAll("a")).forEach((e) => {
+    const targetValue = e.getAttribute("target")
+    if (!targetValue || targetValue[0] === "_") e.setAttribute("target", "_blank")
+  })
+</script>
+`;
 
     const onLoadIframe = (e) => {
       const iframeDom = e.target;

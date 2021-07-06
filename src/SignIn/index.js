@@ -8,26 +8,27 @@ import { Context } from "..";
 import "./index.scss";
 
 const Home = () => {
-  const { setIsLogin } = useContext(Context);
-  const [pwInput, setPwInput] = useState("");
+  const { setUserInfo } = useContext(Context);
+  const [usernameInput, setUsernameInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
 
-  const onChangePw = (e) => {
-    setPwInput(e.target.value);
+  const onChangeUsername = (e) => {
+    setUsernameInput(e.target.value);
   };
 
-  const login = (input) => {
-    return fetch("/admin", {
+  const onChangePassword = (e) => {
+    setPasswordInput(e.target.value);
+  };
+
+  const mutation = useMutation((body) => {
+    return fetch("/user/sign-in", {
       method: "POST",
       headers: {
         "content-type": "application/json"
       },
-      body: JSON.stringify({
-        password: input
-      })
+      body: JSON.stringify(body)
     }).then((r) => r.json());
-  };
-
-  const mutation = useMutation(login);
+  });
 
   let infoMessage;
 
@@ -37,15 +38,18 @@ const Home = () => {
   if (mutation.data === false) infoMessage = "🤔 Wrong Password";
 
   useEffect(() => {
-    if (mutation.data && setIsLogin) {
+    if (mutation.data && setUserInfo) {
       setTimeout(() => {
-        setIsLogin(true);
+        setUserInfo(true);
       }, 500);
     }
-  }, [mutation.data, setIsLogin]);
+  }, [mutation.data, setUserInfo]);
 
   const onClickLogin = () => {
-    mutation.mutate(pwInput);
+    const body = { password: passwordInput };
+    if (usernameInput.includes("@")) body.email = usernameInput;
+    else body.username = usernameInput;
+    mutation.mutate(body);
   };
 
   const onKeyDownInput = (e) => {
@@ -59,11 +63,19 @@ const Home = () => {
         <div className="info_message">{infoMessage}</div>
         <input
           className="login_ui"
-          placeholder="Admin Only"
-          type="password"
-          value={pwInput}
+          placeholder="username or email"
+          type="username"
+          value={usernameInput}
           onKeyDown={onKeyDownInput}
-          onChange={onChangePw}
+          onChange={onChangeUsername}
+        />
+        <input
+          className="login_ui"
+          placeholder="password"
+          type="password"
+          value={passwordInput}
+          onKeyDown={onKeyDownInput}
+          onChange={onChangePassword}
         />
         <button className="login_ui" onClick={onClickLogin}>
           <LoginIcon />

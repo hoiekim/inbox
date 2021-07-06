@@ -16,7 +16,7 @@ const Accounts = () => {
   const [searchInputDom, setSearchInputDom] = useState(null);
 
   const {
-    setIsLogin,
+    setUserInfo,
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
@@ -148,11 +148,11 @@ const Accounts = () => {
     };
 
     const onClickLogout = () => {
-      fetch("/admin", { method: "DELETE" })
+      fetch("/user", { method: "DELETE" })
         .then((r) => r.json())
         .then((r) => {
           if (r === true) {
-            setIsLogin(false);
+            setUserInfo(false);
             setSelectedAccount("");
           }
         });
