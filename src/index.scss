@@ -17,6 +17,12 @@ body {
   }
 }
 
+a {
+  font-weight: 400;
+  cursor: pointer;
+  text-decoration: none;
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
     monospace;

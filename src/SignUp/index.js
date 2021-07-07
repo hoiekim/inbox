@@ -52,15 +52,25 @@ const SignUp = () => {
 
   let infoMessage;
 
-  if (id) infoMessage = "🤐 Please set your username and password.";
-  else infoMessage = "😀 Please provide your email to sign up.";
-
-  if (mutation.isLoading) infoMessage = "🧐 Checking...";
-  if (mutation.isError) infoMessage = "🤯 Server error";
-  if (mutation.data === true) {
-    infoMessage = "🤗 Please check your mail box and complete signing up.";
+  if (id) {
+    infoMessage = "🤐 Please set your username and password.";
+    if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
+    if (mutation.isError) infoMessage = "🤯 Server error";
+    if (mutation.data === true) {
+      infoMessage = "🤗 All set up!";
+    }
+    if (mutation.data === false)
+      infoMessage = "🤔 Something is wrong. Please try again.";
+  } else {
+    infoMessage = "😀 Please provide your email to sign up.";
+    if (mutation.isLoading) infoMessage = "🧐 Sending confirmation email...";
+    if (mutation.isError) infoMessage = "🤯 Server error";
+    if (mutation.data === true) {
+      infoMessage = "🤗 Please check your mail box and complete signing up.";
+    }
+    if (mutation.data === false)
+      infoMessage = "🤔 Something is wrong. Please try again.";
   }
-  if (mutation.data === false) infoMessage = "🤔 Please try again.";
 
   useEffect(() => {
     if (mutation.data && setUserInfo) {

@@ -1,5 +1,6 @@
 import React, { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
+import { Link } from "react-router-dom";
 
 import LoginIcon from "./components/LoginIcon";
 
@@ -81,6 +82,16 @@ const Home = () => {
           <LoginIcon />
           <span>Login</span>
         </button>
+        <div className="info_message">
+          <span>Forgot password?</span>
+          &nbsp;
+          <Link to="/sign-up">Reset Password</Link>
+        </div>
+        <div className="info_message">
+          <span>Don't have account?</span>
+          &nbsp;
+          <Link to="/sign-up">Sign Up</Link>
+        </div>
       </blockquote>
     </div>
   );
