@@ -110,6 +110,7 @@ mailsRouter.sendMail = async (req, res) => {
   console.info("Received POST request to send mail", req.ip, "at", new Date());
   if (!req.session.user) return res.json(new Error("Login is required"));
   try {
+    const { username } = req.session.user;
     const result = await Mail.sendMail(
       { ...req.body, username },
       req.files?.attachments
