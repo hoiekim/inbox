@@ -214,7 +214,7 @@ Mail.getMails = (account, options) => {
 
 Mail.getMailBody = (id) => {
   return Mail.request("_search", "POST", {
-    _source: ["html", "attachments", "messageId"],
+    _source: ["envelopeTo", "html", "attachments", "messageId"],
     query: {
       term: {
         _id: id
@@ -369,16 +369,11 @@ Mail.deleteMail = async (id, username) => {
 };
 
 Mail.validateMailAddress = (data, domainName) => {
+  if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
   let isAddressCorrect = !!data.envelopeTo.find((e) => {
     const parsedAddress = e.address?.split("@");
     return parsedAddress[parsedAddress.length - 1].includes(domainName);
   });
-  if (!isAddressCorrect) {
-    isAddressCorrect = !!data.to.value?.find((e) => {
-      const parsedAddress = e.address?.split("@");
-      return parsedAddress[parsedAddress.length - 1].includes(domainName);
-    });
-  }
   return isAddressCorrect;
 };
 

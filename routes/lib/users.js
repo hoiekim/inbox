@@ -2,7 +2,7 @@ const bcrypt = require("bcrypt");
 const Elastic = require("./components/elastic");
 const Mail = require("./mails");
 
-const serviceHostname = process.env.DOMAIN || "mydomain";
+const serviceHostname = process.env.APP_DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
