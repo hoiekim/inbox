@@ -43,7 +43,8 @@ Mail.sendMail = async (mailData, files) => {
     throw new Error("You need to set your domainName name in the env data");
   }
 
-  const { name, sender, to, cc, bcc, subject, html, inReplyTo } = mailData;
+  const { username, name, sender, to, cc, bcc, subject, html, inReplyTo } =
+    mailData;
   const text = htmlToText(html);
 
   let attachments;
@@ -67,7 +68,7 @@ Mail.sendMail = async (mailData, files) => {
     ];
   }
 
-  const from = { name, email: `${sender}@${domainName}` };
+  const from = { name, email: `${sender}@${username}.${domainName}` };
 
   const messageToSend = {
     from,
@@ -226,8 +227,7 @@ Mail.getMailBody = (id) => {
     });
 };
 
-Mail.getAccounts = (user) => {
-  const { username } = user;
+Mail.getAccounts = (username) => {
   const accounts = Mail.request("_msearch", "POST", [
     // Query1: All accounts
     {},
@@ -321,7 +321,7 @@ Mail.getAccounts = (user) => {
 
 Mail.markRead = (id) => {
   return Mail.request(`_update/${id}`, "POST", {
-    script: "ctx._source.read = true"
+    doc: { read: true }
   });
 };
 
@@ -361,8 +361,22 @@ Mail.searchMail = (value, options) => {
   });
 };
 
-Mail.deleteMail = (id) => {
+Mail.deleteMail = async (id, username) => {
   return Mail.request(`_doc/${id}`, "DELETE");
+};
+
+Mail.validateMailAddress = (data, domainName) => {
+  let isAddressCorrect = !!data.envelopeTo.find((e) => {
+    const parsedAddress = e.address?.split("@");
+    return parsedAddress[parsedAddress.length - 1].includes(domainName);
+  });
+  if (!isAddressCorrect) {
+    isAddressCorrect = !!data.to.value?.find((e) => {
+      const parsedAddress = e.address?.split("@");
+      return parsedAddress[parsedAddress.length - 1].includes(domainName);
+    });
+  }
+  return isAddressCorrect;
 };
 
 module.exports = Mail;
