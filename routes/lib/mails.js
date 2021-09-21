@@ -9,7 +9,7 @@ sgMail.setApiKey(process.env.SENDGRID_KEY);
 const domainName = process.env.DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
-const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "elastic";
+const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_MAILS || "mails";
 
@@ -69,7 +69,9 @@ Mail.sendMail = async (mailData, files) => {
   }
 
   const from = { name, email: `${sender}@${domainName}` };
-  const replyTo = { name, email: `${sender}@${username}.${domainName}` };
+  const replyTo = username
+    ? { name, email: `${sender}@${username}.${domainName}` }
+    : from;
 
   const messageToSend = {
     from,

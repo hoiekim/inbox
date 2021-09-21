@@ -30,10 +30,6 @@ app.use(
   })
 );
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
-});
-
 app.get("/api/attachment/:id", mails.getAttachment);
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/markRead/:id", mails.markRead);
@@ -49,6 +45,10 @@ app.post("/user/sign-in", users.signIn);
 app.post("/user/send-token", users.sendToken);
 app.post("/user/set-info", users.setUserInfo);
 app.delete("/user", users.signOut);
+
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "build", "index.html"));
+});
 
 app.listen(port, () => {
   console.info(`${domainName} mail server is listening`);
