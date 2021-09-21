@@ -12,7 +12,8 @@ router.signIn = async (req, res) => {
   try {
     const userInfo = await User.signIn(req.body);
     if (userInfo) {
-      req.session.user = userInfo;
+      req.session.user = { ...userInfo };
+      if (userInfo.username === "admin") userInfo.username === null;
       res.status(200).json(userInfo);
     } else {
       res.status(401).json(false);

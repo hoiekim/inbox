@@ -74,9 +74,9 @@ const SignUp = () => {
   }
 
   useEffect(() => {
-    if (mutation.data?.result === "updated" && setUserInfo) {
+    if (mutation.data?.username && setUserInfo) {
       setTimeout(() => {
-        setUserInfo(true);
+        setUserInfo(mutation.data);
       }, 500);
     }
   }, [mutation.data, setUserInfo]);
