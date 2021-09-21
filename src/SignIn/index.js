@@ -35,13 +35,13 @@ const Home = () => {
 
   if (mutation.isLoading) infoMessage = "🧐 Checking...";
   if (mutation.isError) infoMessage = "🤯 Server error";
-  if (mutation.data === true) infoMessage = "🤗 Welcome!";
+  if (mutation.data?.username) infoMessage = "🤗 Welcome!";
   if (mutation.data === false) infoMessage = "🤔 Wrong Password";
 
   useEffect(() => {
     if (mutation.data && setUserInfo) {
       setTimeout(() => {
-        setUserInfo(true);
+        setUserInfo(mutation.data);
       }, 500);
     }
   }, [mutation.data, setUserInfo]);
@@ -82,15 +82,17 @@ const Home = () => {
           <LoginIcon />
           <span>Login</span>
         </button>
-        <div className="info_message">
-          <span>Forgot password?</span>
-          &nbsp;
-          <Link to="/sign-up">Reset Password</Link>
-        </div>
-        <div className="info_message">
-          <span>Don't have account?</span>
-          &nbsp;
-          <Link to="/sign-up">Sign Up</Link>
+        <div className="card_footer">
+          <div className="info_message">
+            <span>Forgot password?</span>
+            &nbsp;
+            <Link to="/set-info">Reset Password</Link>
+          </div>
+          <div className="info_message">
+            <span>Don't have account?</span>
+            &nbsp;
+            <Link to="/set-info">Sign Up</Link>
+          </div>
         </div>
       </blockquote>
     </div>

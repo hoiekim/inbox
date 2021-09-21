@@ -2,10 +2,11 @@ const bcrypt = require("bcrypt");
 const Elastic = require("./components/elastic");
 const Mail = require("./mails");
 
-const serviceHostname = process.env.SERVICE_HOSTNAME || "https://mydomain";
+// const serviceHostname = process.env.DOMAIN || "mydomain";
+const serviceHostname = "localhost:3000";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
-const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "elastic";
+const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_USERS || "users";
 
@@ -73,9 +74,7 @@ User.signIn = async (credentials) => {
 
 User.expiryTimer = {};
 
-const getToken = () => Math.floor(Math.random() * 1000000000).toString(36);
-
-User.signUp = async (email) => {
+User.sendToken = async (email) => {
   const values = email.split("@");
   const validation = !values.find((e) => !validate(e));
 
@@ -84,21 +83,32 @@ User.signUp = async (email) => {
     return false;
   }
 
-  const existingUserInfo = await User.getUser({ email });
-  if (existingUserInfo) {
-    console.info("Signup failed because email already exists.");
-    return false;
-  }
-
-  const token = getToken();
+  const token = Math.floor(Math.random() * 1000000000).toString(36);
   const duration = 1000 * 60 * 60;
   const expiry = Date.now() + duration;
 
-  const { _id: id } = await User.request("_doc", "POST", {
-    email,
-    token,
-    expiry
-  });
+  let id, username;
+
+  const existingUserInfo = await User.getUser({ email });
+  if (existingUserInfo) {
+    id = existingUserInfo.id;
+    username = existingUserInfo.username;
+  }
+
+  if (!id) {
+    id = await User.request("_doc", "POST", {
+      email,
+      token,
+      expiry
+    })._id;
+  } else {
+    await User.request(`_update/${id}`, "POST", {
+      doc: { token }
+    });
+  }
+
+  let href = `http://${serviceHostname}/set-info/${email}?t=${token}`;
+  if (username) href += `&u=${username}`;
 
   await Mail.sendMail({
     name: "Administrator",
@@ -113,7 +123,7 @@ User.signUp = async (email) => {
   Please click the button below to complete signing up.
 </p>
 <a
-  href="${serviceHostname}/sign-up/${id}?t=${token}"
+  href="${href}"
   target="inbox-confirm"
   style="display: flex; align-items: center; justify-content: center; margin: 2rem auto; background-color: #3291FF; color: white; border: none; height: 40px; width: 400px; font-size: 20px;"
 >Confirm Sign Up</a>
@@ -137,37 +147,47 @@ User.signUp = async (email) => {
 };
 
 User.setUserInfo = async (userInfo) => {
-  if (!userInfo.id) {
-    throw new Error("Setting userInfo failed because id is not specified.");
+  if (!userInfo.email) {
+    throw new Error("Setting userInfo failed because email is not specified.");
   }
 
-  const { id, password, token, username } = userInfo;
+  let { email, password, token, username } = userInfo;
 
-  const findUserInfoById = await User.getUser({ _id: id });
-  if (!findUserInfoById) {
+  const findUserInfoByEmail = await User.getUser({ email });
+  if (!findUserInfoByEmail) {
     throw new Error("Setting userInfo failed because user data is not found.");
   }
-  if (findUserInfoById.token !== token) {
+
+  const { id } = findUserInfoByEmail;
+
+  if (findUserInfoByEmail.token !== token) {
     throw new Error(
       "Setting userInfo failed because user token does not match."
     );
   }
-  if (findUserInfoById.expiry < Date.now()) {
-    await User.deleteUser(id);
-    throw new Error("Setting userInfo failed because user token is expired.");
-  }
 
-  const expiryTimer = User.expiryTimer[userInfo.id];
-  if (expiryTimer) clearTimeout(expiryTimer);
+  if (!findUserInfoByEmail.username) {
+    if (findUserInfoByEmail.expiry < Date.now()) {
+      await User.deleteUser(id);
+      throw new Error("Setting userInfo failed because user token is expired.");
+    }
 
-  const findUserInfoByUsername = await User.getUser({ username });
-  if (findUserInfoByUsername) {
-    throw new Error("Setting userInfo failed because username already exists.");
+    const expiryTimer = User.expiryTimer[id];
+    if (expiryTimer) clearTimeout(expiryTimer);
+
+    const findUserInfoByUsername = await User.getUser({ username });
+    if (findUserInfoByUsername) {
+      throw new Error(
+        "Setting userInfo failed because username already exists."
+      );
+    }
+  } else {
+    username = findUserInfoByEmail.username;
   }
 
   const encryptedPassword = await bcrypt.hash(password, 10);
 
-  return User.request(`_update/${id}`, "POST", {
+  await User.request(`_update/${id}`, "POST", {
     doc: {
       password: encryptedPassword,
       username,
@@ -175,6 +195,8 @@ User.setUserInfo = async (userInfo) => {
       expiry: 0
     }
   });
+
+  return true;
 };
 
 module.exports = User;

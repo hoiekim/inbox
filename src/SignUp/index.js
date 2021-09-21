@@ -1,6 +1,6 @@
 import React, { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
-import { useParams, useLocation } from "react-router-dom";
+import { useParams, useLocation, Link } from "react-router-dom";
 
 import SignUpIcon from "./components/SignUpIcon";
 import UserEditIcon from "./components/UserEditIcon";
@@ -12,17 +12,18 @@ import "./index.scss";
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
 
-  const { id } = useParams();
+  const { email } = useParams();
   const query = new URLSearchParams(useLocation().search);
   const token = query.get("t");
+  const username = query.get("u");
 
-  const [emailInput, setEmailInput] = useState(id ? "***@**.*" : "");
-  const [usernameInput, setUsernameInput] = useState("");
+  const [emailInput, setEmailInput] = useState(email || "");
+  const [usernameInput, setUsernameInput] = useState(username || "");
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
 
   const onChangeEmail = (e) => {
-    if (!id) setEmailInput(e.target.value);
+    setEmailInput(e.target.value);
   };
 
   const onChangeUsername = (e) => {
@@ -39,8 +40,8 @@ const SignUp = () => {
 
   const mutation = useMutation((body) => {
     let url;
-    if (id) url = "/user/set-info";
-    else url = "/user/sign-up";
+    if (email) url = "/user/set-info";
+    else url = "/user/send-token";
     return fetch(url, {
       method: "POST",
       headers: {
@@ -52,30 +53,30 @@ const SignUp = () => {
 
   let infoMessage;
 
-  if (id) {
-    infoMessage = "🤐 Please set your username and password.";
+  if (email) {
+    infoMessage = "🤐 Please set your user information.";
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
-    if (mutation.data === true) {
-      infoMessage = "🤗 All set up!";
-    }
-    if (mutation.data === false)
+    if (mutation.data === true) infoMessage = "🤗 All set up!";
+    if (mutation.data === false) {
       infoMessage = "🤔 Something is wrong. Please try again.";
+    }
   } else {
-    infoMessage = "😀 Please provide your email to sign up.";
+    infoMessage = "😀 Please provide your email.";
     if (mutation.isLoading) infoMessage = "🧐 Sending confirmation email...";
     if (mutation.isError) infoMessage = "🤯 Server error";
     if (mutation.data === true) {
-      infoMessage = "🤗 Please check your mail box and complete signing up.";
+      infoMessage =
+        "🤗 Please check your mail box and continue to set your user information.";
     }
     if (mutation.data === false)
       infoMessage = "🤔 Something is wrong. Please try again.";
   }
 
   useEffect(() => {
-    if (mutation.data && setUserInfo) {
+    if (mutation.data?.result === "updated" && setUserInfo) {
       setTimeout(() => {
-        // setUserInfo(true);
+        setUserInfo(true);
       }, 500);
     }
   }, [mutation.data, setUserInfo]);
@@ -83,12 +84,11 @@ const SignUp = () => {
   const onClickSignUp = () => {
     mutation.mutate({
       email: emailInput,
-      id,
       token,
       username: usernameInput,
       password: passwordInput
     });
-    window.name = "inbox-confirm";
+    if (email) window.name = "inbox-confirm";
   };
 
   const onKeyDownInput = (e) => {
@@ -107,9 +107,9 @@ const SignUp = () => {
           value={emailInput}
           onKeyDown={onKeyDownInput}
           onChange={onChangeEmail}
-          disabled={!!id}
+          disabled={!!email}
         />
-        {id ? (
+        {email ? (
           <>
             <input
               className="login_ui"
@@ -118,6 +118,7 @@ const SignUp = () => {
               value={usernameInput}
               onKeyDown={onKeyDownInput}
               onChange={onChangeUsername}
+              disabled={!!username}
             />
             <input
               className="login_ui"
@@ -140,7 +141,7 @@ const SignUp = () => {
           </>
         ) : null}
         <button className="login_ui" onClick={onClickSignUp}>
-          {id ? (
+          {email ? (
             <>
               <UserEditIcon />
               <span>Set Up</span>
@@ -148,10 +149,17 @@ const SignUp = () => {
           ) : (
             <>
               <SignUpIcon />
-              <span>Sign Up</span>
+              <span>Send Confirm Email</span>
             </>
           )}
         </button>
+        <div className="card_footer">
+          <div className="info_message">
+            <span>Already have an account?</span>
+            &nbsp;
+            <Link to="/sign-in">Sign In</Link>
+          </div>
+        </div>
       </blockquote>
     </div>
   );

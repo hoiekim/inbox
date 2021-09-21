@@ -46,7 +46,7 @@ app.delete("/api/mails/:id", mails.deleteMail);
 
 app.get("/user", users.check);
 app.post("/user/sign-in", users.signIn);
-app.post("/user/sign-up", users.signUp);
+app.post("/user/send-token", users.sendToken);
 app.post("/user/set-info", users.setUserInfo);
 app.delete("/user", users.signOut);
 

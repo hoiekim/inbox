@@ -227,7 +227,7 @@ Mail.getMailBody = (id) => {
 };
 
 Mail.getAccounts = (user) => {
-  const { id } = user;
+  const { username } = user;
   const accounts = Mail.request("_msearch", "POST", [
     // Query1: All accounts
     {},
@@ -238,7 +238,7 @@ Mail.getAccounts = (user) => {
           must: {
             query_string: {
               default_field: "envelopeTo.address",
-              query: `*@${domainName}`
+              query: `*@${username}.${domainName}`
             }
           }
         }
@@ -262,7 +262,7 @@ Mail.getAccounts = (user) => {
             {
               query_string: {
                 default_field: "envelopeTo.address",
-                query: `*@${domainName}`
+                query: `*@${username}.${domainName}`
               }
             },
             { term: { read: false } }
@@ -285,7 +285,7 @@ Mail.getAccounts = (user) => {
       query: {
         query_string: {
           default_field: "from.value.address",
-          query: `*@${domainName}`
+          query: `*@${username}.${domainName}`
         }
       },
       aggs: {

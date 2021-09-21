@@ -1,4 +1,4 @@
-const Mail = require("../lib/mails");
+const Mail = require("./lib/mails");
 
 const domainName = process.env.DOMAIN || "mydomain";
 
@@ -6,7 +6,7 @@ const mailsRouter = {};
 
 mailsRouter.getAttachment = async (req, res) => {
   console.info("Received GET request to attachment", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const attachment = await Mail.getAttachment(req.params.id);
     res.status(200).send(attachment);
@@ -31,7 +31,7 @@ mailsRouter.getAccounts = async (req, res) => {
 
 mailsRouter.markRead = async (req, res) => {
   console.info("Received GET request to mark read", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const result = await Mail.markRead(req.params.id);
     res.status(200).json(result);
@@ -43,8 +43,14 @@ mailsRouter.markRead = async (req, res) => {
 
 mailsRouter.getMails = async (req, res) => {
   console.info("Received GET request to mails", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
+
   try {
+    const username = req.params.account.split("@")[1].split(domainName)[0];
+    if (!req.session.user.username !== username) {
+      return res.json(new Error("Wrong request"));
+    }
+
     const mails = await Mail.getMails(req.params.account, req.query);
     res.status(200).json(mails);
   } catch (err) {
@@ -55,7 +61,7 @@ mailsRouter.getMails = async (req, res) => {
 
 mailsRouter.getMailBody = async (req, res) => {
   console.info("Received GET request to mail body", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const mail = await Mail.getMailBody(req.params.id);
     res.status(200).json(mail);
@@ -72,7 +78,7 @@ mailsRouter.deleteMail = async (req, res) => {
     "at",
     new Date()
   );
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const result = await Mail.deleteMail(req.params.id);
     res.status(200).json(result);
@@ -84,7 +90,7 @@ mailsRouter.deleteMail = async (req, res) => {
 
 mailsRouter.sendMail = async (req, res) => {
   console.info("Received POST request to send mail", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const result = await Mail.sendMail(req.body, req.files?.attachments);
     if (result === true) res.status(200).json(result);
@@ -143,7 +149,7 @@ mailsRouter.savePostMail = async (req, res) => {
 
 mailsRouter.searchMail = async (req, res) => {
   console.info("Received GET request to search mail", req.ip, "at", new Date());
-  if (!req.session.admin) return res.json(new Error("Admin Login is required"));
+  if (!req.session.user) return res.json(new Error("Admin Login is required"));
   try {
     const value = decodeURIComponent(req.params.value);
     const result = await Mail.searchMail(value, req.query);

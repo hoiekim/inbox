@@ -8,7 +8,9 @@ const callback = async (r) => {
 
 function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
   const Authorization =
-    "Basic " + Buffer.from(`${USERNAME}:${PASSWORD}`).toString("base64");
+    USERNAME && PASSWORD
+      ? "Basic " + Buffer.from(`${USERNAME}:${PASSWORD}`).toString("base64")
+      : null;
 
   this.initialize = async (schema) => {
     console.info("Initializing index:", INDEX);
@@ -17,7 +19,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
       const tempIndex = INDEX + "-temp-" + Math.floor(Math.random() * 10000);
 
       // Check if the index to initialize already exists
-      const indexExists = await fetch(`${HOST}:/${INDEX}`, {
+      const indexExists = await fetch(`${HOST}/${INDEX}`, {
         method: "HEAD",
         headers: {
           Authorization,
@@ -40,7 +42,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
 
         if (dataExists) {
           // Move data to temporary index
-          await fetch(`${HOST}:/_reindex`, {
+          await fetch(`${HOST}/_reindex`, {
             method: "POST",
             headers: {
               Authorization,
@@ -64,7 +66,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
 
       if (dataExists) {
         // Move data back from the temporary index
-        await fetch(`${HOST}:/_reindex`, {
+        await fetch(`${HOST}/_reindex`, {
           method: "POST",
           headers: {
             Authorization,
@@ -77,7 +79,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
         }).then(callback);
 
         // Delete temporary index
-        await fetch(`${HOST}:/${tempIndex}`, {
+        await fetch(`${HOST}/${tempIndex}`, {
           method: "DELETE",
           headers: {
             Authorization,
@@ -113,7 +115,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
       }
     }
 
-    return fetch(`${HOST}:/${INDEX}/${path}`, options).then(callback);
+    return fetch(`${HOST}/${INDEX}/${path}`, options).then(callback);
   };
 }
 

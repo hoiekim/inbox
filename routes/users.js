@@ -1,4 +1,4 @@
-const User = require("../lib/users");
+const User = require("./lib/users");
 
 const router = {};
 
@@ -13,9 +13,9 @@ router.signIn = async (req, res) => {
     const userInfo = await User.signIn(req.body);
     if (userInfo) {
       req.session.user = userInfo;
-      res.status(200).json({ ...userInfo, password: null });
+      res.status(200).json(userInfo);
     } else {
-      res.status(401).json(null);
+      res.status(401).json(false);
     }
   } catch (err) {
     console.error(err);
@@ -34,15 +34,15 @@ router.signOut = (req, res) => {
   res.status(200).json(true);
 };
 
-router.signUp = async (req, res) => {
+router.sendToken = async (req, res) => {
   console.info(
-    "Received POST request to /user/sign-up",
+    "Received POST request to /user/send-token",
     req.ip,
     "at",
     new Date()
   );
   try {
-    const result = await User.signUp(req.body.email);
+    const result = await User.sendToken(req.body.email);
     res.status(200).json(result);
   } catch (err) {
     console.error(err);
@@ -58,7 +58,11 @@ router.setUserInfo = async (req, res) => {
     new Date()
   );
   try {
-    const result = await User.setUserInfo(req.body);
+    const [result, updatedUserInfo] = await Promise.all([
+      User.setUserInfo(req.body),
+      User.getUser({ email: req.body.email })
+    ]);
+    req.session.user = updatedUserInfo;
     res.status(200).json(result);
   } catch (err) {
     console.error(err);

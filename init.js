@@ -1,7 +1,7 @@
 require("./config")();
 
-const Mail = require("./lib/mails");
-const User = require("./lib/users");
+const Mail = require("./routes/lib/mails");
+const User = require("./routes/lib/users");
 
 Mail.initialize({
   attachments: { type: "object" },

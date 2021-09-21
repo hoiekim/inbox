@@ -81,7 +81,7 @@ const App = () => {
               <Route exact path="/sign-in">
                 {userInfo ? <Redirect to="/" /> : <SignIn />}
               </Route>
-              <Route exact path={["/sign-up", "/sign-up/:id"]}>
+              <Route exact path={["/set-info", "/set-info/:email"]}>
                 {userInfo ? <Redirect to="/" /> : <SignUp />}
               </Route>
             </Switch>
