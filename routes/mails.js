@@ -56,8 +56,8 @@ mailsRouter.getMails = async (req, res) => {
     const username = req.params.account
       .split("@")[1]
       .split(`.${domainName}`)[0];
-    if (!req.session.user.username !== username) {
-      return res.json(new Error("Wrong request"));
+    if (req.session.user.username !== username) {
+      throw new Error("Wrong request");
     }
 
     const mails = await Mail.getMails(req.params.account, req.query);
