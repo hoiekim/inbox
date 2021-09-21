@@ -93,7 +93,13 @@ Mail.sendMail = async (mailData, files) => {
     .then((r) => {
       console.info("Sendgrid email sending request succeed");
 
-      if (!to.includes("@" + domainName)) {
+      const toDomain = messageToSend.to.map((e) => {
+        const splitString = e.split("@")[1].split(".");
+        const length = splitString.length;
+        return splitString[length - 2] + "." + splitString[length - 1];
+      });
+
+      if (!toDomain.find((e) => e === domainName)) {
         const messageToSave = {
           ...messageToSend,
           date: new Date().toISOString(),
