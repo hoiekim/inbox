@@ -37,6 +37,12 @@ const validate = (value) => /^[a-z0-9.-]+$/.test(value);
 User.signIn = async (credentials) => {
   const { username, email, password } = credentials;
   const query = {};
+
+  if (username === "admin") {
+    if (password === process.env.ADMIN_PW) return credentials;
+    else return null;
+  }
+
   if (username) {
     query.username = username;
     if (!validate(username)) {
@@ -110,6 +116,7 @@ User.sendToken = async (email) => {
   if (username) href += `&u=${username}`;
 
   await Mail.sendMail({
+    username: "admin",
     name: "Administrator",
     sender: "admin",
     to: email,
@@ -117,9 +124,9 @@ User.sendToken = async (email) => {
     html: `
 <h2 style="text-align: center;">Thanks for signing up with Inbox!</h2>
 <p style="text-align: center;">
-  You have requested sign-up confirmation email for Inbox.
+  You have requested membership confirmation email for Inbox.
   <br/>
-  Please click the button below to complete signing up.
+  Please click the button below to complete setting user information.
 </p>
 <a
   href="${href}"
@@ -130,6 +137,8 @@ User.sendToken = async (email) => {
   * This email expires in 1 hour.
   <br/>  
   * You should not share this email with other people.
+  <br/>  
+  * Ignore this email if you have not requested it.
 </p>
 `
   });
@@ -146,11 +155,10 @@ User.sendToken = async (email) => {
 };
 
 User.setUserInfo = async (userInfo) => {
-  if (!userInfo.email) {
+  let { email, password, token, username } = userInfo;
+  if (!email || username || password) {
     throw new Error("Setting userInfo failed because email is not specified.");
   }
-
-  let { email, password, token, username } = userInfo;
 
   const findUserInfoByEmail = await User.getUser({ email });
   if (!findUserInfoByEmail) {

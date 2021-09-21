@@ -35,7 +35,9 @@ mailsRouter.markRead = async (req, res) => {
   try {
     const mail = await Mail.getMailBody(req.params.id);
     const { username } = req.session.user;
-    const valid = Mail.validateMailAddress(mail, `${username}.${domainName}`);
+    const fullDomain =
+      username === "admin" ? domainName : `${username}.${domainName}`;
+    const valid = Mail.validateMailAddress(mail, fullDomain);
     if (valid) {
       const result = await Mail.markRead(req.params.id);
       res.status(200).json(result);
@@ -75,7 +77,7 @@ mailsRouter.getMailBody = async (req, res) => {
     const mail = await Mail.getMailBody(req.params.id);
     const { username } = req.session.user;
     const valid = Mail.validateMailAddress(mail, `${username}.${domainName}`);
-    if (valid) res.status(200).json(mail);
+    if (username === "admin" || valid) res.status(200).json(mail);
     else throw new Error("Wrong Request");
   } catch (err) {
     console.error(err);
@@ -96,7 +98,7 @@ mailsRouter.deleteMail = async (req, res) => {
     const data = await Mail.getMailBody(id);
     const { username } = req.session.user;
     const valid = Mail.validateMailAddress(data, `${username}.${domainName}`);
-    if (valid) {
+    if (username === "admin" || valid) {
       const result = await Mail.deleteMail(id);
       res.status(200).json(result);
     } else {
@@ -166,7 +168,11 @@ mailsRouter.searchMail = async (req, res) => {
   if (!req.session.user) return res.json(new Error("Login is required"));
   try {
     const value = decodeURIComponent(req.params.value);
-    const result = await Mail.searchMail(value, req.query);
+    const result = await Mail.searchMail(
+      value,
+      req.session.user.username,
+      req.query
+    );
     res.status(200).json(result);
   } catch (err) {
     console.error(err);

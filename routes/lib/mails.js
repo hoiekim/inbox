@@ -69,9 +69,10 @@ Mail.sendMail = async (mailData, files) => {
   }
 
   const from = { name, email: `${sender}@${domainName}` };
-  const replyTo = username
-    ? { name, email: `${sender}@${username}.${domainName}` }
-    : from;
+  const replyTo =
+    username === "admin"
+      ? from
+      : { name, email: `${sender}@${username}.${domainName}` };
 
   const messageToSend = {
     from,
@@ -123,7 +124,7 @@ Mail.sendMail = async (mailData, files) => {
     });
 };
 
-const getAttachmentId = () => {
+const genAttachmentId = () => {
   const id = uuid.v4();
   if (fs.existsSync(`./attachments/${id}`)) {
     console.warn("Duplicate uuid is found");
@@ -131,13 +132,13 @@ const getAttachmentId = () => {
     console.log(`Duplicated path: ./attachments/${id}`);
     console.log("Isn't attachments storage directory too full?");
     console.groupEnd();
-    return getAttachmentId();
+    return genAttachmentId();
   } else return id;
 };
 
 Mail.saveMail = (body) => {
   body.attachments.forEach((e) => {
-    const id = getAttachmentId();
+    const id = genAttachmentId();
     const content = e.content.data || e.content;
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
       if (err) throw new Error(err);
@@ -231,6 +232,8 @@ Mail.getMailBody = (id) => {
 };
 
 Mail.getAccounts = (username) => {
+  const fullDomain =
+    username === "admin" ? domainName : `${username}.${domainName}`;
   const accounts = Mail.request("_msearch", "POST", [
     // Query1: All accounts
     {},
@@ -241,7 +244,7 @@ Mail.getAccounts = (username) => {
           must: {
             query_string: {
               default_field: "envelopeTo.address",
-              query: `*@${username}.${domainName}`
+              query: `*@${fullDomain}`
             }
           }
         }
@@ -265,7 +268,7 @@ Mail.getAccounts = (username) => {
             {
               query_string: {
                 default_field: "envelopeTo.address",
-                query: `*@${username}.${domainName}`
+                query: `*@${fullDomain}`
               }
             },
             { term: { read: false } }
@@ -288,7 +291,7 @@ Mail.getAccounts = (username) => {
       query: {
         query_string: {
           default_field: "from.value.address",
-          query: `*@${username}.${domainName}`
+          query: `*@${fullDomain}`
         }
       },
       aggs: {
@@ -328,7 +331,7 @@ Mail.markRead = (id) => {
   });
 };
 
-Mail.searchMail = (value, options) => {
+Mail.searchMail = (value, username, options) => {
   const { field } = options;
   value = value.replace(/</g, "").replace(/>/g, "");
 
@@ -347,12 +350,27 @@ Mail.searchMail = (value, options) => {
     fields[i] += "^" + (fields.length - i);
   });
 
+  const fullDomain =
+    username === "admin" ? domainName : `${username}.${domainName}`;
+
   return Mail.request("_search", "POST", {
     _source: ["read", "date", "from", "to", "subject"],
     query: {
-      query_string: {
-        fields,
-        query: value
+      bool: {
+        must: [
+          {
+            query_string: {
+              fields,
+              query: value
+            }
+          },
+          {
+            query_string: {
+              default_field: "envelopeTo.address",
+              query: `*@${fullDomain}`
+            }
+          }
+        ]
       }
     },
     highlight
@@ -364,7 +382,7 @@ Mail.searchMail = (value, options) => {
   });
 };
 
-Mail.deleteMail = async (id, username) => {
+Mail.deleteMail = async (id) => {
   return Mail.request(`_doc/${id}`, "DELETE");
 };
 
