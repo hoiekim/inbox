@@ -2,8 +2,7 @@ const bcrypt = require("bcrypt");
 const Elastic = require("./components/elastic");
 const Mail = require("./mails");
 
-// const serviceHostname = process.env.DOMAIN || "mydomain";
-const serviceHostname = "localhost:3000";
+const serviceHostname = process.env.DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
@@ -107,7 +106,7 @@ User.sendToken = async (email) => {
     });
   }
 
-  let href = `http://${serviceHostname}/set-info/${email}?t=${token}`;
+  let href = `https://${serviceHostname}/set-info/${email}?t=${token}`;
   if (username) href += `&u=${username}`;
 
   await Mail.sendMail({
