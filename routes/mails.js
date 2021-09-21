@@ -55,10 +55,11 @@ mailsRouter.getMails = async (req, res) => {
   if (!req.session.user) return res.json(new Error("Login is required"));
 
   try {
-    const username = req.params.account
+    const { username } = req.session.user;
+    const usernameInAccount = req.params.account
       .split("@")[1]
       .split(`.${domainName}`)[0];
-    if (req.session.user.username !== username) {
+    if (username !== "admin" && username !== usernameInAccount) {
       throw new Error("Wrong request");
     }
 
