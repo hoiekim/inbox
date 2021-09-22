@@ -4,16 +4,14 @@ const fs = require("fs");
 const sgMail = require("@sendgrid/mail");
 const { htmlToText } = require("html-to-text");
 
-require("dotenv").config();
-
 sgMail.setApiKey(process.env.SENDGRID_KEY);
 
 const domainName = process.env.DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
-const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "elastic";
+const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
-const ELASTIC_INDEX = process.env.ELASTIC_INDEX || "mails";
+const ELASTIC_INDEX = process.env.ELASTIC_INDEX_MAILS || "mails";
 
 const Mail = new Elastic(
   ELASTIC_HOST,
@@ -45,7 +43,8 @@ Mail.sendMail = async (mailData, files) => {
     throw new Error("You need to set your domainName name in the env data");
   }
 
-  const { name, sender, to, cc, bcc, subject, html, inReplyTo } = mailData;
+  const { username, name, sender, to, cc, bcc, subject, html, inReplyTo } =
+    mailData;
   const text = htmlToText(html);
 
   let attachments;
@@ -69,11 +68,15 @@ Mail.sendMail = async (mailData, files) => {
     ];
   }
 
-  const from = { name, email: `${sender}@${domainName}` };
+  const email =
+    username === "admin"
+      ? `${sender}@${domainName}`
+      : `${sender}@${username}.${domainName}`;
+
+  const from = { name, email };
 
   const messageToSend = {
     from,
-    replyTo: from,
     subject,
     text,
     html
@@ -90,7 +93,13 @@ Mail.sendMail = async (mailData, files) => {
     .then((r) => {
       console.info("Sendgrid email sending request succeed");
 
-      if (!to.includes("@" + domainName)) {
+      const toDomain = messageToSend.to.map((e) => {
+        const splitString = e.email.split("@")[1].split(".");
+        const length = splitString.length;
+        return splitString[length - 2] + "." + splitString[length - 1];
+      });
+
+      if (!toDomain.find((e) => e === domainName)) {
         const messageToSave = {
           ...messageToSend,
           date: new Date().toISOString(),
@@ -121,7 +130,7 @@ Mail.sendMail = async (mailData, files) => {
     });
 };
 
-const getAttachmentId = () => {
+const genAttachmentId = () => {
   const id = uuid.v4();
   if (fs.existsSync(`./attachments/${id}`)) {
     console.warn("Duplicate uuid is found");
@@ -129,13 +138,13 @@ const getAttachmentId = () => {
     console.log(`Duplicated path: ./attachments/${id}`);
     console.log("Isn't attachments storage directory too full?");
     console.groupEnd();
-    return getAttachmentId();
+    return genAttachmentId();
   } else return id;
 };
 
 Mail.saveMail = (body) => {
   body.attachments.forEach((e) => {
-    const id = getAttachmentId();
+    const id = genAttachmentId();
     const content = e.content.data || e.content;
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
       if (err) throw new Error(err);
@@ -212,7 +221,7 @@ Mail.getMails = (account, options) => {
 
 Mail.getMailBody = (id) => {
   return Mail.request("_search", "POST", {
-    _source: ["html", "attachments", "messageId"],
+    _source: ["envelopeTo", "html", "attachments", "messageId"],
     query: {
       term: {
         _id: id
@@ -228,7 +237,9 @@ Mail.getMailBody = (id) => {
     });
 };
 
-Mail.getAccounts = () => {
+Mail.getAccounts = (username) => {
+  const fullDomain =
+    username === "admin" ? domainName : `${username}.${domainName}`;
   const accounts = Mail.request("_msearch", "POST", [
     // Query1: All accounts
     {},
@@ -239,7 +250,7 @@ Mail.getAccounts = () => {
           must: {
             query_string: {
               default_field: "envelopeTo.address",
-              query: `*@${domainName}`
+              query: `*@${fullDomain}`
             }
           }
         }
@@ -263,7 +274,7 @@ Mail.getAccounts = () => {
             {
               query_string: {
                 default_field: "envelopeTo.address",
-                query: `*@${domainName}`
+                query: `*@${fullDomain}`
               }
             },
             { term: { read: false } }
@@ -286,7 +297,7 @@ Mail.getAccounts = () => {
       query: {
         query_string: {
           default_field: "from.value.address",
-          query: `*@${domainName}`
+          query: `*@${fullDomain}`
         }
       },
       aggs: {
@@ -322,11 +333,11 @@ Mail.getAccounts = () => {
 
 Mail.markRead = (id) => {
   return Mail.request(`_update/${id}`, "POST", {
-    script: "ctx._source.read = true"
+    doc: { read: true }
   });
 };
 
-Mail.searchMail = (value, options) => {
+Mail.searchMail = (value, username, options) => {
   const { field } = options;
   value = value.replace(/</g, "").replace(/>/g, "");
 
@@ -345,12 +356,27 @@ Mail.searchMail = (value, options) => {
     fields[i] += "^" + (fields.length - i);
   });
 
+  const fullDomain =
+    username === "admin" ? domainName : `${username}.${domainName}`;
+
   return Mail.request("_search", "POST", {
     _source: ["read", "date", "from", "to", "subject"],
     query: {
-      query_string: {
-        fields,
-        query: value
+      bool: {
+        must: [
+          {
+            query_string: {
+              fields,
+              query: value
+            }
+          },
+          {
+            query_string: {
+              default_field: "envelopeTo.address",
+              query: `*@${fullDomain}`
+            }
+          }
+        ]
       }
     },
     highlight
@@ -362,8 +388,17 @@ Mail.searchMail = (value, options) => {
   });
 };
 
-Mail.deleteMail = (id) => {
+Mail.deleteMail = async (id) => {
   return Mail.request(`_doc/${id}`, "DELETE");
+};
+
+Mail.validateMailAddress = (data, domainName) => {
+  if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
+  let isAddressCorrect = !!data.envelopeTo.find((e) => {
+    const parsedAddress = e.address?.split("@");
+    return parsedAddress[parsedAddress.length - 1].includes(domainName);
+  });
+  return isAddressCorrect;
 };
 
 module.exports = Mail;

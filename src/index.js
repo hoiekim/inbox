@@ -1,17 +1,19 @@
 import React, { useState, createContext, useEffect } from "react";
 import ReactDOM from "react-dom";
 import { QueryClient, QueryClientProvider } from "react-query";
+import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
 import Header from "./Header";
 
-import Home from "./Home";
+import SignIn from "./SignIn";
 import Box from "./Box";
+import SignUp from "./SignUp";
 
 import "./index.scss";
 
 const Context = createContext();
 
-let session = false;
+let session;
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,7 +35,7 @@ const App = () => {
     width: window.innerWidth,
     height: window.innerHeight
   });
-  const [isLogin, setIsLogin] = useState(session);
+  const [userInfo, setUserInfo] = useState(session);
   const [isAccountsOpen, setIsAccountsOpen] = useState(true);
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
@@ -50,8 +52,8 @@ const App = () => {
   // stores states to export with `Context`
   const contextValue = {
     viewSize,
-    isLogin,
-    setIsLogin,
+    userInfo,
+    setUserInfo,
     isAccountsOpen,
     setIsAccountsOpen,
     isWriterOpen,
@@ -70,8 +72,20 @@ const App = () => {
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
-          <Header />
-          {isLogin ? <Box /> : <Home />}
+          <BrowserRouter>
+            <Header />
+            <Switch>
+              <Route exact path="/">
+                {userInfo ? <Box /> : <Redirect to="/sign-in" />}
+              </Route>
+              <Route exact path="/sign-in">
+                {userInfo ? <Redirect to="/" /> : <SignIn />}
+              </Route>
+              <Route exact path={["/set-info", "/set-info/:email"]}>
+                {userInfo ? <Redirect to="/" /> : <SignUp />}
+              </Route>
+            </Switch>
+          </BrowserRouter>
         </Context.Provider>
       </QueryClientProvider>
     </React.StrictMode>
@@ -79,7 +93,7 @@ const App = () => {
 };
 
 const mountApp = async () => {
-  session = await fetch("/admin").then((r) => r.json());
+  session = await fetch("/user").then((r) => r.json());
   ReactDOM.render(<App />, document.getElementById("root"));
 };
 

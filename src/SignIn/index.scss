@@ -1,11 +1,15 @@
 h3.greeting {
   text-align: center;
   margin-top: 3rem;
-  margin-bottom: 1rem;
+  margin-bottom: 2rem;
 }
 
-div.info_message {
+.card_footer {
   margin: 3rem 0 1rem;
+}
+
+.info_message {
+  margin: 0.5rem 0;
   display: flex;
   justify-content: center;
   align-items: center;

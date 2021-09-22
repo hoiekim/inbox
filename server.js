@@ -1,3 +1,5 @@
+require("./config")();
+
 const express = require("express");
 const fileupload = require("express-fileupload");
 const session = require("express-session");
@@ -9,9 +11,8 @@ const path = require("path");
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-require("dotenv").config();
-
 const domainName = process.env.DOMAIN || "mydomain";
+const port = process.env.PORT || 3004;
 
 app.use(express.static(path.join(__dirname, "build")));
 app.use(express.json());
@@ -29,10 +30,6 @@ app.use(
   })
 );
 
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
-});
-
 app.get("/api/attachment/:id", mails.getAttachment);
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/markRead/:id", mails.markRead);
@@ -43,11 +40,17 @@ app.post("/api/mails", mails.savePostMail);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
-app.get("/admin", users.check);
-app.post("/admin", users.admin);
-app.delete("/admin", users.logout);
+app.get("/user", users.check);
+app.post("/user/sign-in", users.signIn);
+app.post("/user/send-token", users.sendToken);
+app.post("/user/set-info", users.setUserInfo);
+app.delete("/user", users.signOut);
 
-app.listen(3004, () => {
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "build", "index.html"));
+});
+
+app.listen(port, () => {
   console.info(`${domainName} mail server is listening`);
 });
 
