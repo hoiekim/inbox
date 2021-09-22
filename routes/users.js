@@ -59,10 +59,11 @@ router.setUserInfo = async (req, res) => {
     new Date()
   );
   try {
-    const [result, updatedUserInfo] = await Promise.all([
-      User.setUserInfo(req.body),
-      User.getUser({ email: req.body.email })
-    ]);
+    await User.setUserInfo(req.body);
+    const updatedUserInfo = {
+      email: req.body.email,
+      username: req.body.username
+    };
     req.session.user = updatedUserInfo;
     res.status(200).json(updatedUserInfo);
   } catch (err) {

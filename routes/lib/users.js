@@ -74,6 +74,7 @@ User.signIn = async (credentials) => {
     return null;
   }
 
+  delete userInfo.password;
   return userInfo;
 };
 

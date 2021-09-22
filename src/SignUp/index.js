@@ -57,7 +57,7 @@ const SignUp = () => {
     infoMessage = "🤐 Please set your user information.";
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
-    if (mutation.data === true) infoMessage = "🤗 All set up!";
+    if (mutation.data?.username) infoMessage = "🤗 All set up!";
     if (mutation.data === false) {
       infoMessage = "🤔 Something is wrong. Please try again.";
     }
