@@ -94,7 +94,7 @@ Mail.sendMail = async (mailData, files) => {
       console.info("Sendgrid email sending request succeed");
 
       const toDomain = messageToSend.to.map((e) => {
-        const splitString = e.split("@")[1].split(".");
+        const splitString = e.email.split("@")[1].split(".");
         const length = splitString.length;
         return splitString[length - 2] + "." + splitString[length - 1];
       });
