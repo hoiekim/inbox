@@ -30,7 +30,8 @@ For detailed instruction, please keep reading this document.
    ELASTIC_USERNAME=        // Elasticsearch credentials.
    ELASTIC_PASSWORD=        // Elasticsearch credentials.
    ELASTIC_HOST=            // Elasticsearch credentials.
-   ELASTIC_INDEX=           // Elasticsearch credentials.
+   ELASTIC_INDEX_MAILS=     // Elasticsearch credentials.
+   ELASTIC_INDEX_USERS=     // Elasticsearch credentials.
 
    SENDGRID_KEY=            // API key that is issued by sendgrid.
    ```
