@@ -9,7 +9,9 @@ const Header = () => {
   const { viewSize, userInfo, selectedAccount } = useContext(Context);
   let domainName = process.env.REACT_APP_DOMAIN || "mydomain";
   const username = userInfo?.username;
-  if (username) domainName = username + "." + domainName;
+  if (username && username !== "admin") {
+    domainName = username + "." + domainName;
+  }
 
   const title = !selectedAccount
     ? "@" + domainName
