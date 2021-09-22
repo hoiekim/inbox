@@ -156,7 +156,7 @@ User.sendToken = async (email) => {
 
 User.setUserInfo = async (userInfo) => {
   let { email, password, token, username } = userInfo;
-  if (!email || username || password) {
+  if (!email || !username || !password) {
     throw new Error("Setting userInfo failed because email is not specified.");
   }
 
