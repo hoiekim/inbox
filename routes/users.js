@@ -64,7 +64,7 @@ router.setUserInfo = async (req, res) => {
       User.getUser({ email: req.body.email })
     ]);
     req.session.user = updatedUserInfo;
-    res.status(200).json(result);
+    res.status(200).json(updatedUserInfo);
   } catch (err) {
     console.error(err);
     res.status(500).json(new Error("Failed to set user information"));
