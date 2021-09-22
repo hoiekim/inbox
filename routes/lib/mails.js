@@ -68,15 +68,15 @@ Mail.sendMail = async (mailData, files) => {
     ];
   }
 
-  const from = { name, email: `${sender}@${domainName}` };
-  const replyTo =
+  const email =
     username === "admin"
-      ? from
-      : { name, email: `${sender}@${username}.${domainName}` };
+      ? `${sender}@${domainName}`
+      : `${sender}@${username}.${domainName}`;
+
+  const from = { name, email };
 
   const messageToSend = {
     from,
-    replyTo,
     subject,
     text,
     html
