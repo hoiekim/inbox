@@ -1,4 +1,4 @@
-import React, { useContext, useEffect } from "react";
+import React, { useContext, useEffect, useRef } from "react";
 import { useQuery } from "react-query";
 
 import FileIcon from "../../../FileIcon";
@@ -12,6 +12,8 @@ const MailBody = ({ mailId }) => {
 
   const getMail = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMail);
+
+  const iframeElement = useRef(null);
 
   useEffect(() => {
     if (
@@ -85,12 +87,18 @@ ${data.html}
 `;
 
     const onLoadIframe = (e) => {
-      const iframeDom = e.target;
-      const iframeContent = iframeDom.contentWindow.document.body;
-      const iframeContentHeight = iframeContent.scrollHeight;
-      iframeDom.style.height = `calc(2rem + ${iframeContentHeight + 32}px)`;
-      iframeDom.style.padding = "1rem";
+      try {
+        const iframeDom = e.target;
+        if (!iframeDom) return;
+        const iframeContent = iframeDom.contentWindow.document.body;
+        const iframeContentHeight = iframeContent.scrollHeight;
+        iframeDom.style.height = `calc(2rem + ${iframeContentHeight + 32}px)`;
+      } catch (err) {
+        console.error(err);
+      }
     };
+
+    setTimeout(() => onLoadIframe({ target: iframeElement.current }), 300);
 
     return (
       <div className="text">
@@ -99,9 +107,15 @@ ${data.html}
         ) : (
           <></>
         )}
-        <iframe title={mailId} srcDoc={iframeSrcDoc} onLoad={onLoadIframe} />
+        <iframe
+          title={mailId}
+          srcDoc={iframeSrcDoc}
+          onLoad={onLoadIframe}
+          ref={iframeElement}
+        />
       </div>
     );
   }
 };
+
 export default MailBody;
