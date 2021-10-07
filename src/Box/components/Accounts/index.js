@@ -4,6 +4,7 @@ import { useQuery } from "react-query";
 import SkeletonAccount from "./components/SkeletonAccount";
 import SkeletonCategory from "./components/SkeletonCategory";
 import SearchIcon from "./components/SearchIcon";
+import RefreshIcon from "./components/RefreshIcon";
 import LogoutIcon from "./components/LogoutIcon";
 
 import { Context, categories } from "../../..";
@@ -147,6 +148,11 @@ const Accounts = () => {
       }
     };
 
+    const onClickRefresh = () => {
+      init = false;
+      query.refetch();
+    };
+
     const onClickLogout = () => {
       fetch("/user", { method: "DELETE" })
         .then((r) => r.json())
@@ -164,7 +170,10 @@ const Accounts = () => {
           <div>{categoryComponents}</div>
           <div>
             <div className="flex">
-              <LogoutIcon className="cursor" onClick={onClickLogout} />
+              <RefreshIcon onClick={onClickRefresh} />
+            </div>
+            <div className="flex">
+              <LogoutIcon onClick={onClickLogout} />
             </div>
           </div>
         </div>
@@ -186,7 +195,9 @@ const Accounts = () => {
               />
             </div>
           ) : null}
-          {accountComponents}
+          {accountComponents?.length
+            ? accountComponents
+            : "This category is empty"}
         </div>
       </div>
     );
