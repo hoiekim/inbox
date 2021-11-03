@@ -99,6 +99,15 @@ Mail.sendMail = async (mailData, files) => {
         return splitString[length - 2] + "." + splitString[length - 1];
       });
 
+      attachments.forEach((e) => {
+        const id = genAttachmentId();
+        const content = e.content.data || e.content;
+        fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
+          if (err) throw new Error(err);
+        });
+        e.content.data = id;
+      });
+
       if (!toDomain.find((e) => e === domainName)) {
         const messageToSave = {
           ...messageToSend,
