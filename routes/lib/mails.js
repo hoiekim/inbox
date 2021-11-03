@@ -158,7 +158,7 @@ Mail.saveMail = (body) => {
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
       if (err) throw new Error(err);
     });
-    e.content.data = id;
+    e.content = { data: id };
   });
 
   delete body.connection;
