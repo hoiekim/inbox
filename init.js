@@ -4,7 +4,15 @@ const Mail = require("./routes/lib/mails");
 const User = require("./routes/lib/users");
 
 Mail.initialize({
-  attachments: { type: "object" },
+  attachments: {
+    type: "object",
+    properties: {
+      content: {
+        type: "object",
+        properties: { data: { type: "keyword" } }
+      }
+    }
+  },
   "cc.value.address": { type: "keyword" },
   date: { type: "date" },
   "from.value.address": { type: "keyword" },
