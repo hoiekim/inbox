@@ -54,8 +54,7 @@ Mail.sendMail = async (mailData, files) => {
 
     files.forEach((e) => {
       const id = genAttachmentId();
-      const content = e.data;
-      fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
+      fs.writeFile(`./attachments/${id}`, e.data, (err) => {
         if (err) throw new Error(err);
       });
 
@@ -73,8 +72,7 @@ Mail.sendMail = async (mailData, files) => {
     });
   } else if (files?.name) {
     const id = genAttachmentId();
-    const content = files.data;
-    fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
+    fs.writeFile(`./attachments/${id}`, files.data, (err) => {
       if (err) throw new Error(err);
     });
 
