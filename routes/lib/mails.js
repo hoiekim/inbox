@@ -130,7 +130,7 @@ Mail.sendMail = async (mailData, files) => {
         const messageToSave = {
           ...messageToSend,
           date: new Date().toISOString(),
-          attachments: attachments || [],
+          attachments: attachmentsToSave || [],
           messageId: `<${r[0].headers["x-message-id"]}@${domainName}>`,
           from: {
             value: { name, address: from.email },
