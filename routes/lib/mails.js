@@ -47,23 +47,50 @@ Mail.sendMail = async (mailData, files) => {
     mailData;
   const text = htmlToText(html);
 
-  let attachments;
+  let attachments, attachmentsToSave;
   if (Array.isArray(files)) {
-    attachments = files.map((e) => {
-      return {
+    attachments = [];
+    attachmentsToSave = [];
+
+    files.forEach((e) => {
+      const id = genAttachmentId();
+      const content = e.data;
+      fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
+        if (err) throw new Error(err);
+      });
+
+      attachments.push({
         filename: e.name,
         content: e.data.toString("base64"),
         type: e.type,
         disposition: "attachment"
-      };
+      });
+
+      attachmentsToSave.push({
+        content: { data: id },
+        filename: e.name
+      });
     });
   } else if (files?.name) {
+    const id = genAttachmentId();
+    const content = files.data;
+    fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
+      if (err) throw new Error(err);
+    });
+
     attachments = [
       {
         filename: files.name,
         content: files.data.toString("base64"),
         type: files.type,
         disposition: "attachment"
+      }
+    ];
+
+    attachmentsToSave = [
+      {
+        content: { data: id },
+        filename: files.name
       }
     ];
   }
@@ -97,15 +124,6 @@ Mail.sendMail = async (mailData, files) => {
         const splitString = e.email.split("@")[1].split(".");
         const length = splitString.length;
         return splitString[length - 2] + "." + splitString[length - 1];
-      });
-
-      attachments.forEach((e) => {
-        const id = genAttachmentId();
-        const content = e.content.data || e.content;
-        fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
-          if (err) throw new Error(err);
-        });
-        e.content.data = id;
       });
 
       if (!toDomain.find((e) => e === domainName)) {
