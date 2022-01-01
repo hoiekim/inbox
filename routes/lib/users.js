@@ -4,7 +4,7 @@ const Mail = require("./mails");
 
 const serviceHostname = process.env.APP_DOMAIN || "mydomain";
 
-const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://127.0.0.1:9200";
+const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://elastic:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_USERS || "users";

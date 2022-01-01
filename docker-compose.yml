@@ -2,13 +2,14 @@
 version: "3.3"
 
 services:
-  build:
+  modules:
     image: node:14.17.6-alpine3.13
     volumes:
       - ./:/app
       - node_modules:/app/node_modules
     command: sh -c "npm i"
     working_dir: /app
+    profiles: ["modules"]
   app:
     image: node:14.17.6-alpine3.13
     environment:
@@ -21,7 +22,7 @@ services:
     links:
       - elastic
     depends_on:
-      - build
+      - modules
       - elastic
     restart: always
     volumes:
