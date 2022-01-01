@@ -92,6 +92,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
     } catch (err) {
       console.error("Initializing index has failed:", INDEX);
       console.error(err);
+      throw new Error(err);
     }
   };
 

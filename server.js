@@ -1,5 +1,7 @@
 require("./config")();
 
+if (process.env.INIT) require("./init")();
+
 const express = require("express");
 const fileupload = require("express-fileupload");
 const session = require("express-session");
