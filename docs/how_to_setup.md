@@ -5,7 +5,7 @@ If these instructions are outdated, please raise an issue or send us a Pull Requ
 You need these to use Inbox:
 
 - A domain name
-- A server to run Inbox (Backend & Frontend server)
+- A server to run Inbox
 
 If you want to send emails using Inbox. You need a 3rd party email sending service.(Currently we're using [Sendgrid](https://sendgrid.com/))
 
@@ -17,7 +17,7 @@ For detailed instruction, please keep reading this document.
    ```
    git clone https://github.com/garageScript/inbox.git
    ```
-2. Setup environment variables in `.env` file
+2. Setup environment variables in `.env.development` and `.env.production` file
 
    ```
    DOMAIN=                  // Domain name to use when sending mails.
