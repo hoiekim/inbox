@@ -22,7 +22,6 @@ services:
     links:
       - elastic
     depends_on:
-      - modules
       - elastic
     restart: always
     volumes:
