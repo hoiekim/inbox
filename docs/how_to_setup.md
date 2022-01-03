@@ -72,10 +72,10 @@ Following instruction assumes that you have docker and docker-compose installed 
 
    ```
    (Production mode)
-   INIT=1 NODE_ENV=production sudo -E docker-compose up
+   INIT= NODE_ENV=production sudo -E docker-compose up
 
    (Development mode)
-   INIT=1 NODE_ENV=development sudo -E docker-compose up
+   INIT= NODE_ENV=development sudo -E docker-compose up
    ```
    
    - This command skips initializing elasticsearch indices and installing node modules.
