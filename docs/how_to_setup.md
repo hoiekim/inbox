@@ -58,14 +58,10 @@ Following instruction assumes that you have docker and docker-compose installed 
 
    ```
    (Production mode)
-   INIT=1
-   NODE_ENV=production
-   sudo -E docker-compose --profile modules up
+   INIT=1 NODE_ENV=production sudo -E docker-compose --profile modules up
 
    (Development mode)
-   INIT=1
-   NODE_ENV=development
-   sudo -E docker-compose --profile modules up
+   INIT=1 NODE_ENV=development sudo -E docker-compose --profile modules up
    ```
 
    - When you run app with `INIT` option, your elasticsearch database will be initialized.
@@ -76,14 +72,10 @@ Following instruction assumes that you have docker and docker-compose installed 
 
    ```
    (Production mode)
-   INIT=
-   NODE_ENV=production
-   sudo -E docker-compose up
+   INIT=1 NODE_ENV=production sudo -E docker-compose up
 
    (Development mode)
-   INIT=
-   NODE_ENV=development
-   sudo -E docker-compose up
+   INIT=1 NODE_ENV=development sudo -E docker-compose up
    ```
    
    - This command skips initializing elasticsearch indices and installing node modules.
@@ -93,4 +85,5 @@ Following instruction assumes that you have docker and docker-compose installed 
 ## 5. Enjoy!
 
 Default port number is 3004. So you can connect to Inbox at http://(your-server-ip):3004 (use port number 3000 for development mode)
+
 Admin username is `admin`, password is equal to environment variable called `ADMIN_PW`
