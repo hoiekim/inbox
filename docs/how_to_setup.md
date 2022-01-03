@@ -17,7 +17,11 @@ For detailed instruction, please keep reading this document.
    ```
    git clone https://github.com/garageScript/inbox.git
    ```
-2. Setup environment variables in `.env.development` and `.env.production` file
+2. Install Node packages
+   ```
+   cd inbox && npm install
+   ```
+3. Setup environment variables in `.env.development` and `.env.production` file
 
    ```
    DOMAIN=                  // Domain name to use when sending mails.
