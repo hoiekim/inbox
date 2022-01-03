@@ -22,9 +22,9 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
           "content-type": "application/json"
         }
       })
-      if (healthStatus !== 200) throw new Error()
+      if (healthStatus < 200 || 300 <= healthStatus) throw new Error()
     } catch (err) {
-      console.info("Helathcheck falied, restarting in 10 seconds.")
+      console.info("Healthcheck falied, restarting initialization in 20 seconds.")
       return new Promise((res, rej) => setTimeout(() => res(this.initialize(schema)), 10000))
     }
     
