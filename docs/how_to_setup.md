@@ -58,10 +58,14 @@ Following instruction assumes that you have docker and docker-compose installed 
 
    ```
    (Production mode)
-   sudo INIT=1 NODE_ENV=production docker-compose --profile modules up
+   INIT=1
+   NODE_ENV=production
+   sudo docker-compose --profile modules up
 
    (Development mode)
-   sudo INIT=1 NODE_ENV=development docker-compose --profile modules up
+   INIT=1
+   NODE_ENV=development
+   sudo docker-compose --profile modules up
    ```
 
    - When you run app with `INIT` option, your elasticsearch database will be initialized.
@@ -72,10 +76,14 @@ Following instruction assumes that you have docker and docker-compose installed 
 
    ```
    (Production mode)
-   sudo INIT= NODE_ENV=production docker-compose up
+   INIT=
+   NODE_ENV=production
+   sudo docker-compose up
 
    (Development mode)
-   sudo INIT= NODE_ENV=development docker-compose up
+   INIT=
+   NODE_ENV=development
+   sudo docker-compose up
    ```
    
    - This command skips initializing elasticsearch indices and installing node modules.
