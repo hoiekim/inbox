@@ -84,6 +84,6 @@ Following instruction assumes that you have docker and docker-compose installed 
 
 ## 5. Enjoy!
 
-Default port number is 3004. So you can connect to Inbox at http://(your-server-ip):3004 (use port number 3000 for development mode)
+Default port number is 3004. So you can connect to Inbox at http://(your-server-ip):3004 (use port number 3005 for development mode)
 
 Admin username is `admin`, password is equal to environment variable called `ADMIN_PW`
