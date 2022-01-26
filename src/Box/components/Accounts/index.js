@@ -31,7 +31,8 @@ const Accounts = () => {
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getAccounts, {
     onSuccess: (data) => {
-      if (data.new?.length && !init) setSelectedCategory("new");
+      const newMailsExists = data.received.find((e) => e.unread_doc_count);
+      if (newMailsExists && !init) setSelectedCategory("new");
       init = true;
     }
   });
@@ -72,13 +73,15 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const unreadAccounts = query.data?.new.sort((a, b) =>
+    const accountsByDate = [...query.data.received].sort((a, b) => {
+      const dateA = new Date(a.updated);
+      const dateB = new Date(b.updated);
+      return dateB - dateA;
+    });
+    const accountsByAbc = [...query.data.received].sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
-    const allAccounts = query.data?.all.sort((a, b) =>
-      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
-    );
-    const sentAccounts = query.data?.sent.sort((a, b) =>
+    const sentAccounts = query.data.sent.sort((a, b) =>
       a.key > b.key ? 1 : b.key > a.key ? -1 : 0
     );
 
@@ -105,10 +108,10 @@ const Accounts = () => {
 
     let accountComponents;
 
-    if (selectedCategory === "new" && unreadAccounts) {
-      accountComponents = unreadAccounts.map(renderAccount);
-    } else if (selectedCategory === "all" && allAccounts) {
-      accountComponents = allAccounts.map(renderAccount);
+    if (selectedCategory === "new" && accountsByDate) {
+      accountComponents = accountsByDate.map(renderAccount);
+    } else if (selectedCategory === "all" && accountsByAbc) {
+      accountComponents = accountsByAbc.map(renderAccount);
     } else if (selectedCategory === "sent" && sentAccounts) {
       accountComponents = sentAccounts.map(renderAccount);
     } else if (selectedCategory === "search" && searchHistory) {

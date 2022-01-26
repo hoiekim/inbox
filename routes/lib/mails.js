@@ -268,7 +268,7 @@ Mail.getAccounts = (username) => {
   const fullDomain =
     username === "admin" ? domainName : `${username}.${domainName}`;
   const accounts = Mail.request("_msearch", "POST", [
-    // Query1: All accounts
+    // Query1: Accounts that have received mails
     {},
     {
       size: 0,
@@ -286,38 +286,22 @@ Mail.getAccounts = (username) => {
         address: {
           terms: {
             field: "envelopeTo.address",
-            size: 10000
-          }
-        }
-      }
-    },
-    // Query2: Accounts that have new mails
-    {},
-    {
-      size: 0,
-      query: {
-        bool: {
-          must: [
-            {
-              query_string: {
-                default_field: "envelopeTo.address",
-                query: `*@${fullDomain}`
+            size: 10000,
+            order: { updated: "desc" }
+          },
+          aggs: {
+            updated: { max: { field: "date" } },
+            read: {
+              terms: {
+                field: "read",
+                size: 10000
               }
-            },
-            { term: { read: false } }
-          ]
-        }
-      },
-      aggs: {
-        address: {
-          terms: {
-            field: "envelopeTo.address",
-            size: 10000
+            }
           }
         }
       }
     },
-    // Query3: Accounts that have sent mails
+    // Query2: Accounts that have sent mails
     {},
     {
       size: 0,
@@ -340,21 +324,17 @@ Mail.getAccounts = (username) => {
 
   return accounts.then((r) => {
     if (r.error) throw new Error(JSON.stringify(r.error));
-
-    const [allAccounts, unreadAccounts, sentAccounts] = r.responses.map(
+    const [received, sent] = r.responses.map(
       (e) => e.aggregations?.address.buckets || []
     );
 
-    allAccounts.forEach((e) => {
-      e.unread_doc_count =
-        unreadAccounts.find((f) => e.key === f.key)?.doc_count || 0;
+    received.forEach((e) => {
+      e.unread_doc_count = e.read.buckets.find((f) => !f.key)?.doc_count || 0;
+      e.updated = new Date(e.updated.value);
+      delete e.read;
     });
 
-    unreadAccounts.forEach((e) => {
-      e.unread_doc_count = e.doc_count;
-    });
-
-    return { new: unreadAccounts, all: allAccounts, sent: sentAccounts };
+    return { received, sent };
   });
 };
 
