@@ -1,3 +1,17 @@
+@import "../variables.scss";
+
+@media (prefers-color-scheme: light) {
+  #title_bar {
+    background-color: adjust-color($color-light, $lightness: -20%);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  #title_bar {
+    background-color: adjust-color($color-dark, $lightness: -8%);
+  }
+}
+
 #title_bar {
   position: fixed;
   top: 0;

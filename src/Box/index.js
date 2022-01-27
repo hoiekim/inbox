@@ -20,29 +20,34 @@ const Box = () => {
   };
 
   const mainPaneStyle = { height: viewSize.height - 55 + "px" };
-  const sidePaneStyle = { width: "250px", height: viewSize.height + "px" };
-  const writerStyle = { height: viewSize.height - 65 + "px" };
+  const sidePaneStyle = { width: "350px", height: viewSize.height + "px" };
+  const writerStyle = {
+    width: "calc(100vw - 1rem)",
+    height: viewSize.height - 65 + "px"
+  };
 
   if (viewSize.width > 1050) {
-    mainPaneStyle.width = "calc(100vw - 370px)";
-    mainPaneStyle.left = "252px";
+    mainPaneStyle.width = "calc(100vw - 470px)";
+    mainPaneStyle.left = "352px";
     sidePaneStyle.left = 0;
-    writerStyle.width = "calc(100vw - 400px)";
   } else if (viewSize.width > 750) {
     mainPaneStyle.width = "calc(100vw - 252px)";
-    mainPaneStyle.left = "252px";
+    mainPaneStyle.left = "352px";
     sidePaneStyle.left = 0;
-    writerStyle.width = "calc(100vw - 3rem)";
   } else {
     mainPaneStyle.width = "100vw";
     mainPaneStyle.left = 0;
     mainPaneStyle.padding = "0";
-    writerStyle.width = "calc(100vw - 1rem)";
+    writerStyle.width = "100vw";
   }
 
   if (isAccountsOpen) {
-    mainPaneStyle.left = "252px";
+    mainPaneStyle.left = "352px";
     sidePaneStyle.left = 0;
+    if (viewSize.width <= 1050 && viewSize.width > 750) {
+      mainPaneStyle.left = "252px";
+      sidePaneStyle.width = "250px";
+    }
   } else {
     if (viewSize.width > 1050) {
       mainPaneStyle.width = "calc(100vw - 118px)";
@@ -51,15 +56,15 @@ const Box = () => {
       mainPaneStyle.width = "100vw";
       mainPaneStyle.left = 0;
     }
-    sidePaneStyle.left = "-250px";
+    sidePaneStyle.left = "-350px";
   }
 
   if (isWriterOpen) {
     writerStyle.right = 0;
   } else if (viewSize.width > 1050) {
-    writerStyle.right = "calc(500px - 100vw)";
+    writerStyle.right = "calc(115px - 100vw)";
   } else {
-    writerStyle.right = "calc(1rem - 100vw)";
+    writerStyle.right = "-100vw";
   }
 
   return (

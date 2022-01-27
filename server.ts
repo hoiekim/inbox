@@ -1,14 +1,17 @@
-require("./config")();
+import config from "./config";
+config();
 
-if (process.env.INIT) require("./init")();
+import init from "./init";
+if (process.env.INIT) init();
 
-const express = require("express");
-const fileupload = require("express-fileupload");
-const session = require("express-session");
-const mails = require("./routes/mails");
-const users = require("./routes/users");
+import express from "express";
+import fileupload from "express-fileupload";
+import session from "express-session";
+import mails from "./routes/mails";
+import users from "./routes/users";
+import path from "path";
+
 const nodeMailin = require("node-mailin");
-const path = require("path");
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));
@@ -21,7 +24,7 @@ app.use(express.json());
 app.use(fileupload());
 app.use(
   session({
-    secret: process.env.SECRET,
+    secret: process.env.SECRET || "secret",
     resave: true,
     saveUninitialized: false,
     rolling: true,
@@ -57,7 +60,6 @@ app.listen(port, () => {
 });
 
 nodeMailin.on("message", mails.saveMail);
-
 nodeMailin.on("error", console.error);
 
 nodeMailin.start({

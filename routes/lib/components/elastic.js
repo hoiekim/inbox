@@ -14,20 +14,24 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
 
   this.initialize = async (schema) => {
     console.info("Initializing index:", INDEX);
-    
+
     try {
       const healthStatus = await fetch(HOST, {
         headers: {
           Authorization,
           "content-type": "application/json"
         }
-      })
-      if (healthStatus < 200 || 300 <= healthStatus) throw new Error()
+      });
+      if (healthStatus < 200 || 300 <= healthStatus) throw new Error();
     } catch (err) {
-      console.info("Healthcheck falied, restarting initialization in 20 seconds.")
-      return new Promise((res, rej) => setTimeout(() => res(this.initialize(schema)), 10000))
+      console.info(
+        "Healthcheck falied, restarting initialization in 20 seconds."
+      );
+      return new Promise((res, rej) =>
+        setTimeout(() => res(this.initialize(schema)), 10000)
+      );
     }
-    
+
     try {
       // Bellow assumes that user has access authentication to "INDEX-*"
       const tempIndex = INDEX + "-temp-" + Math.floor(Math.random() * 10000);

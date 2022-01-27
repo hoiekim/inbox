@@ -204,14 +204,12 @@ ${replyData.html}
     return (
       <div
         key={i}
-        className="attachment"
+        className="attachment cursor"
         title="Click to remove"
         onClick={onClickRemove}
       >
-        <div className="attachment-text cursor">
-          <FileIcon />
-          <span>{file.name}</span>
-        </div>
+        <FileIcon />
+        <span>{file.name}</span>
       </div>
     );
   });
@@ -225,9 +223,9 @@ ${replyData.html}
             <EraserIcon className="cursor" onClick={onClickEraserIcon} />
           </span>
         </div>
-        <div className="margin_box">
+        <div className="margin_box inputBox-flex">
           <input
-            className="writer-short from_name"
+            className="writer-short"
             placeholder="name"
             autoComplete="off"
             value={name}

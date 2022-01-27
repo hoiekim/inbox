@@ -7,14 +7,17 @@ import SearchIcon from "./components/SearchIcon";
 import RefreshIcon from "./components/RefreshIcon";
 import LogoutIcon from "./components/LogoutIcon";
 
-import { Context, categories } from "../../..";
+import { Context, categories, ContextType } from "src";
+import { Account, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";
 
-let searchDelay, init;
+let searchDelay: NodeJS.Timeout, init: boolean;
 
 const Accounts = () => {
-  const [searchInputDom, setSearchInputDom] = useState(null);
+  const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
+    null
+  );
 
   const {
     setUserInfo,
@@ -24,12 +27,12 @@ const Accounts = () => {
     setSelectedCategory,
     searchHistory,
     setSearchHistory
-  } = useContext(Context);
+  } = useContext(Context) as ContextType;
 
   const queryUrl = "/api/accounts";
 
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getAccounts, {
+  const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
     onSuccess: (data) => {
       const newMailsExists = data.received.find((e) => e.unread_doc_count);
       if (newMailsExists && !init) setSelectedCategory("new");
@@ -73,19 +76,9 @@ const Accounts = () => {
   }
 
   if (query.isSuccess) {
-    const accountsByDate = [...query.data.received].sort((a, b) => {
-      const dateA = new Date(a.updated);
-      const dateB = new Date(b.updated);
-      return dateB - dateA;
-    });
-    const accountsByAbc = [...query.data.received].sort((a, b) =>
-      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
-    );
-    const sentAccounts = query.data.sent.sort((a, b) =>
-      a.key > b.key ? 1 : b.key > a.key ? -1 : 0
-    );
+    const { received = [], sent = [] } = query.data || {};
 
-    const renderAccount = (data, i) => {
+    const renderAccount = (data: Account, i: number) => {
       const accountName = data.key;
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
@@ -106,14 +99,25 @@ const Accounts = () => {
       );
     };
 
-    let accountComponents;
+    let accountComponents: JSX.Element[] = [];
 
-    if (selectedCategory === "new" && accountsByDate) {
-      accountComponents = accountsByDate.map(renderAccount);
-    } else if (selectedCategory === "all" && accountsByAbc) {
-      accountComponents = accountsByAbc.map(renderAccount);
-    } else if (selectedCategory === "sent" && sentAccounts) {
-      accountComponents = sentAccounts.map(renderAccount);
+    if (selectedCategory === "new") {
+      accountComponents = received
+        .filter((e) => e.unread_doc_count)
+        .sort((a, b) => {
+          const dateA = +new Date(a.updated);
+          const dateB = +new Date(b.updated);
+          return dateB - dateA;
+        })
+        .map(renderAccount);
+    } else if (selectedCategory === "all") {
+      accountComponents = received
+        .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
+        .map(renderAccount);
+    } else if (selectedCategory === "sent") {
+      accountComponents = sent
+        .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
+        .map(renderAccount);
     } else if (selectedCategory === "search" && searchHistory) {
       accountComponents = searchHistory.map(renderAccount);
     }
@@ -126,6 +130,7 @@ const Accounts = () => {
       const classes = [];
       if (selectedCategory === e) classes.push("clicked");
       if (e === "search") classes.push("flex");
+
       return (
         <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
           {e === "search" ? (
@@ -137,16 +142,27 @@ const Accounts = () => {
       );
     });
 
-    const onChangeSearch = (e) => {
+    const onChangeSearch: React.ChangeEventHandler<HTMLInputElement> = (e) => {
       clearTimeout(searchDelay);
       searchDelay = setTimeout(() => {
         setSelectedAccount(e.target.value);
       }, 500);
     };
 
-    const onKeyDownSearch = (e) => {
+    const onKeyDownSearch: React.KeyboardEventHandler<HTMLInputElement> = (
+      e: any
+    ) => {
+      console.log(e);
       if (e.key === "Enter") {
-        setSearchHistory([{ key: e.target.value }, ...searchHistory]);
+        setSearchHistory([
+          {
+            key: e.target.value,
+            doc_count: 0,
+            unread_doc_count: 0,
+            updated: new Date()
+          },
+          ...searchHistory
+        ]);
         setSelectedAccount(e.target.value);
       }
     };
@@ -161,7 +177,7 @@ const Accounts = () => {
         .then((r) => r.json())
         .then((r) => {
           if (r === true) {
-            setUserInfo(false);
+            setUserInfo(undefined);
             setSelectedAccount("");
           }
         });

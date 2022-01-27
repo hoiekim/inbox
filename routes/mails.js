@@ -181,4 +181,4 @@ mailsRouter.searchMail = async (req, res) => {
   }
 };
 
-module.exports = mailsRouter;
+export default mailsRouter;

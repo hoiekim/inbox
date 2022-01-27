@@ -32,13 +32,8 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = () => {
-  const {
-    isWriterOpen,
-    setReplyData,
-    selectedAccount,
-    setSelectedAccount,
-    selectedCategory
-  } = useContext(Context);
+  const { isWriterOpen, setReplyData, selectedAccount, selectedCategory } =
+    useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
   const [openedKebab, setOpenedKebab] = useState("");
@@ -47,32 +42,16 @@ const MailsRendered = () => {
     setOpenedKebab("");
   }, [selectedAccount]);
 
-  const queryOptions = {};
-
   let queryUrl;
 
   if (selectedCategory === "search") {
     queryUrl = `/api/search/${encodeURIComponent(selectedAccount)}`;
   } else {
     queryUrl = `/api/mails/${selectedAccount}?${selectedCategory}=1`;
-
-    const accountsData = queryClient.getQueryData("/api/accounts");
-    const foundAccount = accountsData[selectedCategory]?.find((e) => {
-      return e.key === selectedAccount;
-    });
-
-    if (!foundAccount) {
-      queryOptions.enabled = false;
-    }
   }
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getMails, queryOptions);
-
-  if (query.isIdle) {
-    setSelectedAccount("");
-    return <></>;
-  }
+  const query = useQuery(queryUrl, getMails);
 
   if (query.isLoading) {
     return (
@@ -128,21 +107,7 @@ const MailsRendered = () => {
           return account.key === selectedAccount;
         });
 
-        if (foundData) {
-          foundData.unread_doc_count -= 1;
-
-          if (!foundData.unread_doc_count) {
-            let foundIndex;
-
-            newData.new.find((account, i) => {
-              const found = account.key === selectedAccount;
-              if (found) foundIndex = i;
-              return found;
-            });
-
-            if (foundIndex !== undefined) newData.new.splice(foundIndex, 1);
-          }
-        }
+        if (foundData?.unread_doc_count > 0) foundData.unread_doc_count -= 1;
 
         const queryUrl = `/api/mails/${selectedAccount}?${category}=1`;
 

@@ -1,9 +1,10 @@
-require("./config")();
+import config from "./config";
+config();
 
-const Mail = require("./routes/lib/mails");
-const User = require("./routes/lib/users");
+import Mail from "./routes/lib/mails";
+import User from "./routes/lib/users";
 
-module.exports = () => {
+const init = () => {
   Mail.initialize({
     attachments: {
       type: "object",
@@ -64,3 +65,5 @@ module.exports = () => {
     expiry: { type: "date" }
   });
 };
+
+export default init;

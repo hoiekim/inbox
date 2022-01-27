@@ -9,25 +9,77 @@ import SignIn from "./SignIn";
 import Box from "./Box";
 import SignUp from "./SignUp";
 
+import { Account } from "routes/lib/mails";
+
 import "./index.scss";
 
-const Context = createContext();
+interface UserInfoType {
+  username: string;
+}
 
-let session;
+export interface SearchHistory {}
 
-const queryClient = new QueryClient({
+export interface ContextType {
+  viewSize: {
+    width: number;
+    height: number;
+  };
+  userInfo: UserInfoType | undefined;
+  setUserInfo: React.Dispatch<React.SetStateAction<ContextType["userInfo"]>>;
+  isAccountsOpen: boolean;
+  setIsAccountsOpen: React.Dispatch<
+    React.SetStateAction<ContextType["isAccountsOpen"]>
+  >;
+  isWriterOpen: boolean;
+  setIsWriterOpen: React.Dispatch<
+    React.SetStateAction<ContextType["isWriterOpen"]>
+  >;
+  replyData: any;
+  setReplyData: React.Dispatch<React.SetStateAction<ContextType["replyData"]>>;
+  selectedAccount: string;
+  setSelectedAccount: React.Dispatch<
+    React.SetStateAction<ContextType["selectedAccount"]>
+  >;
+  selectedCategory: string;
+  setSelectedCategory: React.Dispatch<
+    React.SetStateAction<ContextType["selectedCategory"]>
+  >;
+  searchHistory: Account[];
+  setSearchHistory: React.Dispatch<
+    React.SetStateAction<ContextType["searchHistory"]>
+  >;
+}
+
+export const Context = createContext<ContextType | null>(null);
+
+let session: UserInfoType | undefined;
+
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       cacheTime: Infinity,
       refetchOnWindowFocus: false,
-      refetchOnmount: false,
-      refetchOnReconnect: false,
+      refetchOnMount: false,
+      refetchOnReconnect: true,
       retry: false
     }
   }
 });
 
-const categories = ["new", "all", "sent", "search"];
+export const categories = ["new", "all", "sent", "search"];
+
+export enum SortBy {
+  Date = "SORT_BY_DATE",
+  Size = "SORT_BY_SIZE",
+  Name = "SORT_BY_NAME"
+}
+
+export enum Category {
+  NewMails = "NEW_MAILS",
+  AllMails = "ALL_MAILS",
+  SavedMails = "SAVED_MAILS",
+  SentMails = "SENT_MAILS"
+}
 
 const App = () => {
   // defines states used for UI control
@@ -41,7 +93,9 @@ const App = () => {
   const [replyData, setReplyData] = useState({});
   const [selectedAccount, setSelectedAccount] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-  const [searchHistory, setSearchHistory] = useState([]);
+  const [searchHistory, setSearchHistory] = useState<
+    ContextType["searchHistory"]
+  >([]);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -98,5 +152,3 @@ const mountApp = async () => {
 };
 
 mountApp();
-
-export { Context, categories, queryClient };

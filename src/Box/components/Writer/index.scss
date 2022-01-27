@@ -1,6 +1,10 @@
 .writer {
   height: 100%;
 
+  span {
+    white-space: nowrap;
+  }
+
   &.shadow {
     box-shadow: rgb(0 0 0 / 10%) -10px 10px 10px 10px;
   }
@@ -23,12 +27,18 @@
     background-color: white;
   }
 
-  .attachment-text {
+  .attachment {
     z-index: 11;
     position: relative;
     overflow: hidden;
     transition: 150ms;
     white-space: nowrap;
+    margin: 0 0.4rem 0.4rem 0;
+    padding: 0.4rem;
+
+    svg {
+      margin-right: 0.3rem;
+    }
   }
 
   .fieldName {
@@ -42,17 +52,15 @@
     font-size: 16px;
   }
 
-  .from_name {
-    margin-right: 1rem;
-  }
-
   .from_address {
-    display: inline-block;
     margin: 0.2rem 0;
+    display: inline-block;
+    min-width: 210px;
   }
 
   input.writer-short {
-    width: 100px;
+    width: max(90px, 20vw);
+    max-width: 200px;
   }
 
   input.writer-long {
@@ -68,6 +76,8 @@
 
   .inputBox-flex {
     display: flex;
+    justify-content: flex-start;
+    align-items: center;
 
     > :nth-child(2) {
       margin-left: 0.5rem;

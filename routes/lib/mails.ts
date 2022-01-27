@@ -1,10 +1,13 @@
-const Elastic = require("./components/elastic");
-const uuid = require("uuid");
-const fs = require("fs");
-const sgMail = require("@sendgrid/mail");
-const { htmlToText } = require("html-to-text");
+import Elastic from "./components/elastic";
+import uuid from "uuid";
+import fs from "fs";
+import sgMail from "@sendgrid/mail";
+import { EmailData } from "@sendgrid/helpers/classes/email-address";
+import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
+import { htmlToText } from "html-to-text";
+import { FileArray, UploadedFile } from "express-fileupload";
 
-sgMail.setApiKey(process.env.SENDGRID_KEY);
+sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
 const domainName = process.env.DOMAIN || "mydomain";
 
@@ -13,15 +16,15 @@ const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_MAILS || "mails";
 
-const Mail = new Elastic(
+export const { request } = new Elastic(
   ELASTIC_HOST,
   ELASTIC_USERNAME,
   ELASTIC_PASSWORD,
   ELASTIC_INDEX
 );
 
-const addressParser = (str) => {
-  if (!str) return null;
+const addressParser = (str: string) => {
+  if (!str) return;
 
   const result = str
     .split(",")
@@ -33,12 +36,24 @@ const addressParser = (str) => {
       return { email: e };
     });
 
-  if (!result.length) return null;
+  if (!result.length) return;
 
   return result;
 };
 
-Mail.sendMail = async (mailData, files) => {
+export interface MailToSend {
+  username: string;
+  name: string;
+  sender: string;
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  html: string;
+  inReplyTo: string;
+}
+
+export const sendMail = async (mailData: MailToSend, files: FileArray) => {
   if (!domainName) {
     throw new Error("You need to set your domainName name in the env data");
   }
@@ -47,53 +62,32 @@ Mail.sendMail = async (mailData, files) => {
     mailData;
   const text = htmlToText(html);
 
-  let attachments, attachmentsToSave;
-  if (Array.isArray(files)) {
-    attachments = [];
-    attachmentsToSave = [];
+  const attachments: AttachmentData[] = [];
+  const attachmentsToSave: (AttachmentData | { content: { data: string } })[] =
+    [];
 
-    files.forEach((e) => {
-      const id = genAttachmentId();
-      const content = e.data;
-      fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
-        if (err) throw new Error(err);
-      });
-
-      attachments.push({
-        filename: e.name,
-        content: e.data.toString("base64"),
-        type: e.type,
-        disposition: "attachment"
-      });
-
-      attachmentsToSave.push({
-        content: { data: id },
-        filename: e.name
-      });
-    });
-  } else if (files?.name) {
+  const parseFile = (e: UploadedFile) => {
     const id = genAttachmentId();
-    const content = files.data;
+    const content = e.data;
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
-      if (err) throw new Error(err);
+      if (err) throw err;
     });
 
-    attachments = [
-      {
-        filename: files.name,
-        content: files.data.toString("base64"),
-        type: files.type,
-        disposition: "attachment"
-      }
-    ];
+    attachments.push({
+      filename: e.name,
+      content: e.data.toString("base64"),
+      type: e.mimetype,
+      disposition: "attachment"
+    });
 
-    attachmentsToSave = [
-      {
-        content: { data: id },
-        filename: files.name
-      }
-    ];
-  }
+    attachmentsToSave.push({
+      content: { data: id },
+      filename: e.name
+    });
+  };
+
+  if (!Array.isArray(files)) parseFile(files as unknown as UploadedFile);
+  else files.forEach(parseFile);
 
   const email =
     username === "admin"
@@ -102,31 +96,34 @@ Mail.sendMail = async (mailData, files) => {
 
   const from = { name, email };
 
-  const messageToSend = {
+  const messageToSend: sgMail.MailDataRequired = {
     from,
     subject,
     text,
-    html
+    html,
+    to: addressParser(to),
+    cc: addressParser(cc),
+    bcc: addressParser(bcc),
+    attachments: attachments.length ? attachments : undefined,
+    headers: inReplyTo ? { inReplyTo } : undefined
   };
-
-  if (to) messageToSend.to = addressParser(to);
-  if (cc) messageToSend.cc = addressParser(cc);
-  if (bcc) messageToSend.bcc = addressParser(bcc);
-  if (attachments) messageToSend.attachments = attachments;
-  if (inReplyTo) messageToSend.headers = { inReplyTo };
 
   return sgMail
     .send(messageToSend)
     .then((r) => {
       console.info("Sendgrid email sending request succeed");
 
-      const toDomain = messageToSend.to.map((e) => {
-        const splitString = e.email.split("@")[1].split(".");
+      const toData = messageToSend.to as EmailData[];
+      const toDomain = toData.map((e: EmailData) => {
+        let email: string;
+        if (typeof e === "string") email = e;
+        else email = e.email;
+        const splitString = email.split("@")[1].split(".");
         const length = splitString.length;
         return splitString[length - 2] + "." + splitString[length - 1];
       });
 
-      if (!toDomain.find((e) => e === domainName)) {
+      if (!toDomain.find((e: string) => e === domainName)) {
         const messageToSave = {
           ...messageToSend,
           date: new Date().toISOString(),
@@ -148,7 +145,7 @@ Mail.sendMail = async (mailData, files) => {
           read: true
         };
 
-        return Mail.saveMail(messageToSave);
+        return saveMail(messageToSave);
       } else return r;
     })
     .then((r) => true)
@@ -157,7 +154,7 @@ Mail.sendMail = async (mailData, files) => {
     });
 };
 
-const genAttachmentId = () => {
+const genAttachmentId = (): string => {
   const id = uuid.v4();
   if (fs.existsSync(`./attachments/${id}`)) {
     console.warn("Duplicate uuid is found");
@@ -169,12 +166,13 @@ const genAttachmentId = () => {
   } else return id;
 };
 
-Mail.saveMail = (body) => {
-  body.attachments.forEach((e) => {
+// TODO: Clarify variable types
+export const saveMail = (body: any) => {
+  body.attachments.forEach((e: any) => {
     const id = genAttachmentId();
     const content = e.content.data || e.content;
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
-      if (err) throw new Error(err);
+      if (err) throw err;
     });
     e.content = { data: id };
   });
@@ -183,7 +181,7 @@ Mail.saveMail = (body) => {
   delete body.envelopeFrom.args;
   delete body.envelopeTo.args;
 
-  return Mail.request("_doc", "POST", body).then((r) => {
+  return request("_doc", "POST", body).then((r: any) => {
     if (r.error) {
       fs.writeFile(
         `./error/${Date.now()}`,
@@ -196,7 +194,7 @@ Mail.saveMail = (body) => {
   });
 };
 
-Mail.getAttachment = (id) => {
+export const getAttachment = (id: string) => {
   return new Promise((res, rej) => {
     fs.readFile(`./attachments/${id}`, (err, data) => {
       if (err) rej(err);
@@ -205,8 +203,8 @@ Mail.getAttachment = (id) => {
   });
 };
 
-Mail.getMails = (account, options) => {
-  let searchFiled, query;
+export const getMails = (account: string, options: { sent: any; new: any }) => {
+  let searchFiled;
 
   if (options.sent) {
     searchFiled = "from.value.address";
@@ -214,40 +212,30 @@ Mail.getMails = (account, options) => {
     searchFiled = "envelopeTo.address";
   }
 
-  if (options.new) {
-    query = {
-      bool: {
-        must: [{ term: { [searchFiled]: account } }, { term: { read: false } }]
-      }
-    };
-  } else {
-    query = {
+  return request("_search", "POST", {
+    _source: ["read", "date", "from", "to", "cc", "bcc", "subject"],
+    query: {
       term: {
         [searchFiled]: account
       }
-    };
-  }
-
-  return Mail.request("_search", "POST", {
-    _source: ["read", "date", "from", "to", "cc", "bcc", "subject"],
-    query,
+    },
     sort: { date: "desc" },
     from: 0,
     size: 10000
   })
-    .then((r) => {
+    .then((r: any) => {
       if (!r.hits) return [];
       return r.hits.hits;
     })
-    .then((r) => {
-      return r.map((e) => {
+    .then((r: any) => {
+      return r.map((e: any) => {
         return { ...e._source, id: e._id };
       });
     });
 };
 
-Mail.getMailBody = (id) => {
-  return Mail.request("_search", "POST", {
+export const getMailBody = (id: string) => {
+  return request("_search", "POST", {
     _source: ["envelopeTo", "html", "attachments", "messageId"],
     query: {
       term: {
@@ -255,19 +243,31 @@ Mail.getMailBody = (id) => {
       }
     }
   })
-    .then((r) => {
+    .then((r: any) => {
       if (!r.hits) return [];
       return r.hits.hits;
     })
-    .then((r) => {
+    .then((r: any) => {
       return { ...r[0]._source, id: r[0]._id };
     });
 };
 
-Mail.getAccounts = (username) => {
+export interface Account {
+  key: string;
+  doc_count: number;
+  unread_doc_count: number;
+  updated: Date;
+}
+
+export interface AccountsResponse {
+  received: Account[];
+  sent: Account[];
+}
+
+export const getAccounts = (username: string): AccountsResponse => {
   const fullDomain =
     username === "admin" ? domainName : `${username}.${domainName}`;
-  const accounts = Mail.request("_msearch", "POST", [
+  const accounts = request("_msearch", "POST", [
     // Query1: Accounts that have received mails
     {},
     {
@@ -322,14 +322,15 @@ Mail.getAccounts = (username) => {
     }
   ]);
 
-  return accounts.then((r) => {
+  return accounts.then((r: any) => {
     if (r.error) throw new Error(JSON.stringify(r.error));
     const [received, sent] = r.responses.map(
-      (e) => e.aggregations?.address.buckets || []
+      (e: any) => e.aggregations?.address.buckets || []
     );
 
-    received.forEach((e) => {
-      e.unread_doc_count = e.read.buckets.find((f) => !f.key)?.doc_count || 0;
+    received.forEach((e: any) => {
+      e.unread_doc_count =
+        e.read.buckets.find((f: any) => !f.key)?.doc_count || 0;
       e.updated = new Date(e.updated.value);
       delete e.read;
     });
@@ -338,13 +339,17 @@ Mail.getAccounts = (username) => {
   });
 };
 
-Mail.markRead = (id) => {
-  return Mail.request(`_update/${id}`, "POST", {
+export const markRead = (id: string) => {
+  return request(`_update/${id}`, "POST", {
     doc: { read: true }
   });
 };
 
-Mail.searchMail = (value, username, options) => {
+export const searchMail = (
+  value: string,
+  username: string,
+  options: { field: string }
+) => {
   const { field } = options;
   value = value.replace(/</g, "").replace(/>/g, "");
 
@@ -356,7 +361,7 @@ Mail.searchMail = (value, username, options) => {
     .map((e) => "*" + e + "*")
     .join(" ");
 
-  const highlight = { fields: {} };
+  const highlight: any = { fields: {} };
   const fields = field ? [field] : ["subject", "text"];
   fields.forEach((e, i) => {
     highlight.fields[e] = {};
@@ -366,7 +371,7 @@ Mail.searchMail = (value, username, options) => {
   const fullDomain =
     username === "admin" ? domainName : `${username}.${domainName}`;
 
-  return Mail.request("_search", "POST", {
+  return request("_search", "POST", {
     _source: ["read", "date", "from", "to", "subject"],
     query: {
       bool: {
@@ -387,25 +392,21 @@ Mail.searchMail = (value, username, options) => {
       }
     },
     highlight
-  }).then((r) => {
+  }).then((r: any) => {
     if (r.error) throw new Error(JSON.stringify(r.error));
-    return r.hits.hits.map((e) => {
+    return r.hits.hits.map((e: any) => {
       return { ...e._source, id: e._id, highlight: e.highlight };
     });
   });
 };
 
-Mail.deleteMail = async (id) => {
-  return Mail.request(`_doc/${id}`, "DELETE");
-};
+export const deleteMail = async (id: string) => request(`_doc/${id}`, "DELETE");
 
-Mail.validateMailAddress = (data, domainName) => {
+export const validateMailAddress = (data: any, domainName: string) => {
   if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
-  let isAddressCorrect = !!data.envelopeTo.find((e) => {
+  let isAddressCorrect = !!data.envelopeTo.find((e: any) => {
     const parsedAddress = e.address?.split("@");
     return parsedAddress[parsedAddress.length - 1].includes(domainName);
   });
   return isAddressCorrect;
 };
-
-module.exports = Mail;

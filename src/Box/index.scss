@@ -1,3 +1,5 @@
+@import "../variables.scss";
+
 .pane {
   position: fixed;
   box-sizing: border-box;
@@ -7,7 +9,7 @@
 }
 
 .main_pane {
-  padding: 0 0.5rem 0.5rem 1rem;
+  padding: 5px 0.5rem 0.5rem 1rem;
 
   &,
   & > .curtain {
@@ -16,7 +18,7 @@
 }
 
 .writer_pane {
-  top: 55px;
+  top: 60px;
   z-index: 10;
   transition: 150ms;
   position: fixed;

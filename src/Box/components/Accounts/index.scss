@@ -11,7 +11,7 @@
     }
 
     .accounts {
-      background-color: adjust-color($color-light, $lightness: 0%);
+      background-color: adjust-color($color-light, $lightness: -5%);
     }
   }
 }
@@ -27,7 +27,7 @@
     }
 
     .accounts {
-      background-color: adjust-color($color-dark, $lightness: 0%);
+      background-color: adjust-color($color-dark, $lightness: -2%);
     }
   }
 }
@@ -108,7 +108,7 @@
       font-size: 18px;
       display: inline-block;
       position: relative;
-      max-width: 175px;
+      max-width: 240px;
       padding: 0.5rem 1rem;
       margin: 0 0 0.5rem 0;
       border-radius: 5px;
