@@ -6,7 +6,7 @@
       background-color: adjust-color($color-light, $lightness: -10%);
 
       div.clicked {
-        background-color: adjust-color($color-light, $lightness: 0%);
+        background-color: adjust-color($color-light, $lightness: -5%);
       }
     }
 
@@ -22,7 +22,7 @@
       background-color: adjust-color($color-dark, $lightness: -4%);
 
       div.clicked {
-        background-color: adjust-color($color-dark, $lightness: 0%);
+        background-color: adjust-color($color-dark, $lightness: -2%);
       }
     }
 
@@ -51,7 +51,8 @@
         padding: 1rem;
         border-top-left-radius: 10px;
         border-bottom-left-radius: 10px;
-        text-align: center;
+        display: flex;
+        justify-content: center;
 
         &.flex {
           padding: 0;
@@ -117,6 +118,7 @@
 
       .numberBall {
         position: absolute;
+        min-width: 20px;
         top: -5px;
         right: -10px;
         font-size: 16px;
@@ -129,6 +131,53 @@
         border-radius: 10px;
         background-color: rgb(200, 60, 70);
         color: white;
+      }
+    }
+
+    .sort_box {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      position: relative;
+      margin-bottom: 0.5rem;
+
+      > div {
+        height: 25px;
+      }
+
+      .sort_icon {
+        white-space: nowrap;
+        width: 10px;
+        margin-right: 0.5rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+
+        > div {
+          width: 10px;
+          height: 20px;
+
+          > svg {
+            color: adjust-color($color-light, $alpha: -0.75);
+          }
+
+          > svg.highlight {
+            color: inherit;
+          }
+
+          > svg:nth-child(2) {
+            position: relative;
+            right: 10px;
+          }
+        }
+      }
+
+      .sort_current {
+      }
+      .sort_select {
+        position: absolute;
+        width: 100px;
+        right: -30px;
       }
     }
   }

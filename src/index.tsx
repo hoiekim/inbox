@@ -17,7 +17,13 @@ interface UserInfoType {
   username: string;
 }
 
-export interface SearchHistory {}
+export enum Category {
+  NewMails = "New Mails",
+  AllMails = "All Mails",
+  SavedMails = "Saved Mails",
+  SentMails = "Sent Mails",
+  Search = "Search"
+}
 
 export interface ContextType {
   viewSize: {
@@ -40,7 +46,7 @@ export interface ContextType {
   setSelectedAccount: React.Dispatch<
     React.SetStateAction<ContextType["selectedAccount"]>
   >;
-  selectedCategory: string;
+  selectedCategory: Category;
   setSelectedCategory: React.Dispatch<
     React.SetStateAction<ContextType["selectedCategory"]>
   >;
@@ -66,21 +72,6 @@ export const queryClient = new QueryClient({
   }
 });
 
-export const categories = ["new", "all", "sent", "search"];
-
-export enum SortBy {
-  Date = "SORT_BY_DATE",
-  Size = "SORT_BY_SIZE",
-  Name = "SORT_BY_NAME"
-}
-
-export enum Category {
-  NewMails = "NEW_MAILS",
-  AllMails = "ALL_MAILS",
-  SavedMails = "SAVED_MAILS",
-  SentMails = "SENT_MAILS"
-}
-
 const App = () => {
   // defines states used for UI control
   const [viewSize, setViewSize] = useState({
@@ -92,7 +83,7 @@ const App = () => {
   const [isWriterOpen, setIsWriterOpen] = useState(false);
   const [replyData, setReplyData] = useState({});
   const [selectedAccount, setSelectedAccount] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedCategory, setSelectedCategory] = useState(Category.AllMails);
   const [searchHistory, setSearchHistory] = useState<
     ContextType["searchHistory"]
   >([]);

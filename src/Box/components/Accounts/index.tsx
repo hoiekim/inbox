@@ -1,16 +1,27 @@
 import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
-import SkeletonAccount from "./components/SkeletonAccount";
-import SkeletonCategory from "./components/SkeletonCategory";
-import SearchIcon from "./components/SearchIcon";
-import RefreshIcon from "./components/RefreshIcon";
-import LogoutIcon from "./components/LogoutIcon";
+import {
+  SkeletonAccount,
+  SkeletonCategory,
+  SearchIcon,
+  RefreshIcon,
+  LogoutIcon,
+  SortDownIcon,
+  SortUpIcon
+} from "./components";
 
-import { Context, categories, ContextType } from "src";
+import { Context, ContextType, Category } from "src";
+import { useLocalStorage } from "src/lib";
 import { Account, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";
+
+enum SortBy {
+  Date = "Sort by Date",
+  Size = "Sort by Size",
+  Name = "Sort by Name"
+}
 
 let searchDelay: NodeJS.Timeout, init: boolean;
 
@@ -18,6 +29,8 @@ const Accounts = () => {
   const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
     null
   );
+  const [sortBy, setSortBy] = useLocalStorage<SortBy>("sortBy", SortBy.Name);
+  const [sortAscending, setSortAscending] = useLocalStorage("sortBy", true);
 
   const {
     setUserInfo,
@@ -35,7 +48,7 @@ const Accounts = () => {
   const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
     onSuccess: (data) => {
       const newMailsExists = data.received.find((e) => e.unread_doc_count);
-      if (newMailsExists && !init) setSelectedCategory("new");
+      if (newMailsExists && !init) setSelectedCategory(Category.NewMails);
       init = true;
     }
   });
@@ -101,7 +114,7 @@ const Accounts = () => {
 
     let accountComponents: JSX.Element[] = [];
 
-    if (selectedCategory === "new") {
+    if (selectedCategory === Category.NewMails) {
       accountComponents = received
         .filter((e) => e.unread_doc_count)
         .sort((a, b) => {
@@ -110,34 +123,30 @@ const Accounts = () => {
           return dateB - dateA;
         })
         .map(renderAccount);
-    } else if (selectedCategory === "all") {
+    } else if (selectedCategory === Category.AllMails) {
       accountComponents = received
         .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
         .map(renderAccount);
-    } else if (selectedCategory === "sent") {
+    } else if (selectedCategory === Category.SentMails) {
       accountComponents = sent
         .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
         .map(renderAccount);
-    } else if (selectedCategory === "search" && searchHistory) {
+    } else if (selectedCategory === Category.Search && searchHistory) {
       accountComponents = searchHistory.map(renderAccount);
     }
 
-    const categoryComponents = categories.map((e, i) => {
+    const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
-        if (e === "search") setSelectedAccount("");
+        if (e === Category.Search) setSelectedAccount("");
         setSelectedCategory(e);
       };
       const classes = [];
       if (selectedCategory === e) classes.push("clicked");
-      if (e === "search") classes.push("flex");
+      if (e === Category.Search) classes.push("flex");
 
       return (
         <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
-          {e === "search" ? (
-            <SearchIcon />
-          ) : (
-            e[0].toUpperCase() + e.substring(1)
-          )}
+          {e === Category.Search ? <SearchIcon /> : e.split(" ")[0]}
         </div>
       );
     });
@@ -197,26 +206,52 @@ const Accounts = () => {
           </div>
         </div>
         <div className="accounts">
-          {selectedCategory === "search" ? (
-            <div className="search_container">
-              <div className="fieldName">
-                <span>Search This:</span>
+          <div className="sort_box">
+            <div className="sort_icon cursor">
+              <div>
+                <SortDownIcon className={sortAscending ? "highlight" : ""} />
+                <SortUpIcon className={sortAscending ? "" : "highlight"} />
               </div>
-              <input
-                type="search"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck="false"
-                onChange={onChangeSearch}
-                onKeyDown={onKeyDownSearch}
-                ref={(e) => e && setSearchInputDom(e)}
-              />
             </div>
-          ) : null}
-          {accountComponents?.length
-            ? accountComponents
-            : "This category is empty"}
+            <div>
+              <div className="sort_current">{sortBy.split(" ").pop()}</div>
+              <div className="sort_select">
+                {Object.values(SortBy).map((e, i) => {
+                  return (
+                    <div
+                      key={i}
+                      className="sort_option cursor"
+                      onClick={() => setSortBy(e)}
+                    >
+                      {e}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div>
+            {selectedCategory === Category.Search ? (
+              <div className="search_container">
+                <div className="fieldName">
+                  <span>Search This:</span>
+                </div>
+                <input
+                  type="search"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  onChange={onChangeSearch}
+                  onKeyDown={onKeyDownSearch}
+                  ref={(e) => e && setSearchInputDom(e)}
+                />
+              </div>
+            ) : null}
+            {accountComponents?.length
+              ? accountComponents
+              : "This category is empty"}
+          </div>
         </div>
       </div>
     );
