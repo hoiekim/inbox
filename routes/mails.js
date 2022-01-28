@@ -50,6 +50,27 @@ mailsRouter.markRead = async (req, res) => {
   }
 };
 
+mailsRouter.markSaved = async (req, res) => {
+  console.info("Received GET request to mark saved", req.ip, "at", new Date());
+  if (!req.session.user) return res.json(new Error("Login is required"));
+  try {
+    const mail = await Mail.getMailBody(req.params.id);
+    const { username } = req.session.user;
+    const fullDomain =
+      username === "admin" ? domainName : `${username}.${domainName}`;
+    const valid = Mail.validateMailAddress(mail, fullDomain);
+    if (valid) {
+      const result = await Mail.markSaved(req.params.id, req.query);
+      res.status(200).json(result);
+    } else {
+      throw new Error("Wrong Request");
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json(new Error("Failed to request to mark as read"));
+  }
+};
+
 mailsRouter.getMails = async (req, res) => {
   console.info("Received GET request to mails", req.ip, "at", new Date());
   if (!req.session.user) return res.json(new Error("Login is required"));

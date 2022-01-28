@@ -37,7 +37,7 @@ const Box = () => {
   } else {
     mainPaneStyle.width = "100vw";
     mainPaneStyle.left = 0;
-    mainPaneStyle.padding = "0";
+    mainPaneStyle.padding = "5px 0 0 0";
     writerStyle.width = "100vw";
   }
 
@@ -62,21 +62,13 @@ const Box = () => {
   if (isWriterOpen) {
     writerStyle.right = 0;
   } else if (viewSize.width > 1050) {
-    writerStyle.right = "calc(115px - 100vw)";
+    writerStyle.right = "calc(115px - min(100vw, 900px))";
   } else {
     writerStyle.right = "-100vw";
   }
 
   return (
     <>
-      <div style={sidePaneStyle} className="pane side_pane">
-        <div
-          style={sidePaneStyle}
-          className={isWriterOpen ? "curtain on" : "curtain"}
-          onClick={onClickCurtain}
-        />
-        <Accounts />
-      </div>
       <div style={mainPaneStyle} className="pane main_pane">
         <div
           style={mainPaneStyle}
@@ -90,6 +82,14 @@ const Box = () => {
           onClick={onClickCurtain}
         />
         <Mails />
+      </div>
+      <div style={sidePaneStyle} className="pane side_pane">
+        <div
+          style={sidePaneStyle}
+          className={isWriterOpen ? "curtain on" : "curtain"}
+          onClick={onClickCurtain}
+        />
+        <Accounts />
       </div>
       <div
         style={writerStyle}

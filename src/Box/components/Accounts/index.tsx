@@ -30,7 +30,11 @@ const Accounts = () => {
     null
   );
   const [sortBy, setSortBy] = useLocalStorage<SortBy>("sortBy", SortBy.Name);
-  const [sortAscending, setSortAscending] = useLocalStorage("sortBy", true);
+  const [sortAscending, setSortAscending] = useLocalStorage(
+    "sortAscending",
+    true
+  );
+  const [showSortOptions, setShowSortOptions] = useState(false);
 
   const {
     setUserInfo,
@@ -112,28 +116,41 @@ const Accounts = () => {
       );
     };
 
-    let accountComponents: JSX.Element[] = [];
+    let sortedAccountData: Account[] = [];
 
     if (selectedCategory === Category.NewMails) {
-      accountComponents = received
-        .filter((e) => e.unread_doc_count)
-        .sort((a, b) => {
-          const dateA = +new Date(a.updated);
-          const dateB = +new Date(b.updated);
-          return dateB - dateA;
-        })
-        .map(renderAccount);
+      sortedAccountData = received.filter((e) => e.unread_doc_count);
     } else if (selectedCategory === Category.AllMails) {
-      accountComponents = received
-        .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
-        .map(renderAccount);
+      sortedAccountData = received;
+    } else if (selectedCategory === Category.SavedMails) {
+      sortedAccountData = received.filter((e) => e.saved);
     } else if (selectedCategory === Category.SentMails) {
-      accountComponents = sent
-        .sort((a, b) => (a.key > b.key ? 1 : b.key > a.key ? -1 : 0))
-        .map(renderAccount);
+      sortedAccountData = sent;
     } else if (selectedCategory === Category.Search && searchHistory) {
-      accountComponents = searchHistory.map(renderAccount);
+      sortedAccountData = searchHistory;
     }
+
+    const sortingFactor = 2 * +sortAscending - 1;
+
+    if (sortBy === SortBy.Name) {
+      sortedAccountData.sort(
+        (a, b) => (2 * +(a.key > b.key) - 1) * sortingFactor
+      );
+    } else if (sortBy === SortBy.Date) {
+      sortedAccountData.sort(
+        (a, b) => (+new Date(a.updated) - +new Date(b.updated)) * sortingFactor
+      );
+    } else if (sortBy === SortBy.Size) {
+      const sortKey =
+        selectedCategory === Category.NewMails
+          ? "unread_doc_count"
+          : "doc_count";
+      sortedAccountData.sort(
+        (a, b) => (a[sortKey] - b[sortKey]) * sortingFactor
+      );
+    }
+
+    const accountComponents = sortedAccountData.map(renderAccount);
 
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
@@ -147,6 +164,23 @@ const Accounts = () => {
       return (
         <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
           {e === Category.Search ? <SearchIcon /> : e.split(" ")[0]}
+        </div>
+      );
+    });
+
+    const sortOptionComponents = Object.values(SortBy).map((e, i) => {
+      const onClickSortOption = () => {
+        if (e !== sortBy) {
+          setSortBy(e);
+          if (e === SortBy.Name) setSortAscending(true);
+          else setSortAscending(false);
+        }
+        setShowSortOptions(false);
+      };
+
+      return (
+        <div key={i} className="sort_option cursor" onClick={onClickSortOption}>
+          {e}
         </div>
       );
     });
@@ -168,7 +202,8 @@ const Accounts = () => {
             key: e.target.value,
             doc_count: 0,
             unread_doc_count: 0,
-            updated: new Date()
+            updated: new Date(),
+            saved: false
           },
           ...searchHistory
         ]);
@@ -207,30 +242,43 @@ const Accounts = () => {
         </div>
         <div className="accounts">
           <div className="sort_box">
-            <div className="sort_icon cursor">
-              <div>
-                <SortDownIcon className={sortAscending ? "highlight" : ""} />
-                <SortUpIcon className={sortAscending ? "" : "highlight"} />
+            {showSortOptions ? (
+              <></>
+            ) : (
+              <div
+                className="sort_icon cursor"
+                onClick={() => setSortAscending(!sortAscending)}
+              >
+                <div>
+                  <SortDownIcon className={sortAscending ? "" : "highlight"} />
+                  <SortUpIcon className={sortAscending ? "highlight" : ""} />
+                </div>
               </div>
-            </div>
+            )}
             <div>
-              <div className="sort_current">{sortBy.split(" ").pop()}</div>
-              <div className="sort_select">
-                {Object.values(SortBy).map((e, i) => {
-                  return (
-                    <div
-                      key={i}
-                      className="sort_option cursor"
-                      onClick={() => setSortBy(e)}
-                    >
-                      {e}
-                    </div>
-                  );
-                })}
-              </div>
+              {showSortOptions ? (
+                <></>
+              ) : (
+                <div
+                  className="sort_current cursor"
+                  onClick={() => setShowSortOptions(!showSortOptions)}
+                >
+                  {sortBy.split(" ").pop()}
+                </div>
+              )}
+              {showSortOptions ? (
+                <div
+                  className="sort_select"
+                  onMouseLeave={() => setShowSortOptions(false)}
+                >
+                  {sortOptionComponents}
+                </div>
+              ) : (
+                <></>
+              )}
             </div>
           </div>
-          <div>
+          <div className="tags_container">
             {selectedCategory === Category.Search ? (
               <div className="search_container">
                 <div className="fieldName">

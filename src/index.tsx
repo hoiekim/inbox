@@ -92,6 +92,9 @@ const App = () => {
     window.addEventListener("resize", () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
     });
+    window.addEventListener("orientationchange", () => {
+      setViewSize({ width: window.innerWidth, height: window.innerHeight });
+    });
   }, []);
 
   // stores states to export with `Context`

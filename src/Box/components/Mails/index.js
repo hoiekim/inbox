@@ -1,14 +1,18 @@
 import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
-import MailBody from "./components/MailBody";
-import KebabIcon from "./components/KebabIcon";
-import ReplyIcon from "./components/ReplyIcon";
-import ShareIcon from "./components/ShareIcon";
-import TrashIcon from "./components/TrashIcon";
-import SkeletonMail from "./components/SkeletonMail";
+import {
+  MailBody,
+  SkeletonMail,
+  KebabIcon,
+  ReplyIcon,
+  ShareIcon,
+  TrashIcon,
+  EmptyStarIcon,
+  SolidStarIcon
+} from "./components";
 
-import { Context, queryClient } from "../../..";
+import { Context, Category, queryClient } from "../../..";
 
 import "./index.scss";
 
@@ -32,11 +36,17 @@ const MailsNotRendered = () => {
 };
 
 const MailsRendered = () => {
-  const { isWriterOpen, setReplyData, selectedAccount, selectedCategory } =
-    useContext(Context);
+  const {
+    isWriterOpen,
+    setReplyData,
+    selectedAccount,
+    setSelectedAccount,
+    selectedCategory
+  } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState({});
   const [openedKebab, setOpenedKebab] = useState("");
+  const [hoveringMailCard, setHoveringMailCard] = useState("");
 
   useEffect(() => {
     setOpenedKebab("");
@@ -44,14 +54,26 @@ const MailsRendered = () => {
 
   let queryUrl;
 
-  if (selectedCategory === "search") {
+  if (selectedCategory === Category.Search) {
     queryUrl = `/api/search/${encodeURIComponent(selectedAccount)}`;
   } else {
-    queryUrl = `/api/mails/${selectedAccount}?${selectedCategory}=1`;
+    const queryOption =
+      selectedCategory === Category.SentMails
+        ? "?sent=1"
+        : selectedCategory === Category.NewMails
+        ? "?new=1"
+        : selectedCategory === Category.SavedMails
+        ? "?saved=1"
+        : "";
+    queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
   }
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getMails);
+  const query = useQuery(queryUrl, getMails, {
+    onSuccess: (data) => {
+      if (!data?.length) setSelectedAccount("");
+    }
+  });
 
   if (query.isLoading) {
     return (
@@ -75,6 +97,11 @@ const MailsRendered = () => {
   const requestMarkRead = (mailId) =>
     fetch(`/api/markRead/${mailId}`).then((r) => r.json());
 
+  const requestMarkSaved = (mailId, unsave) => {
+    const query = unsave ? "?unsave=1" : "";
+    return fetch(`/api/markSaved/${mailId}${query}`).then((r) => r.json());
+  };
+
   const removeAccountFromQueryData = () => {
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
@@ -91,7 +118,8 @@ const MailsRendered = () => {
         if (foundIndex !== undefined) newData[category].splice(foundIndex, 1);
       };
 
-      if (selectedCategory === "sent") editByCategory(selectedCategory);
+      if (selectedCategory === Category.SentMails)
+        editByCategory(selectedCategory);
       else for (const key in newData) key !== "sent" && editByCategory(key);
 
       return newData;
@@ -123,6 +151,18 @@ const MailsRendered = () => {
       };
 
       for (const key in newData) editByCategory(key);
+
+      return newData;
+    });
+  };
+
+  const markSavedInQueryData = (mailId, unsave) => {
+    queryClient.setQueryData(queryUrl, (oldData) => {
+      if (!oldData) return oldData;
+
+      const newData = [...oldData];
+      const foundData = newData.find((e) => e.id === mailId);
+      if (foundData) foundData.label = unsave ? "" : "saved";
 
       return newData;
     });
@@ -161,6 +201,8 @@ const MailsRendered = () => {
         duration = "just now";
       }
 
+      const saved = mail.label === "saved";
+
       const onClickMailcard = () => {
         if (activeMailId[mail.id]) {
           const clonedActiveMailId = { ...activeMailId };
@@ -184,7 +226,7 @@ const MailsRendered = () => {
         }
         setReplyData({
           ...mail,
-          subject: "RE: " + mail.subject,
+          subject: "Re: " + mail.subject,
           to: { address: selectedAccount }
         });
       };
@@ -196,7 +238,7 @@ const MailsRendered = () => {
         }
         setReplyData({
           ...mail,
-          subject: "FW: " + mail.subject,
+          subject: "Fwd: " + mail.subject,
           to: { address: "" }
         });
       };
@@ -213,6 +255,11 @@ const MailsRendered = () => {
             return newData;
           });
         }
+      };
+
+      const onClickStar = () => {
+        requestMarkSaved(mail.id, saved);
+        markSavedInQueryData(mail.id, saved);
       };
 
       const onClickKebab = () => {
@@ -233,19 +280,37 @@ const MailsRendered = () => {
         });
       }
 
+      if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
+      if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
+
       return (
-        <blockquote key={i} className={classes.join(" ")}>
+        <blockquote
+          key={i}
+          className={classes.join(" ")}
+          onMouseEnter={() => setHoveringMailCard(mail.id)}
+          onMouseLeave={() => setHoveringMailCard("")}
+        >
           <div className="header cursor" onClick={onClickMailcard}>
             <div className="mailcard-small content">{duration}</div>
+            {activeMailId[mail.id] ? (
+              <div className="mailcard-small content">
+                {date}, {time}
+              </div>
+            ) : (
+              <></>
+            )}
             <div className="mailcard-small content">
-              {date}, {time}
+              {"from: " +
+                mail.from.value.map((e) => e.name || e.address).join(", ")}
             </div>
-            <div className="mailcard-small content">
-              {"from: " + mail.from?.text}
-            </div>
-            <div className="mailcard-small content">
-              {"to: " + mail.to?.text}
-            </div>
+            {activeMailId[mail.id] ? (
+              <div className="mailcard-small content">
+                {"to: " +
+                  mail.to.value.map((e) => e.name || e.address).join(", ")}
+              </div>
+            ) : (
+              <></>
+            )}
             <div className="mailcard-subject content">{mail.subject}</div>
           </div>
           {activeMailId[mail.id] ? (
@@ -254,6 +319,15 @@ const MailsRendered = () => {
             <div className="search_highlight">{searchHighlight}</div>
           ) : null}
           <div className="actionBox">
+            <div className="iconBox cursor" onClick={onClickStar}>
+              {saved ? (
+                <SolidStarIcon />
+              ) : hoveringMailCard === mail.id ? (
+                <EmptyStarIcon />
+              ) : (
+                <></>
+              )}
+            </div>
             <div className="iconBox cursor" onClick={onClickKebab}>
               <KebabIcon />
             </div>

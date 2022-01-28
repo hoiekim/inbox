@@ -9,7 +9,7 @@
 }
 
 .main_pane {
-  padding: 5px 0.5rem 0.5rem 1rem;
+  padding: 5px 0.5rem 0.5rem 0.5rem;
 
   &,
   & > .curtain {
@@ -23,4 +23,5 @@
   transition: 150ms;
   position: fixed;
   margin-top: 0;
+  max-width: 900px;
 }

@@ -38,6 +38,7 @@ app.use(
 app.get("/api/attachment/:id", mails.getAttachment);
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/markRead/:id", mails.markRead);
+app.get("/api/markSaved/:id", mails.markSaved);
 app.get("/api/mails/:account", mails.getMails);
 app.get("/api/mail-body/:id", mails.getMailBody);
 app.get("/api/search/:value", mails.searchMail);

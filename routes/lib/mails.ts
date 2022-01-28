@@ -203,8 +203,11 @@ export const getAttachment = (id: string) => {
   });
 };
 
-export const getMails = (account: string, options: { sent: any; new: any }) => {
-  let searchFiled;
+export const getMails = (
+  account: string,
+  options: { sent: any; new: any; saved: any }
+) => {
+  let searchFiled, query;
 
   if (options.sent) {
     searchFiled = "from.value.address";
@@ -212,13 +215,32 @@ export const getMails = (account: string, options: { sent: any; new: any }) => {
     searchFiled = "envelopeTo.address";
   }
 
-  return request("_search", "POST", {
-    _source: ["read", "date", "from", "to", "cc", "bcc", "subject"],
-    query: {
+  if (options.new) {
+    query = {
+      bool: {
+        must: [{ term: { [searchFiled]: account } }, { term: { read: false } }]
+      }
+    };
+  } else if (options.saved) {
+    query = {
+      bool: {
+        must: [
+          { term: { [searchFiled]: account } },
+          { term: { label: "saved" } }
+        ]
+      }
+    };
+  } else {
+    query = {
       term: {
         [searchFiled]: account
       }
-    },
+    };
+  }
+
+  return request("_search", "POST", {
+    _source: ["read", "label", "date", "from", "to", "cc", "bcc", "subject"],
+    query,
     sort: { date: "desc" },
     from: 0,
     size: 10000
@@ -257,6 +279,7 @@ export interface Account {
   doc_count: number;
   unread_doc_count: number;
   updated: Date;
+  saved: boolean;
 }
 
 export interface AccountsResponse {
@@ -296,6 +319,12 @@ export const getAccounts = (username: string): AccountsResponse => {
                 field: "read",
                 size: 10000
               }
+            },
+            label: {
+              terms: {
+                field: "label",
+                size: 10000
+              }
             }
           }
         }
@@ -331,8 +360,10 @@ export const getAccounts = (username: string): AccountsResponse => {
     received.forEach((e: any) => {
       e.unread_doc_count =
         e.read.buckets.find((f: any) => !f.key)?.doc_count || 0;
-      e.updated = new Date(e.updated.value);
       delete e.read;
+      e.updated = new Date(e.updated.value);
+      e.saved = !!e.label.buckets.find((f: any) => f.key === "saved");
+      delete e.label;
     });
 
     return { received, sent };
@@ -343,6 +374,12 @@ export const markRead = (id: string) => {
   return request(`_update/${id}`, "POST", {
     doc: { read: true }
   });
+};
+
+export const markSaved = (id: string, options: { unsave: any }) => {
+  const { unsave } = options;
+  const label = unsave ? "" : "saved";
+  return request(`_update/${id}`, "POST", { doc: { label } });
 };
 
 export const searchMail = (
