@@ -46,7 +46,6 @@ const MailsRendered = () => {
 
   const [activeMailId, setActiveMailId] = useState({});
   const [openedKebab, setOpenedKebab] = useState("");
-  const [hoveringMailCard, setHoveringMailCard] = useState("");
 
   useEffect(() => {
     setOpenedKebab("");
@@ -130,14 +129,17 @@ const MailsRendered = () => {
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
 
-      const editByCategory = (category) => {
-        const foundData = newData[category].find((account) => {
-          return account.key === selectedAccount;
-        });
+      for (const key in Category) {
+        const queryOption =
+          key === Category.SentMails
+            ? "?sent=1"
+            : key === Category.NewMails
+            ? "?new=1"
+            : key === Category.SavedMails
+            ? "?saved=1"
+            : "";
 
-        if (foundData?.unread_doc_count > 0) foundData.unread_doc_count -= 1;
-
-        const queryUrl = `/api/mails/${selectedAccount}?${category}=1`;
+        const queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
 
         queryClient.setQueryData(queryUrl, (oldData) => {
           if (!oldData) return oldData;
@@ -148,24 +150,75 @@ const MailsRendered = () => {
 
           return newData;
         });
-      };
+      }
 
-      for (const key in newData) editByCategory(key);
+      for (const key in newData) {
+        const foundData = newData[key].find(
+          (account) => account.key === selectedAccount
+        );
+        if (foundData?.unread_doc_count > 0) foundData.unread_doc_count -= 1;
+      }
 
       return newData;
     });
   };
 
   const markSavedInQueryData = (mailId, unsave) => {
-    queryClient.setQueryData(queryUrl, (oldData) => {
-      if (!oldData) return oldData;
-
-      const newData = [...oldData];
-      const foundData = newData.find((e) => e.id === mailId);
-      if (foundData) foundData.label = unsave ? "" : "saved";
-
+    queryClient.setQueryData("/api/accounts", (oldData) => {
+      const newData = { ...oldData };
+      const numberOfSavedMailsInCurrentAccount = query.data.filter((e) => {
+        return e.label === "saved";
+      }).length;
+      if (!unsave) {
+        Object.values(newData).forEach((e) => {
+          const found = e.find((f) => f.key === selectedAccount);
+          if (found) found.saved = true;
+        });
+      } else if (numberOfSavedMailsInCurrentAccount === 1) {
+        Object.values(newData).forEach((e) => {
+          const found = e.find((f) => f.key === selectedAccount);
+          if (found) found.saved = false;
+        });
+      }
       return newData;
     });
+
+    for (const key in Category) {
+      const queryOption =
+        key === Category.SentMails
+          ? "?sent=1"
+          : key === Category.NewMails
+          ? "?new=1"
+          : key === Category.SavedMails
+          ? "?saved=1"
+          : "";
+
+      const queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
+
+      queryClient.setQueryData(queryUrl, (oldData) => {
+        if (!oldData) return oldData;
+        console.log(key, oldData);
+
+        const newData = [...oldData];
+        let foundIndex;
+        newData.find((e, i) => {
+          if (e.id === mailId) {
+            foundIndex = i;
+            e.label = unsave ? "" : "saved";
+            console.log(e);
+            return true;
+          }
+        });
+        if (
+          foundIndex !== undefined &&
+          selectedCategory === Category.SavedMails
+        ) {
+          newData.splice(foundIndex, 1);
+        }
+
+        return newData;
+      });
+    }
   };
 
   if (query.isSuccess) {
@@ -284,12 +337,7 @@ const MailsRendered = () => {
       if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
 
       return (
-        <blockquote
-          key={i}
-          className={classes.join(" ")}
-          onMouseEnter={() => setHoveringMailCard(mail.id)}
-          onMouseLeave={() => setHoveringMailCard("")}
-        >
+        <blockquote key={i} className={classes.join(" ")}>
           <div className="header cursor" onClick={onClickMailcard}>
             <div className="mailcard-small content">{duration}</div>
             {activeMailId[mail.id] ? (
@@ -320,13 +368,7 @@ const MailsRendered = () => {
           ) : null}
           <div className="actionBox">
             <div className="iconBox cursor" onClick={onClickStar}>
-              {saved ? (
-                <SolidStarIcon />
-              ) : hoveringMailCard === mail.id ? (
-                <EmptyStarIcon />
-              ) : (
-                <></>
-              )}
+              {saved ? <SolidStarIcon /> : <></>}
             </div>
             <div className="iconBox cursor" onClick={onClickKebab}>
               <KebabIcon />
@@ -337,6 +379,9 @@ const MailsRendered = () => {
             onClick={onClickKebab}
             onMouseLeave={onClickKebab}
           >
+            <div className="iconBox cursor" onClick={onClickStar}>
+              {saved ? <SolidStarIcon /> : <EmptyStarIcon />}
+            </div>
             <div className="iconBox cursor" onClick={onClickReply}>
               <ReplyIcon />
             </div>
