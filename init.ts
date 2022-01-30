@@ -66,6 +66,6 @@ const init = () => {
   });
 };
 
-init();
+// init();
 
 export default init;

@@ -12,7 +12,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "server": "ts-node server.ts",
-    "init": "ts-node init.ts"
+    "init": "ts-node -e \"import init from './init'; init();\""
   },
   "keywords": [],
   "author": "",
