@@ -11,15 +11,6 @@ services:
     working_dir: /app
     profiles: ["modules"]
 
-  build:
-    image: node:14.17.6-alpine3.13
-    volumes:
-      - ./:/app
-      - build:/app/build
-    command: sh -c "npm run build"
-    working_dir: /app
-    profiles: ["build"]
-
   init:
     image: node:14.17.6-alpine3.13
     volumes:
