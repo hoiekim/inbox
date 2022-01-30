@@ -301,8 +301,12 @@ const MailsRendered = () => {
         markSavedInQueryData(mail, saved);
       };
 
-      const onClickKebab = () => {
-        setOpenedKebab(openedKebab === mail.id ? "" : mail.id);
+      const openKebab = () => {
+        setOpenedKebab(mail.id);
+      };
+
+      const closeKebab = () => {
+        setOpenedKebab("");
       };
 
       const classes = ["mailcard"];
@@ -323,7 +327,11 @@ const MailsRendered = () => {
       if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
 
       return (
-        <blockquote key={i} className={classes.join(" ")}>
+        <blockquote
+          key={i}
+          className={classes.join(" ")}
+          onMouseLeave={closeKebab}
+        >
           <div className="header cursor" onClick={onClickMailcard}>
             <div className="mailcard-small content">{duration}</div>
             {activeMailId[mail.id] ? (
@@ -353,17 +361,11 @@ const MailsRendered = () => {
             <div className="search_highlight">{searchHighlight}</div>
           ) : null}
           <div className="actionBox">
-            <div className="iconBox cursor" onClick={onClickStar}>
-              {saved ? (
-                <SolidStarIcon />
-              ) : openedKebab === mail.id ? (
-                <EmptyStarIcon />
-              ) : (
-                <></>
-              )}
-            </div>
             {openedKebab === mail.id ? (
               <>
+                <div className="iconBox cursor" onClick={onClickStar}>
+                  {saved ? <SolidStarIcon /> : <EmptyStarIcon />}
+                </div>
                 <div className="iconBox cursor" onClick={onClickReply}>
                   <ReplyIcon />
                 </div>
@@ -375,17 +377,18 @@ const MailsRendered = () => {
                 </div>
               </>
             ) : (
-              <></>
+              <>
+                <div className="iconBox" />
+                <div className="iconBox" />
+                <div className="iconBox cursor" onClick={onClickStar}>
+                  {saved ? <SolidStarIcon /> : <></>}
+                </div>
+                <div className="iconBox cursor" onClick={openKebab}>
+                  <KebabIcon />
+                </div>
+              </>
             )}
-            <div className="iconBox cursor" onClick={onClickKebab}>
-              <KebabIcon />
-            </div>
           </div>
-          <div
-            className={openedKebab === mail.id ? "popupBox" : "popupBox hide"}
-            onClick={onClickKebab}
-            onMouseLeave={onClickKebab}
-          ></div>
         </blockquote>
       );
     };

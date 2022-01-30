@@ -73,7 +73,7 @@
     justify-content: center;
     right: 0.5rem;
     top: 0.5rem;
-    width: 80px;
+    width: 160px;
     height: 40px;
 
     .iconBox {
@@ -92,49 +92,6 @@
       &:active > svg {
         width: 22px;
         height: 22px;
-      }
-    }
-  }
-
-  .popupBox {
-    position: absolute;
-    display: flex;
-    justify-content: center;
-    border-radius: 35px;
-    right: 2.5rem;
-    top: 1rem;
-    width: 250px;
-    height: 70px;
-    padding: 0 0.7rem;
-    box-shadow: 0px 2px 2px 4px rgba(0, 0, 0, 0.05);
-
-    @media (prefers-color-scheme: dark) {
-      background-color: adjust-color($color-accent, $lightness: 7%);
-    }
-    @media (prefers-color-scheme: light) {
-      background-color: adjust-color($color-light, $lightness: 10%);
-    }
-
-    &.hide {
-      display: none;
-    }
-
-    .iconBox {
-      width: 100%;
-
-      svg {
-        width: 25px;
-        height: 25px;
-      }
-
-      &:hover > svg {
-        width: 29px;
-        height: 29px;
-      }
-
-      &:active > svg {
-        width: 27px;
-        height: 27px;
       }
     }
   }
