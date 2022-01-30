@@ -61,6 +61,10 @@ const Accounts = () => {
     if (searchInputDom) searchInputDom.focus();
   }, [searchInputDom]);
 
+  useEffect(() => {
+    window.addEventListener("touchstart", () => setShowSortOptions(false));
+  }, []);
+
   if (query.isLoading) {
     return (
       <div className="tab-holder">
@@ -183,7 +187,12 @@ const Accounts = () => {
       };
 
       return (
-        <div key={i} className="sort_option cursor" onClick={onClickSortOption}>
+        <div
+          key={i}
+          className="sort_option cursor"
+          onClick={onClickSortOption}
+          onTouchStart={(e) => e.stopPropagation()}
+        >
           {e}
         </div>
       );
@@ -264,7 +273,7 @@ const Accounts = () => {
               ) : (
                 <div
                   className="sort_current cursor"
-                  onClick={() => setShowSortOptions(!showSortOptions)}
+                  onClick={() => setShowSortOptions(true)}
                 >
                   {sortBy.split(" ").pop()}
                 </div>

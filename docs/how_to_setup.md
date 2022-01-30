@@ -76,7 +76,7 @@ Following instruction assumes that you have docker and docker-compose installed 
     b. Development mode
 
     ```
-    docker-compose up elastic dev
+    docker-compose up dev
     ```
 
 ## 5. Enjoy!

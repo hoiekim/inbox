@@ -2,26 +2,28 @@
 
 .pane {
   position: fixed;
-  box-sizing: border-box;
   overflow-y: scroll;
   overflow-x: hidden;
-  transition: 150ms;
-}
-
-.main_pane {
-  padding: 5px 0.5rem 0.5rem 0.5rem;
+  transition: 200ms cubic-bezier(0.31, 0.25, 0.52, 1.19);
+  height: calc(100vh - 55px);
 
   &,
   & > .curtain {
     top: 55px;
   }
+
+  .curtain.on {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.main_pane {
+  padding: 5px 0.5rem 0.5rem 0.5rem;
 }
 
 .writer_pane {
-  top: 60px;
   z-index: 10;
-  transition: 150ms;
-  position: fixed;
-  margin-top: 0;
-  max-width: 900px;
+  max-width: 950px;
+  overflow: hidden;
 }

@@ -109,10 +109,6 @@ ${replyData.html}
     localStorage.setItem("writer-senderName", name);
   };
 
-  const onClickCurtain = () => {
-    setIsWriterOpen(true);
-  };
-
   const onClickEraserIcon = () => {
     setSender("");
     setTo("");
@@ -330,11 +326,6 @@ ${replyData.html}
           <span>Send</span>
         </button>
       </div>
-      <div
-        style={{ left: "-3px" }}
-        className={isWriterOpen ? "curtain" : "curtain on"}
-        onClick={onClickCurtain}
-      />
     </blockquote>
   );
 };

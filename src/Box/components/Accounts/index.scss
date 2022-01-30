@@ -65,8 +65,8 @@
   height: 100%;
 
   .categories {
-    padding: 55px 0 0 0.5rem;
-    width: 80px;
+    padding: 0 0 0.5rem calc(0.5rem + 50px);
+    width: 130px;
     height: 100%;
     display: flex;
     flex-direction: column;
@@ -119,9 +119,8 @@
 
   .accounts {
     position: relative;
-    top: 55px;
     padding: 0.5rem 0 0.5rem 0.5rem;
-    height: calc(100% - 55px);
+    height: 100%;
     width: calc(100% - 80px);
     overflow-y: scroll;
 

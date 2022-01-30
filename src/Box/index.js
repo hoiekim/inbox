@@ -14,64 +14,69 @@ const Box = () => {
     setIsWriterOpen
   } = useContext(Context);
 
-  const onClickCurtain = () => {
-    setIsWriterOpen(false);
+  const onClickMainOrSideCurtain = () => {
     if (!isWriterOpen) setIsAccountsOpen(false);
+    setIsWriterOpen(false);
   };
 
-  const mainPaneStyle = { height: viewSize.height - 55 + "px" };
-  const sidePaneStyle = { width: "350px", height: viewSize.height + "px" };
-  const writerStyle = {
-    width: "calc(100vw - 1rem)",
-    height: viewSize.height - 65 + "px"
-  };
+  const onClickWriterCurtain = () => setIsWriterOpen(true);
+
+  const mainPaneStyle = {};
+  const sidePaneStyle = {};
+  const writerStyle = { width: "calc(100vw - 1rem + 50px)" };
 
   if (viewSize.width > 1050) {
-    mainPaneStyle.width = "calc(100vw - 470px)";
-    mainPaneStyle.left = "352px";
-    sidePaneStyle.left = 0;
-  } else if (viewSize.width > 750) {
-    mainPaneStyle.width = "calc(100vw - 252px)";
-    mainPaneStyle.left = "352px";
-    sidePaneStyle.left = 0;
-  } else {
-    mainPaneStyle.width = "100vw";
-    mainPaneStyle.left = 0;
-    mainPaneStyle.padding = "5px 0 0 0";
-    writerStyle.width = "100vw";
-  }
+    sidePaneStyle.width = 400;
 
-  if (isAccountsOpen) {
-    mainPaneStyle.left = "352px";
-    sidePaneStyle.left = 0;
-    if (viewSize.width <= 1050 && viewSize.width > 750) {
-      mainPaneStyle.left = "252px";
-      sidePaneStyle.width = "250px";
-    }
-  } else {
-    if (viewSize.width > 1050) {
-      mainPaneStyle.width = "calc(100vw - 118px)";
+    if (isAccountsOpen) {
+      mainPaneStyle.width = "calc(100vw - 470px)";
+      mainPaneStyle.left = 350;
+      sidePaneStyle.left = -50;
+    } else {
+      mainPaneStyle.width = "calc(100vw - 120px)";
       mainPaneStyle.left = 0;
-    } else if (viewSize.width > 750) {
+      sidePaneStyle.left = -400;
+    }
+
+    if (isWriterOpen) writerStyle.right = -50;
+    else writerStyle.right = "calc(65px - min(100vw, 900px))";
+  } else if (viewSize.width > 750) {
+    sidePaneStyle.width = 300;
+
+    if (isAccountsOpen) {
+      mainPaneStyle.width = "calc(100vw - 250px)";
+      mainPaneStyle.left = 250;
+      sidePaneStyle.left = -50;
+    } else {
       mainPaneStyle.width = "100vw";
       mainPaneStyle.left = 0;
+      sidePaneStyle.left = -300;
     }
-    sidePaneStyle.left = "-350px";
-  }
 
-  if (isWriterOpen) {
-    writerStyle.right = 0;
-  } else if (viewSize.width > 1050) {
-    writerStyle.right = "calc(115px - min(100vw, 900px))";
+    if (isWriterOpen) writerStyle.right = -50;
+    else writerStyle.right = "calc(-100vw - 50px)";
   } else {
-    writerStyle.right = "-100vw";
+    sidePaneStyle.width = 400;
+    mainPaneStyle.width = "100vw";
+    writerStyle.width = "calc(100vw + 50px)";
+
+    if (isAccountsOpen) {
+      mainPaneStyle.left = 350;
+      sidePaneStyle.left = -50;
+    } else {
+      mainPaneStyle.left = 0;
+      mainPaneStyle.padding = "5px 0 0 0";
+      sidePaneStyle.left = -400;
+    }
+
+    if (isWriterOpen) writerStyle.right = -50;
+    else writerStyle.right = "calc(-100vw - 50px)";
   }
 
   return (
     <>
       <div style={mainPaneStyle} className="pane main_pane">
         <div
-          style={mainPaneStyle}
           className={
             isWriterOpen
               ? "curtain on"
@@ -79,22 +84,25 @@ const Box = () => {
               ? "curtain on"
               : "curtain"
           }
-          onClick={onClickCurtain}
+          onClick={onClickMainOrSideCurtain}
         />
         <Mails />
       </div>
       <div style={sidePaneStyle} className="pane side_pane">
         <div
-          style={sidePaneStyle}
-          className={isWriterOpen ? "curtain on" : "curtain"}
-          onClick={onClickCurtain}
+          className={"curtain" + (isWriterOpen ? " on" : "")}
+          onClick={onClickMainOrSideCurtain}
         />
         <Accounts />
       </div>
       <div
         style={writerStyle}
-        className={isWriterOpen ? "writer_pane shadow" : "writer_pane"}
+        className={"pane writer_pane" + (isWriterOpen ? " shadow" : "")}
       >
+        <div
+          className={"curtain" + (isWriterOpen ? "" : " on")}
+          onClick={onClickWriterCurtain}
+        />
         <Writer />
       </div>
     </>

@@ -73,6 +73,10 @@ const MailsRendered = () => {
     setOpenedKebab("");
   }, [selectedAccount]);
 
+  useEffect(() => {
+    window.addEventListener("touchstart", () => setOpenedKebab(""));
+  }, []);
+
   const queryUrl = getMailsQueryUrl(selectedAccount, selectedCategory);
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
@@ -301,14 +305,6 @@ const MailsRendered = () => {
         markSavedInQueryData(mail, saved);
       };
 
-      const openKebab = () => {
-        setOpenedKebab(mail.id);
-      };
-
-      const closeKebab = () => {
-        setOpenedKebab("");
-      };
-
       const classes = ["mailcard"];
 
       if (!mail.read) classes.push("unread");
@@ -330,7 +326,7 @@ const MailsRendered = () => {
         <blockquote
           key={i}
           className={classes.join(" ")}
-          onMouseLeave={closeKebab}
+          onMouseLeave={() => setOpenedKebab("")}
         >
           <div className="header cursor" onClick={onClickMailcard}>
             <div className="mailcard-small content">{duration}</div>
@@ -363,16 +359,32 @@ const MailsRendered = () => {
           <div className="actionBox">
             {openedKebab === mail.id ? (
               <>
-                <div className="iconBox cursor" onClick={onClickStar}>
+                <div
+                  className="iconBox cursor"
+                  onClick={onClickStar}
+                  onTouchStart={(e) => e.stopPropagation()}
+                >
                   {saved ? <SolidStarIcon /> : <EmptyStarIcon />}
                 </div>
-                <div className="iconBox cursor" onClick={onClickReply}>
+                <div
+                  className="iconBox cursor"
+                  onClick={onClickReply}
+                  onTouchStart={(e) => e.stopPropagation()}
+                >
                   <ReplyIcon />
                 </div>
-                <div className="iconBox cursor" onClick={onClickShare}>
+                <div
+                  className="iconBox cursor"
+                  onClick={onClickShare}
+                  onTouchStart={(e) => e.stopPropagation()}
+                >
                   <ShareIcon />
                 </div>
-                <div className="iconBox cursor" onClick={onClickTrash}>
+                <div
+                  className="iconBox cursor"
+                  onClick={onClickTrash}
+                  onTouchStart={(e) => e.stopPropagation()}
+                >
                   <TrashIcon />
                 </div>
               </>
@@ -383,7 +395,10 @@ const MailsRendered = () => {
                 <div className="iconBox cursor" onClick={onClickStar}>
                   {saved ? <SolidStarIcon /> : <></>}
                 </div>
-                <div className="iconBox cursor" onClick={openKebab}>
+                <div
+                  className="iconBox cursor"
+                  onClick={(e) => setOpenedKebab(mail.id)}
+                >
                   <KebabIcon />
                 </div>
               </>
