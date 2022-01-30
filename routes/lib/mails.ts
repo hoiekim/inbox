@@ -1,11 +1,11 @@
 import Elastic from "./components/elastic";
-import uuid from "uuid";
 import fs from "fs";
 import sgMail from "@sendgrid/mail";
 import { EmailData } from "@sendgrid/helpers/classes/email-address";
 import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
 import { htmlToText } from "html-to-text";
 import { FileArray, UploadedFile } from "express-fileupload";
+const uuid = require("uuid");
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
@@ -16,7 +16,7 @@ const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_MAILS || "mails";
 
-export const { request } = new Elastic(
+export const { request, initialize } = new Elastic(
   ELASTIC_HOST,
   ELASTIC_USERNAME,
   ELASTIC_PASSWORD,
@@ -86,8 +86,8 @@ export const sendMail = async (mailData: MailToSend, files: FileArray) => {
     });
   };
 
-  if (!Array.isArray(files)) parseFile(files as unknown as UploadedFile);
-  else files.forEach(parseFile);
+  if (Array.isArray(files)) files.forEach(parseFile);
+  else if (files) parseFile(files as unknown as UploadedFile);
 
   const email =
     username === "admin"
@@ -278,8 +278,8 @@ export interface Account {
   key: string;
   doc_count: number;
   unread_doc_count: number;
+  saved_doc_count: number;
   updated: Date;
-  saved: boolean;
 }
 
 export interface AccountsResponse {
@@ -361,9 +361,10 @@ export const getAccounts = (username: string): AccountsResponse => {
       e.unread_doc_count =
         e.read.buckets.find((f: any) => !f.key)?.doc_count || 0;
       delete e.read;
-      e.updated = new Date(e.updated.value);
-      e.saved = !!e.label.buckets.find((f: any) => f.key === "saved");
+      e.saved_doc_count =
+        e.label.buckets.find((f: any) => f.key === "saved")?.doc_count || 0;
       delete e.label;
+      e.updated = new Date(e.updated.value);
     });
 
     return { received, sent };

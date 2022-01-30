@@ -5,15 +5,14 @@
   "private": false,
   "proxy": "http://localhost:3004",
   "scripts": {
-    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run front\" \"nodemon server.ts\"",
-    "start": "npm run build && npm run back",
-    "back": "node server.ts",
-    "front": "react-scripts start",
+    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run react-start\" \"nodemon server.ts\"",
+    "start": "npm run build && npm run server",
+    "react-start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "development": "npm run dev",
-    "production": "npm run start"
+    "server": "ts-node server.ts",
+    "init": "ts-node init.ts"
   },
   "keywords": [],
   "author": "",

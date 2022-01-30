@@ -9,7 +9,7 @@
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
-    "module": "commonjs",
+    "module": "esnext",
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "isolatedModules": true,
@@ -18,5 +18,10 @@
     "baseUrl": "./"
   },
   "include": ["src", "routes"],
-  "exclude": ["node_modules", "build", "attachments"]
+  "exclude": ["node_modules", "build", "attachments"],
+  "ts-node": {
+    "compilerOptions": {
+      "module": "CommonJS"
+    }
+  }
 }

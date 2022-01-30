@@ -1,9 +1,6 @@
 import config from "./config";
 config();
 
-import init from "./init";
-if (process.env.INIT) init();
-
 import express from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";

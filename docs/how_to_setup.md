@@ -54,36 +54,35 @@ If you want to use this app only for receiving mails, skip this step.
 
 Following instruction assumes that you have docker and docker-compose installed in your machine.
 
-   1. First time run
+1.  Install modules & put index mapping (First time run)
 
-   ```
-   (Production mode)
-   INIT=1 NODE_ENV=production sudo -E docker-compose --profile modules up
+    Run following commands one by one:
 
-   (Development mode)
-   INIT=1 NODE_ENV=development sudo -E docker-compose --profile modules up
-   ```
+    ```
+    docker-compose up modules
+    docker-compose up init
+    ```
 
-   - When you run app with `INIT` option, your elasticsearch database will be initialized.
-   - Which means all data in the specified index is cleared, and created with mapped keys.
-   - Don't use `INIT` option if you don't want to initialize elasticsearch indices.
-   
-   2. Second time run & after
+    `modules` and `init` services can be started using one command(`docker-compose up modules init`). However, `init` service will fail without `modules` installed completely. Run those services separately to make sure avoiding this problem.
 
-   ```
-   (Production mode)
-   INIT= NODE_ENV=production sudo -E docker-compose up
+2.  Run app
 
-   (Development mode)
-   INIT= NODE_ENV=development sudo -E docker-compose up
-   ```
-   
-   - This command skips initializing elasticsearch indices and installing node modules.
-   - If you edit indexing mapping or node modules, you should run command in 4-1.
+    a. Production mode
 
+    ```
+    docker-compose up
+    ```
+
+    b. Development mode
+
+    ```
+    docker-compose up elastic dev
+    ```
 
 ## 5. Enjoy!
 
-Default port number is 3004. So you can connect to Inbox at http://(your-server-ip):3004 (use port number 3005 for development mode)
+Default port number is 3004. So you can connect to Inbox at http://(your-server-ip):3004
 
-Admin username is `admin`, password is equal to environment variable called `ADMIN_PW`
+For development mode, use port number 3000 instead.
+
+Admin username is `admin`, password is equal to the value of environment variable called `ADMIN_PW`

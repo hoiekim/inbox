@@ -110,7 +110,9 @@ const Accounts = () => {
         <div key={i}>
           <div className={classes.join(" ")} onClick={onClickAccount}>
             <span>{accountName.split("@")[0]}</span>
-            {unreadNo ? <div className="numberBall">{unreadNo}</div> : null}
+            {unreadNo && selectedCategory !== Category.SavedMails ? (
+              <div className="numberBall">{unreadNo}</div>
+            ) : null}
           </div>
         </div>
       );
@@ -123,7 +125,7 @@ const Accounts = () => {
     } else if (selectedCategory === Category.AllMails) {
       sortedAccountData = received;
     } else if (selectedCategory === Category.SavedMails) {
-      sortedAccountData = received.filter((e) => e.saved);
+      sortedAccountData = received.filter((e) => e.saved_doc_count);
     } else if (selectedCategory === Category.SentMails) {
       sortedAccountData = sent;
     } else if (selectedCategory === Category.Search && searchHistory) {
@@ -144,6 +146,8 @@ const Accounts = () => {
       const sortKey =
         selectedCategory === Category.NewMails
           ? "unread_doc_count"
+          : selectedCategory === Category.SavedMails
+          ? "saved_doc_count"
           : "doc_count";
       sortedAccountData.sort(
         (a, b) => (a[sortKey] - b[sortKey]) * sortingFactor
@@ -195,15 +199,14 @@ const Accounts = () => {
     const onKeyDownSearch: React.KeyboardEventHandler<HTMLInputElement> = (
       e: any
     ) => {
-      console.log(e);
       if (e.key === "Enter") {
         setSearchHistory([
           {
             key: e.target.value,
             doc_count: 0,
             unread_doc_count: 0,
-            updated: new Date(),
-            saved: false
+            saved_doc_count: 0,
+            updated: new Date()
           },
           ...searchHistory
         ]);

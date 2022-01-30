@@ -35,6 +35,28 @@ const MailsNotRendered = () => {
   );
 };
 
+const getMailsQueryUrl = (account, category) => {
+  let queryOption;
+
+  switch (category) {
+    case Category.Search:
+      return `/api/search/${encodeURIComponent(account)}`;
+    case Category.SentMails:
+      queryOption = "?sent=1";
+      break;
+    case Category.NewMails:
+      queryOption = "?new=1";
+      break;
+    case Category.SavedMails:
+      queryOption = "?saved=1";
+      break;
+    default:
+      queryOption = "";
+  }
+
+  return `/api/mails/${account}${queryOption}`;
+};
+
 const MailsRendered = () => {
   const {
     isWriterOpen,
@@ -51,21 +73,7 @@ const MailsRendered = () => {
     setOpenedKebab("");
   }, [selectedAccount]);
 
-  let queryUrl;
-
-  if (selectedCategory === Category.Search) {
-    queryUrl = `/api/search/${encodeURIComponent(selectedAccount)}`;
-  } else {
-    const queryOption =
-      selectedCategory === Category.SentMails
-        ? "?sent=1"
-        : selectedCategory === Category.NewMails
-        ? "?new=1"
-        : selectedCategory === Category.SavedMails
-        ? "?saved=1"
-        : "";
-    queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
-  }
+  const queryUrl = getMailsQueryUrl(selectedAccount, selectedCategory);
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery(queryUrl, getMails, {
@@ -90,13 +98,14 @@ const MailsRendered = () => {
     );
   }
 
-  const requestDeleteMail = (mailId) =>
-    fetch(`/api/mails/${mailId}`, { method: "DELETE" }).then((r) => r.json());
+  const requestDeleteMail = (mail) =>
+    fetch(`/api/mails/${mail.id}`, { method: "DELETE" }).then((r) => r.json());
 
-  const requestMarkRead = (mailId) =>
-    fetch(`/api/markRead/${mailId}`).then((r) => r.json());
+  const requestMarkRead = (mail) =>
+    fetch(`/api/markRead/${mail.id}`).then((r) => r.json());
 
-  const requestMarkSaved = (mailId, unsave) => {
+  const requestMarkSaved = (mail, unsave) => {
+    const mailId = mail.id;
     const query = unsave ? "?unsave=1" : "";
     return fetch(`/api/markSaved/${mailId}${query}`).then((r) => r.json());
   };
@@ -125,21 +134,13 @@ const MailsRendered = () => {
     });
   };
 
-  const markReadInQueryData = (mailId) => {
+  const markReadInQueryData = (mail) => {
+    const mailId = mail.id;
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
 
       for (const key in Category) {
-        const queryOption =
-          key === Category.SentMails
-            ? "?sent=1"
-            : key === Category.NewMails
-            ? "?new=1"
-            : key === Category.SavedMails
-            ? "?saved=1"
-            : "";
-
-        const queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
+        const queryUrl = getMailsQueryUrl(selectedAccount, Category[key]);
 
         queryClient.setQueryData(queryUrl, (oldData) => {
           if (!oldData) return oldData;
@@ -163,57 +164,42 @@ const MailsRendered = () => {
     });
   };
 
-  const markSavedInQueryData = (mailId, unsave) => {
+  const markSavedInQueryData = (mail, unsave) => {
+    const mailId = mail.id;
     queryClient.setQueryData("/api/accounts", (oldData) => {
       const newData = { ...oldData };
-      const numberOfSavedMailsInCurrentAccount = query.data.filter((e) => {
-        return e.label === "saved";
-      }).length;
-      if (!unsave) {
-        Object.values(newData).forEach((e) => {
-          const found = e.find((f) => f.key === selectedAccount);
-          if (found) found.saved = true;
-        });
-      } else if (numberOfSavedMailsInCurrentAccount === 1) {
-        Object.values(newData).forEach((e) => {
-          const found = e.find((f) => f.key === selectedAccount);
-          if (found) found.saved = false;
-        });
-      }
+      Object.values(newData).forEach((e) => {
+        const found = e.find((f) => f.key === selectedAccount);
+        if (found) {
+          if (unsave) found.saved_doc_count--;
+          else found.saved_doc_count++;
+        }
+      });
       return newData;
     });
 
     for (const key in Category) {
-      const queryOption =
-        key === Category.SentMails
-          ? "?sent=1"
-          : key === Category.NewMails
-          ? "?new=1"
-          : key === Category.SavedMails
-          ? "?saved=1"
-          : "";
-
-      const queryUrl = `/api/mails/${selectedAccount}${queryOption}`;
+      const queryUrl = getMailsQueryUrl(selectedAccount, Category[key]);
 
       queryClient.setQueryData(queryUrl, (oldData) => {
         if (!oldData) return oldData;
-        console.log(key, oldData);
-
         const newData = [...oldData];
         let foundIndex;
         newData.find((e, i) => {
           if (e.id === mailId) {
             foundIndex = i;
             e.label = unsave ? "" : "saved";
-            console.log(e);
             return true;
           }
+          return false;
         });
-        if (
-          foundIndex !== undefined &&
-          selectedCategory === Category.SavedMails
-        ) {
-          newData.splice(foundIndex, 1);
+        if (Category[key] === Category.SavedMails) {
+          if (foundIndex !== undefined) newData.splice(foundIndex, 1);
+          else {
+            let i = 0;
+            while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
+            newData.splice(i, 0, { ...mail });
+          }
         }
 
         return newData;
@@ -263,8 +249,8 @@ const MailsRendered = () => {
           setActiveMailId(clonedActiveMailId);
         } else {
           if (!mail.read) {
-            requestMarkRead(mail.id);
-            markReadInQueryData(mail.id);
+            requestMarkRead(mail);
+            markReadInQueryData(mail);
             mail.read = true;
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
@@ -298,8 +284,8 @@ const MailsRendered = () => {
 
       const onClickTrash = () => {
         if (window.confirm("Do you want to delete this mail?")) {
-          requestDeleteMail(mail.id);
-          if (!mail.read) markReadInQueryData(mail.id);
+          requestDeleteMail(mail);
+          if (!mail.read) markReadInQueryData(mail);
 
           queryClient.setQueryData(queryUrl, (oldData) => {
             const newData = [...oldData];
@@ -311,8 +297,8 @@ const MailsRendered = () => {
       };
 
       const onClickStar = () => {
-        requestMarkSaved(mail.id, saved);
-        markSavedInQueryData(mail.id, saved);
+        requestMarkSaved(mail, saved);
+        markSavedInQueryData(mail, saved);
       };
 
       const onClickKebab = () => {
@@ -368,8 +354,29 @@ const MailsRendered = () => {
           ) : null}
           <div className="actionBox">
             <div className="iconBox cursor" onClick={onClickStar}>
-              {saved ? <SolidStarIcon /> : <></>}
+              {saved ? (
+                <SolidStarIcon />
+              ) : openedKebab === mail.id ? (
+                <EmptyStarIcon />
+              ) : (
+                <></>
+              )}
             </div>
+            {openedKebab === mail.id ? (
+              <>
+                <div className="iconBox cursor" onClick={onClickReply}>
+                  <ReplyIcon />
+                </div>
+                <div className="iconBox cursor" onClick={onClickShare}>
+                  <ShareIcon />
+                </div>
+                <div className="iconBox cursor" onClick={onClickTrash}>
+                  <TrashIcon />
+                </div>
+              </>
+            ) : (
+              <></>
+            )}
             <div className="iconBox cursor" onClick={onClickKebab}>
               <KebabIcon />
             </div>
@@ -378,20 +385,7 @@ const MailsRendered = () => {
             className={openedKebab === mail.id ? "popupBox" : "popupBox hide"}
             onClick={onClickKebab}
             onMouseLeave={onClickKebab}
-          >
-            <div className="iconBox cursor" onClick={onClickStar}>
-              {saved ? <SolidStarIcon /> : <EmptyStarIcon />}
-            </div>
-            <div className="iconBox cursor" onClick={onClickReply}>
-              <ReplyIcon />
-            </div>
-            <div className="iconBox cursor" onClick={onClickShare}>
-              <ShareIcon />
-            </div>
-            <div className="iconBox cursor" onClick={onClickTrash}>
-              <TrashIcon />
-            </div>
-          </div>
+          ></div>
         </blockquote>
       );
     };
