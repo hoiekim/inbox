@@ -11,8 +11,7 @@ import {
   SortUpIcon
 } from "./components";
 
-import { Context, ContextType, Category } from "src";
-import { useLocalStorage } from "src/lib";
+import { Context, ContextType, Category, useLocalStorage } from "src";
 import { Account, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";

@@ -13,6 +13,9 @@ import { Account } from "routes/lib/mails";
 
 import "./index.scss";
 
+import { useLocalStorage } from "./lib";
+export * from "./lib";
+
 interface UserInfoType {
   username: string;
 }
@@ -79,11 +82,23 @@ const App = () => {
     height: window.innerHeight
   });
   const [userInfo, setUserInfo] = useState(session);
-  const [isAccountsOpen, setIsAccountsOpen] = useState(true);
-  const [isWriterOpen, setIsWriterOpen] = useState(false);
+  const [isAccountsOpen, setIsAccountsOpen] = useLocalStorage(
+    "isAccountsOpen",
+    true
+  );
+  const [isWriterOpen, setIsWriterOpen] = useLocalStorage(
+    "isWriterOpen",
+    false
+  );
   const [replyData, setReplyData] = useState({});
-  const [selectedAccount, setSelectedAccount] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState(Category.AllMails);
+  const [selectedAccount, setSelectedAccount] = useLocalStorage(
+    "selectedAccount",
+    ""
+  );
+  const [selectedCategory, setSelectedCategory] = useLocalStorage(
+    "selectedCategory",
+    Category.AllMails
+  );
   const [searchHistory, setSearchHistory] = useState<
     ContextType["searchHistory"]
   >([]);

@@ -8,15 +8,13 @@ import AttachIcon from "./components/AttachIcon";
 import FileIcon from "../FileIcon";
 import EraserIcon from "./components/EraserIcon";
 
-import { Context } from "../../..";
+import { Context, useLocalStorage } from "src";
 
 import "./index.scss";
 
 import marked from "marked";
 
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
-
-const cookieSenderName = localStorage.getItem("writer-senderName") || "";
 
 const writerParser = (html) => {
   const htmlComponents = html.split("<in-reply-to>");
@@ -30,17 +28,17 @@ const Writer = () => {
   const { isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
     useContext(Context);
 
-  const [isCcOpen, setIsCcOpen] = useState(false);
+  const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewSrc, setPreviewSrc] = useState("");
 
-  const [name, setName] = useState(cookieSenderName);
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [bcc, setBcc] = useState("");
-  const [subject, setSubject] = useState("");
-  const [sender, setSender] = useState("");
-  const [textarea, setTextarea] = useState("");
+  const [name, setName] = useLocalStorage("name", "");
+  const [to, setTo] = useLocalStorage("to", "");
+  const [cc, setCc] = useLocalStorage("cc", "");
+  const [bcc, setBcc] = useLocalStorage("bcc", "");
+  const [subject, setSubject] = useLocalStorage("subject", "");
+  const [sender, setSender] = useLocalStorage("sender", "");
+  const [textarea, setTextarea] = useLocalStorage("textarea", "");
 
   const [attachments, setAttachments] = useState({});
 
@@ -106,7 +104,6 @@ ${replyData.html}
   const onChangeName = (e) => {
     const name = e.target.value;
     setName(name);
-    localStorage.setItem("writer-senderName", name);
   };
 
   const onClickEraserIcon = () => {
