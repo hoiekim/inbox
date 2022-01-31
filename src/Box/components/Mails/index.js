@@ -309,6 +309,7 @@ const MailsRendered = () => {
 
       if (!mail.read) classes.push("unread");
       if (!isWriterOpen) classes.push("shadow");
+      if (saved) classes.push("star");
 
       let searchHighlight;
 
@@ -364,7 +365,11 @@ const MailsRendered = () => {
                   onClick={onClickStar}
                   onTouchStart={(e) => e.stopPropagation()}
                 >
-                  {saved ? <SolidStarIcon /> : <EmptyStarIcon />}
+                  {saved ? (
+                    <SolidStarIcon className="star" />
+                  ) : (
+                    <EmptyStarIcon />
+                  )}
                 </div>
                 <div
                   className="iconBox cursor"
@@ -393,7 +398,7 @@ const MailsRendered = () => {
                 <div className="iconBox" />
                 <div className="iconBox" />
                 <div className="iconBox cursor" onClick={onClickStar}>
-                  {saved ? <SolidStarIcon /> : <></>}
+                  {saved ? <SolidStarIcon className="star" /> : <></>}
                 </div>
                 <div
                   className="iconBox cursor"

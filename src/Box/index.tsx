@@ -1,7 +1,5 @@
 import React, { useContext, useState } from "react";
-import Writer from "./components/Writer";
-import Accounts from "./components/Accounts";
-import Mails from "./components/Mails";
+import { Writer, Accounts, Mails } from "./components";
 import { Context, ContextType } from "src";
 import "./index.scss";
 

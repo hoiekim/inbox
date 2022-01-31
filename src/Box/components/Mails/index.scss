@@ -44,10 +44,14 @@
     height: 0;
     transition: 150ms;
     border: none;
-    overflow-x: scroll;
+    overflow-x: hidden;
   }
 
   blockquote {
+    &.star {
+      border-color: $color-point;
+    }
+
     &.unread {
       border-color: rgb(200, 60, 70);
     }
@@ -91,6 +95,10 @@
       &:active > svg {
         width: 22px;
         height: 22px;
+      }
+
+      .star {
+        color: $color-point;
       }
     }
   }

@@ -92,7 +92,9 @@ ${data.html}
         if (!iframeDom) return;
         const iframeContent = iframeDom.contentWindow.document.body;
         const iframeContentHeight = iframeContent.scrollHeight;
-        iframeDom.style.height = `calc(2rem + ${iframeContentHeight + 32}px)`;
+        const scale = (iframeDom.offsetWidth - 16) / iframeContent.scrollWidth;
+        iframeDom.style.height = scale * (iframeContentHeight + 64) + "px";
+        iframeContent.style.transform = `scale(${scale})`;
       } catch (err) {
         console.error(err);
       }
