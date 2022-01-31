@@ -62,7 +62,7 @@ const Writer = () => {
 <p>On ${date} at ${time}, ${replyData.from.text
         .replace("<", "&lt;")
         .replace(">", "&gt;")} wrote:</p>
-<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; margin-left: 0.5rem">
+<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; padding-right: 0; margin-left: 0.5rem; margin-right: 0;">
 ${replyData.html}
 </blockquote>`;
 
@@ -76,7 +76,18 @@ ${replyData.html}
 
       setReplyData({});
     }
-  }, [replyData, setReplyData, isWriterOpen]);
+  }, [
+    setSender,
+    setTo,
+    setCc,
+    setBcc,
+    setSubject,
+    setTextarea,
+    setAttachments,
+    replyData,
+    setReplyData,
+    isWriterOpen
+  ]);
 
   const sendMail = (data) => {
     return fetch("/api/send", {
@@ -97,6 +108,7 @@ ${replyData.html}
     setSubject("");
     setTextarea("");
     setAttachments({});
+    setPreviewSrc("");
   };
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
