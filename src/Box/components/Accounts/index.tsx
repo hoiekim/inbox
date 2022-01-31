@@ -316,6 +316,8 @@ const Accounts = () => {
       </div>
     );
   }
+
+  return <></>;
 };
 
 export default Accounts;

@@ -281,7 +281,6 @@ button:hover {
 .curtain {
   z-index: 10;
   position: fixed;
-  transition: 150ms;
   pointer-events: none;
 
   &.on {
