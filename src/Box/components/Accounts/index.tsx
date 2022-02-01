@@ -51,7 +51,9 @@ const Accounts = () => {
   const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
     onSuccess: (data) => {
       const newMailsExists = data.received.find((e) => e.unread_doc_count);
-      if (newMailsExists && !init) setSelectedCategory(Category.NewMails);
+      if (newMailsExists && !init) {
+        setSelectedCategory(Category.NewMails);
+      }
       init = true;
     }
   });

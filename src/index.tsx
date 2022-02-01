@@ -67,7 +67,9 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       cacheTime: Infinity,
-      refetchOnWindowFocus: false,
+      refetchInterval: 1000 * 60 * 60,
+      refetchIntervalInBackground: true,
+      refetchOnWindowFocus: true,
       refetchOnMount: false,
       refetchOnReconnect: true,
       retry: false
@@ -84,7 +86,7 @@ const App = () => {
   const [userInfo, setUserInfo] = useState(session);
   const [isAccountsOpen, setIsAccountsOpen] = useLocalStorage(
     "isAccountsOpen",
-    true
+    window.innerWidth > 750
   );
   const [isWriterOpen, setIsWriterOpen] = useLocalStorage(
     "isWriterOpen",

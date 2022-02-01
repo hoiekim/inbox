@@ -12,18 +12,19 @@ import {
   SolidStarIcon
 } from "./components";
 
-import { Context, Category, queryClient } from "../../..";
+import { Context, ContextType, Category, queryClient } from "src";
+
+import { MailHeaderType, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";
 
-import getting_started from "./components/getting_started.md";
-import marked from "marked";
+import { marked } from "marked";
 
 const MailsNotRendered = () => {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    fetch(getting_started)
+    fetch("/text/getting_started.md")
       .then((r) => r.text())
       .then((r) => setMessage(marked(r)));
   }, []);
@@ -35,7 +36,7 @@ const MailsNotRendered = () => {
   );
 };
 
-const getMailsQueryUrl = (account, category) => {
+const getMailsQueryUrl = (account: string, category: Category) => {
   let queryOption;
 
   switch (category) {
@@ -64,9 +65,9 @@ const MailsRendered = () => {
     selectedAccount,
     setSelectedAccount,
     selectedCategory
-  } = useContext(Context);
+  } = useContext(Context) as ContextType;
 
-  const [activeMailId, setActiveMailId] = useState({});
+  const [activeMailId, setActiveMailId] = useState<any>({});
   const [openedKebab, setOpenedKebab] = useState("");
 
   useEffect(() => {
@@ -80,7 +81,7 @@ const MailsRendered = () => {
   const queryUrl = getMailsQueryUrl(selectedAccount, selectedCategory);
 
   const getMails = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery(queryUrl, getMails, {
+  const query = useQuery<MailHeaderType[]>(queryUrl, getMails, {
     onSuccess: (data) => {
       if (!data?.length) setSelectedAccount("");
     }
@@ -102,119 +103,132 @@ const MailsRendered = () => {
     );
   }
 
-  const requestDeleteMail = (mail) =>
+  const requestDeleteMail = (mail: MailHeaderType) =>
     fetch(`/api/mails/${mail.id}`, { method: "DELETE" }).then((r) => r.json());
 
-  const requestMarkRead = (mail) =>
+  const requestMarkRead = (mail: MailHeaderType) =>
     fetch(`/api/markRead/${mail.id}`).then((r) => r.json());
 
-  const requestMarkSaved = (mail, unsave) => {
+  const requestMarkSaved = (mail: MailHeaderType, unsave: boolean) => {
     const mailId = mail.id;
     const query = unsave ? "?unsave=1" : "";
     return fetch(`/api/markSaved/${mailId}${query}`).then((r) => r.json());
   };
 
   const removeAccountFromQueryData = () => {
-    queryClient.setQueryData("/api/accounts", (oldData) => {
-      const newData = { ...oldData };
+    queryClient.setQueryData<AccountsResponse | undefined>(
+      "/api/accounts",
+      (oldData) => {
+        if (!oldData) return oldData;
 
-      const editByCategory = (category) => {
-        let foundIndex;
-
-        newData[category].find((account, i) => {
+        const newData = { ...oldData };
+        const key =
+          selectedCategory === Category.SentMails ? "sent" : "received";
+        newData[key].find((account, i) => {
           const found = account.key === selectedAccount;
-          if (found) foundIndex = i;
+          if (found) newData.received.splice(i, 1);
           return found;
         });
 
-        if (foundIndex !== undefined) newData[category].splice(foundIndex, 1);
-      };
-
-      if (selectedCategory === Category.SentMails)
-        editByCategory(selectedCategory);
-      else for (const key in newData) key !== "sent" && editByCategory(key);
-
-      return newData;
-    });
+        return newData;
+      }
+    );
   };
 
-  const markReadInQueryData = (mail) => {
+  const markReadInQueryData = (mail: MailHeaderType) => {
     const mailId = mail.id;
-    queryClient.setQueryData("/api/accounts", (oldData) => {
-      const newData = { ...oldData };
-
-      for (const key in Category) {
-        const queryUrl = getMailsQueryUrl(selectedAccount, Category[key]);
-
-        queryClient.setQueryData(queryUrl, (oldData) => {
-          if (!oldData) return oldData;
-
-          const newData = [...oldData];
-          const foundData = newData.find((e) => e.id === mailId);
-          if (foundData) foundData.read = true;
-
-          return newData;
-        });
-      }
-
-      for (const key in newData) {
-        const foundData = newData[key].find(
-          (account) => account.key === selectedAccount
-        );
-        if (foundData?.unread_doc_count > 0) foundData.unread_doc_count -= 1;
-      }
-
-      return newData;
-    });
-  };
-
-  const markSavedInQueryData = (mail, unsave) => {
-    const mailId = mail.id;
-    queryClient.setQueryData("/api/accounts", (oldData) => {
-      const newData = { ...oldData };
-      Object.values(newData).forEach((e) => {
-        const found = e.find((f) => f.key === selectedAccount);
-        if (found) {
-          if (unsave) found.saved_doc_count--;
-          else found.saved_doc_count++;
-        }
-      });
-      return newData;
-    });
-
-    for (const key in Category) {
-      const queryUrl = getMailsQueryUrl(selectedAccount, Category[key]);
-
-      queryClient.setQueryData(queryUrl, (oldData) => {
+    queryClient.setQueryData<AccountsResponse | undefined>(
+      "/api/accounts",
+      (oldData) => {
         if (!oldData) return oldData;
-        const newData = [...oldData];
-        let foundIndex;
-        newData.find((e, i) => {
-          if (e.id === mailId) {
-            foundIndex = i;
-            e.label = unsave ? "" : "saved";
-            return true;
-          }
-          return false;
+
+        const newData = { ...oldData };
+
+        Object.values(Category).forEach((e) => {
+          const queryUrl = getMailsQueryUrl(selectedAccount, e);
+
+          queryClient.setQueryData<MailHeaderType[] | undefined>(
+            queryUrl,
+            (oldData) => {
+              if (!oldData) return oldData;
+
+              const newData = [...oldData];
+              const foundData = newData.find((e) => e.id === mailId);
+              if (foundData) foundData.read = true;
+
+              return newData;
+            }
+          );
         });
-        if (Category[key] === Category.SavedMails) {
-          if (foundIndex !== undefined) newData.splice(foundIndex, 1);
-          else {
-            let i = 0;
-            while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
-            newData.splice(i, 0, { ...mail });
-          }
-        }
+
+        Object.values(newData).forEach((e) => {
+          e.find((account) => {
+            const { key, unread_doc_count } = account;
+            const found = key === selectedAccount;
+            if (found && unread_doc_count) account.unread_doc_count -= 1;
+            return found;
+          });
+        });
 
         return newData;
-      });
-    }
+      }
+    );
+  };
+
+  const markSavedInQueryData = (mail: MailHeaderType, unsave: boolean) => {
+    const mailId = mail.id;
+    queryClient.setQueryData<AccountsResponse | undefined>(
+      "/api/accounts",
+      (oldData) => {
+        if (!oldData) return oldData;
+        const newData = { ...oldData };
+        Object.values(newData).forEach((e) => {
+          const found = e.find((f) => f.key === selectedAccount);
+          if (found) {
+            if (unsave) found.saved_doc_count--;
+            else found.saved_doc_count++;
+          }
+        });
+        return newData;
+      }
+    );
+
+    Object.values(Category).forEach((e) => {
+      const queryUrl = getMailsQueryUrl(selectedAccount, e);
+
+      queryClient.setQueryData<MailHeaderType[] | undefined>(
+        queryUrl,
+        (oldData) => {
+          if (!oldData) return oldData;
+          const newData = [...oldData];
+          let foundIndex;
+          newData.find((e, i) => {
+            if (e.id === mailId) {
+              foundIndex = i;
+              e.label = unsave ? "" : "saved";
+              return true;
+            }
+            return false;
+          });
+          if (e === Category.SavedMails) {
+            if (foundIndex !== undefined) newData.splice(foundIndex, 1);
+            else {
+              let i = 0;
+              while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
+              newData.splice(i, 0, { ...mail });
+            }
+          }
+
+          return newData;
+        }
+      );
+    });
   };
 
   if (query.isSuccess) {
     const mails = Array.isArray(query.data) ? query.data : [];
 
-    const renderMail = (mail, i) => {
+    const renderMail = (mail: MailHeaderType, i: number) => {
       const date = new Date(mail.date).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
@@ -227,19 +241,21 @@ const MailsRendered = () => {
         minute: "2-digit"
       });
 
-      let duration = (Date.now() - new Date(mail.date)) / (1000 * 60);
-      if (duration > 2 * 24 * 60 * 365) {
-        duration = `${Math.floor(duration / (60 * 24 * 365))} years ago`;
-      } else if (duration > 2 * 24 * 60 * 30.42) {
-        duration = `${Math.floor(duration / (60 * 24 * 30.42))} months ago`;
-      } else if (duration > 2 * 24 * 60 * 7) {
-        duration = `${Math.floor(duration / (60 * 24 * 7))} weeks ago`;
-      } else if (duration > 2 * 24 * 60) {
-        duration = `${Math.floor(duration / (60 * 24))} days ago`;
-      } else if (duration > 2 * 60) {
-        duration = `${Math.floor(duration / 60)} hours ago`;
-      } else if (duration > 2) {
-        duration = `${Math.floor(duration)} minutes ago`;
+      const d = (Date.now() - +new Date(mail.date)) / (1000 * 60);
+      let duration: string;
+
+      if (d > 2 * 24 * 60 * 365) {
+        duration = `${Math.floor(d / (60 * 24 * 365))} years ago`;
+      } else if (d > 2 * 24 * 60 * 30.42) {
+        duration = `${Math.floor(d / (60 * 24 * 30.42))} months ago`;
+      } else if (d > 2 * 24 * 60 * 7) {
+        duration = `${Math.floor(d / (60 * 24 * 7))} weeks ago`;
+      } else if (d > 2 * 24 * 60) {
+        duration = `${Math.floor(d / (60 * 24))} days ago`;
+      } else if (d > 2 * 60) {
+        duration = `${Math.floor(d / 60)} hours ago`;
+      } else if (d > 2) {
+        duration = `${Math.floor(d)} minutes ago`;
       } else {
         duration = "just now";
       }
@@ -291,12 +307,16 @@ const MailsRendered = () => {
           requestDeleteMail(mail);
           if (!mail.read) markReadInQueryData(mail);
 
-          queryClient.setQueryData(queryUrl, (oldData) => {
-            const newData = [...oldData];
-            newData.splice(i, 1);
-            if (!newData.length) removeAccountFromQueryData();
-            return newData;
-          });
+          queryClient.setQueryData<MailHeaderType[] | undefined>(
+            queryUrl,
+            (oldData) => {
+              if (!oldData) return oldData;
+              const newData = [...oldData];
+              newData.splice(i, 1);
+              if (!newData.length) removeAccountFromQueryData();
+              return newData;
+            }
+          );
         }
       };
 
@@ -329,7 +349,11 @@ const MailsRendered = () => {
           className={classes.join(" ")}
           onMouseLeave={() => setOpenedKebab("")}
         >
-          <div className="header cursor" onClick={onClickMailcard}>
+          <div
+            className="header cursor"
+            onClick={onClickMailcard}
+            onMouseLeave={() => setOpenedKebab("")}
+          >
             <div className="mailcard-small content">{duration}</div>
             {activeMailId[mail.id] ? (
               <div className="mailcard-small content">
@@ -364,6 +388,7 @@ const MailsRendered = () => {
                   className="iconBox cursor"
                   onClick={onClickStar}
                   onTouchStart={(e) => e.stopPropagation()}
+                  onMouseEnter={() => setOpenedKebab(mail.id)}
                 >
                   {saved ? (
                     <SolidStarIcon className="star" />
@@ -375,6 +400,7 @@ const MailsRendered = () => {
                   className="iconBox cursor"
                   onClick={onClickReply}
                   onTouchStart={(e) => e.stopPropagation()}
+                  onMouseEnter={() => setOpenedKebab(mail.id)}
                 >
                   <ReplyIcon />
                 </div>
@@ -382,6 +408,7 @@ const MailsRendered = () => {
                   className="iconBox cursor"
                   onClick={onClickShare}
                   onTouchStart={(e) => e.stopPropagation()}
+                  onMouseEnter={() => setOpenedKebab(mail.id)}
                 >
                   <ShareIcon />
                 </div>
@@ -389,6 +416,7 @@ const MailsRendered = () => {
                   className="iconBox cursor"
                   onClick={onClickTrash}
                   onTouchStart={(e) => e.stopPropagation()}
+                  onMouseEnter={() => setOpenedKebab(mail.id)}
                 >
                   <TrashIcon />
                 </div>
@@ -402,7 +430,7 @@ const MailsRendered = () => {
                 </div>
                 <div
                   className="iconBox cursor"
-                  onClick={(e) => setOpenedKebab(mail.id)}
+                  onClick={() => setOpenedKebab(mail.id)}
                 >
                   <KebabIcon />
                 </div>
@@ -421,10 +449,12 @@ const MailsRendered = () => {
       </div>
     );
   }
+
+  return <></>;
 };
 
 const Mails = () => {
-  const { selectedAccount } = useContext(Context);
+  const { selectedAccount } = useContext(Context) as ContextType;
   if (!selectedAccount) return <MailsNotRendered />;
   else return <MailsRendered />;
 };

@@ -19,7 +19,9 @@ const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 const writerParser = (html) => {
   const htmlComponents = html.split("<in-reply-to>");
   return {
-    html: marked(htmlComponents[0]) + (htmlComponents[2] || ""),
+    html:
+      marked(htmlComponents[0].replace(/\n/g, "<br/>\n")) +
+      (htmlComponents[2] || ""),
     inReplyTo: htmlComponents[1] || ""
   };
 };

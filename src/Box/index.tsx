@@ -75,7 +75,7 @@ const Box = () => {
       const d_side = Math.max(-sidePaneLimit, swipeAmount);
       mainPaneStyle.left += d_side;
       sidePaneStyle.left += d_side;
-      if (swipeAmount < -sidePaneLimit / 2.5) swipeCloseAccounts = true;
+      if (swipeAmount < -sidePaneLimit / 3) swipeCloseAccounts = true;
     }
   } else {
     sidePaneStyle.left -= sidePaneLimit;
@@ -85,14 +85,14 @@ const Box = () => {
       const d_side = Math.min(sidePaneLimit, swipeAmount);
       mainPaneStyle.left += d_side;
       sidePaneStyle.left += d_side;
-      if (swipeAmount > sidePaneLimit / 2.5) swipeOpenAccounts = true;
+      if (swipeAmount > sidePaneLimit / 3) swipeOpenAccounts = true;
     }
   }
 
   if (isWriterOpen) {
     if (swipeAmount > 0) {
       writerStyle.right -= Math.min(writerLimit, swipeAmount);
-      if (swipeAmount > Math.min(writerLimit / 2.5, 200)) {
+      if (swipeAmount > Math.min(writerLimit / 3, 150)) {
         swipeCloseWriter = true;
       }
     }
@@ -100,7 +100,7 @@ const Box = () => {
     writerStyle.right -= writerLimit;
     if (!isAccountsOpen && swipeAmount < 0) {
       writerStyle.right -= Math.max(-writerLimit, swipeAmount);
-      if (swipeAmount < Math.max(-writerLimit / 2.5, -200)) {
+      if (swipeAmount < Math.max(-writerLimit / 3, -150)) {
         swipeOpenWriter = true;
       }
     }
@@ -138,6 +138,7 @@ const Box = () => {
         onTouchEnd={onPaneTouchEnd}
       >
         <div
+          style={mainPaneStyle}
           className={
             isWriterOpen
               ? "curtain on"
@@ -159,6 +160,7 @@ const Box = () => {
         onTouchEnd={onPaneTouchEnd}
       >
         <div
+          style={sidePaneStyle}
           className={"curtain" + (isWriterOpen ? " on" : "")}
           onClick={onClickMainOrSideCurtain}
         />
@@ -172,6 +174,7 @@ const Box = () => {
         onTouchEnd={onPaneTouchEnd}
       >
         <div
+          style={writerStyle}
           className={
             "curtain" +
             (isWriterOpen

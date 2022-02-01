@@ -203,10 +203,50 @@ export const getAttachment = (id: string) => {
   });
 };
 
+export interface EmailAdressValue {
+  address: string;
+  name?: string;
+}
+
+export interface EmailAdress {
+  value: EmailAdressValue | EmailAdressValue[];
+  text: string;
+}
+
+export interface MailHeaderType {
+  id: string;
+  read: boolean;
+  label: string;
+  date: string;
+  from: EmailAdress;
+  to: EmailAdress;
+  cc: EmailAdress;
+  bcc: EmailAdress;
+  subject: string;
+  highlight?: {
+    subject?: string[];
+    text?: string[];
+  };
+}
+
+export interface MailBodyType {
+  id: string;
+  html: string;
+  attachments: {
+    content: {
+      data: string;
+    };
+    contentType: string;
+    filename: string;
+  }[];
+}
+
+export interface MailType extends MailHeaderType, MailBodyType {}
+
 export const getMails = (
   account: string,
   options: { sent: any; new: any; saved: any }
-) => {
+): MailHeaderType[] => {
   let searchFiled, query;
 
   if (options.sent) {
@@ -256,7 +296,7 @@ export const getMails = (
     });
 };
 
-export const getMailBody = (id: string) => {
+export const getMailBody = (id: string): MailBodyType => {
   return request("_search", "POST", {
     _source: ["envelopeTo", "html", "attachments", "messageId"],
     query: {

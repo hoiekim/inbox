@@ -118,6 +118,8 @@ ${data.html}
       </div>
     );
   }
+
+  return <></>;
 };
 
 export default MailBody;
