@@ -57,6 +57,10 @@ export interface ContextType {
   setSearchHistory: React.Dispatch<
     React.SetStateAction<ContextType["searchHistory"]>
   >;
+  newMailsTotal: number;
+  setNewMailsTotal: React.Dispatch<
+    React.SetStateAction<ContextType["newMailsTotal"]>
+  >;
 }
 
 export const Context = createContext<ContextType | null>(null);
@@ -67,7 +71,7 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       cacheTime: Infinity,
-      refetchInterval: 1000 * 60 * 60,
+      refetchInterval: 1000 * 60,
       refetchIntervalInBackground: true,
       refetchOnWindowFocus: true,
       refetchOnMount: false,
@@ -104,6 +108,8 @@ const App = () => {
   const [searchHistory, setSearchHistory] = useState<
     ContextType["searchHistory"]
   >([]);
+  const [newMailsTotal, setNewMailsTotal] =
+    useState<ContextType["newMailsTotal"]>(0);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -111,6 +117,9 @@ const App = () => {
     });
     window.addEventListener("orientationchange", () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
+    });
+    window.addEventListener("scroll", () => {
+      window.scrollTo(0, 0);
     });
   }, []);
 
@@ -130,7 +139,9 @@ const App = () => {
     selectedCategory,
     setSelectedCategory,
     searchHistory,
-    setSearchHistory
+    setSearchHistory,
+    newMailsTotal,
+    setNewMailsTotal
   };
 
   return (

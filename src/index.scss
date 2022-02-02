@@ -28,6 +28,8 @@ a {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
     monospace;
+  background-color: rgba(100, 100, 100, 0.3);
+  padding: 0 5px;
 }
 
 /* scrollbar */
@@ -300,16 +302,20 @@ svg {
   .iconBox {
     width: 72px;
 
+    > div {
+      position: relative;
+    }
+
     svg {
       height: 30px;
     }
   }
 
-  &:hover > .iconBox > svg {
+  &:hover > .iconBox svg {
     height: 34px;
   }
 
-  &:active > .iconBox > svg {
+  &:active > .iconBox svg {
     height: 32px;
   }
 }

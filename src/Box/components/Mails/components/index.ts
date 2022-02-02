@@ -1,4 +1,5 @@
 export { default as MailBody } from "./MailBody";
+export { default as MailHeader } from "./MailHeader";
 export { default as SkeletonMail } from "./SkeletonMail";
 export { default as KebabIcon } from "./KebabIcon";
 export { default as ReplyIcon } from "./ReplyIcon";

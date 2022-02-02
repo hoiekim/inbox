@@ -229,16 +229,19 @@ export interface MailHeaderType {
   };
 }
 
+export interface Attachment {
+  content: {
+    data: string;
+  };
+  contentType: string;
+  filename: string;
+}
+
 export interface MailBodyType {
   id: string;
   html: string;
-  attachments: {
-    content: {
-      data: string;
-    };
-    contentType: string;
-    filename: string;
-  }[];
+  attachments: Attachment[];
+  messageId: string;
 }
 
 export interface MailType extends MailHeaderType, MailBodyType {}

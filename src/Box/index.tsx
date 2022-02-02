@@ -23,6 +23,10 @@ const Box = () => {
 
   const onClickWriterCurtain = () => setIsWriterOpen(true);
 
+  const isWriterOpening = !isAccountsOpen && swipeAmount < 0;
+  const isAccountsOpening = !isWriterOpen && swipeAmount < 0;
+  const isAccountsClosing = !isWriterOpen && swipeAmount > 0;
+
   const mainPaneStyle: any = { height: viewSize.height - 55, left: 0 };
   const sidePaneStyle: any = { height: viewSize.height - 55, left: -50 };
   const writerStyle: any = { height: viewSize.height - 55, right: -50 };
@@ -57,7 +61,7 @@ const Box = () => {
     mainPaneLimit = 250;
     writerLimit = Math.min(viewSize.width, 900);
   } else {
-    if (!isAccountsOpen) mainPaneStyle.padding = "5px 0 0 0";
+    mainPaneStyle.padding = "5px 0 0 0";
     mainPaneStyle.width = viewSize.width;
     sidePaneStyle.width = 400;
     writerStyle.width = viewSize.width + 50;
@@ -69,7 +73,7 @@ const Box = () => {
   if (isAccountsOpen) {
     mainPaneStyle.width -= mainPaneLimit;
     mainPaneStyle.left += sidePaneLimit;
-    if (!isWriterOpen && swipeAmount < 0) {
+    if (isAccountsOpening) {
       const d_main = Math.max(-mainPaneLimit, swipeAmount);
       mainPaneStyle.width -= d_main;
       const d_side = Math.max(-sidePaneLimit, swipeAmount);
@@ -79,7 +83,7 @@ const Box = () => {
     }
   } else {
     sidePaneStyle.left -= sidePaneLimit;
-    if (!isWriterOpen && swipeAmount > 0) {
+    if (isAccountsClosing) {
       const d_main = Math.min(mainPaneLimit, swipeAmount);
       mainPaneStyle.width -= d_main;
       const d_side = Math.min(sidePaneLimit, swipeAmount);
@@ -98,7 +102,7 @@ const Box = () => {
     }
   } else {
     writerStyle.right -= writerLimit;
-    if (!isAccountsOpen && swipeAmount < 0) {
+    if (isWriterOpening) {
       writerStyle.right -= Math.max(-writerLimit, swipeAmount);
       if (swipeAmount < Math.max(-writerLimit / 3, -150)) {
         swipeOpenWriter = true;
@@ -140,13 +144,12 @@ const Box = () => {
         <div
           style={mainPaneStyle}
           className={
-            isWriterOpen
-              ? "curtain on"
-              : isAccountsOpen && viewSize.width < 750
-              ? "curtain on"
-              : !isAccountsOpen && swipeAmount < 0
-              ? "curtain on"
-              : "curtain"
+            "curtain" +
+            (isWriterOpen ||
+            (isAccountsOpen && viewSize.width <= 750) ||
+            isWriterOpening
+              ? " on"
+              : "")
           }
           onClick={onClickMainOrSideCurtain}
         />
@@ -176,12 +179,7 @@ const Box = () => {
         <div
           style={writerStyle}
           className={
-            "curtain" +
-            (isWriterOpen
-              ? ""
-              : !isAccountsOpen && swipeAmount < 0
-              ? ""
-              : " on")
+            "curtain" + (!isWriterOpen && !isWriterOpening ? " on" : "")
           }
           onClick={onClickWriterCurtain}
         />

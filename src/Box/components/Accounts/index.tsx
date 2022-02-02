@@ -22,7 +22,7 @@ enum SortBy {
   Name = "Sort by Name"
 }
 
-let searchDelay: NodeJS.Timeout, init: boolean;
+let searchDelay: NodeJS.Timeout;
 
 const Accounts = () => {
   const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
@@ -36,13 +36,17 @@ const Accounts = () => {
   const [showSortOptions, setShowSortOptions] = useState(false);
 
   const {
+    viewSize,
     setUserInfo,
     selectedAccount,
     setSelectedAccount,
     selectedCategory,
     setSelectedCategory,
     searchHistory,
-    setSearchHistory
+    setSearchHistory,
+    setIsAccountsOpen,
+    newMailsTotal,
+    setNewMailsTotal
   } = useContext(Context) as ContextType;
 
   const queryUrl = "/api/accounts";
@@ -50,11 +54,11 @@ const Accounts = () => {
   const getAccounts = () => fetch(queryUrl).then((r) => r.json());
   const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
     onSuccess: (data) => {
-      const newMailsExists = data.received.find((e) => e.unread_doc_count);
-      if (newMailsExists && !init) {
-        setSelectedCategory(Category.NewMails);
-      }
-      init = true;
+      const newMails = data.received.reduce(
+        (acc, e) => acc + e.unread_doc_count,
+        0
+      );
+      setNewMailsTotal(newMails);
     }
   });
 
@@ -104,7 +108,10 @@ const Accounts = () => {
       const accountName = data.key;
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
-        if (selectedAccount !== accountName) setSelectedAccount(accountName);
+        if (selectedAccount !== accountName) {
+          setSelectedAccount(accountName);
+          if (viewSize.width <= 750) setIsAccountsOpen(false);
+        }
       };
 
       const classes = ["tag"];
@@ -172,7 +179,20 @@ const Accounts = () => {
 
       return (
         <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
-          {e === Category.Search ? <SearchIcon /> : e.split(" ")[0]}
+          {e === Category.Search ? (
+            <SearchIcon />
+          ) : (
+            <div>
+              {e.split(" ")[0]}
+              {e === Category.NewMails &&
+              e !== selectedCategory &&
+              newMailsTotal ? (
+                <div className="numberBall" />
+              ) : (
+                <></>
+              )}
+            </div>
+          )}
         </div>
       );
     });
@@ -221,11 +241,11 @@ const Accounts = () => {
           ...searchHistory
         ]);
         setSelectedAccount(e.target.value);
+        if (viewSize.width <= 750) setIsAccountsOpen(false);
       }
     };
 
     const onClickRefresh = () => {
-      init = false;
       query.refetch();
     };
 

@@ -4,8 +4,13 @@ import HamburgerIcon from "./components/HamburgerIcon";
 import { Context } from "../../..";
 
 const LeftMenu = () => {
-  const { isAccountsOpen, setIsAccountsOpen, isWriterOpen, setIsWriterOpen } =
-    useContext(Context);
+  const {
+    isAccountsOpen,
+    setIsAccountsOpen,
+    isWriterOpen,
+    setIsWriterOpen,
+    newMailsTotal
+  } = useContext(Context);
 
   const onClickHamburger = () => {
     if (isWriterOpen) {
@@ -17,7 +22,14 @@ const LeftMenu = () => {
   return (
     <div className="menu left cursor" onClick={onClickHamburger}>
       <div id="hamburger" className="iconBox">
-        <HamburgerIcon />
+        <div>
+          <HamburgerIcon />
+          {newMailsTotal && !isAccountsOpen ? (
+            <div className="numberBall" />
+          ) : (
+            <></>
+          )}
+        </div>
       </div>
     </div>
   );

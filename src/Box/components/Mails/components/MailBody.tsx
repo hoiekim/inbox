@@ -1,0 +1,156 @@
+import React, { useState, useContext, useEffect, useRef } from "react";
+import { useQuery } from "react-query";
+
+import { Context, ContextType } from "src";
+import FileIcon from "src/Box/components/FileIcon";
+
+import { Attachment, MailBodyType } from "routes/lib/mails";
+
+const MailBody = ({ mailId }: { mailId: string }) => {
+  const { setIsWriterOpen, replyData, setReplyData } = useContext(
+    Context
+  ) as ContextType;
+
+  const [isLoadingIframe, setIsLoadingIframe] = useState(true);
+
+  const queryUrl = `/api/mail-body/${mailId}`;
+
+  const getMail = () => fetch(queryUrl).then((r) => r.json());
+  const query = useQuery<MailBodyType>(queryUrl, getMail);
+
+  const iframeElement = useRef(null);
+
+  useEffect(() => {
+    if (
+      query.data?.html &&
+      replyData.id === query.data.id &&
+      replyData.messageId !== query.data.messageId
+    ) {
+      setReplyData({
+        ...replyData,
+        html: query.data.html,
+        messageId: query.data.messageId
+      });
+      setIsWriterOpen(true);
+    }
+  }, [setIsWriterOpen, replyData, setReplyData, query]);
+
+  useEffect(() => {
+    setTimeout(() => audjstMailContnetSize(iframeElement.current), 300);
+  }, []);
+
+  const audjstMailContnetSize = (
+    iframeDom: HTMLIFrameElement | null | undefined
+  ) => {
+    if (!iframeDom || !iframeDom.contentWindow) return;
+    const content = iframeDom.contentWindow.document.body;
+    const contentHeight = content.scrollHeight;
+    const contentWidth = content.scrollWidth;
+    const adjustedContentWidth = iframeDom.offsetWidth - 16;
+    const scale = adjustedContentWidth / contentWidth;
+    const adjustedContentHeight = scale * contentHeight;
+    const adjusteClientHeight = adjustedContentHeight + 32;
+
+    content.style.transform = `scale(${scale})`;
+    content.style.position = "absolute";
+    content.style.top = (adjustedContentHeight * (1 - scale)) / -2 + "px";
+    content.style.left = (adjustedContentWidth * (1 - scale)) / -2 + "px";
+
+    iframeDom.style.transition = adjusteClientHeight / 3 + "ms";
+    iframeDom.style.height = adjusteClientHeight + "px";
+    iframeDom.style.padding = "8px 8px 24px 8px";
+  };
+
+  const loadingMessage = "Loading Mail Data...";
+
+  if (query.isLoading) {
+    return <div className="text">{loadingMessage}</div>;
+  }
+
+  if (query.error) {
+    return <div className="text">Mail Data Request Failed</div>;
+  }
+
+  const data = query.data;
+
+  if (query.isSuccess && data) {
+    const attachments: JSX.Element[] = data.attachments?.map(
+      (attachment: Attachment, i: number) => {
+        const onClickAttachment = () => {
+          fetch(`/api/attachment/${attachment.content.data}`)
+            .then((r) => r.arrayBuffer())
+            .then((r) => {
+              const link = document.createElement("a");
+              const blob = new Blob([r], { type: attachment.contentType });
+              const objectUrl = URL.createObjectURL(blob);
+              link.href = objectUrl;
+              link.target = "_black";
+              link.download = attachment.filename;
+              return link;
+            })
+            .then((link) => link.click());
+        };
+        return (
+          <div
+            key={i}
+            className="attachment cursor"
+            onClick={onClickAttachment}
+          >
+            <FileIcon />
+            <span>{attachment.filename}</span>
+          </div>
+        );
+      }
+    );
+
+    const iframeSrcDoc = `
+<style>
+  body {
+      margin: 0;
+      overflow: hidden;
+      width: 100%;
+      height: 100%
+  }
+  * {
+      font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+      "Helvetica Neue", sans-serif;
+      color: rgb(70,70,70);
+  }
+</style>
+${data.html}
+<script>
+  Array.from(document.querySelectorAll("a")).forEach((e) => {
+    const target = e.getAttribute("target")
+    if (!target || target[0] === "_") e.setAttribute("target", "_blank")
+  })
+</script>
+`;
+
+    const onLoadIframe: React.ReactEventHandler<HTMLIFrameElement> = (e) => {
+      audjstMailContnetSize(e.target as HTMLIFrameElement);
+      setIsLoadingIframe(false);
+    };
+
+    return (
+      <div className="text">
+        {isLoadingIframe ? loadingMessage : null}
+        {attachments && attachments.length ? (
+          <div className="attachmentBox">{attachments}</div>
+        ) : (
+          <></>
+        )}
+        <iframe
+          title={mailId}
+          srcDoc={iframeSrcDoc}
+          onLoad={onLoadIframe}
+          ref={iframeElement}
+        />
+      </div>
+    );
+  }
+
+  return <></>;
+};
+
+export default MailBody;

@@ -2,6 +2,7 @@ import React, { useState, useContext, useEffect } from "react";
 import { useQuery } from "react-query";
 
 import {
+  MailHeader,
   MailBody,
   SkeletonMail,
   KebabIcon,
@@ -229,37 +230,6 @@ const MailsRendered = () => {
     const mails = Array.isArray(query.data) ? query.data : [];
 
     const renderMail = (mail: MailHeaderType, i: number) => {
-      const date = new Date(mail.date).toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      });
-
-      const time = new Date(mail.date).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit"
-      });
-
-      const d = (Date.now() - +new Date(mail.date)) / (1000 * 60);
-      let duration: string;
-
-      if (d > 2 * 24 * 60 * 365) {
-        duration = `${Math.floor(d / (60 * 24 * 365))} years ago`;
-      } else if (d > 2 * 24 * 60 * 30.42) {
-        duration = `${Math.floor(d / (60 * 24 * 30.42))} months ago`;
-      } else if (d > 2 * 24 * 60 * 7) {
-        duration = `${Math.floor(d / (60 * 24 * 7))} weeks ago`;
-      } else if (d > 2 * 24 * 60) {
-        duration = `${Math.floor(d / (60 * 24))} days ago`;
-      } else if (d > 2 * 60) {
-        duration = `${Math.floor(d / 60)} hours ago`;
-      } else if (d > 2) {
-        duration = `${Math.floor(d)} minutes ago`;
-      } else {
-        duration = "just now";
-      }
-
       const saved = mail.label === "saved";
 
       const onClickMailcard = () => {
@@ -349,38 +319,6 @@ const MailsRendered = () => {
           className={classes.join(" ")}
           onMouseLeave={() => setOpenedKebab("")}
         >
-          <div
-            className="header cursor"
-            onClick={onClickMailcard}
-            onMouseLeave={() => setOpenedKebab("")}
-          >
-            <div className="mailcard-small content">{duration}</div>
-            {activeMailId[mail.id] ? (
-              <div className="mailcard-small content">
-                {date}, {time}
-              </div>
-            ) : (
-              <></>
-            )}
-            <div className="mailcard-small content">
-              {"from: " +
-                mail.from.value.map((e) => e.name || e.address).join(", ")}
-            </div>
-            {activeMailId[mail.id] ? (
-              <div className="mailcard-small content">
-                {"to: " +
-                  mail.to.value.map((e) => e.name || e.address).join(", ")}
-              </div>
-            ) : (
-              <></>
-            )}
-            <div className="mailcard-subject content">{mail.subject}</div>
-          </div>
-          {activeMailId[mail.id] ? (
-            <MailBody mailId={mail.id} />
-          ) : searchHighlight ? (
-            <div className="search_highlight">{searchHighlight}</div>
-          ) : null}
           <div className="actionBox">
             {openedKebab === mail.id ? (
               <>
@@ -437,6 +375,17 @@ const MailsRendered = () => {
               </>
             )}
           </div>
+          <MailHeader
+            mail={mail}
+            isActive={!!activeMailId[mail.id]}
+            onClick={onClickMailcard}
+            onMouseLeave={() => setOpenedKebab("")}
+          />
+          {activeMailId[mail.id] ? (
+            <MailBody mailId={mail.id} />
+          ) : searchHighlight ? (
+            <div className="search_highlight">{searchHighlight}</div>
+          ) : null}
         </blockquote>
       );
     };

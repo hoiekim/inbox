@@ -34,11 +34,6 @@
   }
 }
 
-code {
-  background-color: rgba(100, 100, 100, 0.3);
-  padding: 0 5px;
-}
-
 .mails_container {
   width: 100%;
   position: relative;
@@ -48,7 +43,7 @@ code {
   }
 
   iframe {
-    padding: 0.5rem;
+    padding: 0 8px;
     background-color: white;
     width: 100%;
     height: 0;
@@ -143,10 +138,19 @@ code {
     .mailcard-small {
       font-size: 16px;
       opacity: 0.7;
+      transition: 100ms;
+      height: 24px;
+      overflow: hidden;
+
+      &.closed {
+        height: 0;
+      }
     }
+
     .mailcard-subject {
       font-size: 20px;
       margin-top: 0.5rem;
+      margin-bottom: 0.3rem;
     }
 
     &.skeleton {
