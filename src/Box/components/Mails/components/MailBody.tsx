@@ -58,7 +58,8 @@ const MailBody = ({ mailId }: { mailId: string }) => {
 
     iframeDom.style.transition = adjusteClientHeight / 3 + "ms";
     iframeDom.style.height = adjusteClientHeight + "px";
-    iframeDom.style.padding = "8px 8px 24px 8px";
+    iframeDom.style.paddingTop = "8px";
+    iframeDom.style.paddingBottom = "24px";
   };
 
   const loadingMessage = "Loading Mail Data...";
@@ -128,13 +129,15 @@ ${data.html}
 `;
 
     const onLoadIframe: React.ReactEventHandler<HTMLIFrameElement> = (e) => {
-      audjstMailContnetSize(e.target as HTMLIFrameElement);
       setIsLoadingIframe(false);
+      audjstMailContnetSize(e.target as HTMLIFrameElement);
     };
 
     return (
       <div className="text">
-        {isLoadingIframe ? loadingMessage : null}
+        <div className="loading_message">
+          {isLoadingIframe ? loadingMessage : null}
+        </div>
         {attachments && attachments.length ? (
           <div className="attachmentBox">{attachments}</div>
         ) : (

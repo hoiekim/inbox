@@ -13,7 +13,7 @@ import {
   SolidStarIcon
 } from "./components";
 
-import { Context, ContextType, Category, queryClient } from "src";
+import { Context, Category, queryClient } from "src";
 
 import { MailHeaderType, AccountsResponse } from "routes/lib/mails";
 
@@ -38,7 +38,7 @@ const MailsNotRendered = () => {
 };
 
 const getMailsQueryUrl = (account: string, category: Category) => {
-  let queryOption;
+  let queryOption: string;
 
   switch (category) {
     case Category.Search:
@@ -66,7 +66,7 @@ const MailsRendered = () => {
     selectedAccount,
     setSelectedAccount,
     selectedCategory
-  } = useContext(Context) as ContextType;
+  } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState<any>({});
   const [openedKebab, setOpenedKebab] = useState("");
@@ -231,9 +231,10 @@ const MailsRendered = () => {
 
     const renderMail = (mail: MailHeaderType, i: number) => {
       const saved = mail.label === "saved";
+      const isActive = !!activeMailId[mail.id];
 
       const onClickMailcard = () => {
-        if (activeMailId[mail.id]) {
+        if (isActive) {
           const clonedActiveMailId = { ...activeMailId };
           delete clonedActiveMailId[mail.id];
           setActiveMailId(clonedActiveMailId);
@@ -249,7 +250,7 @@ const MailsRendered = () => {
       };
 
       const onClickReply = () => {
-        if (!activeMailId[mail.id]) {
+        if (!isActive) {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
@@ -261,7 +262,7 @@ const MailsRendered = () => {
       };
 
       const onClickShare = () => {
-        if (!activeMailId[mail.id]) {
+        if (!isActive) {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
@@ -313,14 +314,33 @@ const MailsRendered = () => {
       if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
       if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
 
+      const isKebabOpen = openedKebab === mail.id;
+
       return (
         <blockquote
           key={i}
           className={classes.join(" ")}
           onMouseLeave={() => setOpenedKebab("")}
         >
-          <div className="actionBox">
-            {openedKebab === mail.id ? (
+          <MailHeader
+            mail={mail}
+            isActive={isActive}
+            onClick={onClickMailcard}
+            onMouseLeave={() => setOpenedKebab("")}
+          />
+          {isActive ? (
+            <MailBody mailId={mail.id} />
+          ) : searchHighlight ? (
+            <div className="search_highlight">{searchHighlight}</div>
+          ) : null}
+          <div
+            className={
+              "actionBox" +
+              (isKebabOpen ? " open" : "") +
+              (saved ? " saved" : "")
+            }
+          >
+            {isKebabOpen ? (
               <>
                 <div
                   className="iconBox cursor"
@@ -361,11 +381,13 @@ const MailsRendered = () => {
               </>
             ) : (
               <>
-                <div className="iconBox" />
-                <div className="iconBox" />
-                <div className="iconBox cursor" onClick={onClickStar}>
-                  {saved ? <SolidStarIcon className="star" /> : <></>}
-                </div>
+                {saved ? (
+                  <div className={"iconBox cursor"} onClick={onClickStar}>
+                    <SolidStarIcon className="star" />
+                  </div>
+                ) : (
+                  <></>
+                )}
                 <div
                   className="iconBox cursor"
                   onClick={() => setOpenedKebab(mail.id)}
@@ -375,17 +397,6 @@ const MailsRendered = () => {
               </>
             )}
           </div>
-          <MailHeader
-            mail={mail}
-            isActive={!!activeMailId[mail.id]}
-            onClick={onClickMailcard}
-            onMouseLeave={() => setOpenedKebab("")}
-          />
-          {activeMailId[mail.id] ? (
-            <MailBody mailId={mail.id} />
-          ) : searchHighlight ? (
-            <div className="search_highlight">{searchHighlight}</div>
-          ) : null}
         </blockquote>
       );
     };
@@ -403,7 +414,7 @@ const MailsRendered = () => {
 };
 
 const Mails = () => {
-  const { selectedAccount } = useContext(Context) as ContextType;
+  const { selectedAccount } = useContext(Context);
   if (!selectedAccount) return <MailsNotRendered />;
   else return <MailsRendered />;
 };

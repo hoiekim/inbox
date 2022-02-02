@@ -11,7 +11,7 @@ import {
   SortUpIcon
 } from "./components";
 
-import { Context, ContextType, Category, useLocalStorage } from "src";
+import { Context, Category, useLocalStorage } from "src";
 import { Account, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";
@@ -47,7 +47,7 @@ const Accounts = () => {
     setIsAccountsOpen,
     newMailsTotal,
     setNewMailsTotal
-  } = useContext(Context) as ContextType;
+  } = useContext(Context);
 
   const queryUrl = "/api/accounts";
 

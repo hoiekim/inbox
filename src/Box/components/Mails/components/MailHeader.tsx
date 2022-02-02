@@ -1,6 +1,6 @@
 import React, { useContext } from "react";
 
-import { Context, ContextType } from "src";
+import { Context } from "src";
 import { MailHeaderType } from "routes/lib/mails";
 
 export interface MailHeaderProps extends React.ComponentProps<"div"> {
@@ -14,7 +14,7 @@ const MailHeader = ({
   onClick,
   onMouseLeave
 }: MailHeaderProps) => {
-  const { isWriterOpen } = useContext(Context) as ContextType;
+  const { isWriterOpen } = useContext(Context);
 
   const date = new Date(mail.date).toLocaleDateString("en-US", {
     weekday: "long",

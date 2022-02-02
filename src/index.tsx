@@ -63,7 +63,7 @@ export interface ContextType {
   >;
 }
 
-export const Context = createContext<ContextType | null>(null);
+export const Context = createContext<ContextType>({} as ContextType);
 
 let session: UserInfoType | undefined;
 
@@ -108,8 +108,7 @@ const App = () => {
   const [searchHistory, setSearchHistory] = useState<
     ContextType["searchHistory"]
   >([]);
-  const [newMailsTotal, setNewMailsTotal] =
-    useState<ContextType["newMailsTotal"]>(0);
+  const [newMailsTotal, setNewMailsTotal] = useState(0);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -124,7 +123,7 @@ const App = () => {
   }, []);
 
   // stores states to export with `Context`
-  const contextValue = {
+  const contextValue: ContextType = {
     viewSize,
     userInfo,
     setUserInfo,

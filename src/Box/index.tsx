@@ -1,6 +1,6 @@
 import React, { useContext, useState } from "react";
 import { Writer, Accounts, Mails } from "./components";
-import { Context, ContextType } from "src";
+import { Context } from "src";
 import "./index.scss";
 
 const touchStartPosition = { x: 0, y: 0 };
@@ -12,7 +12,7 @@ const Box = () => {
     setIsAccountsOpen,
     isWriterOpen,
     setIsWriterOpen
-  } = useContext(Context) as ContextType;
+  } = useContext(Context);
 
   const [swipeAmount, setSwipeAmount] = useState(0);
 
