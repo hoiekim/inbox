@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { Suspense, useContext, useState } from "react";
 import { Writer, Accounts, Mails } from "./components";
 import { Context } from "src";
 import "./index.scss";
@@ -153,7 +153,9 @@ const Box = () => {
           }
           onClick={onClickMainOrSideCurtain}
         />
-        <Mails />
+        <Suspense fallback={<></>}>
+          <Mails />
+        </Suspense>
       </div>
       <div
         style={sidePaneStyle}
@@ -167,7 +169,9 @@ const Box = () => {
           className={"curtain" + (isWriterOpen ? " on" : "")}
           onClick={onClickMainOrSideCurtain}
         />
-        <Accounts />
+        <Suspense fallback={<></>}>
+          <Accounts />
+        </Suspense>
       </div>
       <div
         style={writerStyle}
@@ -183,7 +187,9 @@ const Box = () => {
           }
           onClick={onClickWriterCurtain}
         />
-        <Writer />
+        <Suspense fallback={<></>}>
+          <Writer />
+        </Suspense>
       </div>
     </>
   );
