@@ -88,30 +88,24 @@
       flex-direction: column;
       width: 100%;
       height: calc(100% - 0.5rem - 20px);
-      perspective: 4000px;
 
-      .writer-content {
-        position: relative;
-        width: 100%;
+      * {
+        font-weight: 400;
+        transition: 500ms;
+        transition-property: background-color;
+      }
+
+      .writer-content-padding {
+        padding: 0.5rem;
         height: 100%;
-        transition: transform 600ms;
-        transform-style: preserve-3d;
+        border-radius: 3px;
+        overflow: visible;
 
-        &.flip {
-          transform: rotateY(180deg);
-        }
-
-        > * {
-          position: absolute;
-          width: 100%;
+        .writer-content {
+          position: relative;
           height: 100%;
-          -webkit-backface-visibility: hidden;
-          backface-visibility: hidden;
-        }
-
-        #writer-preview {
-          border-radius: 3px;
-          transform: rotateY(180deg);
+          cursor: text;
+          overflow: visible;
         }
       }
     }

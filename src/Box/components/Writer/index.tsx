@@ -1,22 +1,21 @@
 import React, { useContext, useState, useEffect } from "react";
 import { useMutation } from "react-query";
 
-import CcIcon from "./components/CcIcon";
-import PreviewIcon from "./components/PreviewIcon";
-import SendIcon from "./components/SendIcon";
-import AttachIcon from "./components/AttachIcon";
+import Editor, { theme } from "rich-markdown-editor";
+
+import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
-import EraserIcon from "./components/EraserIcon";
 
 import { Context, useLocalStorage } from "src";
+import { useDarkTheme } from "src/lib";
 
 import "./index.scss";
 
-import marked from "marked";
+import { marked } from "marked";
 
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
-const writerParser = (html) => {
+const writerParser = (html: any) => {
   const htmlComponents = html.split("<in-reply-to>");
   return {
     html:
@@ -31,8 +30,6 @@ const Writer = () => {
     useContext(Context);
 
   const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [previewSrc, setPreviewSrc] = useState("");
 
   const [name, setName] = useLocalStorage("name", "");
   const [to, setTo] = useLocalStorage("to", "");
@@ -42,7 +39,11 @@ const Writer = () => {
   const [sender, setSender] = useLocalStorage("sender", "");
   const [textarea, setTextarea] = useLocalStorage("textarea", "");
 
-  const [attachments, setAttachments] = useState({});
+  const [attachments, setAttachments] = useState<any>({});
+
+  const [editorValue, setEditorValue] = useState(textarea);
+
+  const isDarkTheme = useDarkTheme();
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
@@ -91,7 +92,7 @@ ${replyData.html}
     isWriterOpen
   ]);
 
-  const sendMail = (data) => {
+  const sendMail = (data: any) => {
     return fetch("/api/send", {
       method: "POST",
       headers: {},
@@ -99,7 +100,7 @@ ${replyData.html}
     }).then((r) => r.json());
   };
 
-  const onSuccessSendMail = (data) => {
+  const onSuccessSendMail = (data: any) => {
     if (data !== true) return alert("Failed to send. Please Try again");
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
@@ -110,12 +111,11 @@ ${replyData.html}
     setSubject("");
     setTextarea("");
     setAttachments({});
-    setPreviewSrc("");
   };
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
 
-  const onChangeName = (e) => {
+  const onChangeName = (e: any) => {
     const name = e.target.value;
     setName(name);
   };
@@ -128,30 +128,12 @@ ${replyData.html}
     setSubject("");
     setTextarea("");
     setAttachments({});
+    setEditorValue("");
+    console.log(editorValue);
   };
 
   const onClickCcIcon = () => {
     setIsCcOpen(!isCcOpen);
-  };
-
-  const onClickPreview = () => {
-    if (isPreviewOpen) setIsPreviewOpen(false);
-    else {
-      const { html } = writerParser(textarea);
-      setPreviewSrc(`
-        <style>
-          body {
-            padding: 0.5rem;
-            margin: 0;
-            font-family: "Open Sans", -apple-system, BlinkMacSystemFont,
-              "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell",
-              "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
-          }
-        </style>
-        ${html}
-      `);
-      setIsPreviewOpen(true);
-    }
   };
 
   const onClickAttach = () => {
@@ -161,8 +143,8 @@ ${replyData.html}
     fileInput.click();
     fileInput.addEventListener("change", () => {
       const timeStamp = Date.now();
-      const clonedAttachments = { ...attachments };
-      const files = Array.from(fileInput.files);
+      const clonedAttachments: any = { ...attachments };
+      const files = Array.from(fileInput.files as unknown as any[]);
       files.forEach(async (e, i) => {
         clonedAttachments[`${timeStamp}-${i}`] = e;
       });
@@ -177,7 +159,7 @@ ${replyData.html}
 
     const { html, inReplyTo } = writerParser(textarea);
 
-    const mailData = {
+    const mailData: any = {
       name,
       sender,
       to,
@@ -220,6 +202,34 @@ ${replyData.html}
       </div>
     );
   });
+
+  const editorBackgroundColor = isWriterOpen
+    ? theme.background
+    : isDarkTheme
+    ? "#2d3537"
+    : "#f2f2f2";
+
+  const editorColor = isWriterOpen
+    ? theme.text
+    : isDarkTheme
+    ? "#f2f2f2"
+    : "#2d3537";
+
+  let focusAtEnd: () => void = () => {};
+
+  const onClickPadding: React.MouseEventHandler<HTMLDivElement> = (e) => {
+    const targetClassList = Array.from((e.target as any).classList);
+    const targetIsContainer = targetClassList.find(
+      (f) => f === "editor_container"
+    );
+    if (targetIsContainer) focusAtEnd();
+  };
+
+  const uploadImage = async (file: File) => {
+    const blob = new Blob([file]);
+    const objectUrl = URL.createObjectURL(blob);
+    return objectUrl;
+  };
 
   return (
     <blockquote className="writer">
@@ -310,28 +320,48 @@ ${replyData.html}
             <></>
           )}
           <div
-            className={isPreviewOpen ? "writer-content flip" : "writer-content"}
+            className="writer-content-padding"
+            style={{
+              backgroundColor: editorBackgroundColor
+            }}
           >
-            <textarea
-              className="writer-fat"
-              placeholder="Say something really cool here!"
-              autoComplete="off"
-              value={textarea}
-              onChange={(e) => setTextarea(e.target.value)}
-            ></textarea>
-            <iframe
-              id="writer-preview"
-              title="writer-preview"
-              srcDoc={previewSrc}
-            ></iframe>
+            <div
+              className="writer-content"
+              onClick={onClickPadding}
+              style={{
+                backgroundColor: editorBackgroundColor
+              }}
+            >
+              <Editor
+                className="editor_container"
+                ref={(e) => {
+                  if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
+                }}
+                style={{
+                  height: "100%",
+                  justifyContent: "flex-start",
+                  backgroundColor: editorBackgroundColor,
+                  color: editorColor,
+                  overflowY: "scroll",
+                  overflowX: "visible",
+                  paddingLeft: "2rem"
+                }}
+                theme={{
+                  ...theme,
+                  background: editorBackgroundColor,
+                  text: editorColor
+                }}
+                placeholder="Say something really cool here!"
+                defaultValue={textarea}
+                value={editorValue}
+                onChange={setTextarea}
+                uploadImage={uploadImage}
+              />
+            </div>
           </div>
         </div>
       </div>
       <div className="writer-buttons">
-        <button onClick={onClickPreview}>
-          <PreviewIcon />
-          <span>Preview</span>
-        </button>
         <button onClick={onClickSend}>
           <SendIcon />
           <span>Send</span>

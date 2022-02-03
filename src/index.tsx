@@ -74,7 +74,7 @@ export const queryClient = new QueryClient({
       refetchInterval: 1000 * 60,
       refetchIntervalInBackground: true,
       refetchOnWindowFocus: true,
-      refetchOnMount: false,
+      refetchOnMount: true,
       refetchOnReconnect: true,
       retry: false
     }
@@ -116,9 +116,6 @@ const App = () => {
     });
     window.addEventListener("orientationchange", () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
-    });
-    window.addEventListener("scroll", () => {
-      window.scrollTo(0, 0);
     });
   }, []);
 

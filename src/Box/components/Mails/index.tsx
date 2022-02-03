@@ -14,7 +14,6 @@ import {
 } from "./components";
 
 import { Context, Category, queryClient } from "src";
-
 import { MailHeaderType, AccountsResponse } from "routes/lib/mails";
 
 import "./index.scss";
@@ -65,7 +64,9 @@ const MailsRendered = () => {
     setReplyData,
     selectedAccount,
     setSelectedAccount,
-    selectedCategory
+    selectedCategory,
+    setSelectedCategory,
+    newMailsTotal
   } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState<any>({});
@@ -243,6 +244,7 @@ const MailsRendered = () => {
             requestMarkRead(mail);
             markReadInQueryData(mail);
             mail.read = true;
+            if (newMailsTotal === 1) setSelectedCategory(Category.AllMails);
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);

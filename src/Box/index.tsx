@@ -24,8 +24,8 @@ const Box = () => {
   const onClickWriterCurtain = () => setIsWriterOpen(true);
 
   const isWriterOpening = !isAccountsOpen && swipeAmount < 0;
-  const isAccountsOpening = !isWriterOpen && swipeAmount < 0;
-  const isAccountsClosing = !isWriterOpen && swipeAmount > 0;
+  const isAccountsClosing = !isWriterOpen && swipeAmount < 0;
+  const isAccountsOpening = !isWriterOpen && swipeAmount > 0;
 
   const mainPaneStyle: any = { height: viewSize.height - 55, left: 0 };
   const sidePaneStyle: any = { height: viewSize.height - 55, left: -50 };
@@ -73,7 +73,7 @@ const Box = () => {
   if (isAccountsOpen) {
     mainPaneStyle.width -= mainPaneLimit;
     mainPaneStyle.left += sidePaneLimit;
-    if (isAccountsOpening) {
+    if (isAccountsClosing) {
       const d_main = Math.max(-mainPaneLimit, swipeAmount);
       mainPaneStyle.width -= d_main;
       const d_side = Math.max(-sidePaneLimit, swipeAmount);
@@ -83,7 +83,7 @@ const Box = () => {
     }
   } else {
     sidePaneStyle.left -= sidePaneLimit;
-    if (isAccountsClosing) {
+    if (isAccountsOpening) {
       const d_main = Math.min(mainPaneLimit, swipeAmount);
       mainPaneStyle.width -= d_main;
       const d_side = Math.min(sidePaneLimit, swipeAmount);
