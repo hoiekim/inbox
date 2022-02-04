@@ -6,6 +6,8 @@ body {
   top: 0;
   left: 0;
   margin: 0;
+  width: 100vw;
+  height: 100vh;
   font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
     "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
     "Helvetica Neue", sans-serif;
@@ -54,9 +56,27 @@ code {
   *:hover::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.2);
   }
+
+  #block-menu-container,
+  #emoji-menu-container,
+  .editor_container {
+    &:hover::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+
   ::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.7);
   }
+
+  #block-menu-container,
+  #emoji-menu-container,
+  .editor_container {
+    &::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.7);
+    }
+  }
+
   input::-webkit-scrollbar-thumb {
     border: 7px solid $color-light;
   }
@@ -67,36 +87,46 @@ code {
     color: $color-dark;
   }
 
-  button {
-    background-color: adjust-color($color-accent, $lightness: 17%);
-    color: $color-light;
+  .login_card,
+  .writer-buttons {
+    & > button {
+      background-color: adjust-color($color-accent, $lightness: 17%);
+      color: $color-light;
 
-    &:hover {
-      background-color: adjust-color($color-accent, $lightness: 24%);
-    }
+      &:hover {
+        background-color: adjust-color($color-accent, $lightness: 24%);
+      }
 
-    &:active {
-      background-color: adjust-color($color-accent, $lightness: 22%);
+      &:active {
+        background-color: adjust-color($color-accent, $lightness: 22%);
+      }
     }
   }
 
-  blockquote {
+  .mailcard,
+  .writer,
+  .login_card {
     background-color: adjust-color($color-light, $lightness: 3%);
     border-left: 3px solid adjust-color($color-light, $lightness: 8%);
+  }
 
-    &.mailcard:hover {
-      background-color: adjust-color($color-light, $lightness: 4%);
+  .mailcard:hover {
+    background-color: adjust-color($color-light, $lightness: 4%);
+  }
+
+  .inputBox-flex,
+  .search_container,
+  .login_card {
+    input {
+      color: $color-dark;
+      background-color: adjust-color($color-light, $lightness: 10%);
+      box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
+        -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
     }
   }
 
-  input {
-    color: $color-dark;
-    background-color: adjust-color($color-light, $lightness: 10%);
-    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
-      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
-  }
-
-  .attachment {
+  .attachment,
+  .message_preview {
     background-color: adjust-color($color-light, $lightness: 8%);
 
     &:hover {
@@ -130,13 +160,32 @@ code {
   *:hover::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.2);
   }
+
+  #block-menu-container,
+  #emoji-menu-container,
+  .editor_container {
+    &:hover::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.2);
+    }
+  }
+
   ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.7);
   }
+
+  #block-menu-container,
+  #emoji-menu-container,
+  .editor_container {
+    &::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 0, 0, 0.7);
+    }
+  }
+
   input::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.2);
     border: 7px solid rgb(235, 235, 235);
   }
+
   input::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.7);
   }
@@ -147,35 +196,45 @@ code {
     color: $color-light;
   }
 
-  button {
-    color: $color-light;
-    background-color: adjust-color($color-accent, $lightness: 7%);
+  .login_card,
+  .writer-buttons {
+    & > button {
+      color: $color-light;
+      background-color: adjust-color($color-accent, $lightness: 7%);
 
-    &:hover {
-      background-color: adjust-color($color-accent, $lightness: 14%);
-    }
-    &:active {
-      background-color: adjust-color($color-accent, $lightness: 12%);
+      &:hover {
+        background-color: adjust-color($color-accent, $lightness: 14%);
+      }
+      &:active {
+        background-color: adjust-color($color-accent, $lightness: 12%);
+      }
     }
   }
 
-  blockquote {
+  .mailcard,
+  .writer,
+  .login_card {
     background-color: adjust-color($color-dark, $lightness: 3%);
     border-left: 3px solid adjust-color($color-dark, $lightness: 10%);
+  }
 
-    &.mailcard:not(.skeleton):hover {
-      background-color: adjust-color($color-dark, $lightness: 4%);
+  .mailcard:not(.skeleton):hover {
+    background-color: adjust-color($color-dark, $lightness: 4%);
+  }
+
+  .inputBox-flex,
+  .search_container,
+  .login_card {
+    input {
+      color: $color-light;
+      background-color: adjust-color($color-dark, $lightness: -3%);
+      box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
+        -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
     }
   }
 
-  input {
-    color: $color-light;
-    background-color: adjust-color($color-dark, $lightness: -3%);
-    box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
-      -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
-  }
-
-  .attachment {
+  .attachment,
+  .message_preview {
     background-color: adjust-color($color-dark, $lightness: 10%);
 
     &:hover {
@@ -228,18 +287,19 @@ a:visited {
   color: rgb(100, 130, 220);
 }
 
-input {
-  font-size: 16px;
-  border: none;
-  padding: 0.5rem;
-  border-radius: 3px;
-  cursor: auto;
-}
-
-input {
-  text-align: center;
-  height: 30px;
-  width: 200px;
+.inputBox-flex,
+.search_container,
+.login_card {
+  input {
+    font-size: 16px;
+    border: none;
+    padding: 0.5rem;
+    border-radius: 3px;
+    cursor: auto;
+    text-align: center;
+    height: 30px;
+    width: 200px;
+  }
 }
 
 ::placeholder {
@@ -247,34 +307,33 @@ input {
   font-size: 0.8rem;
 }
 
-button {
-  border: none;
-  box-sizing: border-box;
-  text-align: center;
-  border-radius: 3px;
-  height: 30px;
-  width: 90px;
-  font-size: 16px;
-  font-weight: 500;
-  overflow: hidden;
-  $color-light-space: nowrap;
-}
-button:hover {
-  cursor: pointer;
-
-  * {
-    cursor: pointer;
+.login_card,
+.writer-buttons {
+  & > button {
+    border: none;
+    box-sizing: border-box;
+    text-align: center;
+    border-radius: 3px;
+    height: 30px;
+    font-size: 16px;
+    font-weight: 500;
+    overflow: hidden;
+    $color-light-space: nowrap;
   }
 }
 
-.under_header {
-  position: fixed;
+button:hover {
+  &,
+  & * {
+    cursor: pointer;
+  }
 }
 
 .cursor,
 .cursor * {
   cursor: pointer;
 }
+
 .hide {
   display: none;
 }

@@ -44,7 +44,9 @@ const Accounts = () => {
     setSelectedCategory,
     searchHistory,
     setSearchHistory,
+    isAccountsOpen,
     setIsAccountsOpen,
+    isWriterOpen,
     newMailsTotal,
     setNewMailsTotal
   } = useContext(Context);
@@ -63,8 +65,9 @@ const Accounts = () => {
   });
 
   useEffect(() => {
-    if (searchInputDom) searchInputDom.focus();
-  }, [searchInputDom]);
+    if (searchInputDom && isAccountsOpen && !isWriterOpen)
+      searchInputDom.focus();
+  }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
   useEffect(() => {
     window.addEventListener("touchstart", () => setShowSortOptions(false));

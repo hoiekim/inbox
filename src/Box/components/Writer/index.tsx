@@ -7,7 +7,7 @@ import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
 import { Context, useLocalStorage } from "src";
-import { useDarkTheme } from "src/lib";
+import { useDarkTheme, getDateForMailHeader } from "src/lib";
 
 import "./index.scss";
 
@@ -15,13 +15,37 @@ import { marked } from "marked";
 
 const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
 
-const writerParser = (html: any) => {
-  const htmlComponents = html.split("<in-reply-to>");
+const replyDataToOriginalMessage = (replyData: any) => {
+  if (!replyData) {
+    return {
+      id: "",
+      messageId: "",
+      subject: "",
+      prefix: "",
+      shortPrefix: "",
+      html: ""
+    };
+  }
+  const { id, messageId, date, subject, from, html } = replyData;
+
+  const {
+    date: localeDate,
+    time: localeTime,
+    duration
+  } = getDateForMailHeader(new Date(date));
+
+  const fromText = from.text.replace("<", "&lt;").replace(">", "&gt;");
+  const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
+  const shortPrefix = `${duration}, ${fromText} wrote:`;
+  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin-left: 0 0 0 0.5rem;">${html}</blockquote>`;
+
   return {
-    html:
-      marked(htmlComponents[0].replace(/\n/g, "<br/>\n")) +
-      (htmlComponents[2] || ""),
-    inReplyTo: htmlComponents[1] || ""
+    id,
+    messageId,
+    subject,
+    prefix,
+    shortPrefix,
+    html: newHtml
   };
 };
 
@@ -38,44 +62,47 @@ const Writer = () => {
   const [subject, setSubject] = useLocalStorage("subject", "");
   const [sender, setSender] = useLocalStorage("sender", "");
   const [textarea, setTextarea] = useLocalStorage("textarea", "");
+  const [originalMessage, setOriginalMessage] = useLocalStorage(
+    "originalMessage",
+    {
+      id: "",
+      messageId: "",
+      subject: "",
+      html: "",
+      prefix: "",
+      shortPrefix: ""
+    }
+  );
 
   const [attachments, setAttachments] = useState<any>({});
 
-  const [editorValue, setEditorValue] = useState(textarea);
+  const [editorKey, setEditorKey] = useState(1);
 
   const isDarkTheme = useDarkTheme();
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
-      const date = new Date(replyData.date).toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-      });
-
-      const time = new Date(replyData.date).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit"
-      });
-
-      const html = `\n\n\n
-<in-reply-to>${replyData.messageId}<in-reply-to>
-<br><br><br>
-<p>On ${date} at ${time}, ${replyData.from.text
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")} wrote:</p>
-<blockquote style="border-left: 1px solid #cccccc; padding-left: 0.5rem; padding-right: 0; margin-left: 0.5rem; margin-right: 0;">
-${replyData.html}
-</blockquote>`;
-
       setSender(replyData.to.address.split("@")[0]);
       setTo(replyData.from.value[0].address);
       setCc("");
       setBcc("");
-      setSubject(replyData.subject);
-      setTextarea(html);
+      const replyMarkExistsInSubect = !replyData.subject
+        .toLowerCase()
+        .indexOf("re:");
+      const forwardMarkExistsInSubect = !replyData.subject
+        .toLowerCase()
+        .indexOf("fwd:");
+      const subject = replyData.to.address
+        ? replyMarkExistsInSubect
+          ? replyData.subject
+          : "Re: " + replyData.subject
+        : forwardMarkExistsInSubect
+        ? replyData.subject
+        : "Fwd: " + replyData.subject;
+      setSubject(subject);
+      setTextarea("");
       setAttachments({});
+      setOriginalMessage(replyDataToOriginalMessage(replyData));
 
       setReplyData({});
     }
@@ -89,7 +116,8 @@ ${replyData.html}
     setAttachments,
     replyData,
     setReplyData,
-    isWriterOpen
+    isWriterOpen,
+    setOriginalMessage
   ]);
 
   const sendMail = (data: any) => {
@@ -104,13 +132,7 @@ ${replyData.html}
     if (data !== true) return alert("Failed to send. Please Try again");
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
-    setSender("");
-    setTo("");
-    setCc("");
-    setBcc("");
-    setSubject("");
-    setTextarea("");
-    setAttachments({});
+    onClickEraserIcon();
   };
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
@@ -128,8 +150,15 @@ ${replyData.html}
     setSubject("");
     setTextarea("");
     setAttachments({});
-    setEditorValue("");
-    console.log(editorValue);
+    setEditorKey(editorKey + 1);
+    setOriginalMessage({
+      id: "",
+      messageId: "",
+      html: "",
+      subject: "",
+      prefix: "",
+      shortPrefix: ""
+    });
   };
 
   const onClickCcIcon = () => {
@@ -157,7 +186,11 @@ ${replyData.html}
 
     const formData = new FormData();
 
-    const { html, inReplyTo } = writerParser(textarea);
+    const html =
+      marked(textarea) +
+      "\n\n\n" +
+      `<p>${originalMessage.prefix}</p>` +
+      originalMessage.html;
 
     const mailData: any = {
       name,
@@ -167,7 +200,7 @@ ${replyData.html}
       bcc,
       subject,
       html,
-      inReplyTo
+      inReplyTo: originalMessage.messageId
     };
 
     for (const key in mailData) {
@@ -296,7 +329,7 @@ ${replyData.html}
       </div>
       <div>
         <div className="fieldName">Subject: </div>
-        <div className="margin_box">
+        <div className="inputBox-flex margin_box">
           <input
             className="writer-long"
             placeholder="This is the mail subject"
@@ -313,52 +346,60 @@ ${replyData.html}
             <AttachIcon className="cursor" onClick={onClickAttach} />
           </span>
         </div>
-        <div className="writer-content-wrap margin_box">
+        <div className="writer-content-wrap">
           {attachmentComponents.length ? (
             <div className="attachmentBox">{attachmentComponents}</div>
           ) : (
             <></>
           )}
           <div
-            className="writer-content-padding"
+            className="writer-content margin_box"
+            onClick={onClickPadding}
             style={{
               backgroundColor: editorBackgroundColor
             }}
           >
-            <div
-              className="writer-content"
-              onClick={onClickPadding}
-              style={{
-                backgroundColor: editorBackgroundColor
+            <Editor
+              key={editorKey}
+              className="editor_container"
+              ref={(e) => {
+                if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
               }}
-            >
-              <Editor
-                className="editor_container"
-                ref={(e) => {
-                  if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
-                }}
-                style={{
-                  height: "100%",
-                  justifyContent: "flex-start",
-                  backgroundColor: editorBackgroundColor,
-                  color: editorColor,
-                  overflowY: "scroll",
-                  overflowX: "visible",
-                  paddingLeft: "2rem"
-                }}
-                theme={{
-                  ...theme,
-                  background: editorBackgroundColor,
-                  text: editorColor
-                }}
-                placeholder="Say something really cool here!"
-                defaultValue={textarea}
-                value={editorValue}
-                onChange={setTextarea}
-                uploadImage={uploadImage}
-              />
-            </div>
+              style={{
+                height: "100%",
+                justifyContent: "flex-start",
+                backgroundColor: editorBackgroundColor,
+                color: editorColor,
+                overflowY: "scroll",
+                overflowX: "visible",
+                paddingTop: "8px",
+                paddingRight: "10px",
+                paddingLeft: "20px"
+              }}
+              theme={{
+                ...theme,
+                background: editorBackgroundColor,
+                text: editorColor
+              }}
+              placeholder="Say something really cool here!"
+              defaultValue={textarea}
+              onChange={setTextarea}
+              uploadImage={uploadImage}
+            />
           </div>
+          {originalMessage.id ? (
+            <div className="original_message">
+              <div
+                className="message_preview cursor"
+                onClick={() => setIsWriterOpen(false)}
+              >
+                <div className="suffix">{originalMessage.shortPrefix}</div>
+                <div className="subject">{originalMessage.subject}</div>
+              </div>
+            </div>
+          ) : (
+            <></>
+          )}
         </div>
       </div>
       <div className="writer-buttons">

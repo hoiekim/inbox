@@ -256,11 +256,7 @@ const MailsRendered = () => {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
-        setReplyData({
-          ...mail,
-          subject: "Re: " + mail.subject,
-          to: { address: selectedAccount }
-        });
+        setReplyData({ ...mail, to: { address: selectedAccount } });
       };
 
       const onClickShare = () => {
@@ -268,11 +264,7 @@ const MailsRendered = () => {
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);
         }
-        setReplyData({
-          ...mail,
-          subject: "Fwd: " + mail.subject,
-          to: { address: "" }
-        });
+        setReplyData({ ...mail, to: { address: "" } });
       };
 
       const onClickTrash = () => {
