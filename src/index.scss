@@ -125,8 +125,18 @@ code {
     }
   }
 
-  .attachment,
-  .message_preview {
+  .writer-content {
+    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
+      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
+
+    &,
+    * {
+      color: $color-dark;
+      background-color: adjust-color($color-light, $lightness: 10%);
+    }
+  }
+
+  .attachment {
     background-color: adjust-color($color-light, $lightness: 8%);
 
     &:hover {
@@ -233,8 +243,18 @@ code {
     }
   }
 
-  .attachment,
-  .message_preview {
+  .writer-content {
+    box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
+      -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
+
+    &,
+    * {
+      color: $color-light;
+      background-color: adjust-color($color-dark, $lightness: -3%);
+    }
+  }
+
+  .attachment {
     background-color: adjust-color($color-dark, $lightness: 10%);
 
     &:hover {
@@ -261,6 +281,32 @@ code {
 
   .curtain.on {
     background-color: adjust-color($color-dark, $alpha: -0.4);
+  }
+}
+
+.writer-content {
+  &.open {
+    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
+      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
+
+    &,
+    * {
+      background-color: white;
+      color: black;
+    }
+    .original_message {
+      &,
+      * {
+        background-color: adjust-color($color-light, $lightness: 12%);
+      }
+
+      &:hover {
+        &,
+        * {
+          background-color: adjust-color($color-light, $lightness: 10%);
+        }
+      }
+    }
   }
 }
 
@@ -298,7 +344,6 @@ a:visited {
     cursor: auto;
     text-align: center;
     height: 30px;
-    width: 200px;
   }
 }
 

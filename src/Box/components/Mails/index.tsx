@@ -244,7 +244,6 @@ const MailsRendered = () => {
             requestMarkRead(mail);
             markReadInQueryData(mail);
             mail.read = true;
-            if (newMailsTotal === 1) setSelectedCategory(Category.AllMails);
           }
           const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
           setActiveMailId(clonedActiveMailId);

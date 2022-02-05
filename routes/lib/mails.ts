@@ -60,7 +60,9 @@ export const sendMail = async (mailData: MailToSend, files: FileArray) => {
 
   const { username, name, sender, to, cc, bcc, subject, html, inReplyTo } =
     mailData;
-  const text = htmlToText(html);
+  const text = htmlToText(html, {
+    selectors: [{ selector: "img", format: "skip" }]
+  });
 
   const attachments: AttachmentData[] = [];
   const attachmentsToSave: (AttachmentData | { content: { data: string } })[] =

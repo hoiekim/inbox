@@ -136,7 +136,12 @@ const Box = () => {
     <>
       <div
         style={mainPaneStyle}
-        className="pane main_pane"
+        className={
+          "pane main_pane" +
+          (swipeAmount || (isAccountsOpen && viewSize.width <= 750)
+            ? " lock_scroll"
+            : "")
+        }
         onTouchStart={onPaneTouchStart}
         onTouchMove={onPaneTouchMove}
         onTouchEnd={onPaneTouchEnd}
@@ -159,7 +164,7 @@ const Box = () => {
       </div>
       <div
         style={sidePaneStyle}
-        className="pane side_pane"
+        className={"pane side_pane" + (swipeAmount ? " lock_scroll" : "")}
         onTouchStart={onPaneTouchStart}
         onTouchMove={onPaneTouchMove}
         onTouchEnd={onPaneTouchEnd}

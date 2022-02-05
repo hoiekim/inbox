@@ -98,8 +98,6 @@
 
       * {
         font-weight: 400;
-        transition: 500ms;
-        transition-property: background-color;
       }
 
       .writer-content {
@@ -109,25 +107,28 @@
         position: relative;
         height: 100%;
         cursor: text;
-      }
+        overflow-y: scroll;
 
-      .original_message {
-        .message_preview {
-          width: 100%;
-          height: 56px;
-          border-radius: 3px;
-          overflow-x: hidden;
-          overflow-y: scroll;
-          padding: 4px 20px;
+        .editor_container_bottom_padding {
+          min-height: 100%;
 
-          > div {
-            width: 100%;
-            text-overflow: ellipsis;
-            overflow: hidden;
-          }
+          .original_message {
+            border-radius: 3px;
+            padding: 14px 0 4px 15px;
+            margin-top: 10px;
+            margin-left: 5px;
 
-          .subject {
-            font-size: 20px;
+            .subject {
+              font-size: 20px;
+            }
+
+            blockquote {
+              border-left: 1px solid #cccccc;
+              padding: 0.5rem 0 0.5rem 0.5rem;
+              margin-left: 0.5rem;
+              overflow-wrap: break-word;
+              overflow: hidden;
+            }
           }
         }
       }

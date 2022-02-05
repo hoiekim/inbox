@@ -44,20 +44,21 @@ const MailBody = ({ mailId }: { mailId: string }) => {
   ) => {
     if (!iframeDom || !iframeDom.contentWindow) return;
     const content = iframeDom.contentWindow.document.body;
+    if (!content) return;
     const contentHeight = content.scrollHeight;
     const contentWidth = content.scrollWidth;
     const adjustedContentWidth = iframeDom.offsetWidth - 16;
     const scale = adjustedContentWidth / contentWidth;
     const adjustedContentHeight = scale * contentHeight;
-    const adjusteClientHeight = adjustedContentHeight + 32;
+    const adjustedClientHeight = adjustedContentHeight + 32;
 
     content.style.transform = `scale(${scale})`;
     content.style.position = "absolute";
     content.style.top = (adjustedContentHeight * (1 - scale)) / -2 + "px";
     content.style.left = (adjustedContentWidth * (1 - scale)) / -2 + "px";
 
-    iframeDom.style.transition = adjusteClientHeight / 3 + "ms";
-    iframeDom.style.height = adjusteClientHeight + "px";
+    iframeDom.style.transition = adjustedClientHeight / 3 + "ms";
+    iframeDom.style.height = adjustedClientHeight + "px";
     iframeDom.style.paddingTop = "8px";
     iframeDom.style.paddingBottom = "24px";
   };

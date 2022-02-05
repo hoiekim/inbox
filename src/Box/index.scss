@@ -26,6 +26,18 @@
 
 .main_pane {
   padding: 5px 0.5rem 0.5rem 0.5rem;
+
+  &.lock_scroll {
+    overflow: hidden;
+    padding-right: calc(0.5rem + 5px);
+  }
+}
+
+.side_pane.lock_scroll {
+  .accounts {
+    overflow: hidden;
+    padding-right: 5px;
+  }
 }
 
 .writer_pane {

@@ -82,9 +82,15 @@ const Accounts = () => {
             <SkeletonCategory />
             <SkeletonCategory />
             <SkeletonCategory />
+            <SkeletonCategory />
           </div>
         </div>
         <div className="accounts">
+          <div className="sort_box">
+            <div />
+          </div>
+          <SkeletonAccount />
+          <SkeletonAccount />
           <SkeletonAccount />
           <SkeletonAccount />
           <SkeletonAccount />

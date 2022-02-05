@@ -117,6 +117,9 @@ const App = () => {
     window.addEventListener("orientationchange", () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
     });
+    window.addEventListener("scroll", () => {
+      window.scrollTo(window.scrollX, window.scrollY);
+    });
   }, []);
 
   // stores states to export with `Context`

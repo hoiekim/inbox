@@ -1,13 +1,13 @@
 import React, { useContext, useState, useEffect } from "react";
 import { useMutation } from "react-query";
 
-import Editor, { theme } from "rich-markdown-editor";
+import Editor from "rich-markdown-editor";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
 import { Context, useLocalStorage } from "src";
-import { useDarkTheme, getDateForMailHeader } from "src/lib";
+import { getDateForMailHeader } from "src/lib";
 
 import "./index.scss";
 
@@ -22,29 +22,25 @@ const replyDataToOriginalMessage = (replyData: any) => {
       messageId: "",
       subject: "",
       prefix: "",
-      shortPrefix: "",
       html: ""
     };
   }
   const { id, messageId, date, subject, from, html } = replyData;
 
-  const {
-    date: localeDate,
-    time: localeTime,
-    duration
-  } = getDateForMailHeader(new Date(date));
+  const { date: localeDate, time: localeTime } = getDateForMailHeader(
+    new Date(date)
+  );
 
   const fromText = from.text.replace("<", "&lt;").replace(">", "&gt;");
+
   const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
-  const shortPrefix = `${duration}, ${fromText} wrote:`;
-  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin-left: 0 0 0 0.5rem;">${html}</blockquote>`;
+  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html}</blockquote>`;
 
   return {
-    id,
-    messageId,
-    subject,
+    id: id as string,
+    messageId: messageId as string,
+    subject: subject as string,
     prefix,
-    shortPrefix,
     html: newHtml
   };
 };
@@ -69,8 +65,7 @@ const Writer = () => {
       messageId: "",
       subject: "",
       html: "",
-      prefix: "",
-      shortPrefix: ""
+      prefix: ""
     }
   );
 
@@ -78,14 +73,13 @@ const Writer = () => {
 
   const [editorKey, setEditorKey] = useState(1);
 
-  const isDarkTheme = useDarkTheme();
-
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
       setSender(replyData.to.address.split("@")[0]);
       setTo(replyData.from.value[0].address);
       setCc("");
       setBcc("");
+
       const replyMarkExistsInSubect = !replyData.subject
         .toLowerCase()
         .indexOf("re:");
@@ -100,6 +94,7 @@ const Writer = () => {
         ? replyData.subject
         : "Fwd: " + replyData.subject;
       setSubject(subject);
+
       setTextarea("");
       setAttachments({});
       setOriginalMessage(replyDataToOriginalMessage(replyData));
@@ -156,8 +151,7 @@ const Writer = () => {
       messageId: "",
       html: "",
       subject: "",
-      prefix: "",
-      shortPrefix: ""
+      prefix: ""
     });
   };
 
@@ -236,26 +230,14 @@ const Writer = () => {
     );
   });
 
-  const editorBackgroundColor = isWriterOpen
-    ? theme.background
-    : isDarkTheme
-    ? "#2d3537"
-    : "#f2f2f2";
-
-  const editorColor = isWriterOpen
-    ? theme.text
-    : isDarkTheme
-    ? "#f2f2f2"
-    : "#2d3537";
-
   let focusAtEnd: () => void = () => {};
 
   const onClickPadding: React.MouseEventHandler<HTMLDivElement> = (e) => {
     const targetClassList = Array.from((e.target as any).classList);
-    const targetIsContainer = targetClassList.find(
-      (f) => f === "editor_container"
+    const targetIsPadding = !!targetClassList.find(
+      (f) => f === "editor_container_bottom_padding"
     );
-    if (targetIsContainer) focusAtEnd();
+    if (targetIsPadding) focusAtEnd();
   };
 
   const uploadImage = async (file: File) => {
@@ -353,53 +335,41 @@ const Writer = () => {
             <></>
           )}
           <div
-            className="writer-content margin_box"
-            onClick={onClickPadding}
-            style={{
-              backgroundColor: editorBackgroundColor
-            }}
+            className={
+              "writer-content margin_box" + (isWriterOpen ? " open" : "")
+            }
           >
-            <Editor
-              key={editorKey}
-              className="editor_container"
-              ref={(e) => {
-                if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
-              }}
-              style={{
-                height: "100%",
-                justifyContent: "flex-start",
-                backgroundColor: editorBackgroundColor,
-                color: editorColor,
-                overflowY: "scroll",
-                overflowX: "visible",
-                paddingTop: "8px",
-                paddingRight: "10px",
-                paddingLeft: "20px"
-              }}
-              theme={{
-                ...theme,
-                background: editorBackgroundColor,
-                text: editorColor
-              }}
-              placeholder="Say something really cool here!"
-              defaultValue={textarea}
-              onChange={setTextarea}
-              uploadImage={uploadImage}
-            />
-          </div>
-          {originalMessage.id ? (
-            <div className="original_message">
-              <div
-                className="message_preview cursor"
-                onClick={() => setIsWriterOpen(false)}
-              >
-                <div className="suffix">{originalMessage.shortPrefix}</div>
-                <div className="subject">{originalMessage.subject}</div>
-              </div>
+            <div
+              className="editor_container_bottom_padding"
+              onClick={onClickPadding}
+            >
+              <Editor
+                key={editorKey}
+                className="editor_container"
+                ref={(e) => {
+                  if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
+                }}
+                style={{ paddingLeft: "20px" }}
+                placeholder="Say something really cool here!"
+                defaultValue={textarea}
+                onChange={setTextarea}
+                uploadImage={uploadImage}
+              />
+              {originalMessage.id ? (
+                <div
+                  className="original_message cursor"
+                  onClick={() => setIsWriterOpen(false)}
+                >
+                  <div className="suffix">{originalMessage.prefix}</div>
+                  <div className="subject">
+                    <blockquote>{originalMessage.subject}</blockquote>
+                  </div>
+                </div>
+              ) : (
+                <></>
+              )}
             </div>
-          ) : (
-            <></>
-          )}
+          </div>
         </div>
       </div>
       <div className="writer-buttons">
