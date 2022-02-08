@@ -211,7 +211,7 @@ const Accounts = () => {
 
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
-        if (e === Category.Search) setSelectedAccount("");
+        setSelectedAccount("");
         setSelectedCategory(e);
       };
       const classes = [];

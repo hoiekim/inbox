@@ -82,7 +82,7 @@ const RenderedMails = () => {
   const accountsCache = new AccountsCache();
 
   useEffect(() => {
-    setOpenedKebab("");
+    setActiveMailId({});
   }, [selectedAccount]);
 
   useEffect(() => {

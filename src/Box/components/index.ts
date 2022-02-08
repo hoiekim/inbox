@@ -22,12 +22,32 @@ export class MailsSynchronizer {
       const accounts = accountsCache.get();
       const mails = mailsCache.get();
 
-      const countInAccounts =
-        accounts?.received.find((e) => {
-          return e.key === account;
-        })?.doc_count || 0;
+      if (!accounts || !mails) return;
 
-      const countInMails = mails?.length || 0;
+      const accountsKey = category === Category.SentMails ? "sent" : "received";
+      const accountData = accounts[accountsKey].find((e) => e.key === account);
+
+      let countInAccounts: number;
+
+      if (category === Category.NewMails)
+        countInAccounts = accountData?.unread_doc_count || 0;
+      else if (category === Category.SavedMails)
+        countInAccounts = accountData?.saved_doc_count || 0;
+      else countInAccounts = accountData?.doc_count || 0;
+
+      const countInMails = mails.reduce((acc, e) => {
+        switch (category) {
+          case Category.NewMails:
+            if (!e.read) return acc + 1;
+            return acc;
+          case Category.SavedMails:
+            if (e.label === "saved") return acc + 1;
+            return acc;
+          default:
+            return acc + 1;
+        }
+      }, 0);
+
       this.difference = countInAccounts - countInMails;
     }
   }
