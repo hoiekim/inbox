@@ -39,9 +39,7 @@ const MailBody = ({ mailId }: { mailId: string }) => {
     setTimeout(() => audjstMailContnetSize(iframeElement.current), 300);
   }, []);
 
-  const audjstMailContnetSize = (
-    iframeDom: HTMLIFrameElement | null | undefined
-  ) => {
+  const audjstMailContnetSize = (iframeDom: HTMLIFrameElement | null) => {
     if (!iframeDom || !iframeDom.contentWindow) return;
     const content = iframeDom.contentWindow.document.body;
     if (!content) return;

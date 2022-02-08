@@ -82,7 +82,14 @@ const Accounts = () => {
   };
 
   const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
-    onSuccess
+    onSuccess,
+    cacheTime: Infinity,
+    refetchInterval: 1000 * 60 * 10,
+    refetchIntervalInBackground: true,
+    refetchOnMount: false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: false,
+    retry: false
   });
 
   useEffect(() => {

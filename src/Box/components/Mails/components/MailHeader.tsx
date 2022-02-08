@@ -36,11 +36,10 @@ const MailHeader = (props: MailHeaderProps) => {
         {date}, {time}
       </div>
       <div className="mailcard-small content">
-        {"from: " +
-          mail.from.value.map((e) => e?.name || e?.address).join(", ")}
+        {"from: " + mail.from.value?.map((e) => e.name || e.address).join(", ")}
       </div>
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
-        {"to: " + mail.to.value.map((e) => e?.name || e?.address).join(", ")}
+        {"to: " + mail.to.value?.map((e) => e.name || e.address).join(", ")}
       </div>
       <div className="mailcard-subject content">{mail.subject}</div>
     </div>

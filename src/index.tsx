@@ -78,7 +78,7 @@ export const queryClient = new QueryClient({
       refetchInterval: 1000 * 60 * 10,
       refetchIntervalInBackground: true,
       refetchOnMount: false,
-      refetchOnWindowFocus: "always",
+      refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       retry: false
     }
