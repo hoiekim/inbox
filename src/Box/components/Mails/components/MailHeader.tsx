@@ -2,19 +2,15 @@ import React, { useContext } from "react";
 
 import { Context } from "src";
 import { getDateForMailHeader } from "src";
-import { MailHeaderType } from "routes/lib/mails";
+import { MailHeaderType } from "routes";
 
 export interface MailHeaderProps extends React.ComponentProps<"div"> {
   mail: MailHeaderType;
   isActive: boolean;
 }
 
-const MailHeader = ({
-  mail,
-  isActive,
-  onClick,
-  onMouseLeave
-}: MailHeaderProps) => {
+const MailHeader = (props: MailHeaderProps) => {
+  const { mail, isActive, onClick, onMouseLeave } = props;
   const { isWriterOpen } = useContext(Context);
   const { date, time, duration } = getDateForMailHeader(new Date(mail.date));
 
@@ -40,10 +36,11 @@ const MailHeader = ({
         {date}, {time}
       </div>
       <div className="mailcard-small content">
-        {"from: " + mail.from.value.map((e) => e.name || e.address).join(", ")}
+        {"from: " +
+          mail.from.value.map((e) => e?.name || e?.address).join(", ")}
       </div>
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
-        {"to: " + mail.to.value.map((e) => e.name || e.address).join(", ")}
+        {"to: " + mail.to.value.map((e) => e?.name || e?.address).join(", ")}
       </div>
       <div className="mailcard-subject content">{mail.subject}</div>
     </div>

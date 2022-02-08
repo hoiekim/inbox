@@ -1,11 +1,10 @@
 import config from "./config";
 config();
 
-import { initialize as initMail } from "./routes/lib/mails";
-import { initialize as initUser } from "./routes/lib/users";
+import { Mail, User } from "./routes";
 
 const init = () => {
-  initMail({
+  Mail.initialize({
     attachments: {
       type: "object",
       properties: {
@@ -59,7 +58,7 @@ const init = () => {
     label: { type: "keyword" }
   });
 
-  initUser({
+  User.initialize({
     email: { type: "keyword" },
     username: { type: "keyword" },
     expiry: { type: "date" }

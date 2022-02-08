@@ -1,6 +1,6 @@
-const fetch = require("node-fetch");
+import fetch from "node-fetch";
 
-const callback = async (r) => {
+const toJson = async (r) => {
   if (r?.json) r = await r.json();
   if (r?.error) throw new Error(JSON.stringify(r.error));
   return r;
@@ -55,7 +55,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
             match_all: {}
           }
         })
-          .then(callback)
+          .then(toJson)
           .then((r) => !!r.hits.total.value);
 
         if (dataExists) {
@@ -70,17 +70,17 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
               source: { index: INDEX },
               dest: { index: tempIndex }
             })
-          }).then(callback);
+          }).then(toJson);
         }
 
         // Delete the index to initialize
-        await this.request("", "DELETE").then(callback);
+        await this.request("", "DELETE").then(toJson);
       }
 
       // Define mappings to the index to initialize
       await this.request("", "PUT", {
         mappings: { properties: schema }
-      }).then(callback);
+      }).then(toJson);
 
       if (dataExists) {
         // Move data back from the temporary index
@@ -94,7 +94,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
             source: { index: tempIndex },
             dest: { index: INDEX }
           })
-        }).then(callback);
+        }).then(toJson);
 
         // Delete temporary index
         await fetch(`${HOST}/${tempIndex}`, {
@@ -103,7 +103,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
             Authorization,
             "content-type": "application/json"
           }
-        }).then(callback);
+        }).then(toJson);
       }
 
       console.info("Initialized index:", INDEX);
@@ -134,8 +134,8 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
       }
     }
 
-    return fetch(`${HOST}/${INDEX}/${path}`, options).then(callback);
+    return fetch(`${HOST}/${INDEX}/${path}`, options).then(toJson);
   };
 }
 
-module.exports = Elastic;
+export default Elastic;

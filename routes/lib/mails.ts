@@ -16,12 +16,16 @@ const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_MAILS || "mails";
 
-export const { request, initialize } = new Elastic(
+const Mail = new Elastic(
   ELASTIC_HOST,
   ELASTIC_USERNAME,
   ELASTIC_PASSWORD,
   ELASTIC_INDEX
 );
+
+export default Mail;
+
+const { request } = Mail;
 
 const addressParser = (str: string) => {
   if (!str) return;

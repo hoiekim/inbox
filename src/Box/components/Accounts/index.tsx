@@ -11,10 +11,21 @@ import {
   SortUpIcon
 } from "./components";
 
-import { Context, Category, useLocalStorage } from "src";
-import { Account, AccountsResponse } from "routes/lib/mails";
+import { Context, Category, useLocalStorage, MailsSynchronizer } from "src";
+import { QueryCache } from "src/lib";
+import { Account, AccountsResponse } from "routes";
 
 import "./index.scss";
+
+const queryUrl = "/api/accounts";
+
+export class AccountsCache extends QueryCache<AccountsResponse> {
+  constructor() {
+    super(queryUrl);
+  }
+}
+
+let isFetched = false;
 
 enum SortBy {
   Date = "Sort by Date",
@@ -51,17 +62,27 @@ const Accounts = () => {
     setNewMailsTotal
   } = useContext(Context);
 
-  const queryUrl = "/api/accounts";
+  const getAccounts = () => {
+    isFetched = false;
+    return fetch(queryUrl).then((r) => r.json());
+  };
 
-  const getAccounts = () => fetch(queryUrl).then((r) => r.json());
-  const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
-    onSuccess: (data) => {
-      const newMails = data.received.reduce(
-        (acc, e) => acc + e.unread_doc_count,
-        0
-      );
-      setNewMailsTotal(newMails);
+  const onSuccess = (data: AccountsResponse) => {
+    const newMails = data.received.reduce(
+      (acc, e) => acc + e.unread_doc_count,
+      0
+    );
+    setNewMailsTotal(newMails);
+
+    if (!isFetched) {
+      const sync = new MailsSynchronizer(selectedAccount, selectedCategory);
+      if (sync.difference > 0) sync.refetchMails();
+      isFetched = true;
     }
+  };
+
+  const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
+    onSuccess
   });
 
   useEffect(() => {
@@ -81,6 +102,10 @@ const Accounts = () => {
             <SkeletonCategory />
             <SkeletonCategory />
             <SkeletonCategory />
+            <SkeletonCategory />
+            <SkeletonCategory />
+          </div>
+          <div>
             <SkeletonCategory />
             <SkeletonCategory />
           </div>
@@ -256,6 +281,7 @@ const Accounts = () => {
 
     const onClickRefresh = () => {
       query.refetch();
+      setSelectedAccount("");
     };
 
     const onClickLogout = () => {

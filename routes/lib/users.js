@@ -1,6 +1,6 @@
-const bcrypt = require("bcrypt");
-const Elastic = require("./components/elastic");
-const Mail = require("./mails");
+import bcrypt from "bcrypt";
+import Elastic from "./components/elastic";
+import { sendMail } from "./mails";
 
 const serviceHostname = process.env.APP_DOMAIN || "mydomain";
 
@@ -16,8 +16,12 @@ const User = new Elastic(
   ELASTIC_INDEX
 );
 
-User.getUser = (query) => {
-  return User.request("_search", "POST", {
+export default User;
+
+const { request } = User;
+
+export const getUser = (query) => {
+  return request("_search", "POST", {
     query: {
       term: query
     }
@@ -28,13 +32,13 @@ User.getUser = (query) => {
     });
 };
 
-User.deleteUser = (id) => {
-  return User.request(`_doc/${id}`, "DELETE");
+export const deleteUser = (id) => {
+  return request(`_doc/${id}`, "DELETE");
 };
 
-const validate = (value) => /^[a-z0-9.-]+$/.test(value);
+export const validate = (value) => /^[a-z0-9.-]+$/.test(value);
 
-User.signIn = async (credentials) => {
+export const signIn = async (credentials) => {
   const { username, email, password } = credentials;
   const query = {};
 
@@ -62,7 +66,7 @@ User.signIn = async (credentials) => {
     return null;
   }
 
-  const userInfo = await User.getUser(query);
+  const userInfo = await getUser(query);
   if (!userInfo) {
     console.log("Signin failed because user is not found.");
     return null;
@@ -78,9 +82,9 @@ User.signIn = async (credentials) => {
   return userInfo;
 };
 
-User.expiryTimer = {};
+export const expiryTimer = {};
 
-User.sendToken = async (email) => {
+export const sendToken = async (email) => {
   const values = email.split("@");
   const validation = !values.find((e) => !validate(e));
 
@@ -95,20 +99,20 @@ User.sendToken = async (email) => {
 
   let id, username;
 
-  const existingUserInfo = await User.getUser({ email });
+  const existingUserInfo = await getUser({ email });
   if (existingUserInfo) {
     id = existingUserInfo.id;
     username = existingUserInfo.username;
   }
 
   if (!id) {
-    id = await User.request("_doc", "POST", {
+    id = await request("_doc", "POST", {
       email,
       token,
       expiry
     })._id;
   } else {
-    await User.request(`_update/${id}`, "POST", {
+    await request(`_update/${id}`, "POST", {
       doc: { token }
     });
   }
@@ -116,7 +120,7 @@ User.sendToken = async (email) => {
   let href = `https://${serviceHostname}/set-info/${email}?t=${token}`;
   if (username) href += `&u=${username}`;
 
-  await Mail.sendMail({
+  await sendMail({
     username: "admin",
     name: "Administrator",
     sender: "admin",
@@ -144,10 +148,10 @@ User.sendToken = async (email) => {
 `
   });
 
-  User.expiryTimer.id = setTimeout(async () => {
-    const updatedUserInfo = await User.getUser({ _id: id });
+  expiryTimer.id = setTimeout(async () => {
+    const updatedUserInfo = await getUser({ _id: id });
     if (updatedUserInfo.expiry < new Date()) {
-      await User.deleteUser(id);
+      await deleteUser(id);
       console.info("Deleted user with expired token.", `User Email: ${email}`);
     }
   }, duration);
@@ -155,13 +159,13 @@ User.sendToken = async (email) => {
   return true;
 };
 
-User.setUserInfo = async (userInfo) => {
+export const setUserInfo = async (userInfo) => {
   let { email, password, token, username } = userInfo;
   if (!email || !username || !password) {
     throw new Error("Setting userInfo failed because email is not specified.");
   }
 
-  const findUserInfoByEmail = await User.getUser({ email });
+  const findUserInfoByEmail = await getUser({ email });
   if (!findUserInfoByEmail) {
     throw new Error("Setting userInfo failed because user data is not found.");
   }
@@ -176,14 +180,14 @@ User.setUserInfo = async (userInfo) => {
 
   if (!findUserInfoByEmail.username) {
     if (findUserInfoByEmail.expiry < Date.now()) {
-      await User.deleteUser(id);
+      await deleteUser(id);
       throw new Error("Setting userInfo failed because user token is expired.");
     }
 
-    const expiryTimer = User.expiryTimer[id];
+    const expiryTimer = expiryTimer[id];
     if (expiryTimer) clearTimeout(expiryTimer);
 
-    const findUserInfoByUsername = await User.getUser({ username });
+    const findUserInfoByUsername = await getUser({ username });
     if (findUserInfoByUsername) {
       throw new Error(
         "Setting userInfo failed because username already exists."
@@ -195,7 +199,7 @@ User.setUserInfo = async (userInfo) => {
 
   const encryptedPassword = await bcrypt.hash(password, 10);
 
-  await User.request(`_update/${id}`, "POST", {
+  await request(`_update/${id}`, "POST", {
     doc: {
       password: encryptedPassword,
       username,
@@ -206,5 +210,3 @@ User.setUserInfo = async (userInfo) => {
 
   return true;
 };
-
-module.exports = User;

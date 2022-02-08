@@ -6,8 +6,7 @@ import Editor from "rich-markdown-editor";
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
-import { Context, useLocalStorage } from "src";
-import { getDateForMailHeader } from "src/lib";
+import { Context, useLocalStorage, getDateForMailHeader } from "src";
 
 import "./index.scss";
 

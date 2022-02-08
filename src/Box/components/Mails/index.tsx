@@ -13,25 +13,28 @@ import {
   SolidStarIcon
 } from "./components";
 
-import { Context, Category, queryClient } from "src";
-import { MailHeaderType, AccountsResponse } from "routes/lib/mails";
+import { Context, Category } from "src";
+import { QueryCache } from "src/lib";
+import { AccountsCache } from "src/Box/components/Accounts";
+import { MailHeaderType } from "routes";
 
 import "./index.scss";
 
 import { marked } from "marked";
 
-const MailsNotRendered = () => {
-  const [message, setMessage] = useState("");
+const GettingStarted = () => {
+  const queryUrl = "/text/getting_started.md";
 
-  useEffect(() => {
-    fetch("/text/getting_started.md")
+  const fetchMessage = () =>
+    fetch(queryUrl)
       .then((r) => r.text())
-      .then((r) => setMessage(marked(r)));
-  }, []);
+      .then((r) => marked(r));
+
+  const query = useQuery<string>(queryUrl, fetchMessage);
 
   return (
     <div className="getting_started">
-      <div dangerouslySetInnerHTML={{ __html: message }}></div>
+      <div dangerouslySetInnerHTML={{ __html: query.data || "" }} />
     </div>
   );
 };
@@ -58,19 +61,25 @@ const getMailsQueryUrl = (account: string, category: Category) => {
   return `/api/mails/${account}${queryOption}`;
 };
 
-const MailsRendered = () => {
+export class MailsCache extends QueryCache<MailHeaderType[]> {
+  constructor(account: string, category: Category) {
+    super(getMailsQueryUrl(account, category));
+  }
+}
+
+const RenderedMails = () => {
   const {
     isWriterOpen,
     setReplyData,
     selectedAccount,
     setSelectedAccount,
-    selectedCategory,
-    setSelectedCategory,
-    newMailsTotal
+    selectedCategory
   } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState<any>({});
   const [openedKebab, setOpenedKebab] = useState("");
+
+  const accountsCache = new AccountsCache();
 
   useEffect(() => {
     setOpenedKebab("");
@@ -118,112 +127,96 @@ const MailsRendered = () => {
   };
 
   const removeAccountFromQueryData = () => {
-    queryClient.setQueryData<AccountsResponse | undefined>(
-      "/api/accounts",
-      (oldData) => {
-        if (!oldData) return oldData;
+    accountsCache.set((oldData) => {
+      if (!oldData) return oldData;
 
-        const newData = { ...oldData };
-        const key =
-          selectedCategory === Category.SentMails ? "sent" : "received";
-        newData[key].find((account, i) => {
-          const found = account.key === selectedAccount;
-          if (found) newData.received.splice(i, 1);
-          return found;
-        });
+      const newData = { ...oldData };
+      const key = selectedCategory === Category.SentMails ? "sent" : "received";
+      newData[key].find((account, i) => {
+        const found = account.key === selectedAccount;
+        if (found) newData.received.splice(i, 1);
+        return found;
+      });
 
-        return newData;
-      }
-    );
+      return newData;
+    });
   };
 
   const markReadInQueryData = (mail: MailHeaderType) => {
     const mailId = mail.id;
-    queryClient.setQueryData<AccountsResponse | undefined>(
-      "/api/accounts",
-      (oldData) => {
-        if (!oldData) return oldData;
+    accountsCache.set((oldData) => {
+      if (!oldData) return oldData;
 
-        const newData = { ...oldData };
+      const newData = { ...oldData };
 
-        Object.values(Category).forEach((e) => {
-          const queryUrl = getMailsQueryUrl(selectedAccount, e);
+      Object.values(Category).forEach((e) => {
+        const mailsCache = new MailsCache(selectedAccount, e);
 
-          queryClient.setQueryData<MailHeaderType[] | undefined>(
-            queryUrl,
-            (oldData) => {
-              if (!oldData) return oldData;
+        mailsCache.set((oldData) => {
+          if (!oldData) return oldData;
 
-              const newData = [...oldData];
-              const foundData = newData.find((e) => e.id === mailId);
-              if (foundData) foundData.read = true;
+          const newData = [...oldData];
+          const foundData = newData.find((e) => e.id === mailId);
+          if (foundData) foundData.read = true;
 
-              return newData;
-            }
-          );
+          return newData;
         });
+      });
 
-        Object.values(newData).forEach((e) => {
-          e.find((account) => {
-            const { key, unread_doc_count } = account;
-            const found = key === selectedAccount;
-            if (found && unread_doc_count) account.unread_doc_count -= 1;
-            return found;
-          });
+      Object.values(newData).forEach((e) => {
+        e.find((account) => {
+          const { key, unread_doc_count } = account;
+          const found = key === selectedAccount;
+          if (found && unread_doc_count) account.unread_doc_count -= 1;
+          return found;
         });
+      });
 
-        return newData;
-      }
-    );
+      return newData;
+    });
   };
 
   const markSavedInQueryData = (mail: MailHeaderType, unsave: boolean) => {
     const mailId = mail.id;
-    queryClient.setQueryData<AccountsResponse | undefined>(
-      "/api/accounts",
-      (oldData) => {
-        if (!oldData) return oldData;
-        const newData = { ...oldData };
-        Object.values(newData).forEach((e) => {
-          const found = e.find((f) => f.key === selectedAccount);
-          if (found) {
-            if (unsave) found.saved_doc_count--;
-            else found.saved_doc_count++;
-          }
-        });
-        return newData;
-      }
-    );
+    accountsCache.set((oldData) => {
+      if (!oldData) return oldData;
+      const newData = { ...oldData };
+      Object.values(newData).forEach((e) => {
+        const found = e.find((f) => f.key === selectedAccount);
+        if (found) {
+          if (unsave) found.saved_doc_count--;
+          else found.saved_doc_count++;
+        }
+      });
+      return newData;
+    });
 
     Object.values(Category).forEach((e) => {
-      const queryUrl = getMailsQueryUrl(selectedAccount, e);
+      const mailsCache = new MailsCache(selectedAccount, e);
 
-      queryClient.setQueryData<MailHeaderType[] | undefined>(
-        queryUrl,
-        (oldData) => {
-          if (!oldData) return oldData;
-          const newData = [...oldData];
-          let foundIndex;
-          newData.find((e, i) => {
-            if (e.id === mailId) {
-              foundIndex = i;
-              e.label = unsave ? "" : "saved";
-              return true;
-            }
-            return false;
-          });
-          if (e === Category.SavedMails) {
-            if (foundIndex !== undefined) newData.splice(foundIndex, 1);
-            else {
-              let i = 0;
-              while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
-              newData.splice(i, 0, { ...mail });
-            }
+      mailsCache.set((oldData) => {
+        if (!oldData) return oldData;
+        const newData = [...oldData];
+        let foundIndex;
+        newData.find((e, i) => {
+          if (e.id === mailId) {
+            foundIndex = i;
+            e.label = unsave ? "" : "saved";
+            return true;
           }
-
-          return newData;
+          return false;
+        });
+        if (e === Category.SavedMails) {
+          if (foundIndex !== undefined) newData.splice(foundIndex, 1);
+          else {
+            let i = 0;
+            while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
+            newData.splice(i, 0, { ...mail });
+          }
         }
-      );
+
+        return newData;
+      });
     });
   };
 
@@ -269,18 +262,38 @@ const MailsRendered = () => {
       const onClickTrash = () => {
         if (window.confirm("Do you want to delete this mail?")) {
           requestDeleteMail(mail);
-          if (!mail.read) markReadInQueryData(mail);
 
-          queryClient.setQueryData<MailHeaderType[] | undefined>(
-            queryUrl,
-            (oldData) => {
-              if (!oldData) return oldData;
-              const newData = [...oldData];
-              newData.splice(i, 1);
-              if (!newData.length) removeAccountFromQueryData();
-              return newData;
-            }
-          );
+          accountsCache.set((oldData) => {
+            if (!oldData) return oldData;
+
+            const newData = { ...oldData };
+
+            Object.values(newData).forEach((e) => {
+              e.find((account) => {
+                const { key, unread_doc_count } = account;
+                const found = key === selectedAccount;
+                if (found) {
+                  if (!mail.read && unread_doc_count) {
+                    account.unread_doc_count -= 1;
+                  }
+                  account.doc_count -= 1;
+                }
+                return found;
+              });
+            });
+
+            return newData;
+          });
+
+          const mailsCache = new MailsCache(selectedAccount, selectedCategory);
+
+          mailsCache.set((oldData) => {
+            if (!oldData) return oldData;
+            const newData = [...oldData];
+            newData.splice(i, 1);
+            if (!newData.length) removeAccountFromQueryData();
+            return newData;
+          });
         }
       };
 
@@ -408,8 +421,8 @@ const MailsRendered = () => {
 
 const Mails = () => {
   const { selectedAccount } = useContext(Context);
-  if (!selectedAccount) return <MailsNotRendered />;
-  else return <MailsRendered />;
+  if (!selectedAccount) return <GettingStarted />;
+  else return <RenderedMails />;
 };
 
 export default Mails;

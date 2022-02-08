@@ -3,6 +3,8 @@ import { Writer, Accounts, Mails } from "./components";
 import { Context } from "src";
 import "./index.scss";
 
+export * from "./components";
+
 const touchStartPosition = { x: 0, y: 0 };
 
 const Box = () => {

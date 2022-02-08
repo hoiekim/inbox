@@ -4,17 +4,21 @@ import { QueryClient, QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
 import Header from "./Header";
-
 import SignIn from "./SignIn";
 import Box from "./Box";
 import SignUp from "./SignUp";
 
-import { Account } from "routes/lib/mails";
-
 import "./index.scss";
 
+import { Account } from "routes";
+
 import { useLocalStorage } from "./lib";
+
 export * from "./lib";
+export * from "./Box";
+export * from "./Header";
+export * from "./SignIn";
+export * from "./SignUp";
 
 interface UserInfoType {
   username: string;
@@ -71,11 +75,11 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       cacheTime: Infinity,
-      refetchInterval: 1000 * 60,
+      refetchInterval: 1000 * 60 * 10,
       refetchIntervalInBackground: true,
-      refetchOnWindowFocus: true,
-      refetchOnMount: true,
-      refetchOnReconnect: true,
+      refetchOnMount: false,
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: false,
       retry: false
     }
   }

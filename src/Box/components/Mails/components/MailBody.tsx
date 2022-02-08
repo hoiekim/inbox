@@ -4,7 +4,7 @@ import { useQuery } from "react-query";
 import { Context, ContextType } from "src";
 import FileIcon from "src/Box/components/FileIcon";
 
-import { Attachment, MailBodyType } from "routes/lib/mails";
+import { Attachment, MailBodyType } from "routes";
 
 const MailBody = ({ mailId }: { mailId: string }) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(
