@@ -30,9 +30,7 @@ const replyDataToOriginalMessage = (replyData: any) => {
     new Date(date)
   );
 
-  const fromText = from.text.replace("<", "&lt;").replace(">", "&gt;");
-
-  const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
+  const prefix = `On ${localeDate} at ${localeTime}, ${from.text} wrote:`;
   const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html}</blockquote>`;
 
   return {
@@ -182,7 +180,9 @@ const Writer = () => {
     const html =
       marked(textarea) +
       "\n\n\n" +
-      `<p>${originalMessage.prefix}</p>` +
+      `<p>${originalMessage.prefix
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")}</p>` +
       originalMessage.html;
 
     const mailData: any = {
