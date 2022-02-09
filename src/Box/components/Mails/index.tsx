@@ -144,24 +144,25 @@ const RenderedMails = () => {
 
   const markReadInQueryData = (mail: MailHeaderType) => {
     const mailId = mail.id;
+
+    Object.values(Category).forEach((e) => {
+      const mailsCache = new MailsCache(selectedAccount, e);
+
+      mailsCache.set((oldData) => {
+        if (!oldData) return oldData;
+
+        const newData = [...oldData];
+        const foundData = newData.find((e) => e.id === mailId);
+        if (foundData) foundData.read = true;
+
+        return newData;
+      });
+    });
+
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
 
       const newData = { ...oldData };
-
-      Object.values(Category).forEach((e) => {
-        const mailsCache = new MailsCache(selectedAccount, e);
-
-        mailsCache.set((oldData) => {
-          if (!oldData) return oldData;
-
-          const newData = [...oldData];
-          const foundData = newData.find((e) => e.id === mailId);
-          if (foundData) foundData.read = true;
-
-          return newData;
-        });
-      });
 
       Object.values(newData).forEach((e) => {
         e.find((account) => {

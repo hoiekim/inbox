@@ -11,6 +11,7 @@ export class QueryCache<T> {
   public get = () => queryClient.getQueryData<T>(this.key);
 
   public set = (callback: Updater<T | undefined, T | undefined>) => {
+    if (!this.get()) return;
     return queryClient.setQueryData<T | undefined>(this.key, callback);
   };
 }
