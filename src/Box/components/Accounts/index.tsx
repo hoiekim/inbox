@@ -97,8 +97,13 @@ const Accounts = () => {
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
+  const touchStartHandler = () => setShowSortOptions(false);
+
   useEffect(() => {
-    window.addEventListener("touchstart", () => setShowSortOptions(false));
+    window.addEventListener("touchstart", touchStartHandler);
+    return () => {
+      window.removeEventListener("touchstart", touchStartHandler);
+    };
   }, []);
 
   if (query.isLoading) {

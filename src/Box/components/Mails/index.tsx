@@ -85,8 +85,13 @@ const RenderedMails = () => {
     setActiveMailId({});
   }, [selectedAccount]);
 
+  const touchStartHandler = () => setOpenedKebab("");
+
   useEffect(() => {
-    window.addEventListener("touchstart", () => setOpenedKebab(""));
+    window.addEventListener("touchstart", touchStartHandler);
+    return () => {
+      window.removeEventListener("touchstart", touchStartHandler);
+    };
   }, []);
 
   const queryUrl = getMailsQueryUrl(selectedAccount, selectedCategory);

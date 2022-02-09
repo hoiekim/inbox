@@ -12,7 +12,7 @@ import "./index.scss";
 
 import { Account } from "routes";
 
-import { useLocalStorage } from "./lib";
+import { useLocalStorage, Notification } from "./lib";
 
 export * from "./lib";
 export * from "./Box";
@@ -125,6 +125,11 @@ const App = () => {
       window.scrollTo(window.scrollX, window.scrollY);
     });
   }, []);
+
+  useEffect(() => {
+    const noti = new Notification();
+    noti.setBadge(newMailsTotal);
+  }, [newMailsTotal]);
 
   // stores states to export with `Context`
   const contextValue: ContextType = {
