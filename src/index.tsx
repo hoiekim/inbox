@@ -12,7 +12,7 @@ import "./index.scss";
 
 import { Account } from "routes";
 
-import { useLocalStorage, Notification } from "./lib";
+import { useLocalStorage, Notifier } from "./lib";
 
 export * from "./lib";
 export * from "./Box";
@@ -124,11 +124,24 @@ const App = () => {
     window.addEventListener("scroll", () => {
       window.scrollTo(window.scrollX, window.scrollY);
     });
+
+    const noti = new Notifier();
+    noti.requestPermission();
   }, []);
 
   useEffect(() => {
-    const noti = new Notification();
+    const noti = new Notifier();
     noti.setBadge(newMailsTotal);
+    if (newMailsTotal) {
+      const title =
+        newMailsTotal > 1
+          ? `You have ${newMailsTotal} unread messages`
+          : "You have a unread message";
+      noti.notify({
+        title,
+        icon: "/icons/logo192.png"
+      });
+    }
   }, [newMailsTotal]);
 
   // stores states to export with `Context`

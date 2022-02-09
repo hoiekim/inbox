@@ -1,20 +1,39 @@
-export class Notification {
+export class Notifier {
   constructor() {
     if ("setAppBadge" in navigator && "clearAppBadge" in navigator) {
-      this.navigator = navigator;
+      this.isNavigatorAvailable = true;
+    }
+    if (
+      "Notification" in window &&
+      "serviceWorker" in navigator &&
+      "PushManager" in window
+    ) {
+      this.isNotificationAvailable = true;
     }
   }
 
-  private navigator: any = {
-    setAppBadge: async () => {},
-    clearAppBadge: async () => {}
-  };
+  private isNavigatorAvailable = false;
+  private isNotificationAvailable = false;
 
   setBadge = (number: number) => {
-    this.navigator.setAppBadge(number).catch(console.log);
+    if (!this.isNavigatorAvailable) return;
+    (navigator as any).setAppBadge(number).catch(console.log);
   };
 
   clearBadge = () => {
-    this.navigator.clearAppBadge().catch(console.log);
+    if (!this.isNavigatorAvailable) return;
+    (navigator as any).clearAppBadge().catch(console.log);
+  };
+
+  requestPermission = () => {
+    if (!this.isNotificationAvailable) return;
+    Notification.requestPermission();
+  };
+
+  notify = (arg: { title: string; body?: string; icon?: string }) => {
+    if (!this.isNotificationAvailable) return;
+    const { title, body, icon } = arg;
+    const options = { body, icon };
+    new Notification(title, options);
   };
 }
