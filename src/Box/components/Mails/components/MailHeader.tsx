@@ -46,7 +46,7 @@ const MailHeader = (props: MailHeaderProps) => {
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
         {"to: " + mail.to.value?.map((e) => e?.name || e?.address).join(", ")}
       </div>
-      {cc ? (
+      {cc && cc.value ? (
         <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
           {"cc: " +
             (cc.value as EmailAdressValue[])
@@ -56,7 +56,7 @@ const MailHeader = (props: MailHeaderProps) => {
       ) : (
         <></>
       )}
-      {bcc ? (
+      {bcc && bcc.value ? (
         <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
           {"bcc: " +
             (bcc.value as EmailAdressValue[])
