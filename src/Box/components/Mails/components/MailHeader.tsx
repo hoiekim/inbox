@@ -26,8 +26,8 @@ const MailHeader = (props: MailHeaderProps) => {
   if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
 
   const { cc, bcc } = mail;
-  if (cc.value && !Array.isArray(cc.value)) cc.value = [cc.value];
-  if (bcc.value && !Array.isArray(bcc.value)) bcc.value = [bcc.value];
+  if (cc?.value && !Array.isArray(cc.value)) cc.value = [cc.value];
+  if (bcc?.value && !Array.isArray(bcc.value)) bcc.value = [bcc.value];
 
   return (
     <div
