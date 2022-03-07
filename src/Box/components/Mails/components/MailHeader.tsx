@@ -25,6 +25,10 @@ const MailHeader = (props: MailHeaderProps) => {
   if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
   if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
 
+  const { cc, bcc } = mail;
+  if (cc.value && !Array.isArray(cc.value)) cc.value = [cc.value];
+  if (bcc.value && !Array.isArray(bcc.value)) bcc.value = [bcc.value];
+
   return (
     <div
       className="header cursor"
@@ -42,6 +46,20 @@ const MailHeader = (props: MailHeaderProps) => {
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
         {"to: " + mail.to.value?.map((e) => e?.name || e?.address).join(", ")}
       </div>
+      {cc ? (
+        <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
+          {"cc: " + cc.value?.map((e) => e?.name || e?.address).join(", ")}
+        </div>
+      ) : (
+        <></>
+      )}
+      {bcc ? (
+        <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
+          {"bcc: " + bcc.value?.map((e) => e?.name || e?.address).join(", ")}
+        </div>
+      ) : (
+        <></>
+      )}
       <div className="mailcard-subject content">{mail.subject}</div>
     </div>
   );
