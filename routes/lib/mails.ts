@@ -255,7 +255,7 @@ export interface MailType extends MailHeaderType, MailBodyType {}
 export const getMails = (
   account: string,
   options: { sent: any; new: any; saved: any }
-): MailHeaderType[] => {
+): Promise<MailHeaderType[]> => {
   let searchFiled, query;
 
   if (options.sent) {
@@ -305,7 +305,7 @@ export const getMails = (
     });
 };
 
-export const getMailBody = (id: string): MailBodyType => {
+export const getMailBody = (id: string): Promise<MailBodyType> => {
   return request("_search", "POST", {
     _source: ["envelopeTo", "html", "attachments", "messageId"],
     query: {
@@ -336,7 +336,7 @@ export interface AccountsResponse {
   sent: Account[];
 }
 
-export const getAccounts = (username: string): AccountsResponse => {
+export const getAccounts = (username: string): Promise<AccountsResponse> => {
   const fullDomain =
     username === "admin" ? domainName : `${username}.${domainName}`;
   const accounts = request("_msearch", "POST", [
