@@ -74,8 +74,8 @@ const Writer = () => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
       setSender(replyData.to.address.split("@")[0]);
       setTo(replyData.from.value[0].address);
-      setCc("");
-      setBcc("");
+      setCc(replyData.cc?.value?.map((e: any) => e.address).join(", ") || "");
+      setBcc(replyData.bcc?.value?.map((e: any) => e.address).join(", ") || "");
 
       const replyMarkExistsInSubect = !replyData.subject
         .toLowerCase()

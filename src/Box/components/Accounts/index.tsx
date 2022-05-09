@@ -59,7 +59,8 @@ const Accounts = () => {
     setIsAccountsOpen,
     isWriterOpen,
     newMailsTotal,
-    setNewMailsTotal
+    setNewMailsTotal,
+    setLastUpdate
   } = useContext(Context);
 
   const getAccounts = () => {
@@ -68,11 +69,19 @@ const Accounts = () => {
   };
 
   const onSuccess = (data: AccountsResponse) => {
-    const newMails = data.received.reduce(
-      (acc, e) => acc + e.unread_doc_count,
-      0
+    const { newMails, lastUpdate } = data.received.reduce(
+      (acc, e) => {
+        const updated = new Date(e.updated);
+        return {
+          newMails: acc.newMails + e.unread_doc_count,
+          lastUpdate: acc.lastUpdate > updated ? acc.lastUpdate : updated
+        };
+      },
+      { newMails: 0, lastUpdate: new Date(0) }
     );
+
     setNewMailsTotal(newMails);
+    setLastUpdate(lastUpdate);
 
     if (!isFetched) {
       const sync = new MailsSynchronizer(selectedAccount, selectedCategory);

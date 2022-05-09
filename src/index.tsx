@@ -65,11 +65,16 @@ export interface ContextType {
   setNewMailsTotal: React.Dispatch<
     React.SetStateAction<ContextType["newMailsTotal"]>
   >;
+  lastUpdate: Date;
+  setLastUpdate: React.Dispatch<
+    React.SetStateAction<ContextType["lastUpdate"]>
+  >;
 }
 
 export const Context = createContext<ContextType>({} as ContextType);
 
 let session: UserInfoType | undefined;
+let lastNotifiedDate = new Date(0);
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,6 +118,7 @@ const App = () => {
     ContextType["searchHistory"]
   >([]);
   const [newMailsTotal, setNewMailsTotal] = useState(0);
+  const [lastUpdate, setLastUpdate] = useState(lastNotifiedDate);
 
   useEffect(() => {
     window.addEventListener("resize", () => {
@@ -130,9 +136,12 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    console.log("---------------");
+    console.log(lastUpdate);
+    console.log(lastNotifiedDate);
     const noti = new Notifier();
     noti.setBadge(newMailsTotal);
-    if (newMailsTotal) {
+    if (newMailsTotal && lastNotifiedDate < lastUpdate) {
       const title =
         newMailsTotal > 1
           ? `You have ${newMailsTotal} unread messages`
@@ -141,8 +150,9 @@ const App = () => {
         title,
         icon: "/icons/logo192.png"
       });
+      lastNotifiedDate = lastUpdate;
     }
-  }, [newMailsTotal]);
+  }, [newMailsTotal, lastUpdate]);
 
   // stores states to export with `Context`
   const contextValue: ContextType = {
@@ -162,7 +172,9 @@ const App = () => {
     searchHistory,
     setSearchHistory,
     newMailsTotal,
-    setNewMailsTotal
+    setNewMailsTotal,
+    lastUpdate,
+    setLastUpdate
   };
 
   return (

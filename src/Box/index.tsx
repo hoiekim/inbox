@@ -17,6 +17,12 @@ const Box = () => {
   } = useContext(Context);
 
   const [swipeAmount, setSwipeAmount] = useState(0);
+  const [page, setPage] = useState(1);
+
+  const onPaneScroll: React.UIEventHandler<HTMLDivElement> = (e) => {
+    const { scrollHeight, offsetHeight, scrollTop } = e.currentTarget;
+    if (scrollHeight <= offsetHeight + scrollTop) setPage(page + 1);
+  };
 
   const onClickMainOrSideCurtain = () => {
     if (!isWriterOpen) setIsAccountsOpen(false);
@@ -147,6 +153,7 @@ const Box = () => {
         onTouchStart={onPaneTouchStart}
         onTouchMove={onPaneTouchMove}
         onTouchEnd={onPaneTouchEnd}
+        onScroll={onPaneScroll}
       >
         <div
           style={mainPaneStyle}
@@ -161,7 +168,7 @@ const Box = () => {
           onClick={onClickMainOrSideCurtain}
         />
         <Suspense fallback={<></>}>
-          <Mails />
+          <Mails page={page} />
         </Suspense>
       </div>
       <div

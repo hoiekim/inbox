@@ -67,7 +67,7 @@ export class MailsCache extends QueryCache<MailHeaderType[]> {
   }
 }
 
-const RenderedMails = () => {
+const RenderedMails = ({ page }: { page: number }) => {
   const {
     isWriterOpen,
     setReplyData,
@@ -228,6 +228,7 @@ const RenderedMails = () => {
 
   if (query.isSuccess) {
     const mails = Array.isArray(query.data) ? query.data : [];
+    const pagedMails = mails.slice(0, 12 + 8 * page);
 
     const renderMail = (mail: MailHeaderType, i: number) => {
       const saved = mail.label === "saved";
@@ -413,7 +414,7 @@ const RenderedMails = () => {
       );
     };
 
-    const result = mails.map(renderMail);
+    const result = pagedMails.map(renderMail);
 
     return (
       <div className="mails_container">
@@ -425,10 +426,10 @@ const RenderedMails = () => {
   return <></>;
 };
 
-const Mails = () => {
+const Mails = ({ page }: { page: number }) => {
   const { selectedAccount } = useContext(Context);
   if (!selectedAccount) return <GettingStarted />;
-  else return <RenderedMails />;
+  else return <RenderedMails page={page} />;
 };
 
 export default Mails;
