@@ -136,9 +136,6 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    console.log("---------------");
-    console.log(lastUpdate);
-    console.log(lastNotifiedDate);
     const noti = new Notifier();
     noti.setBadge(newMailsTotal);
     if (newMailsTotal && lastNotifiedDate < lastUpdate) {
