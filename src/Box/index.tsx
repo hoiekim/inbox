@@ -184,7 +184,7 @@ const Box = () => {
           onClick={onClickMainOrSideCurtain}
         />
         <Suspense fallback={<></>}>
-          <Accounts />
+          <Accounts setPage={setPage} />
         </Suspense>
       </div>
       <div

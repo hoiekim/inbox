@@ -228,7 +228,7 @@ const RenderedMails = ({ page }: { page: number }) => {
 
   if (query.isSuccess) {
     const mails = Array.isArray(query.data) ? query.data : [];
-    const pagedMails = mails.slice(0, 12 + 8 * page);
+    const pagedMails = mails.slice(0, 4 + 8 * page);
 
     const renderMail = (mail: MailHeaderType, i: number) => {
       const saved = mail.label === "saved";

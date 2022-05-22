@@ -35,7 +35,11 @@ enum SortBy {
 
 let searchDelay: NodeJS.Timeout;
 
-const Accounts = () => {
+const Accounts = ({
+  setPage
+}: {
+  setPage: React.Dispatch<React.SetStateAction<number>>;
+}) => {
   const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
     null
   );
@@ -164,6 +168,7 @@ const Accounts = () => {
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
         if (selectedAccount !== accountName) {
+          setPage(1);
           setSelectedAccount(accountName);
           if (viewSize.width <= 750) setIsAccountsOpen(false);
         }
