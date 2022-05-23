@@ -21,7 +21,7 @@ const Box = () => {
 
   const onPaneScroll: React.UIEventHandler<HTMLDivElement> = (e) => {
     const { scrollHeight, offsetHeight, scrollTop } = e.currentTarget;
-    if (scrollHeight <= offsetHeight + scrollTop) setPage(page + 1);
+    if (scrollHeight - 100 <= offsetHeight + scrollTop) setPage(page + 1);
   };
 
   const onClickMainOrSideCurtain = () => {
