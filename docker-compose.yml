@@ -2,53 +2,8 @@
 version: "3.3"
 
 services:
-  modules:
-    image: node:14.17.6-alpine3.13
-    volumes:
-      - ./:/app
-      - node_modules:/app/node_modules
-    command: sh -c "npm i"
-    working_dir: /app
-    profiles: ["modules"]
-
-  init:
-    image: node:14.17.6-alpine3.13
-    volumes:
-      - ./:/app
-      - node_modules:/app/node_modules
-    command: sh -c "npm run init"
-    working_dir: /app
-    profiles: ["init"]
-
-  dev:
-    image: node:14.17.6-alpine3.13
-    ports:
-      - "3004:3004"
-      - "3000:3000"
-      - "25:25"
-    links:
-      - elastic
-    depends_on:
-      - elastic
-    volumes:
-      - ./:/app
-      - node_modules:/app/node_modules
-      - attachments:/app/attachments
-    command: sh -c "npm run dev"
-    working_dir: /app
-    profiles: ["dev"]
-
-  build:
-    image: node:14.17.6-alpine3.13
-    volumes:
-      - ./:/app
-      - node_modules:/app/node_modules
-      - build:/app/build
-    command: sh -c "npm run build"
-    working_dir: /app
-
   app:
-    image: node:14.17.6-alpine3.13
+    build: ./
     ports:
       - "3004:3004"
       - "25:25"
@@ -58,12 +13,7 @@ services:
       - elastic
     restart: always
     volumes:
-      - ./:/app
-      - node_modules:/app/node_modules
       - attachments:/app/attachments
-      - build:/app/build
-    command: sh -c "npm run server"
-    working_dir: /app
 
   elastic:
     image: docker.elastic.co/elasticsearch/elasticsearch:7.16.2
@@ -76,9 +26,5 @@ services:
 volumes:
   data:
     driver: local
-  node_modules:
-    driver: local
   attachments:
-    driver: local
-  build:
     driver: local

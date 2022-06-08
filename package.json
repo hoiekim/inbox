@@ -6,7 +6,7 @@
   "proxy": "http://localhost:3004",
   "scripts": {
     "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run react-start\" \"nodemon server.ts\"",
-    "start": "npm run build && npm run server",
+    "start": "npm run server",
     "react-start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

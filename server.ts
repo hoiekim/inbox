@@ -1,6 +1,9 @@
 import config from "./config";
 config();
 
+import init from "./init";
+init();
+
 import express from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";

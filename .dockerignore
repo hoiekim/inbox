@@ -1,4 +1,5 @@
-node_modules
-build
-attachments
 .*
+!.env*
+attachments
+build
+node_modules

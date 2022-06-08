@@ -25,7 +25,7 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
       if (healthStatus < 200 || 300 <= healthStatus) throw new Error();
     } catch (err) {
       console.info(
-        "Healthcheck falied, restarting initialization in 20 seconds."
+        "Healthcheck falied, restarting initialization in 10 seconds."
       );
       return new Promise((res, rej) =>
         setTimeout(() => res(this.initialize(schema)), 10000)
@@ -33,9 +33,6 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
     }
 
     try {
-      // Bellow assumes that user has access authentication to "INDEX-*"
-      const tempIndex = INDEX + "-temp-" + Math.floor(Math.random() * 10000);
-
       // Check if the index to initialize already exists
       const indexExists = await fetch(`${HOST}/${INDEX}`, {
         method: "HEAD",
@@ -45,65 +42,16 @@ function Elastic(HOST, USERNAME, PASSWORD, INDEX) {
         }
       }).then((r) => r.status === 200);
 
-      let dataExists = false;
-
       if (indexExists) {
-        // Check if data exists in the index to initialize
-        dataExists = await this.request("_search", "POST", {
-          size: 0,
-          query: {
-            match_all: {}
-          }
-        })
-          .then(toJson)
-          .then((r) => !!r.hits.total.value);
-
-        if (dataExists) {
-          // Move data to temporary index
-          await fetch(`${HOST}/_reindex`, {
-            method: "POST",
-            headers: {
-              Authorization,
-              "content-type": "application/json"
-            },
-            body: JSON.stringify({
-              source: { index: INDEX },
-              dest: { index: tempIndex }
-            })
-          }).then(toJson);
-        }
-
-        // Delete the index to initialize
-        await this.request("", "DELETE").then(toJson);
-      }
-
-      // Define mappings to the index to initialize
-      await this.request("", "PUT", {
-        mappings: { properties: schema }
-      }).then(toJson);
-
-      if (dataExists) {
-        // Move data back from the temporary index
-        await fetch(`${HOST}/_reindex`, {
-          method: "POST",
-          headers: {
-            Authorization,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            source: { index: tempIndex },
-            dest: { index: INDEX }
-          })
-        }).then(toJson);
-
-        // Delete temporary index
-        await fetch(`${HOST}/${tempIndex}`, {
-          method: "DELETE",
-          headers: {
-            Authorization,
-            "content-type": "application/json"
-          }
-        }).then(toJson);
+        // Define mappings to the index
+        await this.request("_mapping", "PUT", {
+          properties: schema
+        });
+      } else {
+        // Create index with mappings
+        await this.request("", "PUT", {
+          mappings: { properties: schema }
+        });
       }
 
       console.info("Initialized index:", INDEX);

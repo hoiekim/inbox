@@ -50,34 +50,33 @@ In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and 
 
 If you want to use this app only for receiving mails, skip this step.
 
-## 4. Run app with Docker
+## 4. Run app
 
-Following instruction assumes that you have docker and docker-compose installed in your machine.
+1. Production mode
 
-1.  Install modules & put index mapping (First time run)
+   Make sure you have docker and docker-compose installed in your machine.
 
-    Run following commands one by one:
+   ```
+   docker-compose up
+   ```
 
-    ```
-    docker-compose up modules
-    docker-compose up init
-    ```
+2. Development mode
 
-    `modules` and `init` services can be started using one command(`docker-compose up modules init`). However, `init` service will fail without `modules` installed completely. Run those services separately to make sure avoiding this problem.
+   Set following values in `.env.development` file to tell inbox what Elasticsearch host to use in development. You can install and run it in your local machine by downloading it from their [official website](https://elastic.co). In this case your Elasticsearch hostname is usually `http://localhost:9200`.
 
-2.  Run app
+   ```
+   ELASTIC_HOST=            // Address starts with http or https that directs to Elasticsearch host
+   ELASTIC_USERNAME=        // Elasticsearch username (if required by Elasticsearch host)
+   ELASTIC_PASSWORD=        // Elasticsearch password (if required by Elasticsearch host)
+   ELASTIC_INDEX=           // Elasticsearch index name (optional)
+   ```
 
-    a. Production mode
+   Then run app using this command
 
-    ```
-    docker-compose up
-    ```
-
-    b. Development mode
-
-    ```
-    docker-compose up dev
-    ```
+   ```
+   npm i
+   npm run dev
+   ```
 
 ## 5. Enjoy!
 
