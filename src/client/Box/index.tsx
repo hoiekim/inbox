@@ -1,6 +1,6 @@
 import React, { Suspense, useContext, useState } from "react";
 import { Writer, Accounts, Mails } from "./components";
-import { Context } from "src";
+import { Context } from "client";
 import "./index.scss";
 
 export * from "./components";

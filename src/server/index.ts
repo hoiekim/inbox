@@ -1,15 +1,28 @@
-import config from "./config";
-config();
+const { NODE_PATH, NODE_ENV } = process.env;
 
-import init from "./init";
-init();
+let envPath = ".env";
+if (NODE_ENV) envPath += "." + NODE_ENV;
+require("dotenv").config({ path: envPath });
+
+if (!NODE_PATH) {
+  const paths = ["src", "compile"];
+  const isWindows = process.platform === "win32";
+  if (isWindows) process.env.NODE_PATH = paths.join(";");
+  else process.env.NODE_PATH = paths.join(":");
+}
+require("module").Module._initPaths();
+
+export * from "./routes";
 
 import express from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";
+import path from "path";
 import mails from "./routes/mails";
 import users from "./routes/users";
-import path from "path";
+import init from "./init";
+
+init();
 
 const nodeMailin = require("node-mailin");
 
@@ -53,7 +66,7 @@ app.post("/user/set-info", users.setUserInfo);
 app.delete("/user", users.signOut);
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
+  res.sendFile(path.join(__dirname, "../../build", "index.html"));
 });
 
 app.listen(port, () => {

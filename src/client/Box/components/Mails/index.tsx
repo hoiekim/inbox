@@ -13,10 +13,9 @@ import {
   SolidStarIcon
 } from "./components";
 
-import { Context, Category } from "src";
-import { QueryCache } from "src/lib";
-import { AccountsCache } from "src/Box/components/Accounts";
-import { MailHeaderType } from "routes";
+import { Context, Category, QueryCache } from "client";
+import { AccountsCache } from "client/Box/components/Accounts";
+import { MailHeaderType } from "server";
 
 import "./index.scss";
 

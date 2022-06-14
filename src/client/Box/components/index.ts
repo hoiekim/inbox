@@ -1,6 +1,6 @@
 import React from "react";
 
-import { Category, queryClient } from "src";
+import { Category, queryClient } from "client";
 import { AccountsCache } from "./Accounts";
 import { MailsCache } from "./Mails";
 

@@ -1,8 +1,8 @@
 import React, { useContext } from "react";
 
-import { Context } from "src";
-import { getDateForMailHeader } from "src";
-import { EmailAdressValue, MailHeaderType } from "routes";
+import { Context } from "client";
+import { getDateForMailHeader } from "client";
+import { EmailAdressValue, MailHeaderType } from "server";
 
 export interface MailHeaderProps extends React.ComponentProps<"div"> {
   mail: MailHeaderType;

@@ -1,10 +1,10 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
 import { useQuery } from "react-query";
 
-import { Context, ContextType } from "src";
-import FileIcon from "src/Box/components/FileIcon";
+import { Context, ContextType } from "client";
+import FileIcon from "client/Box/components/FileIcon";
 
-import { Attachment, MailBodyType } from "routes";
+import { Attachment, MailBodyType } from "server";
 
 const MailBody = ({ mailId }: { mailId: string }) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(

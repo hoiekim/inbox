@@ -11,9 +11,9 @@ import {
   SortUpIcon
 } from "./components";
 
-import { Context, Category, useLocalStorage, MailsSynchronizer } from "src";
-import { QueryCache } from "src/lib";
-import { Account, AccountsResponse } from "routes";
+import { Context, Category, useLocalStorage, QueryCache } from "client";
+import { MailsSynchronizer } from "client/Box";
+import { Account, AccountsResponse } from "server";
 
 import "./index.scss";
 

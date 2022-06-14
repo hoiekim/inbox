@@ -1,5 +1,5 @@
 import { Updater } from "react-query/types/core/utils";
-import { queryClient } from "src";
+import { queryClient } from "client";
 
 export class QueryCache<T> {
   constructor(key: string) {

@@ -1,6 +1,3 @@
-import config from "./config";
-config();
-
 import { Mail, User } from "./routes";
 
 const init = () => {
