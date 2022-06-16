@@ -44,6 +44,7 @@ app.use(
   })
 );
 
+app.get("/api/domainName", mails.getDomainName);
 app.get("/api/attachment/:id", mails.getAttachment);
 app.get("/api/accounts", mails.getAccounts);
 app.get("/api/markRead/:id", mails.markRead);

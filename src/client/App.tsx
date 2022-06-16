@@ -18,6 +18,7 @@ export interface ContextType {
     width: number;
     height: number;
   };
+  domainName: string;
   userInfo: UserInfoType | undefined;
   setUserInfo: React.Dispatch<React.SetStateAction<ContextType["userInfo"]>>;
   isAccountsOpen: boolean;
@@ -84,6 +85,7 @@ const App = ({ session }: Props) => {
     width: window.innerWidth,
     height: window.innerHeight
   });
+  const [domainName, setDomainName] = useLocalStorage("domainName", "");
   const [userInfo, setUserInfo] = useState(session);
   const [isAccountsOpen, setIsAccountsOpen] = useLocalStorage(
     "isAccountsOpen",
@@ -124,6 +126,14 @@ const App = ({ session }: Props) => {
   }, []);
 
   useEffect(() => {
+    if (!domainName) {
+      fetch("/api/domainName")
+        .then((r) => r.text())
+        .then(setDomainName);
+    }
+  }, [domainName, setDomainName]);
+
+  useEffect(() => {
     const noti = new Notifier();
     noti.setBadge(newMailsTotal);
     if (newMailsTotal && lastNotifiedDate < lastUpdate) {
@@ -139,11 +149,25 @@ const App = ({ session }: Props) => {
     }
   }, [newMailsTotal, lastUpdate]);
 
+  useEffect(() => {
+    if (!userInfo) {
+      setSelectedAccount("");
+      setSelectedCategory(Category.AllMails);
+      setIsWriterOpen(false);
+      setIsAccountsOpen(window.innerWidth > 750);
+      setReplyData({});
+      setSearchHistory([]);
+      setNewMailsTotal(0);
+      setLastUpdate(new Date(0));
+    }
+  }, [userInfo]);
+
   // stores states to export with `Context`
   const contextValue: ContextType = {
     viewSize,
     userInfo,
     setUserInfo,
+    domainName,
     isAccountsOpen,
     setIsAccountsOpen,
     isWriterOpen,

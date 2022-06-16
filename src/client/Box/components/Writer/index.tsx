@@ -12,8 +12,6 @@ import "./index.scss";
 
 import { marked } from "marked";
 
-const domainName = process.env.REACT_APP_DOMAIN || "mydomain";
-
 const replyDataToOriginalMessage = (replyData: any) => {
   if (!replyData) {
     return {
@@ -43,7 +41,7 @@ const replyDataToOriginalMessage = (replyData: any) => {
 };
 
 const Writer = () => {
-  const { isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
+  const { domainName, isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
     useContext(Context);
 
   const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);

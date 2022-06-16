@@ -4,6 +4,10 @@ const domainName = process.env.DOMAIN || "mydomain";
 
 const mailsRouter = {};
 
+mailsRouter.getDomainName = async (req, res) => {
+  res.status(200).send(domainName);
+};
+
 mailsRouter.getAttachment = async (req, res) => {
   console.info("Received GET request to attachment", req.ip, "at", new Date());
   if (!req.session.user) return res.json(new Error("Login is required"));

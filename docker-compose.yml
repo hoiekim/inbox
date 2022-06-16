@@ -6,7 +6,6 @@ services:
     build: ./
     env_file:
       - ./.env.local
-      - ./.env.${NODE_ENV}
     ports:
       - "3004:3004"
       - "25:25"

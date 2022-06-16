@@ -6,8 +6,9 @@ import { Context } from "..";
 import "./index.scss";
 
 const Header = () => {
-  const { viewSize, userInfo, selectedAccount } = useContext(Context);
-  let domainName = process.env.REACT_APP_DOMAIN || "mydomain";
+  const { viewSize, domainName, userInfo, selectedAccount } =
+    useContext(Context);
+
   const username = userInfo?.username;
   if (username && username !== "admin") {
     domainName = username + "." + domainName;
