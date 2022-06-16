@@ -8,7 +8,7 @@
     "module": "commonjs",
     "resolveJsonModule": true,
     "allowJs": true,
-    "outDir": "./compile/server",
+    "outDir": "./build/server",
     "baseUrl": "./src",
     "paths": {
       "client": ["./client"],

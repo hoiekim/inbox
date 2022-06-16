@@ -5,7 +5,8 @@ services:
   inbox:
     build: ./
     env_file:
-      - ./.env
+      - ./.env.local
+      - ./.env.${NODE_ENV}
     ports:
       - "3004:3004"
       - "25:25"

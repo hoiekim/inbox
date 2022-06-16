@@ -17,12 +17,11 @@ For detailed instruction, please keep reading this document.
    ```
    git clone https://github.com/garageScript/inbox.git
    ```
-2. Setup environment variables in `.env.development` and `.env.production` file
+2. Copy `.env.example` file and name it `.env.local` then determine environment variables in `.env.local` file as following.
 
    ```
-   DOMAIN=                  // Domain name to use when sending mails.
-   APP_DOMAIN=              // Domain name that hosts inbox app.
-   REACT_APP_DOMAIN=        // Domain name to display in app UI.
+   DOMAIN=                  // Domain name to use when sending & receiving mails.
+   APP_DOMAIN=              // Domain name that hosts inbox web app.
 
    SECRET=                  // Encoding secret for session data. Any value works.
    ADMIN_PW=                // Password to login to Inbox.
@@ -46,7 +45,7 @@ In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and 
 
 1. Go to [Sendgrid](https://sendgrid.com/) and make an account.
 2. Go to [dashboard](https://app.sendgrid.com/guide/integrate/langs/nodejs) and get api key.
-3. Copy api key and paste it in `.env` file.
+3. Copy api key and paste it in `.env.local` file.
 
 If you want to use this app only for receiving mails, skip this step.
 
@@ -62,7 +61,7 @@ If you want to use this app only for receiving mails, skip this step.
 
 2. Development mode
 
-   Set following values in `.env.development` file to tell inbox what Elasticsearch host to use in development. You can install and run it in your local machine by downloading it from their [official website](https://elastic.co). In this case your Elasticsearch hostname is usually `http://localhost:9200`.
+   Set following values in `.env.local` file to tell inbox what Elasticsearch host to use in development. You can install and run it in your local machine by downloading it from their [official website](https://elastic.co). In this case your Elasticsearch hostname is usually `http://localhost:9200`.
 
    ```
    ELASTIC_HOST=            // Address starts with http or https that directs to Elasticsearch host
@@ -77,6 +76,10 @@ If you want to use this app only for receiving mails, skip this step.
    npm i
    npm run dev
    ```
+
+### Environment Variables
+
+This app in default uses `.env` and `.env.local` to load environment variables. `.env` is included in the repository, intending to determine consistent variables that are related to React's build process, etc. `.env.local` is not included in the repository, intending to determine variables that differ by inbox app's host environment, external API credentials, etc. Additionally, we have an option to add another one as `.env.<NODE_ENV>` where you can set `NODE_ENV` in your terminal for example in Mac/Linux, `NODE_ENV=development` or in Windows cmd, `set NODE_ENV=development`.
 
 ## 5. Enjoy!
 

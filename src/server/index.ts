@@ -1,15 +1,13 @@
-const { NODE_PATH, NODE_ENV } = process.env;
+import { config } from "dotenv";
 
-let envPath = ".env";
-if (NODE_ENV) envPath += "." + NODE_ENV;
-require("dotenv").config({ path: envPath });
+const { NODE_ENV } = process.env;
+const extraEnv = NODE_ENV ? ".env." + NODE_ENV : "";
+[".env", ".env.local", extraEnv].forEach((path) => config({ path }));
 
-if (!NODE_PATH) {
-  const paths = ["src", "compile"];
-  const isWindows = process.platform === "win32";
-  if (isWindows) process.env.NODE_PATH = paths.join(";");
-  else process.env.NODE_PATH = paths.join(":");
-}
+const paths = ["src", "build"];
+const isWindows = process.platform === "win32";
+if (isWindows) process.env.NODE_PATH = paths.join(";");
+else process.env.NODE_PATH = paths.join(":");
 require("module").Module._initPaths();
 
 export * from "./routes";
@@ -32,8 +30,6 @@ app.use(express.json({ limit: "50mb" }));
 const domainName = process.env.DOMAIN || "mydomain";
 const port = process.env.PORT || 3004;
 
-app.use(express.static(path.join(__dirname, "../../build")));
-app.use(express.json());
 app.use(fileupload());
 app.use(
   session({
@@ -65,8 +61,10 @@ app.post("/user/send-token", users.sendToken);
 app.post("/user/set-info", users.setUserInfo);
 app.delete("/user", users.signOut);
 
+const clientPath = path.resolve(__dirname, "../client");
+app.use(express.static(clientPath));
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "../../build", "index.html"));
+  res.sendFile(path.join(clientPath, "index.html"));
 });
 
 app.listen(port, () => {
