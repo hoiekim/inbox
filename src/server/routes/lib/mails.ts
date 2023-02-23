@@ -183,6 +183,41 @@ export const saveMail = (body: any) => {
     e.content = { data: id };
   });
 
+  if (Array.isArray(body.to.value)) {
+    body.to.value.forEach((e: any) => {
+      e.address = e.address.toLowerCase();
+    });
+  } else if (body.to.value) {
+    body.to.value.address = body.to.value.address.toLowerCase();
+  }
+  body.to.text = body.to.text.toLowerCase();
+
+  if (Array.isArray(body.from.value)) {
+    body.from.value.forEach((e: any) => {
+      e.address = e.address.toLowerCase();
+    });
+  } else if (body.from.value) {
+    body.from.value.address = body.from.value.address.toLowerCase();
+  }
+  body.from.text = body.from.text.toLowerCase();
+
+  if (Array.isArray(body.envelopeTo)) {
+    body.envelopeTo.forEach((e: any) => {
+      e.address = e.address.toLowerCase();
+    });
+  } else if (body.envelopeTo) {
+    body.envelopeTo.address = body.envelopeTo.address.toLowerCase();
+  }
+
+  if (Array.isArray(body.envelopeFrom)) {
+    body.envelopeFrom.forEach((e: any) => {
+      e.address = e.address.toLowerCase();
+    });
+  } else if (body.envelopeFrom) {
+    body.envelopeFrom.address = body.envelopeFrom.address.toLowerCase();
+  }
+
+  // TODO: investigate the original issue that these properties made Elasticsearch crash
   delete body.connection;
   delete body.envelopeFrom.args;
   delete body.envelopeTo.args;
