@@ -493,7 +493,8 @@ export const validateMailAddress = (data: any, domainName: string) => {
   if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
   let isAddressCorrect = !!data.envelopeTo.find((e: any) => {
     const parsedAddress = e.address?.split("@");
-    return parsedAddress[parsedAddress.length - 1].includes(domainName);
+    const domainNameInData = parsedAddress[parsedAddress.length - 1];
+    return domainNameInData.toLowerCase().includes(domainName.toLowerCase());
   });
   return isAddressCorrect;
 };
