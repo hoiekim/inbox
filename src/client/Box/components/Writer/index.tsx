@@ -1,16 +1,24 @@
-import React, { useContext, useState, useEffect } from "react";
+import React, {
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  useCallback
+} from "react";
 import { useMutation } from "react-query";
-
-import Editor from "rich-markdown-editor";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import {
+  Context,
+  useLocalStorage,
+  getDateForMailHeader,
+  insertStyle
+} from "client";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
-import { Context, useLocalStorage, getDateForMailHeader } from "client";
-
 import "./index.scss";
-
-import { marked } from "marked";
 
 const replyDataToOriginalMessage = (replyData: any) => {
   if (!replyData) {
@@ -52,7 +60,10 @@ const Writer = () => {
   const [bcc, setBcc] = useLocalStorage("bcc", "");
   const [subject, setSubject] = useLocalStorage("subject", "");
   const [sender, setSender] = useLocalStorage("sender", "");
-  const [textarea, setTextarea] = useLocalStorage("textarea", "");
+  const [initialContent, setInitialContent] = useLocalStorage(
+    "initialContent",
+    "Say something really cool here!"
+  );
   const [originalMessage, setOriginalMessage] = useLocalStorage(
     "originalMessage",
     {
@@ -63,10 +74,22 @@ const Writer = () => {
       prefix: ""
     }
   );
-
   const [attachments, setAttachments] = useState<any>({});
-
   const [editorKey, setEditorKey] = useState(1);
+
+  const editor = useEditor({
+    extensions: [StarterKit],
+    content: initialContent
+  });
+
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  editorRef.current?.on("update", (e) => setInitialContent(e.editor.getHTML()));
+
+  const clearEditorContent = useCallback(() => {
+    editorRef.current?.commands.setContent("");
+    setInitialContent("");
+  }, [setInitialContent]);
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
@@ -90,7 +113,7 @@ const Writer = () => {
         : "Fwd: " + replyData.subject;
       setSubject(subject);
 
-      setTextarea("");
+      clearEditorContent();
       setAttachments({});
       setOriginalMessage(replyDataToOriginalMessage(replyData));
 
@@ -102,12 +125,12 @@ const Writer = () => {
     setCc,
     setBcc,
     setSubject,
-    setTextarea,
     setAttachments,
     replyData,
     setReplyData,
     isWriterOpen,
-    setOriginalMessage
+    setOriginalMessage,
+    clearEditorContent
   ]);
 
   const sendMail = (data: any) => {
@@ -138,7 +161,7 @@ const Writer = () => {
     setCc("");
     setBcc("");
     setSubject("");
-    setTextarea("");
+    clearEditorContent();
     setAttachments({});
     setEditorKey(editorKey + 1);
     setOriginalMessage({
@@ -176,7 +199,7 @@ const Writer = () => {
     const formData = new FormData();
 
     const html =
-      marked(textarea) +
+      insertStyle(editor?.getHTML() || "") +
       "\n\n\n" +
       `<p>${originalMessage.prefix
         .replace("<", "&lt;")
@@ -227,20 +250,12 @@ const Writer = () => {
     );
   });
 
-  let focusAtEnd: () => void = () => {};
-
   const onClickPadding: React.MouseEventHandler<HTMLDivElement> = (e) => {
     const targetClassList = Array.from((e.target as any).classList);
     const targetIsPadding = !!targetClassList.find(
       (f) => f === "editor_container_bottom_padding"
     );
-    if (targetIsPadding) focusAtEnd();
-  };
-
-  const uploadImage = async (file: File) => {
-    const blob = new Blob([file]);
-    const objectUrl = URL.createObjectURL(blob);
-    return objectUrl;
+    if (targetIsPadding) editor?.commands.focus();
   };
 
   return (
@@ -340,18 +355,7 @@ const Writer = () => {
               className="editor_container_bottom_padding"
               onClick={onClickPadding}
             >
-              <Editor
-                key={editorKey}
-                className="editor_container"
-                ref={(e) => {
-                  if (e?.focusAtEnd) focusAtEnd = e.focusAtEnd;
-                }}
-                style={{ paddingLeft: "20px" }}
-                placeholder="Say something really cool here!"
-                defaultValue={textarea}
-                onChange={setTextarea}
-                uploadImage={uploadImage}
-              />
+              <EditorContent editor={editor} />
               {originalMessage.id ? (
                 <div
                   className="original_message cursor"

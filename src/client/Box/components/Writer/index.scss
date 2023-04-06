@@ -41,6 +41,10 @@
     svg {
       margin-right: 0.3rem;
     }
+
+    span {
+      font-weight: normal;
+    }
   }
 
   .fieldName {
@@ -96,12 +100,8 @@
       width: 100%;
       height: calc(100% - 0.5rem - 20px);
 
-      * {
-        font-weight: 400;
-      }
-
       .writer-content {
-        padding: 0.5rem;
+        padding: 0 0.5rem;
         height: 100%;
         border-radius: 3px;
         position: relative;
@@ -152,6 +152,54 @@
 
       svg {
         margin-right: 0.5rem;
+      }
+    }
+  }
+
+  .ProseMirror {
+    * {
+      font-weight: normal;
+    }
+
+    p,
+    ul,
+    ol {
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    blockquote {
+      margin-top: 10px;
+      margin-bottom: 10px;
+      padding: 0 0 0 0.5rem;
+      border-left: 5px solid #888;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6 {
+      font-weight: bolder;
+    }
+
+    code {
+      background-color: #eee;
+      color: #c50;
+      border-radius: 2px;
+    }
+
+    pre {
+      background-color: #444;
+      color: #fff;
+      border-radius: 3px;
+      padding: 0.5rem;
+
+      code {
+        color: inherit;
+        background: none;
+        padding: 0;
       }
     }
   }

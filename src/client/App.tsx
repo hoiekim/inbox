@@ -160,7 +160,17 @@ const App = ({ session }: Props) => {
       setNewMailsTotal(0);
       setLastUpdate(new Date(0));
     }
-  }, [userInfo]);
+  }, [
+    userInfo,
+    setSelectedAccount,
+    setSelectedCategory,
+    setIsWriterOpen,
+    setIsAccountsOpen,
+    setReplyData,
+    setSearchHistory,
+    setNewMailsTotal,
+    setLastUpdate
+  ]);
 
   // stores states to export with `Context`
   const contextValue: ContextType = {

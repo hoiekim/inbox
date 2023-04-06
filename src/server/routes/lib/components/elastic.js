@@ -1,5 +1,3 @@
-import fetch from "node-fetch";
-
 const toJson = async (r) => {
   if (r?.json) r = await r.json();
   if (r?.error) throw new Error(JSON.stringify(r.error));

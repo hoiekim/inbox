@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import { useContext } from "react";
 import LeftMenu from "./components/LeftMenu";
 import RightMenu from "./components/RightMenu";
 import { Context } from "..";
@@ -10,12 +10,13 @@ const Header = () => {
     useContext(Context);
 
   const username = userInfo?.username;
-  if (username && username !== "admin") {
-    domainName = username + "." + domainName;
-  }
+  const fullEmailHostName =
+    username === "admin"
+      ? domainName
+      : [username, domainName].filter((e) => e).join(".");
 
   const title = !selectedAccount
-    ? "@" + domainName
+    ? "@" + fullEmailHostName
     : viewSize.width > 750
     ? selectedAccount
     : selectedAccount.split("@")[0];

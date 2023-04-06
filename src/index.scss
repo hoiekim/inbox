@@ -33,6 +33,11 @@ code {
   padding: 0 5px;
 }
 
+/* Remove the border */
+*:focus {
+  outline: none;
+}
+
 /* scrollbar */
 ::-webkit-scrollbar {
   width: 5px;
