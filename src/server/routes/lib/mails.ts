@@ -429,7 +429,8 @@ export const getAccounts = (username: string): Promise<AccountsResponse> => {
           terms: {
             field: "from.value.address",
             size: 10000
-          }
+          },
+          aggs: { updated: { max: { field: "date" } } }
         }
       }
     }
@@ -448,6 +449,10 @@ export const getAccounts = (username: string): Promise<AccountsResponse> => {
       e.saved_doc_count =
         e.label.buckets.find((f: any) => f.key === "saved")?.doc_count || 0;
       delete e.label;
+      e.updated = new Date(e.updated.value);
+    });
+
+    sent.forEach((e: any) => {
       e.updated = new Date(e.updated.value);
     });
 
