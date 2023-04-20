@@ -22,7 +22,7 @@ import init from "./init";
 
 init();
 
-const nodeMailin = require("node-mailin");
+const nodeMailin = require("@umpacken/node-mailin");
 
 const app = express();
 app.use(express.json({ limit: "50mb" }));

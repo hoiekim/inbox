@@ -21,13 +21,13 @@
   "license": "ISC",
   "dependencies": {
     "@sendgrid/mail": "^7.4.4",
+    "@umpacken/node-mailin": "^2.6.2",
     "bcrypt": "^5.0.1",
     "dotenv": "^8.2.0",
     "express": "^4.18.2",
     "express-fileupload": "^1.2.0",
     "express-session": "^1.17.1",
     "html-to-text": "^8.1.0",
-    "node-mailin": "^2.5.0",
     "uuid": "^8.3.2"
   },
   "devDependencies": {
