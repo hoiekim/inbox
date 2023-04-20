@@ -12,8 +12,7 @@ export const insertStyle = (html: string) => {
   });
   document.querySelectorAll("blockquote").forEach((e) => {
     const anyE = e as any;
-    anyE.style.marginTop = "10px";
-    anyE.style.marginBottom = "10px";
+    anyE.style.margin = "10px 0 10px 0";
     anyE.style.padding = "0 0 0 0.5rem";
     anyE.style.borderLeft = "5px solid #888";
   });
@@ -26,6 +25,8 @@ export const insertStyle = (html: string) => {
     anyE.style.backgroundColor = "#eee";
     anyE.style.color = "#c50";
     anyE.style.borderRadius = "2px";
+    anyE.style.fontFamily = "monospace";
+    anyE.style.padding = "0 5px";
   });
   document.querySelectorAll("pre").forEach((e) => {
     const anyE = e as any;

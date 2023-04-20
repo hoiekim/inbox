@@ -14,7 +14,7 @@ const mountApp = async () => {
   );
   root.render(
     <React.StrictMode>
-      <App session={session} />,
+      <App session={session} />
     </React.StrictMode>
   );
 };
