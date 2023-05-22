@@ -132,11 +132,11 @@ ${data.html}
       audjstMailContnetSize(e.target as HTMLIFrameElement);
     };
 
-    const summary = data.insight?.summary.map((e) => {
+    const summary = data.insight?.summary?.map((e) => {
       return <li>{e}</li>;
     });
 
-    const actionItems = data.insight?.action_items.map((e) => {
+    const actionItems = data.insight?.action_items?.map((e) => {
       return <li>{e}</li>;
     });
 
@@ -150,12 +150,12 @@ ${data.html}
         ) : (
           <></>
         )}
-        {!!summary.length && (
+        {!!summary?.length && (
           <div className="summary">
             <ul>{summary}</ul>
           </div>
         )}
-        {!!actionItems.length && (
+        {!!actionItems?.length && (
           <div className="actionItem">
             <ul>{actionItems}</ul>
           </div>

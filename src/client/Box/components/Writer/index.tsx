@@ -86,10 +86,13 @@ const Writer = () => {
   editorRef.current = editor;
   editorRef.current?.on("update", (e) => setInitialContent(e.editor.getHTML()));
 
-  const clearEditorContent = useCallback(() => {
-    editorRef.current?.commands.setContent("");
-    setInitialContent("");
-  }, [setInitialContent]);
+  const setEditorContent = useCallback(
+    (content: string) => {
+      editorRef.current?.commands.setContent(content);
+      setInitialContent(content);
+    },
+    [setInitialContent]
+  );
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
@@ -113,7 +116,7 @@ const Writer = () => {
         : "Fwd: " + replyData.subject;
       setSubject(subject);
 
-      clearEditorContent();
+      setEditorContent(replyData.insight?.suggested_reply || "");
       setAttachments({});
       setOriginalMessage(replyDataToOriginalMessage(replyData));
 
@@ -130,7 +133,7 @@ const Writer = () => {
     setReplyData,
     isWriterOpen,
     setOriginalMessage,
-    clearEditorContent
+    setEditorContent
   ]);
 
   const sendMail = (data: any) => {
@@ -161,7 +164,7 @@ const Writer = () => {
     setCc("");
     setBcc("");
     setSubject("");
-    clearEditorContent();
+    setEditorContent("");
     setAttachments({});
     setEditorKey(editorKey + 1);
     setOriginalMessage({

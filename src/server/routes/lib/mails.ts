@@ -276,6 +276,7 @@ export interface MailHeaderType {
   cc: EmailAdress;
   bcc: EmailAdress;
   subject: string;
+  insight: Insight;
   highlight?: {
     subject?: string[];
     text?: string[];
@@ -336,7 +337,17 @@ export const getMails = (
   }
 
   return request("_search", "POST", {
-    _source: ["read", "label", "date", "from", "to", "cc", "bcc", "subject"],
+    _source: [
+      "read",
+      "label",
+      "date",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "subject",
+      "insight"
+    ],
     query,
     sort: { date: "desc" },
     from: 0,
