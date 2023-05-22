@@ -52,7 +52,15 @@ const init = () => {
     subject: { type: "text" },
     user: { type: "keyword" },
     read: { type: "boolean" },
-    label: { type: "keyword" }
+    label: { type: "keyword" },
+    insight: {
+      type: "nested",
+      properties: {
+        summary: { type: "text" },
+        action_items: { type: "text" },
+        suggested_reply: { type: "text" }
+      }
+    }
   });
 
   User.initialize({

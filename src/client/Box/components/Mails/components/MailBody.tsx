@@ -132,6 +132,14 @@ ${data.html}
       audjstMailContnetSize(e.target as HTMLIFrameElement);
     };
 
+    const summary = data.insight?.summary.map((e) => {
+      return <li>{e}</li>;
+    });
+
+    const actionItems = data.insight?.action_items.map((e) => {
+      return <li>{e}</li>;
+    });
+
     return (
       <div className="text">
         <div className="loading_message">
@@ -141,6 +149,16 @@ ${data.html}
           <div className="attachmentBox">{attachments}</div>
         ) : (
           <></>
+        )}
+        {!!summary.length && (
+          <div className="summary">
+            <ul>{summary}</ul>
+          </div>
+        )}
+        {!!actionItems.length && (
+          <div className="actionItem">
+            <ul>{actionItems}</ul>
+          </div>
         )}
         <iframe
           title={mailId}

@@ -5,6 +5,7 @@ import { EmailData } from "@sendgrid/helpers/classes/email-address";
 import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
 import { htmlToText } from "html-to-text";
 import { FileArray, UploadedFile } from "express-fileupload";
+import { Insight, getInsight } from "./ai";
 const uuid = require("uuid");
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
@@ -65,7 +66,10 @@ export const sendMail = async (mailData: MailToSend, files: FileArray) => {
   const { username, name, sender, to, cc, bcc, subject, html, inReplyTo } =
     mailData;
   const text = htmlToText(html, {
-    selectors: [{ selector: "img", format: "skip" }]
+    selectors: [
+      { selector: "img", format: "skip" },
+      { selector: "a", options: { ignoreHref: true } }
+    ]
   });
 
   const attachments: AttachmentData[] = [];
@@ -161,15 +165,13 @@ export const sendMail = async (mailData: MailToSend, files: FileArray) => {
 };
 
 const genAttachmentId = (): string => {
-  const id = uuid.v4();
-  if (fs.existsSync(`./attachments/${id}`)) {
-    console.warn("Duplicate uuid is found");
-    console.group();
-    console.log(`Duplicated path: ./attachments/${id}`);
-    console.log("Isn't attachments storage directory too full?");
-    console.groupEnd();
-    return genAttachmentId();
-  } else return id;
+  let id = uuid.v4();
+  while (fs.existsSync(`./attachments/${id}`)) {
+    console.warn(`Duplicate uuid is found: ./attachments/${id}`);
+    console.log("Proceeding to regenerate uuid");
+    id = uuid.v4();
+  }
+  return id;
 };
 
 // TODO: Clarify variable types
@@ -177,6 +179,7 @@ export const saveMail = (body: any) => {
   body.attachments.forEach((e: any) => {
     const id = genAttachmentId();
     const content = e.content.data || e.content;
+    if (!fs.existsSync("./attachments")) fs.mkdirSync("./attachments");
     fs.writeFile(`./attachments/${id}`, Buffer.from(content), (err) => {
       if (err) throw err;
     });
@@ -216,6 +219,15 @@ export const saveMail = (body: any) => {
   } else if (body.envelopeFrom) {
     body.envelopeFrom.address = body.envelopeFrom.address.toLowerCase();
   }
+
+  body.text = htmlToText(body.html, {
+    selectors: [
+      { selector: "img", format: "skip" },
+      { selector: "a", options: { ignoreHref: true } }
+    ]
+  });
+
+  body.insight = getInsight(`${body.subject}\n${body.text}`);
 
   // TODO: investigate the original issue that these properties made Elasticsearch crash
   delete body.connection;
@@ -283,6 +295,7 @@ export interface MailBodyType {
   html: string;
   attachments: Attachment[];
   messageId: string;
+  insight: Insight;
 }
 
 export interface MailType extends MailHeaderType, MailBodyType {}
@@ -342,7 +355,7 @@ export const getMails = (
 
 export const getMailBody = (id: string): Promise<MailBodyType> => {
   return request("_search", "POST", {
-    _source: ["envelopeTo", "html", "attachments", "messageId"],
+    _source: ["envelopeTo", "html", "attachments", "messageId", "insight"],
     query: {
       term: {
         _id: id

@@ -22,5 +22,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # email privacy
-error
-attachments
+/error
+/error_ai
+/attachments

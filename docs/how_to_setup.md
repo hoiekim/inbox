@@ -27,6 +27,8 @@ For detailed instruction, please keep reading this document.
    ADMIN_PW=                // Password to login to Inbox.
 
    SENDGRID_KEY=            // API key that is issued by sendgrid.
+
+   OPENAI_KEY=              // (optional) API key that is issued by openai. Used to get insight of emails.
    ```
 
 ## 2. Setup DNS Records
