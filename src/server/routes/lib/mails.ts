@@ -175,7 +175,7 @@ const genAttachmentId = (): string => {
 };
 
 // TODO: Clarify variable types
-export const saveMail = (body: any) => {
+export const saveMail = async (body: any) => {
   body.attachments.forEach((e: any) => {
     const id = genAttachmentId();
     const content = e.content.data || e.content;
@@ -227,7 +227,7 @@ export const saveMail = (body: any) => {
     ]
   });
 
-  body.insight = getInsight(`${body.subject}\n${body.text}`);
+  body.insight = await getInsight(`${body.subject}\n${body.text}`);
 
   // TODO: investigate the original issue that these properties made Elasticsearch crash
   delete body.connection;
