@@ -225,7 +225,10 @@ export const saveMail = async (body: any) => {
       { selector: "img", format: "skip" },
       { selector: "a", options: { ignoreHref: true } }
     ]
-  });
+  })
+    .replace(/(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*\b/g, "[url]")
+    .replace(/((?![\n])\s)+/g, " ")
+    .replace(/(\n\s|\s\n|\n)+/g, "\n");
 
   body.insight = await getInsight(`${body.subject}\n${body.text}`);
 
