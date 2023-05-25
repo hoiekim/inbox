@@ -7,3 +7,4 @@ export { default as ShareIcon } from "./ShareIcon";
 export { default as TrashIcon } from "./TrashIcon";
 export { default as EmptyStarIcon } from "./EmptyStarIcon";
 export { default as SolidStarIcon } from "./SolidStarIcon";
+export { default as RobotIcon } from "./RobotIcon";

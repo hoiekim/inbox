@@ -1,4 +1,10 @@
-import React, { useState, useContext, useEffect } from "react";
+import React, {
+  useState,
+  useContext,
+  useEffect,
+  Dispatch,
+  SetStateAction
+} from "react";
 import { useQuery } from "react-query";
 
 import {
@@ -10,7 +16,8 @@ import {
   ShareIcon,
   TrashIcon,
   EmptyStarIcon,
-  SolidStarIcon
+  SolidStarIcon,
+  RobotIcon
 } from "./components";
 
 import { Context, Category, QueryCache } from "client";
@@ -66,6 +73,235 @@ export class MailsCache extends QueryCache<MailHeaderType[]> {
   }
 }
 
+interface RenderedMailProps {
+  mail: MailHeaderType;
+  i: number;
+  activeMailId: ActiveMailMap;
+  setActiveMailId: Dispatch<SetStateAction<ActiveMailMap>>;
+  requestMarkRead: (mail: MailHeaderType) => Promise<any>;
+  markReadInQueryData: (mail: MailHeaderType) => void;
+  setReplyData: Dispatch<SetStateAction<any>>;
+  requestDeleteMail: (mail: MailHeaderType) => Promise<any>;
+  selectedAccount: string;
+  accountsCache: AccountsCache;
+  selectedCategory: Category;
+  removeAccountFromQueryData: () => void;
+  requestMarkSaved: (mail: MailHeaderType, saved: boolean) => void;
+  markSavedInQueryData: (mail: MailHeaderType, saved: boolean) => void;
+  isWriterOpen: boolean;
+  openedKebab: string;
+  setOpenedKebab: Dispatch<SetStateAction<string>>;
+}
+
+const RenderedMail = ({
+  mail,
+  i,
+  activeMailId,
+  setActiveMailId,
+  requestMarkRead,
+  markReadInQueryData,
+  setReplyData,
+  requestDeleteMail,
+  selectedAccount,
+  accountsCache,
+  selectedCategory,
+  removeAccountFromQueryData,
+  requestMarkSaved,
+  markSavedInQueryData,
+  isWriterOpen,
+  openedKebab,
+  setOpenedKebab
+}: RenderedMailProps) => {
+  const saved = mail.label === "saved";
+  const isActive = !!activeMailId[mail.id];
+
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+
+  const onClickMailcard = () => {
+    if (isActive) {
+      const clonedActiveMailId = { ...activeMailId };
+      delete clonedActiveMailId[mail.id];
+      setActiveMailId(clonedActiveMailId);
+      setIsSummaryOpen(false);
+    } else {
+      if (!mail.read) {
+        requestMarkRead(mail);
+        markReadInQueryData(mail);
+        mail.read = true;
+      }
+      const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+      setActiveMailId(clonedActiveMailId);
+    }
+  };
+
+  const onClickReply = () => {
+    if (!isActive) {
+      const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+      setActiveMailId(clonedActiveMailId);
+    }
+    setReplyData({ ...mail, to: { address: selectedAccount } });
+  };
+
+  const onClickShare = () => {
+    if (!isActive) {
+      const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
+      setActiveMailId(clonedActiveMailId);
+    }
+    setReplyData({ ...mail, to: { address: "" } });
+  };
+
+  const onClickTrash = () => {
+    if (window.confirm("Do you want to delete this mail?")) {
+      requestDeleteMail(mail);
+
+      accountsCache.set((oldData) => {
+        if (!oldData) return oldData;
+
+        const newData = { ...oldData };
+
+        Object.values(newData).forEach((e) => {
+          e.find((account) => {
+            const { key, unread_doc_count } = account;
+            const found = key === selectedAccount;
+            if (found) {
+              if (!mail.read && unread_doc_count) {
+                account.unread_doc_count -= 1;
+              }
+              account.doc_count -= 1;
+            }
+            return found;
+          });
+        });
+
+        return newData;
+      });
+
+      const mailsCache = new MailsCache(selectedAccount, selectedCategory);
+
+      mailsCache.set((oldData) => {
+        if (!oldData) return oldData;
+        const newData = [...oldData];
+        newData.splice(i, 1);
+        if (!newData.length) removeAccountFromQueryData();
+        return newData;
+      });
+    }
+  };
+
+  const onClickStar = () => {
+    requestMarkSaved(mail, saved);
+    markSavedInQueryData(mail, saved);
+  };
+
+  const onClickRobot = () => {
+    if (!isActive) onClickMailcard();
+    setIsSummaryOpen((v) => !v);
+  };
+
+  const classes = ["mailcard"];
+
+  if (!mail.read) classes.push("unread");
+  if (!isWriterOpen) classes.push("shadow");
+  if (saved) classes.push("star");
+
+  let searchHighlight;
+
+  if (mail.highlight) {
+    searchHighlight = Object.values(mail.highlight).map((e) => {
+      const __html = "..." + e.join("... ...") + "...";
+      return <div dangerouslySetInnerHTML={{ __html }}></div>;
+    });
+  }
+
+  if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
+  if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
+
+  const isKebabOpen = openedKebab === mail.id;
+
+  return (
+    <blockquote
+      key={mail.id}
+      className={classes.join(" ")}
+      onMouseLeave={() => setOpenedKebab("")}
+    >
+      <MailHeader
+        mail={mail}
+        isActive={isActive}
+        onClick={onClickMailcard}
+        onMouseLeave={() => setOpenedKebab("")}
+      />
+      {isActive ? (
+        <MailBody mailId={mail.id} isSummaryOpen={isSummaryOpen} />
+      ) : searchHighlight ? (
+        <div className="search_highlight">{searchHighlight}</div>
+      ) : null}
+      <div
+        className={
+          "actionBox" + (isKebabOpen ? " open" : "") + (saved ? " saved" : "")
+        }
+      >
+        {isKebabOpen ? (
+          <>
+            <div
+              className="iconBox cursor"
+              onClick={onClickStar}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+            >
+              {saved ? <SolidStarIcon className="star" /> : <EmptyStarIcon />}
+            </div>
+            <div
+              className="iconBox cursor"
+              onClick={onClickReply}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+            >
+              <ReplyIcon />
+            </div>
+            <div
+              className="iconBox cursor"
+              onClick={onClickShare}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+            >
+              <ShareIcon />
+            </div>
+            <div
+              className="iconBox cursor"
+              onClick={onClickTrash}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+            >
+              <TrashIcon />
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="iconBox cursor" onClick={onClickRobot}>
+              <RobotIcon />
+            </div>
+            {saved && (
+              <div className="iconBox cursor" onClick={onClickStar}>
+                <SolidStarIcon className="star" />
+              </div>
+            )}
+            <div
+              className="iconBox cursor"
+              onClick={() => setOpenedKebab(mail.id)}
+            >
+              <KebabIcon />
+            </div>
+          </>
+        )}
+      </div>
+    </blockquote>
+  );
+};
+
+interface ActiveMailMap {
+  [k: string]: boolean;
+}
+
 const RenderedMails = ({ page }: { page: number }) => {
   const {
     isWriterOpen,
@@ -75,7 +311,7 @@ const RenderedMails = ({ page }: { page: number }) => {
     selectedCategory
   } = useContext(Context);
 
-  const [activeMailId, setActiveMailId] = useState<any>({});
+  const [activeMailId, setActiveMailId] = useState<ActiveMailMap>({});
   const [openedKebab, setOpenedKebab] = useState("");
 
   const accountsCache = new AccountsCache();
@@ -229,191 +465,30 @@ const RenderedMails = ({ page }: { page: number }) => {
     const mails = Array.isArray(query.data) ? query.data : [];
     const pagedMails = mails.slice(0, 4 + 8 * page);
 
-    const renderMail = (mail: MailHeaderType, i: number) => {
-      const saved = mail.label === "saved";
-      const isActive = !!activeMailId[mail.id];
-
-      const onClickMailcard = () => {
-        if (isActive) {
-          const clonedActiveMailId = { ...activeMailId };
-          delete clonedActiveMailId[mail.id];
-          setActiveMailId(clonedActiveMailId);
-        } else {
-          if (!mail.read) {
-            requestMarkRead(mail);
-            markReadInQueryData(mail);
-            mail.read = true;
-          }
-          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
-          setActiveMailId(clonedActiveMailId);
-        }
-      };
-
-      const onClickReply = () => {
-        if (!isActive) {
-          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
-          setActiveMailId(clonedActiveMailId);
-        }
-        setReplyData({ ...mail, to: { address: selectedAccount } });
-      };
-
-      const onClickShare = () => {
-        if (!isActive) {
-          const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
-          setActiveMailId(clonedActiveMailId);
-        }
-        setReplyData({ ...mail, to: { address: "" } });
-      };
-
-      const onClickTrash = () => {
-        if (window.confirm("Do you want to delete this mail?")) {
-          requestDeleteMail(mail);
-
-          accountsCache.set((oldData) => {
-            if (!oldData) return oldData;
-
-            const newData = { ...oldData };
-
-            Object.values(newData).forEach((e) => {
-              e.find((account) => {
-                const { key, unread_doc_count } = account;
-                const found = key === selectedAccount;
-                if (found) {
-                  if (!mail.read && unread_doc_count) {
-                    account.unread_doc_count -= 1;
-                  }
-                  account.doc_count -= 1;
-                }
-                return found;
-              });
-            });
-
-            return newData;
-          });
-
-          const mailsCache = new MailsCache(selectedAccount, selectedCategory);
-
-          mailsCache.set((oldData) => {
-            if (!oldData) return oldData;
-            const newData = [...oldData];
-            newData.splice(i, 1);
-            if (!newData.length) removeAccountFromQueryData();
-            return newData;
-          });
-        }
-      };
-
-      const onClickStar = () => {
-        requestMarkSaved(mail, saved);
-        markSavedInQueryData(mail, saved);
-      };
-
-      const classes = ["mailcard"];
-
-      if (!mail.read) classes.push("unread");
-      if (!isWriterOpen) classes.push("shadow");
-      if (saved) classes.push("star");
-
-      let searchHighlight;
-
-      if (mail.highlight) {
-        searchHighlight = Object.values(mail.highlight).map((e) => {
-          const __html = "..." + e.join("... ...") + "...";
-          return <div dangerouslySetInnerHTML={{ __html }}></div>;
-        });
-      }
-
-      if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
-      if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
-
-      const isKebabOpen = openedKebab === mail.id;
-
+    const result = pagedMails.map((mail, i) => {
       return (
-        <blockquote
-          key={i}
-          className={classes.join(" ")}
-          onMouseLeave={() => setOpenedKebab("")}
-        >
-          <MailHeader
-            mail={mail}
-            isActive={isActive}
-            onClick={onClickMailcard}
-            onMouseLeave={() => setOpenedKebab("")}
-          />
-          {isActive ? (
-            <MailBody mailId={mail.id} />
-          ) : searchHighlight ? (
-            <div className="search_highlight">{searchHighlight}</div>
-          ) : null}
-          <div
-            className={
-              "actionBox" +
-              (isKebabOpen ? " open" : "") +
-              (saved ? " saved" : "")
-            }
-          >
-            {isKebabOpen ? (
-              <>
-                <div
-                  className="iconBox cursor"
-                  onClick={onClickStar}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onMouseEnter={() => setOpenedKebab(mail.id)}
-                >
-                  {saved ? (
-                    <SolidStarIcon className="star" />
-                  ) : (
-                    <EmptyStarIcon />
-                  )}
-                </div>
-                <div
-                  className="iconBox cursor"
-                  onClick={onClickReply}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onMouseEnter={() => setOpenedKebab(mail.id)}
-                >
-                  <ReplyIcon />
-                </div>
-                <div
-                  className="iconBox cursor"
-                  onClick={onClickShare}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onMouseEnter={() => setOpenedKebab(mail.id)}
-                >
-                  <ShareIcon />
-                </div>
-                <div
-                  className="iconBox cursor"
-                  onClick={onClickTrash}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  onMouseEnter={() => setOpenedKebab(mail.id)}
-                >
-                  <TrashIcon />
-                </div>
-              </>
-            ) : (
-              <>
-                {saved ? (
-                  <div className={"iconBox cursor"} onClick={onClickStar}>
-                    <SolidStarIcon className="star" />
-                  </div>
-                ) : (
-                  <></>
-                )}
-                <div
-                  className="iconBox cursor"
-                  onClick={() => setOpenedKebab(mail.id)}
-                >
-                  <KebabIcon />
-                </div>
-              </>
-            )}
-          </div>
-        </blockquote>
+        <RenderedMail
+          key={mail.id}
+          mail={mail}
+          i={i}
+          activeMailId={activeMailId}
+          setActiveMailId={setActiveMailId}
+          requestMarkRead={requestMarkRead}
+          markReadInQueryData={markReadInQueryData}
+          setReplyData={setReplyData}
+          requestDeleteMail={requestDeleteMail}
+          selectedAccount={selectedAccount}
+          accountsCache={accountsCache}
+          selectedCategory={selectedCategory}
+          removeAccountFromQueryData={removeAccountFromQueryData}
+          requestMarkSaved={requestMarkSaved}
+          markSavedInQueryData={markSavedInQueryData}
+          isWriterOpen={isWriterOpen}
+          openedKebab={openedKebab}
+          setOpenedKebab={setOpenedKebab}
+        />
       );
-    };
-
-    const result = pagedMails.map(renderMail);
+    });
 
     return (
       <div className="mails_container">

@@ -17,7 +17,8 @@ export class Insight {
 
 const promptPrefix = `
 I will show you an email and you will answer as JSON with 3 properties; summary, action_items, suggested_reply.
-\`summary\` and \`action_items\` should be arrays of strings each with a maximum length of 6.
+\`summary\` should be an array of strings with a maximum length of 6.
+\`action_items\` should be an array of strings with a maximum length of 3.
 \`suggested_reply\` should be string with fewer than 100 words and exclude header or footer.
 Here's the email:
 `;
@@ -35,22 +36,20 @@ export const getInsight = async (text: string) => {
       console.error(err.response.data.error);
     });
 
-  const answer = completion?.data.choices[0]?.message?.content;
+  const answer = completion?.data?.choices[0]?.message?.content;
+  if (!answer) return new Insight();
 
   try {
-    return answer ? (JSON.parse(answer) as Insight) : new Insight();
+    return JSON.parse(answer) as Insight;
   } catch (error) {
     console.error("Failed to get insight");
     console.error(error);
-    if (answer) {
-      const id = Date.now();
-      if (!fs.existsSync("./error_ai")) fs.mkdirSync("./error_ai");
-      const errorContent =
-        `Prompt: [${prompt}]` + "\n\n" + `Answer: [${answer}]`;
-      fs.writeFile(`./error_ai/${id}`, errorContent, (err) => {
-        if (err) throw err;
-      });
-    }
+    const id = Date.now();
+    if (!fs.existsSync("./error_ai")) fs.mkdirSync("./error_ai");
+    const errorContent = `Prompt: [${prompt}]` + "\n\n" + `Answer: [${answer}]`;
+    fs.writeFile(`./error_ai/${id}`, errorContent, (err) => {
+      if (err) throw err;
+    });
     return new Insight();
   }
 };

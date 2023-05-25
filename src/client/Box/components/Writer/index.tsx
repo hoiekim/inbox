@@ -116,7 +116,11 @@ const Writer = () => {
         : "Fwd: " + replyData.subject;
       setSubject(subject);
 
-      setEditorContent(replyData.insight?.suggested_reply || "");
+      const editorContent = replyData.to.address
+        ? replyData.insight?.suggested_reply || ""
+        : "";
+
+      setEditorContent(editorContent);
       setAttachments({});
       setOriginalMessage(replyDataToOriginalMessage(replyData));
 

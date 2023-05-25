@@ -6,7 +6,12 @@ import FileIcon from "client/Box/components/FileIcon";
 
 import { Attachment, MailBodyType } from "server";
 
-const MailBody = ({ mailId }: { mailId: string }) => {
+interface Props {
+  mailId: string;
+  isSummaryOpen: boolean;
+}
+
+const MailBody = ({ mailId, isSummaryOpen }: Props) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(
     Context
   ) as ContextType;
@@ -143,29 +148,34 @@ ${data.html}
     return (
       <div className="text">
         <div className="loading_message">
-          {isLoadingIframe ? loadingMessage : null}
+          {isLoadingIframe && !isSummaryOpen ? loadingMessage : null}
         </div>
         {attachments && attachments.length ? (
           <div className="attachmentBox">{attachments}</div>
         ) : (
           <></>
         )}
-        {!!summary?.length && (
-          <div className="summary">
-            <ul>{summary}</ul>
+        {isSummaryOpen ? (
+          <div>
+            {!!summary?.length && (
+              <div className="summary">
+                <ul>{summary}</ul>
+              </div>
+            )}
+            {!!actionItems?.length && (
+              <div className="actionItem">
+                <ul>{actionItems}</ul>
+              </div>
+            )}
           </div>
+        ) : (
+          <iframe
+            title={mailId}
+            srcDoc={iframeSrcDoc}
+            onLoad={onLoadIframe}
+            ref={iframeElement}
+          />
         )}
-        {!!actionItems?.length && (
-          <div className="actionItem">
-            <ul>{actionItems}</ul>
-          </div>
-        )}
-        <iframe
-          title={mailId}
-          srcDoc={iframeSrcDoc}
-          onLoad={onLoadIframe}
-          ref={iframeElement}
-        />
       </div>
     );
   }
