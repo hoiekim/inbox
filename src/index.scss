@@ -235,7 +235,10 @@ code {
   }
 
   .mailcard:not(.skeleton):hover {
-    background-color: adjust-color($color-dark, $lightness: 4%);
+    &,
+    > .insight {
+      background-color: adjust-color($color-dark, $lightness: 4%);
+    }
   }
 
   .inputBox-flex,

@@ -123,25 +123,43 @@
       }
     }
 
+    .insight {
+      margin: 5px 0 10px;
+      padding: 5px 0;
+      border-radius: 3px;
+
+      @media (prefers-color-scheme: dark) {
+        background-color: adjust-color($color-dark, $lightness: 2%);
+        box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -5%) inset,
+          -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
+      }
+
+      @media (prefers-color-scheme: light) {
+        background-color: $color-light;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 30px;
+
+        li {
+          margin: 5px 0;
+          border-radius: 5px;
+        }
+      }
+    }
+
     .actionBox {
       position: absolute;
       display: flex;
       justify-content: center;
       right: 0.5rem;
       top: 0;
-      width: 60px;
+      width: auto;
       height: 40px;
 
-      &.saved {
-        width: 90px;
-      }
-
-      &.open {
-        width: 120px;
-      }
-
       .iconBox {
-        width: 100%;
+        width: 30px;
 
         svg {
           width: 20px;

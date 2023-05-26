@@ -122,7 +122,6 @@ const RenderedMail = ({
       const clonedActiveMailId = { ...activeMailId };
       delete clonedActiveMailId[mail.id];
       setActiveMailId(clonedActiveMailId);
-      setIsSummaryOpen(false);
     } else {
       if (!mail.read) {
         requestMarkRead(mail);
@@ -194,7 +193,6 @@ const RenderedMail = ({
   };
 
   const onClickRobot = () => {
-    if (!isActive) onClickMailcard();
     setIsSummaryOpen((v) => !v);
   };
 
@@ -218,6 +216,14 @@ const RenderedMail = ({
 
   const isKebabOpen = openedKebab === mail.id;
 
+  const summary = mail.insight?.summary?.map((e, i) => {
+    return <li key={`summary_${mail.id}_${i}`}>{e}</li>;
+  });
+
+  const actionItems = mail.insight?.action_items?.map((e, i) => {
+    return <li key={`action_items_${mail.id}_${i}`}>{e}</li>;
+  });
+
   return (
     <blockquote
       key={mail.id}
@@ -230,8 +236,22 @@ const RenderedMail = ({
         onClick={onClickMailcard}
         onMouseLeave={() => setOpenedKebab("")}
       />
+      {isSummaryOpen && (
+        <div className="insight">
+          {!!summary?.length && (
+            <div className="summary">
+              <ul>{summary}</ul>
+            </div>
+          )}
+          {!!actionItems?.length && (
+            <div className="actionItem">
+              <ul>{actionItems}</ul>
+            </div>
+          )}
+        </div>
+      )}
       {isActive ? (
-        <MailBody mailId={mail.id} isSummaryOpen={isSummaryOpen} />
+        <MailBody mailId={mail.id} />
       ) : searchHighlight ? (
         <div className="search_highlight">{searchHighlight}</div>
       ) : null}
@@ -277,9 +297,11 @@ const RenderedMail = ({
           </>
         ) : (
           <>
-            <div className="iconBox cursor" onClick={onClickRobot}>
-              <RobotIcon />
-            </div>
+            {!!(summary?.length || actionItems?.length) && (
+              <div className="iconBox cursor" onClick={onClickRobot}>
+                <RobotIcon />
+              </div>
+            )}
             {saved && (
               <div className="iconBox cursor" onClick={onClickStar}>
                 <SolidStarIcon className="star" />

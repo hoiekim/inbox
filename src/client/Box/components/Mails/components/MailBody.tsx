@@ -8,10 +8,9 @@ import { Attachment, MailBodyType } from "server";
 
 interface Props {
   mailId: string;
-  isSummaryOpen: boolean;
 }
 
-const MailBody = ({ mailId, isSummaryOpen }: Props) => {
+const MailBody = ({ mailId }: Props) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(
     Context
   ) as ContextType;
@@ -137,45 +136,22 @@ ${data.html}
       audjstMailContnetSize(e.target as HTMLIFrameElement);
     };
 
-    const summary = data.insight?.summary?.map((e) => {
-      return <li>{e}</li>;
-    });
-
-    const actionItems = data.insight?.action_items?.map((e) => {
-      return <li>{e}</li>;
-    });
-
     return (
       <div className="text">
         <div className="loading_message">
-          {isLoadingIframe && !isSummaryOpen ? loadingMessage : null}
+          {isLoadingIframe ? loadingMessage : null}
         </div>
         {attachments && attachments.length ? (
           <div className="attachmentBox">{attachments}</div>
         ) : (
           <></>
         )}
-        {isSummaryOpen ? (
-          <div>
-            {!!summary?.length && (
-              <div className="summary">
-                <ul>{summary}</ul>
-              </div>
-            )}
-            {!!actionItems?.length && (
-              <div className="actionItem">
-                <ul>{actionItems}</ul>
-              </div>
-            )}
-          </div>
-        ) : (
-          <iframe
-            title={mailId}
-            srcDoc={iframeSrcDoc}
-            onLoad={onLoadIframe}
-            ref={iframeElement}
-          />
-        )}
+        <iframe
+          title={mailId}
+          srcDoc={iframeSrcDoc}
+          onLoad={onLoadIframe}
+          ref={iframeElement}
+        />
       </div>
     );
   }

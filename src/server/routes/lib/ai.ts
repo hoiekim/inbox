@@ -1,5 +1,6 @@
 import fs from "fs";
 import { Configuration, OpenAIApi } from "openai";
+import { MailType } from "./mails";
 
 const apiKey = process.env.OPENAI_KEY;
 const configuration = new Configuration({ apiKey });
@@ -23,9 +24,13 @@ I will show you an email and you will answer as JSON with 3 properties; summary,
 Here's the email:
 `;
 
-export const getInsight = async (text: string) => {
-  if (disabled || !text) return new Insight();
-  const prompt = promptPrefix + text;
+export const getInsight = async (mail: MailType & { text: string }) => {
+  if (disabled) return new Insight();
+
+  const { subject, from, to, text } = mail;
+  const promptBody = JSON.stringify({ subject, from, to, text });
+
+  const prompt = promptPrefix + promptBody;
   const completion = await openai
     .createChatCompletion({
       model: "gpt-3.5-turbo-0301",
@@ -40,7 +45,13 @@ export const getInsight = async (text: string) => {
   if (!answer) return new Insight();
 
   try {
-    return JSON.parse(answer) as Insight;
+    const insight = JSON.parse(answer) as Insight;
+    for (const _key in insight) {
+      const key = _key as keyof Insight;
+      const value = insight[key];
+      if (Array.isArray(value)) insight[key] = value.filter((e) => e) as any;
+    }
+    return insight;
   } catch (error) {
     console.error("Failed to get insight");
     console.error(error);

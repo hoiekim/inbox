@@ -230,7 +230,7 @@ export const saveMail = async (body: any) => {
     .replace(/((?![\n])\s)+/g, " ")
     .replace(/(\n\s|\s\n|\n)+/g, "\n");
 
-  body.insight = await getInsight(`${body.subject}\n${body.text}`);
+  body.insight = await getInsight(body);
 
   // TODO: investigate the original issue that these properties made Elasticsearch crash
   delete body.connection;
@@ -299,7 +299,6 @@ export interface MailBodyType {
   html: string;
   attachments: Attachment[];
   messageId: string;
-  insight: Insight;
 }
 
 export interface MailType extends MailHeaderType, MailBodyType {}
