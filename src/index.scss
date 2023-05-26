@@ -235,9 +235,10 @@ code {
   }
 
   .mailcard:not(.skeleton):hover {
-    &,
-    > .insight {
-      background-color: adjust-color($color-dark, $lightness: 4%);
+    background-color: adjust-color($color-dark, $lightness: 4%);
+
+    .insight {
+      background-color: adjust-color($color-dark, $lightness: 3%);
     }
   }
 
