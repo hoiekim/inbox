@@ -1,6 +1,7 @@
 import React, { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
+import { Notifier } from "client";
 
 import LoginIcon from "./components/LoginIcon";
 
@@ -46,10 +47,11 @@ const Home = () => {
     }
   }, [mutation.data, setUserInfo]);
 
-  const onClickLogin = () => {
+  const onClickLogin = async () => {
     const body = { password: passwordInput };
     if (usernameInput.includes("@")) body.email = usernameInput;
     else body.username = usernameInput;
+    await new Notifier().requestPermission();
     mutation.mutate(body);
   };
 

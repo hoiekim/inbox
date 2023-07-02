@@ -10,7 +10,7 @@ const uuid = require("uuid");
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
-const domainName = process.env.DOMAIN || "mydomain";
+export const domainName = process.env.DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://elastic:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
@@ -555,12 +555,89 @@ export const searchMail = (
 
 export const deleteMail = async (id: string) => request(`_doc/${id}`, "DELETE");
 
+export const isValidAddress = (address: string, domainName: string) => {
+  const parsedAddress = address.split("@");
+  const domainNameInData = parsedAddress[parsedAddress.length - 1];
+  return domainNameInData.toLowerCase().includes(domainName.toLowerCase());
+};
+
 export const validateMailAddress = (data: any, domainName: string) => {
   if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
   let isAddressCorrect = !!data.envelopeTo.find((e: any) => {
-    const parsedAddress = e.address?.split("@");
-    const domainNameInData = parsedAddress[parsedAddress.length - 1];
-    return domainNameInData.toLowerCase().includes(domainName.toLowerCase());
+    return e.address && isValidAddress(e.address, domainName);
   });
   return isAddressCorrect;
+};
+
+export const addressToUsername = (address: string) => {
+  const parsedAddress = address.split("@");
+  const domainNameInAddress = parsedAddress[parsedAddress.length - 1];
+  const subDomain = domainNameInAddress.split(`.${domainName}`)[0];
+  return subDomain === domainName ? "admin" : subDomain;
+};
+
+export const getUsernamesFromMail = (
+  data: any,
+  domainName: string
+): string[] => {
+  if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
+  return data.envelopeTo
+    .filter((e: any) => e.address && isValidAddress(e.address, domainName))
+    .map((e: any) => addressToUsername(e.address));
+};
+
+export type Username = string;
+export type BadgeCount = number;
+export class Notifications extends Map<Username, BadgeCount> {}
+
+export const getNotifications = async (
+  usernames: string[]
+): Promise<Notifications> => {
+  const matchUsername = usernames.map((username) => {
+    const fullDomain =
+      username === "admin" ? domainName : `${username}.${domainName}`;
+    return {
+      query_string: {
+        default_field: "envelopeTo.address",
+        query: `*@${fullDomain}`
+      }
+    };
+  });
+
+  const aggregatedAddresses = request("_search", "POST", {
+    size: 0,
+    query: { bool: { should: matchUsername } },
+    aggs: {
+      address: {
+        terms: {
+          field: "envelopeTo.address",
+          size: 10000
+        },
+        aggs: {
+          read: {
+            terms: {
+              field: "read",
+              size: 10000
+            }
+          }
+        }
+      }
+    }
+  });
+
+  const notifications = new Notifications();
+
+  await aggregatedAddresses.then((r: any) => {
+    if (r.error) throw new Error(JSON.stringify(r.error));
+    const addresses: Account[] = r.aggregations?.address.buckets || [];
+    addresses.forEach((e: any) => {
+      const { buckets } = e.read;
+      const badgeCount = buckets.find((f: any) => !f.key)?.doc_count || 0;
+      const username = addressToUsername(e.key);
+      const existing = notifications.get(username);
+      notifications.set(username, badgeCount + (existing || 0));
+    });
+  });
+
+  return notifications;
 };

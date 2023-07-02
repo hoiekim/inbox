@@ -1,4 +1,6 @@
 const Mail = require("./lib/mails");
+const { notifyNewMails, decrementBadgeCount } = require("./lib/push");
+const { getUsernamesFromMail } = require("./lib/mails");
 
 const domainName = process.env.DOMAIN || "mydomain";
 
@@ -35,10 +37,18 @@ mailsRouter.getAccounts = async (req, res) => {
 
 mailsRouter.markRead = async (req, res) => {
   console.info("Received GET request to mark read", req.ip, "at", new Date());
+
   if (!req.session.user) return res.json(new Error("Login is required"));
+  const { username } = req.session.user;
+
+  try {
+    decrementBadgeCount([username]);
+  } catch (err) {
+    console.error(err);
+  }
+
   try {
     const mail = await Mail.getMailBody(req.params.id);
-    const { username } = req.session.user;
     const fullDomain =
       username === "admin" ? domainName : `${username}.${domainName}`;
     const valid = Mail.validateMailAddress(mail, fullDomain);
@@ -169,6 +179,11 @@ mailsRouter.saveMail = async (connection, data) => {
         label: undefined
       });
       console.info("Successfully saved an email");
+      const usernames = getUsernamesFromMail(data, domainName);
+      await notifyNewMails(usernames);
+      console.info(
+        `Sent push notifications to users: [${usernames.toString()}]`
+      );
       return result;
     } else {
       console.warn("Not saved because address is wrong");

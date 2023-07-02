@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "properties": {
+    "type": { "type": "keyword" },
+    "mail": {
+      "type": "object",
+      "dynamic": true,
+      "properties": {
+        "attachments": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "object",
+              "properties": { "data": { "type": "keyword" } }
+            }
+          }
+        },
+        "cc": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": { "address": { "type": "keyword" } }
+            }
+          }
+        },
+        "from": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": { "address": { "type": "keyword" } }
+            }
+          }
+        },
+        "to": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": { "address": { "type": "keyword" } }
+            }
+          }
+        },
+        "envelopeFrom": {
+          "type": "object",
+          "properties": { "address": { "type": "keyword" } }
+        },
+        "envelopeTo": {
+          "type": "object",
+          "properties": { "address": { "type": "keyword" } }
+        },
+        "date": { "type": "date" },
+        "html": { "type": "text" },
+        "text": { "type": "text" },
+        "subject": { "type": "text" },
+        "user": { "type": "keyword" },
+        "read": { "type": "boolean" },
+        "label": { "type": "keyword" },
+        "insight": {
+          "type": "nested",
+          "properties": {
+            "summary": { "type": "text" },
+            "action_items": { "type": "text" },
+            "suggested_reply": { "type": "text" }
+          }
+        }
+      }
+    },
+    "user": {
+      "type": "object",
+      "dynamic": "strict",
+      "properties": {
+        "email": { "type": "keyword" },
+        "username": { "type": "keyword" },
+        "expiry": { "type": "date" }
+      }
+    },
+    "push_subscription": {
+      "type": "object",
+      "dynamic": "strict",
+      "properties": {
+        "endpoint": { "type": "keyword" },
+        "keys": {
+          "type": "object",
+          "properties": {
+            "p256dh": { "type": "keyword" },
+            "auth": { "type": "keyword" }
+          }
+        }
+      }
+    },
+    "updated": { "type": "date" }
+  }
+}

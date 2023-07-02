@@ -15,3 +15,12 @@ export class QueryCache<T> {
     return queryClient.setQueryData<T | undefined>(this.key, callback);
   };
 }
+
+export const getLocalStorageItem = (key: string) => {
+  const item = window.localStorage.getItem(key);
+  return item && JSON.parse(item);
+};
+
+export const setLocalStorageItem = (key: string, item: any) => {
+  window.localStorage.setItem(key, JSON.stringify(item));
+};

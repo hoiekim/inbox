@@ -1,7 +1,7 @@
 import { Mail, User } from "./routes";
 
-const init = () => {
-  Mail.initialize({
+const init = async () => {
+  await Mail.initialize({
     attachments: {
       type: "object",
       properties: {
@@ -63,7 +63,7 @@ const init = () => {
     }
   });
 
-  User.initialize({
+  await User.initialize({
     email: { type: "keyword" },
     username: { type: "keyword" },
     expiry: { type: "date" }

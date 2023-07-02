@@ -10,7 +10,19 @@ if (isWindows) process.env.NODE_PATH = paths.join(";");
 else process.env.NODE_PATH = paths.join(":");
 require("module").Module._initPaths();
 
+export interface UserSession {
+  id: string;
+  username: string;
+}
+
+declare module "express-session" {
+  export interface SessionData {
+    user: UserSession;
+  }
+}
+
 export * from "./routes";
+export * from "./lib";
 
 import express from "express";
 import fileupload from "express-fileupload";
@@ -18,9 +30,10 @@ import session from "express-session";
 import path from "path";
 import mails from "./routes/mails";
 import users from "./routes/users";
+import * as push from "./routes";
 import init from "./init";
-
-init();
+import { initializeIndex } from "./lib";
+import { cleanSubscriptions, notifyNewMails } from "./routes/lib";
 
 const nodeMailin = require("@umpacken/node-mailin");
 
@@ -62,14 +75,22 @@ app.post("/user/send-token", users.sendToken);
 app.post("/user/set-info", users.setUserInfo);
 app.delete("/user", users.signOut);
 
-const clientPath = path.resolve(__dirname, "../client");
+app.get("/push/refresh/:id", push.refresh);
+app.get("/push/publicKey", push.publicKey);
+app.post("/push/subscribe", push.subscribe);
+
+const clientPath = path.resolve(__dirname, "../../build/client");
 app.use(express.static(clientPath));
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientPath, "index.html"));
 });
 
-app.listen(port, () => {
+app.listen(port, async () => {
+  await init();
+  await initializeIndex();
+  cleanSubscriptions();
   console.info(`${domainName} mail server is listening`);
+  setTimeout(() => notifyNewMails(["admin"]), 1000);
 });
 
 nodeMailin.on("message", mails.saveMail);

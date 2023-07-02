@@ -20,6 +20,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@elastic/elasticsearch": "^8.8.1",
     "@sendgrid/mail": "^7.4.4",
     "@umpacken/node-mailin": "^2.6.2",
     "bcrypt": "^5.0.1",
@@ -29,7 +30,8 @@
     "express-session": "^1.17.1",
     "html-to-text": "^8.1.0",
     "openai": "^3.2.1",
-    "uuid": "^8.3.2"
+    "uuid": "^8.3.2",
+    "web-push": "^3.6.3"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^5.16.5",
@@ -50,6 +52,7 @@
     "@types/react-query": "^1.2.9",
     "@types/react-router-dom": "^5.3.3",
     "@types/uuid": "^8.3.4",
+    "@types/web-push": "^3.3.2",
     "concurrently": "^6.2.0",
     "marked": "^4.0.12",
     "nodemon": "^2.0.20",

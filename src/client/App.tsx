@@ -1,8 +1,16 @@
-import React, { useState, createContext, useEffect } from "react";
+import React, { useState, createContext, useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
-import { Header, SignIn, Box, SignUp, useLocalStorage, Notifier } from "client";
+import {
+  Header,
+  SignIn,
+  Box,
+  SignUp,
+  useLocalStorage,
+  Notifier,
+  getLocalStorageItem
+} from "client";
 import { Account } from "server";
 
 export enum Category {
@@ -110,6 +118,8 @@ const App = ({ session }: Props) => {
   const [newMailsTotal, setNewMailsTotal] = useState(0);
   const [lastUpdate, setLastUpdate] = useState(lastNotifiedDate);
 
+  const lastRefresh = useRef(Date.now());
+
   useEffect(() => {
     window.addEventListener("resize", () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
@@ -120,9 +130,19 @@ const App = ({ session }: Props) => {
     window.addEventListener("scroll", () => {
       window.scrollTo(window.scrollX, window.scrollY);
     });
+    window.addEventListener("focus", () => {
+      if (Date.now() - lastRefresh.current < 1000 * 60 * 60 * 24) return;
+      const push_subscription_id = getLocalStorageItem("push_subscription_id");
+      if (push_subscription_id) {
+        fetch("/push/refresh/" + push_subscription_id);
+      }
+      lastRefresh.current = Date.now();
+    });
 
-    const noti = new Notifier();
-    noti.requestPermission();
+    const push_subscription_id = getLocalStorageItem("push_subscription_id");
+    if (push_subscription_id) {
+      fetch("/push/refresh/" + push_subscription_id);
+    }
   }, []);
 
   useEffect(() => {
@@ -135,12 +155,13 @@ const App = ({ session }: Props) => {
 
   useEffect(() => {
     const noti = new Notifier();
+    noti.clearBadge();
     noti.setBadge(newMailsTotal);
     if (newMailsTotal && lastNotifiedDate < lastUpdate) {
       const title =
         newMailsTotal > 1
-          ? `You have ${newMailsTotal} unread messages`
-          : "You have a unread message";
+          ? `You have ${newMailsTotal} new mails`
+          : "You have a new mail";
       noti.notify({
         title,
         icon: "/icons/logo192.png"
@@ -159,6 +180,8 @@ const App = ({ session }: Props) => {
       setSearchHistory([]);
       setNewMailsTotal(0);
       setLastUpdate(new Date(0));
+    } else {
+      new Notifier().subscribe();
     }
   }, [
     userInfo,
