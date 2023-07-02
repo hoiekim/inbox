@@ -1,6 +1,6 @@
 import Elastic from "./components/elastic";
 import fs from "fs";
-import sgMail from "@sendgrid/mail";
+import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import { EmailData } from "@sendgrid/helpers/classes/email-address";
 import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
 import { htmlToText } from "html-to-text";
@@ -29,8 +29,6 @@ export default Mail;
 const { request } = Mail;
 
 const addressParser = (str: string) => {
-  if (!str) return;
-
   const result = str
     .split(",")
     .map((e) => e.replace(/ /g, ""))
@@ -51,14 +49,14 @@ export interface MailToSend {
   name: string;
   sender: string;
   to: string;
-  cc: string;
-  bcc: string;
+  cc?: string;
+  bcc?: string;
   subject: string;
   html: string;
-  inReplyTo: string;
+  inReplyTo?: string;
 }
 
-export const sendMail = async (mailData: MailToSend, files: FileArray) => {
+export const sendMail = async (mailData: MailToSend, files?: FileArray) => {
   if (!domainName) {
     throw new Error("You need to set your domainName name in the env data");
   }
@@ -106,14 +104,14 @@ export const sendMail = async (mailData: MailToSend, files: FileArray) => {
 
   const from = { name, email };
 
-  const messageToSend: sgMail.MailDataRequired = {
+  const messageToSend: MailDataRequired = {
     from,
     subject,
     text,
     html,
     to: addressParser(to),
-    cc: addressParser(cc),
-    bcc: addressParser(bcc),
+    cc: cc && addressParser(cc),
+    bcc: bcc && addressParser(bcc),
     attachments: attachments.length ? attachments : undefined,
     headers: inReplyTo ? { inReplyTo } : undefined
   };

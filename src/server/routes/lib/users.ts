@@ -20,30 +20,41 @@ export default User;
 
 const { request } = User;
 
-export const getUser = (query) => {
-  return request("_search", "POST", {
-    query: {
-      term: query
-    }
-  })
+export interface User {
+  id: string;
+  email: string;
+  username: string;
+  password: string;
+  token?: string;
+  expiry?: number;
+}
+
+export type MaskedUser = Omit<User, "password">;
+
+export const getUser = (user: Partial<User>): Promise<User> => {
+  type Term = Partial<Omit<User, "id"> & { _id: string }>;
+  const term: Term = {};
+  Object.entries(user).forEach(([key, value]) => {
+    if (key === "id") term._id = value as any;
+    else term[key as keyof Term] = value as any;
+  });
+  return request("_search", "POST", { query: { term } })
     .then((r) => r.hits?.hits)
-    .then((r) => {
-      return r && r[0] && { ...r[0]?._source, id: r[0]?._id };
-    });
+    .then((r) => r && r[0] && { ...r[0]?._source, id: r[0]?._id });
 };
 
-export const deleteUser = (id) => {
+export const deleteUser = (id: string) => {
   return request(`_doc/${id}`, "DELETE");
 };
 
-export const validate = (value) => /^[a-z0-9.-]+$/.test(value);
+export const validate = (value: string) => /^[a-z0-9.-]+$/.test(value);
 
-export const signIn = async (credentials) => {
-  const { username, email, password } = credentials;
-  const query = {};
+export const signIn = async (user: User): Promise<MaskedUser | null> => {
+  const { username, email, password } = user;
+  const query: Partial<User> = {};
 
   if (username === "admin") {
-    if (password === process.env.ADMIN_PW) return credentials;
+    if (password === process.env.ADMIN_PW) return user;
     else return null;
   }
 
@@ -78,13 +89,45 @@ export const signIn = async (credentials) => {
     return null;
   }
 
-  delete userInfo.password;
-  return userInfo;
+  return {
+    id: userInfo.id,
+    username: userInfo.username,
+    email: userInfo.email
+  };
 };
 
-export const expiryTimer = {};
+export const expiryTimer: { [k: string]: NodeJS.Timeout } = {};
 
-export const sendToken = async (email) => {
+const TOKEN_DURATION = 1000 * 60 * 60;
+
+const createToken = async (
+  email: string
+): Promise<{
+  id: string;
+  token: string;
+  username?: string;
+}> => {
+  const token = Math.floor(Math.random() * 1000000000).toString(36);
+
+  const expiry = Date.now() + TOKEN_DURATION;
+  const existing = await getUser({ email });
+  if (existing) {
+    await request(`_update/${existing.id}`, "POST", {
+      doc: { token }
+    });
+    return { id: existing.id, username: existing.username, token };
+  }
+
+  const createResponse = await request("_doc", "POST", {
+    email,
+    token,
+    expiry
+  });
+
+  return { id: createResponse._id, token };
+};
+
+export const sendToken = async (email: string) => {
   const values = email.split("@");
   const validation = !values.find((e) => !validate(e));
 
@@ -93,29 +136,7 @@ export const sendToken = async (email) => {
     return false;
   }
 
-  const token = Math.floor(Math.random() * 1000000000).toString(36);
-  const duration = 1000 * 60 * 60;
-  const expiry = Date.now() + duration;
-
-  let id, username;
-
-  const existingUserInfo = await getUser({ email });
-  if (existingUserInfo) {
-    id = existingUserInfo.id;
-    username = existingUserInfo.username;
-  }
-
-  if (!id) {
-    id = await request("_doc", "POST", {
-      email,
-      token,
-      expiry
-    })._id;
-  } else {
-    await request(`_update/${id}`, "POST", {
-      doc: { token }
-    });
-  }
+  const { id, username, token } = await createToken(email);
 
   let href = `https://${serviceHostname}/set-info/${email}?t=${token}`;
   if (username) href += `&u=${username}`;
@@ -149,20 +170,24 @@ export const sendToken = async (email) => {
   });
 
   expiryTimer.id = setTimeout(async () => {
-    const updatedUserInfo = await getUser({ _id: id });
-    if (updatedUserInfo.expiry < new Date()) {
+    const updatedUserInfo = await getUser({ id });
+    const { expiry } = updatedUserInfo;
+    if (expiry === undefined) return;
+    if (expiry < Date.now()) {
       await deleteUser(id);
       console.info("Deleted user with expired token.", `User Email: ${email}`);
     }
-  }, duration);
+  }, TOKEN_DURATION);
 
   return true;
 };
 
-export const setUserInfo = async (userInfo) => {
+export const setUserInfo = async (userInfo: User) => {
   let { email, password, token, username } = userInfo;
   if (!email || !username || !password) {
-    throw new Error("Setting userInfo failed because email is not specified.");
+    throw new Error(
+      `Setting userInfo failed because input is invalid: ${userInfo}`
+    );
   }
 
   const findUserInfoByEmail = await getUser({ email });
@@ -179,13 +204,13 @@ export const setUserInfo = async (userInfo) => {
   }
 
   if (!findUserInfoByEmail.username) {
-    if (findUserInfoByEmail.expiry < Date.now()) {
+    if (findUserInfoByEmail.expiry && findUserInfoByEmail.expiry < Date.now()) {
       await deleteUser(id);
       throw new Error("Setting userInfo failed because user token is expired.");
     }
 
-    const expiryTimer = expiryTimer[id];
-    if (expiryTimer) clearTimeout(expiryTimer);
+    const expiryTimeout = expiryTimer[id];
+    if (expiryTimeout) clearTimeout(expiryTimeout);
 
     const findUserInfoByUsername = await getUser({ username });
     if (findUserInfoByUsername) {
