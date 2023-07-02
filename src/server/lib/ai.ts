@@ -1,6 +1,6 @@
 import fs from "fs";
 import { Configuration, OpenAIApi } from "openai";
-import { MailType } from "./mails";
+import { MailType } from "server";
 
 const apiKey = process.env.OPENAI_KEY;
 const configuration = new Configuration({ apiKey });

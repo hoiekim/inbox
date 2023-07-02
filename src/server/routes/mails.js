@@ -1,5 +1,5 @@
 const Mail = require("./lib/mails");
-const { notifyNewMails, decrementBadgeCount } = require("./lib/push");
+const { notifyNewMails, decrementBadgeCount } = require("../lib/push");
 const { getUsernamesFromMail } = require("./lib/mails");
 
 const domainName = process.env.DOMAIN || "mydomain";

@@ -32,8 +32,7 @@ import mails from "./routes/mails";
 import users from "./routes/users";
 import * as push from "./routes";
 import init from "./init";
-import { initializeIndex } from "./lib";
-import { cleanSubscriptions, notifyNewMails } from "./routes/lib";
+import { initializeIndex, cleanSubscriptions, notifyNewMails } from "./lib";
 
 const nodeMailin = require("@umpacken/node-mailin");
 

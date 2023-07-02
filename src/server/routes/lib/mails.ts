@@ -5,12 +5,12 @@ import { EmailData } from "@sendgrid/helpers/classes/email-address";
 import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
 import { htmlToText } from "html-to-text";
 import { FileArray, UploadedFile } from "express-fileupload";
-import { Insight, getInsight } from "./ai";
-const uuid = require("uuid");
+import { Insight, getInsight } from "server";
+import uuid from "uuid";
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
-export const domainName = process.env.DOMAIN || "mydomain";
+const domainName = process.env.DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://elastic:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
