@@ -143,17 +143,19 @@ export const notifyNewMails = async (usernames: string[]) => {
       const { push_subscription_id, username } = subscription;
 
       const badge_count = notifications.get(username);
-      if (!badge_count) return;
+      if (badge_count === undefined) return;
+
+      const incrementedBadgeCount = badge_count + 1;
 
       const message =
         badge_count > 1
-          ? `You have ${badge_count} new mails`
+          ? `You have ${incrementedBadgeCount} new mails`
           : "You have a new mail";
 
       const notificationPayload = {
         title: message,
         icon: "/icons/logo192.png",
-        badge_count,
+        badge_count: incrementedBadgeCount,
         push_subscription_id
       };
 
@@ -188,7 +190,7 @@ export const decrementBadgeCount = async (usernames: string[]) => {
       const badge_count = notifications.get(username);
       if (badge_count === undefined) return;
 
-      const decrementedBadgeCount = badge_count - 1;
+      const decrementedBadgeCount = Math.max(badge_count - 1, 0);
 
       const notificationPayload = {
         badge_count: decrementedBadgeCount,

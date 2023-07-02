@@ -90,7 +90,6 @@ app.listen(port, async () => {
   await initializeIndex();
   cleanSubscriptions();
   console.info(`${domainName} mail server is listening`);
-  setTimeout(() => notifyNewMails(["admin"]), 1000);
 });
 
 nodeMailin.on("message", mails.saveMail);
