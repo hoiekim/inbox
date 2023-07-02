@@ -1,7 +1,7 @@
 import webPush, { PushSubscription } from "web-push";
 import { elasticsearchClient, index, getNotifications } from "server";
 
-export const domainName = process.env.DOMAIN || "mydomain";
+const domainName = process.env.DOMAIN || "mydomain";
 
 const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
 
