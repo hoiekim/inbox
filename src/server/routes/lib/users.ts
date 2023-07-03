@@ -16,8 +16,6 @@ const User = new Elastic(
   ELASTIC_INDEX
 );
 
-export default User;
-
 const { request } = User;
 
 export interface User {

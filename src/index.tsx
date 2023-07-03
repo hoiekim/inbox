@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { App, UserInfoType } from "client";
+import { App, UserInfoType, call } from "client";
 
 import "./index.scss";
 

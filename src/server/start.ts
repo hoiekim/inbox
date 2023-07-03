@@ -7,9 +7,9 @@ import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
 import mails from "./routes/mails";
-import users from "./routes/users";
+// import users from "./routes/users";
 import init from "./init";
-import { initializeIndex, cleanSubscriptions } from "server";
+import { initializeIndex, cleanSubscriptions, usersRouter } from "server";
 import * as push from "./routes";
 
 const nodeMailin = require("@umpacken/node-mailin");
@@ -46,15 +46,32 @@ app.post("/api/mails", mails.savePostMail);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
-app.get("/user", users.check);
-app.post("/user/sign-in", users.signIn);
-app.post("/user/send-token", users.sendToken);
-app.post("/user/set-info", users.setUserInfo);
-app.delete("/user", users.signOut);
+// app.get("/user", users.check);
+// app.post("/user/sign-in", users.signIn);
+// app.post("/user/send-token", users.sendToken);
+// app.post("/user/set-info", users.setUserInfo);
+// app.delete("/user", users.signOut);
 
 app.get("/push/refresh/:id", push.refresh);
 app.get("/push/publicKey", push.publicKey);
 app.post("/push/subscribe", push.subscribe);
+
+const apiRouter = express.Router();
+
+apiRouter.use((req, res, next) => {
+  console.info(`<${req.method}> /api${req.url}`);
+  console.group();
+  const date = new Date();
+  const offset = date.getTimezoneOffset() / -60;
+  const offsetString = (offset > 0 ? "+" : "") + offset + "H";
+  console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
+  console.info(`from: ${req.ip}`);
+  console.groupEnd();
+  next();
+});
+
+apiRouter.use("/users", usersRouter);
+app.use("/api", apiRouter);
 
 const clientPath = path.resolve(__dirname, "../../build/client");
 app.use(express.static(clientPath));
