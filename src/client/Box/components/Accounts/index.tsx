@@ -11,7 +11,7 @@ import {
   SortUpIcon
 } from "./components";
 
-import { Context, Category, useLocalStorage, QueryCache } from "client";
+import { Context, Category, useLocalStorage, QueryCache, call } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { Account, AccountsResponse } from "server";
 
@@ -310,15 +310,11 @@ const Accounts = ({
       setSelectedAccount("");
     };
 
-    const onClickLogout = () => {
-      fetch("/user", { method: "DELETE" })
-        .then((r) => r.json())
-        .then((r) => {
-          if (r === true) {
-            setUserInfo(undefined);
-            setSelectedAccount("");
-          }
-        });
+    const onClickLogout = async () => {
+      const response = await call.delete("/api/users/login");
+      if (response.status !== "success") return;
+      setUserInfo(undefined);
+      setSelectedAccount("");
     };
 
     return (

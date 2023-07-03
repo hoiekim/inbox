@@ -11,7 +11,7 @@ import {
   Notifier,
   getLocalStorageItem
 } from "client";
-import { Account } from "server";
+import { Account, MaskedUser } from "server";
 
 export enum Category {
   NewMails = "New Mails",
@@ -27,7 +27,7 @@ export interface ContextType {
     height: number;
   };
   domainName: string;
-  userInfo: UserInfoType | undefined;
+  userInfo: MaskedUser | undefined;
   setUserInfo: React.Dispatch<React.SetStateAction<ContextType["userInfo"]>>;
   isAccountsOpen: boolean;
   setIsAccountsOpen: React.Dispatch<
@@ -84,10 +84,10 @@ export interface UserInfoType {
 }
 
 interface Props {
-  session: UserInfoType | undefined;
+  user?: MaskedUser;
 }
 
-const App = ({ session }: Props) => {
+const App = ({ user: session }: Props) => {
   // defines states used for UI control
   const [viewSize, setViewSize] = useState({
     width: window.innerWidth,

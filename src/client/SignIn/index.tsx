@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
 import { Notifier, call } from "client";
@@ -8,54 +8,47 @@ import LoginIcon from "./components/LoginIcon";
 import { Context } from "..";
 
 import "./index.scss";
+import { LoginPostResponse } from "server";
 
 const Home = () => {
   const { setUserInfo } = useContext(Context);
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
 
-  const onChangeUsername = (e) => {
+  const onChangeUsername = (e: any) => {
     setUsernameInput(e.target.value);
   };
 
-  const onChangePassword = (e) => {
+  const onChangePassword = (e: any) => {
     setPasswordInput(e.target.value);
   };
 
   const mutation = useMutation((body) => {
-    return fetch("/user/sign-in", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(body)
-    }).then((r) => r.json());
+    return call.post<LoginPostResponse>("/api/users/login", body);
   });
 
   let infoMessage;
 
   if (mutation.isLoading) infoMessage = "🧐 Checking...";
   if (mutation.isError) infoMessage = "🤯 Server error";
-  if (mutation.data?.username) infoMessage = "🤗 Welcome!";
-  if (mutation.data === false) infoMessage = "🤔 Wrong Password";
+  if (mutation.data?.status === "success") infoMessage = "🤗 Welcome!";
+  if (mutation.data?.status === "failed") infoMessage = "🤔 Wrong Password";
 
   useEffect(() => {
     if (mutation.data && setUserInfo) {
-      setTimeout(() => {
-        setUserInfo(mutation.data);
-      }, 500);
+      setTimeout(() => setUserInfo(mutation.data?.body), 500);
     }
   }, [mutation.data, setUserInfo]);
 
   const onClickLogin = async () => {
-    const body = { password: passwordInput };
+    const body: any = { password: passwordInput };
     if (usernameInput.includes("@")) body.email = usernameInput;
     else body.username = usernameInput;
     await new Notifier().requestPermission();
     mutation.mutate(body);
   };
 
-  const onKeyDownInput = (e) => {
+  const onKeyDownInput = (e: any) => {
     if (e.key === "Enter") onClickLogin();
   };
 

@@ -1,18 +1,19 @@
-import React, { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
 import { useParams, useLocation, Link } from "react-router-dom";
 
 import SignUpIcon from "./components/SignUpIcon";
 import UserEditIcon from "./components/UserEditIcon";
 
-import { Context } from "..";
+import { Context, call } from "client";
 
 import "./index.scss";
+import { MaskedUser, SetInfoPostResponse } from "server";
 
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
 
-  const { email } = useParams();
+  const { email } = useParams() as any;
   const query = new URLSearchParams(useLocation().search);
   const token = query.get("t");
   const username = query.get("u");
@@ -22,33 +23,26 @@ const SignUp = () => {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
 
-  const onChangeEmail = (e) => {
+  const onChangeEmail = (e: any) => {
     setEmailInput(e.target.value);
   };
 
-  const onChangeUsername = (e) => {
+  const onChangeUsername = (e: any) => {
     setUsernameInput(e.target.value);
   };
 
-  const onChangePassword = (e) => {
+  const onChangePassword = (e: any) => {
     setPasswordInput(e.target.value);
   };
 
-  const onChangePasswordConfirm = (e) => {
+  const onChangePasswordConfirm = (e: any) => {
     setPasswordConfirmInput(e.target.value);
   };
 
-  const mutation = useMutation((body) => {
-    let url;
-    if (email) url = "/user/set-info";
-    else url = "/user/send-token";
-    return fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify(body)
-    }).then((r) => r.json());
+  const mutation = useMutation((body: any) => {
+    if (email)
+      return call.post<SetInfoPostResponse>("/api/users/set-info", body);
+    else return call.post("/api/users/token", body);
   });
 
   let infoMessage;
@@ -57,26 +51,26 @@ const SignUp = () => {
     infoMessage = "🤐 Please set your user information.";
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
-    if (mutation.data?.username) infoMessage = "🤗 All set up!";
-    if (mutation.data === false) {
+    if (mutation.data?.status === "success") infoMessage = "🤗 All set up!";
+    if (mutation.data?.status !== "success") {
       infoMessage = "🤔 Something is wrong. Please try again.";
     }
   } else {
     infoMessage = "😀 Please provide your email.";
     if (mutation.isLoading) infoMessage = "🧐 Sending confirmation email...";
     if (mutation.isError) infoMessage = "🤯 Server error";
-    if (mutation.data === true) {
+    if (mutation.data?.status === "success") {
       infoMessage =
         "🤗 Please check your mail box and continue to set your user information.";
     }
-    if (mutation.data === false)
+    if (mutation.data?.status !== "success")
       infoMessage = "🤔 Something is wrong. Please try again.";
   }
 
   useEffect(() => {
-    if (mutation.data?.username && setUserInfo) {
+    if ((mutation.data as any)?.username && setUserInfo) {
       setTimeout(() => {
-        setUserInfo(mutation.data);
+        setUserInfo(mutation.data as unknown as MaskedUser);
       }, 500);
     }
   }, [mutation.data, setUserInfo]);
@@ -91,7 +85,7 @@ const SignUp = () => {
     if (email) window.name = "inbox-confirm";
   };
 
-  const onKeyDownInput = (e) => {
+  const onKeyDownInput = (e: any) => {
     if (e.key === "Enter") onClickSignUp();
   };
 

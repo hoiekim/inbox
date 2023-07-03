@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { App, UserInfoType, call } from "client";
+import { LoginGetResponse } from "server";
+import { App, getLocalStorageItem, setLocalStorageItem, call } from "client";
 
 import "./index.scss";
 
@@ -9,12 +10,25 @@ const root = ReactDOM.createRoot(
 );
 
 const mountApp = async () => {
-  const session: UserInfoType | undefined = await fetch("/user").then((r) =>
-    r.json()
-  );
+  const user = await call
+    .get<LoginGetResponse>("/api/users/login")
+    .then((r) => {
+      const app = r.body?.app;
+      const version = app?.version;
+      if (version) {
+        const appInfo = getLocalStorageItem("app");
+        const theVersionThatIUsedToKnow = appInfo?.version;
+        if (theVersionThatIUsedToKnow !== version) {
+          localStorage.clear();
+          setLocalStorageItem("app", app);
+        }
+      }
+      return r.body?.user;
+    });
+
   root.render(
     <React.StrictMode>
-      <App session={session} />
+      <App user={user} />
     </React.StrictMode>
   );
 };

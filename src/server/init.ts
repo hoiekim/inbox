@@ -1,4 +1,5 @@
-import { Mail, User } from "./routes";
+import Mail from "./routes/lib/mails";
+import User from "./routes/lib/users";
 
 const init = async () => {
   await Mail.initialize({

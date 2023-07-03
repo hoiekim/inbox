@@ -17,7 +17,3 @@ export const getLoginRoute = new Route<LoginGetResponse>(
     };
   }
 );
-
-// router.check = (req, res) => {
-//   res.status(200).json(req.session.user || null);
-// };

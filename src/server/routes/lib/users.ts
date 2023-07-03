@@ -16,6 +16,8 @@ const User = new Elastic(
   ELASTIC_INDEX
 );
 
+export default User;
+
 const { request } = User;
 
 export interface User {
@@ -28,6 +30,11 @@ export interface User {
 }
 
 export type MaskedUser = Omit<User, "password">;
+
+export const maskUser = (user: User): MaskedUser => {
+  const { id, email, username, token, expiry } = user;
+  return { id, email, username, token, expiry };
+};
 
 export const getUser = (user: Partial<User>): Promise<User> => {
   type Term = Partial<Omit<User, "id"> & { _id: string }>;
@@ -180,7 +187,9 @@ export const sendToken = async (email: string) => {
   return true;
 };
 
-export const setUserInfo = async (userInfo: User) => {
+export const setUserInfo = async (
+  userInfo: Partial<User>
+): Promise<MaskedUser> => {
   let { email, password, token, username } = userInfo;
   if (!email || !username || !password) {
     throw new Error(
@@ -231,5 +240,5 @@ export const setUserInfo = async (userInfo: User) => {
     }
   });
 
-  return true;
+  return { id, email, username };
 };

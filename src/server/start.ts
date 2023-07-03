@@ -7,7 +7,6 @@ import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
 import mails from "./routes/mails";
-// import users from "./routes/users";
 import init from "./init";
 import { initializeIndex, cleanSubscriptions, usersRouter } from "server";
 import * as push from "./routes";
@@ -46,19 +45,13 @@ app.post("/api/mails", mails.savePostMail);
 app.post("/api/send", mails.sendMail);
 app.delete("/api/mails/:id", mails.deleteMail);
 
-// app.get("/user", users.check);
-// app.post("/user/sign-in", users.signIn);
-// app.post("/user/send-token", users.sendToken);
-// app.post("/user/set-info", users.setUserInfo);
-// app.delete("/user", users.signOut);
-
 app.get("/push/refresh/:id", push.refresh);
 app.get("/push/publicKey", push.publicKey);
 app.post("/push/subscribe", push.subscribe);
 
 const apiRouter = express.Router();
 
-apiRouter.use((req, res, next) => {
+apiRouter.use((req, _res, next) => {
   console.info(`<${req.method}> /api${req.url}`);
   console.group();
   const date = new Date();

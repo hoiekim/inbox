@@ -14,7 +14,7 @@
     "ts-compile-server": "tsc -p ./tsconfig.server.json",
     "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run dev-client\" \"npm run dev-server\"",
     "dev-client": "react-scripts start",
-    "dev-server": "nodemon ./src/server/index.ts",
+    "dev-server": "nodemon ./src/server/start.ts",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
