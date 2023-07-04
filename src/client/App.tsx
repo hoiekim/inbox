@@ -12,7 +12,7 @@ import {
   getLocalStorageItem,
   call
 } from "client";
-import { Account, MaskedUser } from "server";
+import { Account, MaskedUser, RefreshGetResponse } from "server";
 import { DomainGetResponse } from "server/routes/mails/get-domain";
 
 export enum Category {
@@ -132,19 +132,20 @@ const App = ({ user: session }: Props) => {
     window.addEventListener("scroll", () => {
       window.scrollTo(window.scrollX, window.scrollY);
     });
+
+    const refresh = () => {
+      const push_subscription_id = getLocalStorageItem("push_subscription_id");
+      if (!push_subscription_id) return;
+      call.get<RefreshGetResponse>("/api/push/refresh/" + push_subscription_id);
+    };
+
     window.addEventListener("focus", () => {
       if (Date.now() - lastRefresh.current < 1000 * 60 * 60 * 24) return;
-      const push_subscription_id = getLocalStorageItem("push_subscription_id");
-      if (push_subscription_id) {
-        fetch("/push/refresh/" + push_subscription_id);
-      }
+      refresh();
       lastRefresh.current = Date.now();
     });
 
-    const push_subscription_id = getLocalStorageItem("push_subscription_id");
-    if (push_subscription_id) {
-      fetch("/push/refresh/" + push_subscription_id);
-    }
+    refresh();
   }, []);
 
   useEffect(() => {

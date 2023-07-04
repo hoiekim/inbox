@@ -16,6 +16,8 @@ webPush.setVapidDetails(
   vapidKeys.privateKey
 );
 
+export const getPushPublicKey = () => PUSH_VAPID_PUBLIC_KEY;
+
 export const storeSubscription = async (
   username: string,
   push_subscription: PushSubscription

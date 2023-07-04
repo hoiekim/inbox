@@ -1,5 +1,5 @@
 import bcrypt from "bcrypt";
-import Elastic from "./components/elastic";
+import Elastic from "./elastic";
 import { sendMail } from "./mails";
 
 const appHostname = process.env.APP_HOSTNAME || "mydomain";

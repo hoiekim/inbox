@@ -1,4 +1,4 @@
-import Elastic from "./components/elastic";
+import Elastic from "./elastic";
 import fs from "fs";
 import sgMail, { MailDataRequired } from "@sendgrid/mail";
 import { EmailData } from "@sendgrid/helpers/classes/email-address";

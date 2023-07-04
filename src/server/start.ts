@@ -3,7 +3,7 @@ import { importConfig, setModulePaths } from "./config";
 importConfig();
 setModulePaths();
 
-import express, { Router, json } from "express";
+import express, { json } from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";
 
@@ -12,13 +12,12 @@ import path from "path";
 import {
   initializeIndex,
   cleanSubscriptions,
-  usersRouter,
-  mailsRouter,
   getDomain,
   saveMailHandler
 } from "server";
 
-import * as push from "./routes/push";
+import apiRouter from "./routes";
+
 import init from "./init";
 
 const nodeMailin = require("@umpacken/node-mailin");
@@ -42,26 +41,6 @@ app.use(
   })
 );
 
-app.get("/push/refresh/:id", push.refresh);
-app.get("/push/publicKey", push.publicKey);
-app.post("/push/subscribe", push.subscribe);
-
-const apiRouter = Router();
-
-apiRouter.use((req, _res, next) => {
-  console.info(`<${req.method}> /api${req.url}`);
-  console.group();
-  const date = new Date();
-  const offset = date.getTimezoneOffset() / -60;
-  const offsetString = (offset > 0 ? "+" : "") + offset + "H";
-  console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
-  console.info(`from: ${req.ip}`);
-  console.groupEnd();
-  next();
-});
-
-apiRouter.use("/users", usersRouter);
-apiRouter.use("/mails", mailsRouter);
 app.use("/api", apiRouter);
 
 const clientPath = path.resolve(__dirname, "../../build/client");

@@ -22,9 +22,10 @@ const routes = [
   postSendMailRoute,
   deleteMailRoute
 ];
+
 routes.forEach((r) => r.register(mailsRouter));
 
-export { mailsRouter };
+export default mailsRouter;
 
 export * from "./get-domain";
 export * from "./get-accounts";

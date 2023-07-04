@@ -14,9 +14,10 @@ const routes = [
   postTokenRoute,
   postSetInfoRoute
 ];
+
 routes.forEach((r) => r.register(usersRouter));
 
-export { usersRouter };
+export default usersRouter;
 
 export * from "./get-login";
 export * from "./post-login";

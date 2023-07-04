@@ -1,4 +1,4 @@
-import { MaskedUser } from "./routes";
+import { MaskedUser } from "./lib";
 
 declare module "express-session" {
   export interface SessionData {

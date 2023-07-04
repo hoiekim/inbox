@@ -1,4 +1,11 @@
+import { PushSubscription } from "web-push";
+import { PublicKeyGetResponse } from "server";
 import { getLocalStorageItem, setLocalStorageItem } from "./cache";
+import { call } from "client";
+import {
+  SubscribePostBody,
+  SubscribePostResponse
+} from "server/routes/push/post-subscribe";
 
 export class Notifier {
   constructor() {
@@ -46,28 +53,26 @@ export class Notifier {
     const registered = getLocalStorageItem("push_subscription_id");
 
     try {
-      const publicKey = await fetch("/push/publicKey")
-        .then((r) => r.json())
-        .then((r) => r.publicKey);
+      const publicKey = await call
+        .get<PublicKeyGetResponse>("/api/push/public-key")
+        .then(({ body }) => body);
 
       await navigator.serviceWorker.register("/service-worker.js");
       const registration = await navigator.serviceWorker.ready;
 
-      const subsPromise = registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: publicKey
-      });
+      const subscription = await registration.pushManager
+        .subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: publicKey
+        })
+        .then((s) => s as unknown as PushSubscription);
 
-      const subscription = await subsPromise;
-
-      const { push_subscription_id } = await fetch("/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          oldSubscriptionId: registered,
+      const push_subscription_id = await call
+        .post<SubscribePostResponse, SubscribePostBody>("/api/push/subscribe", {
+          old_subscription_id: registered,
           subscription
         })
-      }).then((r) => r.json());
+        .then(({ body }) => body);
 
       setLocalStorageItem("push_subscription_id", push_subscription_id);
 

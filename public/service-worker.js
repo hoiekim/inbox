@@ -21,7 +21,7 @@ self.addEventListener("push", (event) => {
     else self.navigator.setAppBadge(badge_count);
   };
 
-  const refresh = async () => fetch("/push/refresh/" + push_subscription_id);
+  const refresh = () => fetch("/api/push/refresh/" + push_subscription_id);
 
   const jobs = Promise.all([showNotification(), setBadge(), refresh()]);
 
