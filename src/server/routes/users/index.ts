@@ -21,4 +21,5 @@ export { usersRouter };
 export * from "./get-login";
 export * from "./post-login";
 export * from "./delete-login";
+export * from "./post-token";
 export * from "./post-set-info";

@@ -23,38 +23,46 @@ export class StreamingStatus {
   };
 }
 
-export type Stream<T = undefined> = (response: ApiResponse<T>) => void;
+export type Stream<T = undefined> = (
+  response: T extends Buffer ? Buffer : ApiResponse<T>
+) => void;
 
 export type GetResponse<T = any> = (
   req: Request,
   res: Response,
   stream: Stream<T>
-) => Promise<ApiResponse<T> | void>;
+) => Promise<T extends Buffer ? Buffer | ApiResponse : ApiResponse<T> | void>;
 
 export class Route<T> {
+  method: Method;
   path: string;
-  handler: RequestHandler;
+  callback: GetResponse<T>;
 
   constructor(method: Method, path: string, callback: GetResponse<T>) {
+    this.method = method;
     this.path = path;
-    this.handler = async (req, res, next) => {
-      if (req.method === method) {
-        try {
-          const stream: Stream<T> = (response) => {
-            res.write(JSON.stringify(response) + "\n");
-          };
-          const result = await callback(req, res, stream);
-          if (result) res.json(result);
-          else res.end();
-          return;
-        } catch (error: any) {
-          console.error(error);
-          res.status(500).json({ status: "error", info: error?.message });
-        }
-      }
-      next();
-    };
+    this.callback = callback;
   }
+
+  handler: RequestHandler = async (req, res, next) => {
+    if (req.method === this.method) {
+      try {
+        const stream: Stream<T> = (response) => {
+          if (Buffer.isBuffer(response)) res.write(response);
+          else res.write(JSON.stringify(response) + "\n");
+        };
+        const result = await this.callback(req, res, stream);
+        if (Buffer.isBuffer(result)) res.send(result);
+        else if (result) res.json(result);
+        else res.end();
+        return;
+      } catch (error: any) {
+        console.error(error);
+        res.status(500).json({ status: "error", info: error?.message });
+      }
+    }
+    next();
+  };
 
   register = (router: Router) => {
     router.use(this.path, this.handler);

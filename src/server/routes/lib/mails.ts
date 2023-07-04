@@ -5,12 +5,12 @@ import { EmailData } from "@sendgrid/helpers/classes/email-address";
 import { AttachmentData } from "@sendgrid/helpers/classes/attachment";
 import { htmlToText } from "html-to-text";
 import { FileArray, UploadedFile } from "express-fileupload";
-import { Insight, getInsight } from "server";
+import { Insight, getInsight, notifyNewMails } from "server";
 import uuid from "uuid";
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
-const domainName = process.env.DOMAIN || "mydomain";
+export const getDomain = () => process.env.EMAIL_DOMAIN || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://elastic:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
@@ -57,8 +57,9 @@ export interface MailToSend {
 }
 
 export const sendMail = async (mailData: MailToSend, files?: FileArray) => {
-  if (!domainName) {
-    throw new Error("You need to set your domainName name in the env data");
+  const domain = getDomain();
+  if (!domain) {
+    throw new Error("You need to set your domain name in the env data");
   }
 
   const { username, name, sender, to, cc, bcc, subject, html, inReplyTo } =
@@ -97,10 +98,8 @@ export const sendMail = async (mailData: MailToSend, files?: FileArray) => {
   if (Array.isArray(files)) files.forEach(parseFile);
   else if (files) parseFile(files as unknown as UploadedFile);
 
-  const email =
-    username === "admin"
-      ? `${sender}@${domainName}`
-      : `${sender}@${username}.${domainName}`;
+  const userDomain = getUserDomain(username);
+  const email = `${sender}@${userDomain}`;
 
   const from = { name, email };
 
@@ -131,12 +130,12 @@ export const sendMail = async (mailData: MailToSend, files?: FileArray) => {
         return splitString[length - 2] + "." + splitString[length - 1];
       });
 
-      if (!toDomain.find((e: string) => e === domainName)) {
+      if (!toDomain.find((e: string) => e === domain)) {
         const messageToSave = {
           ...messageToSend,
           date: new Date().toISOString(),
           attachments: attachmentsToSave || [],
-          messageId: `<${r[0].headers["x-message-id"]}@${domainName}>`,
+          messageId: `<${r[0].headers["x-message-id"]}@${domain}>`,
           from: {
             value: { name, address: from.email },
             text: `${name} <${from.email}>`
@@ -249,12 +248,7 @@ export const saveMail = async (body: any) => {
 };
 
 export const getAttachment = (id: string) => {
-  return new Promise((res, rej) => {
-    fs.readFile(`./attachments/${id}`, (err, data) => {
-      if (err) rej(err);
-      res(data);
-    });
-  });
+  return fs.readFileSync(`./attachments/${id}`);
 };
 
 export interface EmailAdressValue {
@@ -270,14 +264,14 @@ export interface EmailAdress {
 export interface MailHeaderType {
   id: string;
   read: boolean;
-  label: string;
   date: string;
+  subject: string;
   from: EmailAdress;
   to: EmailAdress;
-  cc: EmailAdress;
-  bcc: EmailAdress;
-  subject: string;
-  insight: Insight;
+  cc?: EmailAdress;
+  bcc?: EmailAdress;
+  label?: string;
+  insight?: Insight;
   highlight?: {
     subject?: string[];
     text?: string[];
@@ -301,9 +295,15 @@ export interface MailBodyType {
 
 export interface MailType extends MailHeaderType, MailBodyType {}
 
+export interface GetMailsOptions {
+  sent: boolean;
+  new: boolean;
+  saved: boolean;
+}
+
 export const getMails = (
   account: string,
-  options: { sent: any; new: any; saved: any }
+  options: GetMailsOptions
 ): Promise<MailHeaderType[]> => {
   let searchFiled, query;
 
@@ -390,14 +390,21 @@ export interface Account {
   updated: Date;
 }
 
-export interface AccountsResponse {
+export interface ReceivedAndSentAccounts {
   received: Account[];
   sent: Account[];
 }
 
-export const getAccounts = (username: string): Promise<AccountsResponse> => {
-  const fullDomain =
-    username === "admin" ? domainName : `${username}.${domainName}`;
+export const getUserDomain = (username: string) => {
+  const domain = getDomain();
+  if (username === "admin") return domain;
+  return `${username}.${domain}`;
+};
+
+export const getAccounts = (
+  username: string
+): Promise<ReceivedAndSentAccounts> => {
+  const userDomain = getUserDomain(username);
   const accounts = request("_msearch", "POST", [
     // Query1: Accounts that have received mails
     {},
@@ -408,7 +415,7 @@ export const getAccounts = (username: string): Promise<AccountsResponse> => {
           must: {
             query_string: {
               default_field: "envelopeTo.address",
-              query: `*@${fullDomain}`
+              query: `*@${userDomain}`
             }
           }
         }
@@ -445,7 +452,7 @@ export const getAccounts = (username: string): Promise<AccountsResponse> => {
       query: {
         query_string: {
           default_field: "from.value.address",
-          query: `*@${fullDomain}`
+          query: `*@${userDomain}`
         }
       },
       aggs: {
@@ -490,18 +497,25 @@ export const markRead = (id: string) => {
   });
 };
 
-export const markSaved = (id: string, options: { unsave: any }) => {
-  const { unsave } = options;
-  const label = unsave ? "" : "saved";
+export const markSaved = (id: string, save: boolean) => {
+  const label = save ? "saved" : "";
   return request(`_update/${id}`, "POST", { doc: { label } });
 };
 
-export const searchMail = (
-  value: string,
-  username: string,
-  options: { field: string }
-) => {
-  const { field } = options;
+export interface MailSearchResult {
+  id: string;
+  read: boolean;
+  date: string;
+  from: EmailAdress;
+  to: EmailAdress;
+  subject: string;
+  highlight?: {
+    subject?: string[];
+    text?: string[];
+  };
+}
+
+export const searchMail = (value: string, username: string, field?: string) => {
   value = value.replace(/</g, "").replace(/>/g, "");
 
   const pattern = /([\!\*\+\-\=\<\>\&\|\(\)\[\]\{\}\^\~\?\:\\/"])/g;
@@ -519,8 +533,7 @@ export const searchMail = (
     fields[i] += "^" + (fields.length - i);
   });
 
-  const fullDomain =
-    username === "admin" ? domainName : `${username}.${domainName}`;
+  const userDomain = getUserDomain(username);
 
   return request("_search", "POST", {
     _source: ["read", "date", "from", "to", "subject"],
@@ -536,7 +549,7 @@ export const searchMail = (
           {
             query_string: {
               default_field: "envelopeTo.address",
-              query: `*@${fullDomain}`
+              query: `*@${userDomain}`
             }
           }
         ]
@@ -545,42 +558,53 @@ export const searchMail = (
     highlight
   }).then((r: any) => {
     if (r.error) throw new Error(JSON.stringify(r.error));
-    return r.hits.hits.map((e: any) => {
-      return { ...e._source, id: e._id, highlight: e.highlight };
+    const hits = r.hits.hits as any[];
+    return hits.map((e) => {
+      const { read, date, from, to, subject } = e._source;
+      const result: MailHeaderType = {
+        read,
+        date,
+        from,
+        to,
+        subject,
+        id: e._id,
+        highlight: e.highlight
+      };
+      return result;
     });
   });
 };
 
 export const deleteMail = async (id: string) => request(`_doc/${id}`, "DELETE");
 
-export const isValidAddress = (address: string, domainName: string) => {
+export const isValidAddress = (address: string, domain: string) => {
   const parsedAddress = address.split("@");
-  const domainNameInData = parsedAddress[parsedAddress.length - 1];
-  return domainNameInData.toLowerCase().includes(domainName.toLowerCase());
+  const domainInData = parsedAddress[parsedAddress.length - 1];
+  return domainInData.toLowerCase().includes(domain.toLowerCase());
 };
 
 export const validateMailAddress = (data: any, domainName: string) => {
+  if (!data || !domainName) return false;
   if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
-  let isAddressCorrect = !!data.envelopeTo.find((e: any) => {
+  const isAddressCorrect = !!data.envelopeTo.find((e: any) => {
     return e.address && isValidAddress(e.address, domainName);
   });
   return isAddressCorrect;
 };
 
 export const addressToUsername = (address: string) => {
+  const domain = getDomain();
   const parsedAddress = address.split("@");
-  const domainNameInAddress = parsedAddress[parsedAddress.length - 1];
-  const subDomain = domainNameInAddress.split(`.${domainName}`)[0];
-  return subDomain === domainName ? "admin" : subDomain;
+  const domainInAddress = parsedAddress[parsedAddress.length - 1];
+  const subDomain = domainInAddress.split(`.${domain}`)[0];
+  return subDomain === domain ? "admin" : subDomain;
 };
 
-export const getUsernamesFromMail = (
-  data: any,
-  domainName: string
-): string[] => {
+export const getUsernamesFromMail = (data: any): string[] => {
   if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
+  const domain = getDomain();
   return data.envelopeTo
-    .filter((e: any) => e.address && isValidAddress(e.address, domainName))
+    .filter((e: any) => e.address && isValidAddress(e.address, domain))
     .map((e: any) => addressToUsername(e.address));
 };
 
@@ -592,12 +616,11 @@ export const getNotifications = async (
   usernames: string[]
 ): Promise<Notifications> => {
   const matchUsername = usernames.map((username) => {
-    const fullDomain =
-      username === "admin" ? domainName : `${username}.${domainName}`;
+    const userDomain = getUserDomain(username);
     return {
       query_string: {
         default_field: "envelopeTo.address",
-        query: `*@${fullDomain}`
+        query: `*@${userDomain}`
       }
     };
   });
@@ -638,4 +661,35 @@ export const getNotifications = async (
   });
 
   return notifications;
+};
+
+export const saveMailHandler = async (connection: any, data: any) => {
+  console.info("Received an email at", new Date());
+  console.group();
+  console.log("envelopeFrom:", JSON.stringify(data.envelopeFrom));
+  console.log("envelopeTo:", JSON.stringify(data.envelopeTo));
+  console.log("from:", data.from?.text);
+  console.log("to:", data.to?.text);
+  console.groupEnd();
+  try {
+    const domain = getDomain();
+    if (validateMailAddress(data, domain)) {
+      const result = await saveMail({
+        ...data,
+        read: false,
+        label: undefined
+      });
+      console.info("Successfully saved an email");
+      const usernames = getUsernamesFromMail(data);
+      await notifyNewMails(usernames);
+      console.info(
+        `Sent push notifications to users: [${usernames.toString()}]`
+      );
+      return result;
+    } else {
+      console.warn("Not saved because address is wrong");
+    }
+  } catch (err) {
+    console.error(err);
+  }
 };

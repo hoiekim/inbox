@@ -2,7 +2,7 @@ import bcrypt from "bcrypt";
 import Elastic from "./components/elastic";
 import { sendMail } from "./mails";
 
-const serviceHostname = process.env.APP_DOMAIN || "mydomain";
+const appHostname = process.env.APP_HOSTNAME || "mydomain";
 
 const ELASTIC_HOST = process.env.ELASTIC_HOST || "http://elastic:9200";
 const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
@@ -143,7 +143,7 @@ export const sendToken = async (email: string) => {
 
   const { id, username, token } = await createToken(email);
 
-  let href = `https://${serviceHostname}/set-info/${email}?t=${token}`;
+  let href = `https://${appHostname}/set-info/${email}?t=${token}`;
   if (username) href += `&u=${username}`;
 
   await sendMail({

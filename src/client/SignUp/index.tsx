@@ -8,7 +8,12 @@ import UserEditIcon from "./components/UserEditIcon";
 import { Context, call } from "client";
 
 import "./index.scss";
-import { MaskedUser, SetInfoPostResponse } from "server";
+import {
+  ApiResponse,
+  MaskedUser,
+  SetInfoPostResponse,
+  TokenPostResponse
+} from "server";
 
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
@@ -39,10 +44,13 @@ const SignUp = () => {
     setPasswordConfirmInput(e.target.value);
   };
 
-  const mutation = useMutation((body: any) => {
-    if (email)
+  type DynamicResponse = SetInfoPostResponse | TokenPostResponse;
+  type PromiseDynamicApiResponse = Promise<ApiResponse<DynamicResponse>>;
+
+  const mutation = useMutation((body: any): PromiseDynamicApiResponse => {
+    if (email) {
       return call.post<SetInfoPostResponse>("/api/users/set-info", body);
-    else return call.post("/api/users/token", body);
+    } else return call.post<TokenPostResponse>("/api/users/token", body);
   });
 
   let infoMessage;

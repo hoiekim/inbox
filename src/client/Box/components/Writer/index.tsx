@@ -19,6 +19,7 @@ import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
 import "./index.scss";
+import { ApiResponse, SendMailPostResponse } from "server";
 
 const replyDataToOriginalMessage = (replyData: any) => {
   if (!replyData) {
@@ -141,15 +142,17 @@ const Writer = () => {
   ]);
 
   const sendMail = (data: any) => {
-    return fetch("/api/send", {
+    return fetch("/api/mails/send", {
       method: "POST",
       headers: {},
       body: data
-    }).then((r) => r.json());
+    }).then((r) => r.json() as unknown as ApiResponse<SendMailPostResponse>);
   };
 
-  const onSuccessSendMail = (data: any) => {
-    if (data !== true) return alert("Failed to send. Please Try again");
+  const onSuccessSendMail = (data: ApiResponse<SendMailPostResponse>) => {
+    if (data.status !== "success") {
+      return alert("Failed to send. Please Try again");
+    }
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
     onClickEraserIcon();

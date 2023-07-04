@@ -21,8 +21,9 @@ const call = async <T = any>(path: string, options?: RequestInit) => {
 };
 
 call.get = <T>(path: string) => call<T>(path);
-call.post = <T>(path: string, body: any) =>
-  call<T>(path, { method: "POST", body });
+call.post = <T, B = any>(path: string, body: B) => {
+  return call<T>(path, { method: "POST", body: body as BodyInit });
+};
 call.delete = <T>(path: string) => call<T>(path, { method: "DELETE" });
 
 export { call };

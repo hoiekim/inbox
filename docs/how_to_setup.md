@@ -20,8 +20,8 @@ For detailed instruction, please keep reading this document.
 2. Copy `.env.example` file and name it `.env.local` then determine environment variables in `.env.local` file as following.
 
    ```
-   DOMAIN=                  // Domain name to use when sending & receiving mails.
-   APP_DOMAIN=              // Domain name that hosts inbox web app.
+   EMAIL_DOMAIN=                  // Domain name to use when sending & receiving mails.
+   APP_HOSTNAME=              // Domain name that hosts inbox web app.
 
    SECRET=                  // Encoding secret for session data. Any value works.
    ADMIN_PW=                // Password to login to Inbox.

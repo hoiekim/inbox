@@ -13,13 +13,13 @@ import {
 
 import { Context, Category, useLocalStorage, QueryCache, call } from "client";
 import { MailsSynchronizer } from "client/Box";
-import { Account, AccountsResponse } from "server";
+import { Account, AccountsGetResponse, LoginDeleteResponse } from "server";
 
 import "./index.scss";
 
-const queryUrl = "/api/accounts";
+const queryUrl = "/api/mails/accounts";
 
-export class AccountsCache extends QueryCache<AccountsResponse> {
+export class AccountsCache extends QueryCache<AccountsGetResponse> {
   constructor() {
     super(queryUrl);
   }
@@ -67,12 +67,16 @@ const Accounts = ({
     setLastUpdate
   } = useContext(Context);
 
-  const getAccounts = () => {
+  const getAccounts = async () => {
     isFetched = false;
-    return fetch(queryUrl).then((r) => r.json());
+    const { status, body, message } = await call.get<AccountsGetResponse>(
+      queryUrl
+    );
+    if (status === "success") return body as AccountsGetResponse;
+    else throw new Error(message);
   };
 
-  const onSuccess = (data: AccountsResponse) => {
+  const onSuccess = (data: AccountsGetResponse) => {
     const { newMails, lastUpdate } = data.received.reduce(
       (acc, e) => {
         const updated = new Date(e.updated);
@@ -94,7 +98,7 @@ const Accounts = ({
     }
   };
 
-  const query = useQuery<AccountsResponse>(queryUrl, getAccounts, {
+  const query = useQuery<AccountsGetResponse>(queryUrl, getAccounts, {
     onSuccess,
     cacheTime: Infinity,
     refetchInterval: 1000 * 60 * 10,
@@ -311,7 +315,9 @@ const Accounts = ({
     };
 
     const onClickLogout = async () => {
-      const response = await call.delete("/api/users/login");
+      const response = await call.delete<LoginDeleteResponse>(
+        "/api/users/login"
+      );
       if (response.status !== "success") return;
       setUserInfo(undefined);
       setSelectedAccount("");

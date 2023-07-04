@@ -1,4 +1,4 @@
-import React, {
+import {
   useState,
   useContext,
   useEffect,
@@ -20,9 +20,16 @@ import {
   RobotIcon
 } from "./components";
 
-import { Context, Category, QueryCache } from "client";
+import { Context, Category, QueryCache, call } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
-import { MailHeaderType } from "server";
+import {
+  MailHeaderType,
+  HeadersGetResponse,
+  MarkMailPostBody,
+  MarkMailPostResponse,
+  SearchGetResponse,
+  MailDeleteResponse
+} from "server";
 
 import "./index.scss";
 
@@ -50,7 +57,7 @@ const getMailsQueryUrl = (account: string, category: Category) => {
 
   switch (category) {
     case Category.Search:
-      return `/api/search/${encodeURIComponent(account)}`;
+      return `/api/mails/search/${encodeURIComponent(account)}`;
     case Category.SentMails:
       queryOption = "?sent=1";
       break;
@@ -64,7 +71,7 @@ const getMailsQueryUrl = (account: string, category: Category) => {
       queryOption = "";
   }
 
-  return `/api/mails/${account}${queryOption}`;
+  return `/api/mails/headers/${account}${queryOption}`;
 };
 
 export class MailsCache extends QueryCache<MailHeaderType[]> {
@@ -188,8 +195,8 @@ const RenderedMail = ({
   };
 
   const onClickStar = () => {
-    requestMarkSaved(mail, saved);
-    markSavedInQueryData(mail, saved);
+    requestMarkSaved(mail, !saved);
+    markSavedInQueryData(mail, !saved);
   };
 
   const onClickRobot = () => {
@@ -353,7 +360,13 @@ const RenderedMails = ({ page }: { page: number }) => {
 
   const queryUrl = getMailsQueryUrl(selectedAccount, selectedCategory);
 
-  const getMails = () => fetch(queryUrl).then((r) => r.json());
+  const getMails = async () => {
+    const { status, body, message } = await call.get<
+      HeadersGetResponse | SearchGetResponse
+    >(queryUrl);
+    if (status === "success") return body || [];
+    else throw new Error(message);
+  };
   const query = useQuery<MailHeaderType[]>(queryUrl, getMails, {
     onSuccess: (data) => {
       if (!data?.length) setSelectedAccount("");
@@ -376,16 +389,22 @@ const RenderedMails = ({ page }: { page: number }) => {
     );
   }
 
-  const requestDeleteMail = (mail: MailHeaderType) =>
-    fetch(`/api/mails/${mail.id}`, { method: "DELETE" }).then((r) => r.json());
+  const requestDeleteMail = (mail: MailHeaderType) => {
+    return call.delete<MailDeleteResponse>(`/api/mails/${mail.id}`);
+  };
 
-  const requestMarkRead = (mail: MailHeaderType) =>
-    fetch(`/api/markRead/${mail.id}`).then((r) => r.json());
+  const requestMarkRead = async (mail: MailHeaderType) => {
+    type Response = MarkMailPostResponse;
+    type Body = MarkMailPostBody;
+    const body: Body = { mail_id: mail.id, read: true };
+    return call.post<Response, Body>("/api/mails/mark", body);
+  };
 
-  const requestMarkSaved = (mail: MailHeaderType, unsave: boolean) => {
-    const mailId = mail.id;
-    const query = unsave ? "?unsave=1" : "";
-    return fetch(`/api/markSaved/${mailId}${query}`).then((r) => r.json());
+  const requestMarkSaved = (mail: MailHeaderType, save: boolean) => {
+    type Response = MarkMailPostResponse;
+    type Body = MarkMailPostBody;
+    const body: Body = { mail_id: mail.id, save };
+    return call.post<Response, Body>("/api/mails/mark", body);
   };
 
   const removeAccountFromQueryData = () => {
@@ -439,7 +458,7 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  const markSavedInQueryData = (mail: MailHeaderType, unsave: boolean) => {
+  const markSavedInQueryData = (mail: MailHeaderType, save: boolean) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
@@ -447,8 +466,8 @@ const RenderedMails = ({ page }: { page: number }) => {
       Object.values(newData).forEach((e) => {
         const found = e.find((f) => f.key === selectedAccount);
         if (found) {
-          if (unsave) found.saved_doc_count--;
-          else found.saved_doc_count++;
+          if (save) found.saved_doc_count++;
+          else found.saved_doc_count--;
         }
       });
       return newData;
@@ -464,7 +483,7 @@ const RenderedMails = ({ page }: { page: number }) => {
         newData.find((e, i) => {
           if (e.id === mailId) {
             foundIndex = i;
-            e.label = unsave ? "" : "saved";
+            e.label = save ? "saved" : "";
             return true;
           }
           return false;

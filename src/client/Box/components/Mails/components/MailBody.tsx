@@ -1,10 +1,10 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
 import { useQuery } from "react-query";
 
-import { Context, ContextType } from "client";
+import { Context, ContextType, call } from "client";
 import FileIcon from "client/Box/components/FileIcon";
 
-import { Attachment, MailBodyType } from "server";
+import { Attachment, BodyGetResponse, MailBodyType } from "server";
 
 interface Props {
   mailId: string;
@@ -17,9 +17,13 @@ const MailBody = ({ mailId }: Props) => {
 
   const [isLoadingIframe, setIsLoadingIframe] = useState(true);
 
-  const queryUrl = `/api/mail-body/${mailId}`;
+  const queryUrl = `/api/mails/body/${mailId}`;
 
-  const getMail = () => fetch(queryUrl).then((r) => r.json());
+  const getMail = async () => {
+    const { status, body, message } = await call.get<BodyGetResponse>(queryUrl);
+    if (status === "success") return body as BodyGetResponse;
+    else throw new Error(message);
+  };
   const query = useQuery<MailBodyType>(queryUrl, getMail);
 
   const iframeElement = useRef(null);
@@ -81,7 +85,7 @@ const MailBody = ({ mailId }: Props) => {
     const attachments: JSX.Element[] = data.attachments?.map(
       (attachment: Attachment, i: number) => {
         const onClickAttachment = () => {
-          fetch(`/api/attachment/${attachment.content.data}`)
+          fetch(`/api/mails/attachment/${attachment.content.data}`)
             .then((r) => r.arrayBuffer())
             .then((r) => {
               const link = document.createElement("a");

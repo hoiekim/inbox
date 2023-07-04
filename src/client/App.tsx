@@ -9,9 +9,11 @@ import {
   SignUp,
   useLocalStorage,
   Notifier,
-  getLocalStorageItem
+  getLocalStorageItem,
+  call
 } from "client";
 import { Account, MaskedUser } from "server";
+import { DomainGetResponse } from "server/routes/mails/get-domain";
 
 export enum Category {
   NewMails = "New Mails",
@@ -147,9 +149,9 @@ const App = ({ user: session }: Props) => {
 
   useEffect(() => {
     if (!domainName) {
-      fetch("/api/domainName")
-        .then((r) => r.text())
-        .then(setDomainName);
+      call
+        .get<DomainGetResponse>("/api/mails/domain")
+        .then((r) => setDomainName(r.body || ""));
     }
   }, [domainName, setDomainName]);
 
