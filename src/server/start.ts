@@ -1,10 +1,12 @@
 import { importConfig, setModulePaths } from "./config";
+
 importConfig();
 setModulePaths();
 
-import express from "express";
+import express, { Router, json } from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";
+
 import path from "path";
 
 import {
@@ -22,12 +24,11 @@ import init from "./init";
 const nodeMailin = require("@umpacken/node-mailin");
 
 const app = express();
-app.use(express.json({ limit: "50mb" }));
 
-const domainName = getDomain();
-const port = process.env.PORT || 3004;
+app.use(json({ limit: "50mb" }));
 
 app.use(fileupload());
+
 app.use(
   session({
     secret: process.env.SECRET || "secret",
@@ -45,7 +46,7 @@ app.get("/push/refresh/:id", push.refresh);
 app.get("/push/publicKey", push.publicKey);
 app.post("/push/subscribe", push.subscribe);
 
-const apiRouter = express.Router();
+const apiRouter = Router();
 
 apiRouter.use((req, _res, next) => {
   console.info(`<${req.method}> /api${req.url}`);
@@ -64,16 +65,21 @@ apiRouter.use("/mails", mailsRouter);
 app.use("/api", apiRouter);
 
 const clientPath = path.resolve(__dirname, "../../build/client");
+
 app.use(express.static(clientPath));
+
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientPath, "index.html"));
 });
+
+const domain = getDomain();
+const port = process.env.PORT || 3004;
 
 app.listen(port, async () => {
   await init();
   await initializeIndex();
   cleanSubscriptions();
-  console.info(`${domainName} mail server is listening`);
+  console.info(`${domain} mail server is listening`);
 });
 
 nodeMailin.on("message", saveMailHandler);
