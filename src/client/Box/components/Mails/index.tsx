@@ -23,12 +23,13 @@ import {
 import { Context, Category, QueryCache, call } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import {
-  MailHeaderType,
+  MailHeaderData,
   HeadersGetResponse,
   MarkMailPostBody,
   MarkMailPostResponse,
   SearchGetResponse,
-  MailDeleteResponse
+  MailDeleteResponse,
+  MailSearchResult
 } from "server";
 
 import "./index.scss";
@@ -74,27 +75,27 @@ const getMailsQueryUrl = (account: string, category: Category) => {
   return `/api/mails/headers/${account}${queryOption}`;
 };
 
-export class MailsCache extends QueryCache<MailHeaderType[]> {
+export class MailsCache extends QueryCache<MailHeaderData[]> {
   constructor(account: string, category: Category) {
     super(getMailsQueryUrl(account, category));
   }
 }
 
 interface RenderedMailProps {
-  mail: MailHeaderType;
+  mail: MailHeaderData | MailSearchResult;
   i: number;
   activeMailId: ActiveMailMap;
   setActiveMailId: Dispatch<SetStateAction<ActiveMailMap>>;
-  requestMarkRead: (mail: MailHeaderType) => Promise<any>;
-  markReadInQueryData: (mail: MailHeaderType) => void;
+  requestMarkRead: (mail: MailHeaderData) => Promise<any>;
+  markReadInQueryData: (mail: MailHeaderData) => void;
   setReplyData: Dispatch<SetStateAction<any>>;
-  requestDeleteMail: (mail: MailHeaderType) => Promise<any>;
+  requestDeleteMail: (mail: MailHeaderData) => Promise<any>;
   selectedAccount: string;
   accountsCache: AccountsCache;
   selectedCategory: Category;
   removeAccountFromQueryData: () => void;
-  requestMarkSaved: (mail: MailHeaderType, saved: boolean) => void;
-  markSavedInQueryData: (mail: MailHeaderType, saved: boolean) => void;
+  requestMarkSaved: (mail: MailHeaderData, saved: boolean) => void;
+  markSavedInQueryData: (mail: MailHeaderData, saved: boolean) => void;
   isWriterOpen: boolean;
   openedKebab: string;
   setOpenedKebab: Dispatch<SetStateAction<string>>;
@@ -119,7 +120,7 @@ const RenderedMail = ({
   openedKebab,
   setOpenedKebab
 }: RenderedMailProps) => {
-  const saved = mail.label === "saved";
+  const saved = "label" in mail && mail.label === "saved";
   const isActive = !!activeMailId[mail.id];
 
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
@@ -211,7 +212,7 @@ const RenderedMail = ({
 
   let searchHighlight;
 
-  if (mail.highlight) {
+  if ("highlight" in mail && mail.highlight) {
     searchHighlight = Object.values(mail.highlight).map((e) => {
       const __html = "..." + e.join("... ...") + "...";
       return <div dangerouslySetInnerHTML={{ __html }}></div>;
@@ -223,11 +224,15 @@ const RenderedMail = ({
 
   const isKebabOpen = openedKebab === mail.id;
 
-  const summary = mail.insight?.summary?.map((e, i) => {
-    return <li key={`summary_${mail.id}_${i}`}>{e}</li>;
-  });
+  const summary = ("insight" in mail ? mail.insight?.summary : undefined)?.map(
+    (e, i) => {
+      return <li key={`summary_${mail.id}_${i}`}>{e}</li>;
+    }
+  );
 
-  const actionItems = mail.insight?.action_items?.map((e, i) => {
+  const actionItems = (
+    "insight" in mail ? mail.insight?.action_items : undefined
+  )?.map((e, i) => {
     return <li key={`action_items_${mail.id}_${i}`}>{e}</li>;
   });
 
@@ -367,7 +372,7 @@ const RenderedMails = ({ page }: { page: number }) => {
     if (status === "success") return body || [];
     else throw new Error(message);
   };
-  const query = useQuery<MailHeaderType[]>(queryUrl, getMails, {
+  const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
     onSuccess: (data) => {
       if (!data?.length) setSelectedAccount("");
     }
@@ -389,18 +394,18 @@ const RenderedMails = ({ page }: { page: number }) => {
     );
   }
 
-  const requestDeleteMail = (mail: MailHeaderType) => {
+  const requestDeleteMail = (mail: MailHeaderData) => {
     return call.delete<MailDeleteResponse>(`/api/mails/${mail.id}`);
   };
 
-  const requestMarkRead = async (mail: MailHeaderType) => {
+  const requestMarkRead = async (mail: MailHeaderData) => {
     type Response = MarkMailPostResponse;
     type Body = MarkMailPostBody;
     const body: Body = { mail_id: mail.id, read: true };
     return call.post<Response, Body>("/api/mails/mark", body);
   };
 
-  const requestMarkSaved = (mail: MailHeaderType, save: boolean) => {
+  const requestMarkSaved = (mail: MailHeaderData, save: boolean) => {
     type Response = MarkMailPostResponse;
     type Body = MarkMailPostBody;
     const body: Body = { mail_id: mail.id, save };
@@ -423,7 +428,7 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  const markReadInQueryData = (mail: MailHeaderType) => {
+  const markReadInQueryData = (mail: MailHeaderData) => {
     const mailId = mail.id;
 
     Object.values(Category).forEach((e) => {
@@ -458,7 +463,7 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  const markSavedInQueryData = (mail: MailHeaderType, save: boolean) => {
+  const markSavedInQueryData = (mail: MailHeaderData, save: boolean) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;

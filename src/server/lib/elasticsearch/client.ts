@@ -1,4 +1,4 @@
-import { Client, ClientOptions } from "@elastic/elasticsearch";
+import { Client } from "@elastic/elasticsearch";
 import mappings from "./mappings.json";
 
 const {
@@ -8,10 +8,8 @@ const {
   ELASTIC_INDEX: indexPrefix
 } = process.env;
 
-let auth: ClientOptions["auth"] = undefined;
-if (username && password) auth = { username, password };
-
+const auth = username && password ? { username, password } : undefined;
 export const elasticsearchClient = new Client({ node, auth });
 
-export const { version }: any = mappings;
+export const { version } = mappings;
 export const index = (indexPrefix || "inbox") + (version ? `-${version}` : "");

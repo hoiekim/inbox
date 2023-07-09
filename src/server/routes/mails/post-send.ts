@@ -1,23 +1,20 @@
-import { FileArray } from "express-fileupload";
-import { Route, sendMail, MailToSend } from "server";
+import { Route, sendMail, MailDataToSend, AUTH_ERROR_MESSAGE } from "server";
 
 export type SendMailPostResponse = undefined;
 
-export type SendMailPostBody = Omit<MailToSend, "username">;
+export type SendMailPostBody = MailDataToSend;
 
 export const postSendMailRoute = new Route<SendMailPostResponse>(
   "POST",
   "/send",
   async (req) => {
-    if (!req.session.user) {
-      return { status: "failed", message: "Request user is not logged in." };
-    }
+    const { user } = req.session;
+    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const { username } = req.session.user;
     const body: SendMailPostBody = req.body;
-    const attachments = req.files?.attachments as FileArray | undefined;
+    const attachments = req.files?.attachments;
 
-    await sendMail({ ...body, username }, attachments);
+    await sendMail(user, { ...body }, attachments);
 
     return { status: "success" };
   }

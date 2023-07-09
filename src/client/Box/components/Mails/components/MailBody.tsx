@@ -4,7 +4,7 @@ import { useQuery } from "react-query";
 import { Context, ContextType, call } from "client";
 import FileIcon from "client/Box/components/FileIcon";
 
-import { Attachment, BodyGetResponse, MailBodyType } from "server";
+import { Attachment, BodyGetResponse, MailBodyData } from "server";
 
 interface Props {
   mailId: string;
@@ -24,7 +24,7 @@ const MailBody = ({ mailId }: Props) => {
     if (status === "success") return body as BodyGetResponse;
     else throw new Error(message);
   };
-  const query = useQuery<MailBodyType>(queryUrl, getMail);
+  const query = useQuery<MailBodyData>(queryUrl, getMail);
 
   const iframeElement = useRef(null);
 

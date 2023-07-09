@@ -5,7 +5,5 @@ export type DomainGetResponse = string;
 export const getDomainRoute = new Route<DomainGetResponse>(
   "GET",
   "/domain",
-  async () => {
-    return { status: "success", body: getDomain() };
-  }
+  async () => ({ status: "success", body: getDomain() })
 );

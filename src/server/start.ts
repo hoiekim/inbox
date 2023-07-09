@@ -18,8 +18,6 @@ import {
 
 import apiRouter from "./routes";
 
-import init from "./init";
-
 const nodeMailin = require("@umpacken/node-mailin");
 
 const app = express();
@@ -55,7 +53,6 @@ const domain = getDomain();
 const port = process.env.PORT || 3004;
 
 app.listen(port, async () => {
-  await init();
   await initializeIndex();
   cleanSubscriptions();
   console.info(`${domain} mail server is listening`);

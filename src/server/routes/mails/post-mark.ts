@@ -1,11 +1,12 @@
 import {
   Route,
   decrementBadgeCount,
-  getMailBody,
   validateMailAddress,
-  markRead,
   getUserDomain,
-  markSaved
+  getMailBody,
+  markRead,
+  markSaved,
+  AUTH_ERROR_MESSAGE
 } from "server";
 
 export type MarkMailPostResponse = undefined;
@@ -20,19 +21,16 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
   "POST",
   "/mark",
   async (req) => {
-    if (!req.session.user) {
-      return { status: "failed", message: "Request user is not logged in." };
-    }
+    const { user } = req.session;
+    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const { username } = req.session.user;
+    const { username } = user;
     const body: MarkMailPostBody = req.body;
     const { mail_id, read, save } = body;
 
-    const mail = await getMailBody(mail_id).catch(() => undefined);
-    const userDomain = getUserDomain(username);
-    const valid = validateMailAddress(mail, userDomain);
+    const mail = await getMailBody(user.id, mail_id);
 
-    if (!valid) {
+    if (!mail) {
       return {
         status: "failed",
         message: "Invalid request. You may not manipulate other users' email"

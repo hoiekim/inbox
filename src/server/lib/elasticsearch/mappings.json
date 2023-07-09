@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": "1",
   "properties": {
     "type": { "type": "keyword" },
     "mail": {
@@ -11,7 +11,11 @@
           "properties": {
             "content": {
               "type": "object",
-              "properties": { "data": { "type": "keyword" } }
+              "properties": {
+                "data": { "type": "keyword" },
+                "contentType": { "type": "keyword" },
+                "filename": { "type": "text" }
+              }
             }
           }
         },
@@ -19,42 +23,72 @@
           "type": "object",
           "properties": {
             "value": {
-              "type": "object",
-              "properties": { "address": { "type": "keyword" } }
-            }
+              "type": "nested",
+              "properties": {
+                "address": { "type": "keyword" },
+                "name": { "type": "text" }
+              }
+            },
+            "text": { "type": "text" }
+          }
+        },
+        "bcc": {
+          "type": "object",
+          "properties": {
+            "value": {
+              "type": "nested",
+              "properties": {
+                "address": { "type": "keyword" },
+                "name": { "type": "text" }
+              }
+            },
+            "text": { "type": "text" }
           }
         },
         "from": {
           "type": "object",
           "properties": {
             "value": {
-              "type": "object",
-              "properties": { "address": { "type": "keyword" } }
-            }
+              "type": "nested",
+              "properties": {
+                "address": { "type": "keyword" },
+                "name": { "type": "text" }
+              }
+            },
+            "text": { "type": "text" }
           }
         },
         "to": {
           "type": "object",
           "properties": {
             "value": {
-              "type": "object",
-              "properties": { "address": { "type": "keyword" } }
-            }
+              "type": "nested",
+              "properties": {
+                "address": { "type": "keyword" },
+                "name": { "type": "text" }
+              }
+            },
+            "text": { "type": "text" }
           }
         },
         "envelopeFrom": {
           "type": "object",
-          "properties": { "address": { "type": "keyword" } }
+          "properties": {
+            "address": { "type": "keyword" },
+            "name": { "type": "text" }
+          }
         },
         "envelopeTo": {
           "type": "object",
-          "properties": { "address": { "type": "keyword" } }
+          "properties": {
+            "address": { "type": "keyword" },
+            "name": { "type": "text" }
+          }
         },
         "date": { "type": "date" },
         "html": { "type": "text" },
         "text": { "type": "text" },
         "subject": { "type": "text" },
-        "user": { "type": "keyword" },
         "read": { "type": "boolean" },
         "label": { "type": "keyword" },
         "insight": {
@@ -71,6 +105,7 @@
       "type": "object",
       "dynamic": "strict",
       "properties": {
+        "id": { "type": "keyword" },
         "email": { "type": "keyword" },
         "username": { "type": "keyword" },
         "expiry": { "type": "date" }

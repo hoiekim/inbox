@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import Elastic from "./elastic";
-import { sendMail } from "./mails";
+import { User, sendMail } from "server";
 
 const appHostname = process.env.APP_HOSTNAME || "mydomain";
 
@@ -9,25 +9,16 @@ const ELASTIC_USERNAME = process.env.ELASTIC_USERNAME || "";
 const ELASTIC_PASSWORD = process.env.ELASTIC_PASSWORD || "";
 const ELASTIC_INDEX = process.env.ELASTIC_INDEX_USERS || "users";
 
-const User = new Elastic(
+const UserClient = new Elastic(
   ELASTIC_HOST,
   ELASTIC_USERNAME,
   ELASTIC_PASSWORD,
   ELASTIC_INDEX
 );
 
-export default User;
+export default UserClient;
 
-const { request } = User;
-
-export interface User {
-  id: string;
-  email: string;
-  username: string;
-  password: string;
-  token?: string;
-  expiry?: number;
-}
+const { request } = UserClient;
 
 export type MaskedUser = Omit<User, "password">;
 
@@ -40,8 +31,8 @@ export const getUser = (user: Partial<User>): Promise<User> => {
   type Term = Partial<Omit<User, "id"> & { _id: string }>;
   const term: Term = {};
   Object.entries(user).forEach(([key, value]) => {
-    if (key === "id") term._id = value as any;
-    else term[key as keyof Term] = value as any;
+    if (key === "id") term._id = value;
+    else term[key as keyof Term] = value;
   });
   return request("_search", "POST", { query: { term } })
     .then((r) => r.hits?.hits)
@@ -141,14 +132,15 @@ export const sendToken = async (email: string) => {
     return false;
   }
 
-  const { id, username, token } = await createToken(email);
+  const adminUser = await getUser({ username: "admin" });
+  const createdUser = await createToken(email);
+  const { id, username, token } = createdUser;
 
   let href = `https://${appHostname}/set-info/${email}?t=${token}`;
   if (username) href += `&u=${username}`;
 
-  await sendMail({
-    username: "admin",
-    name: "Administrator",
+  await sendMail(adminUser, {
+    senderFullName: "Administrator",
     sender: "admin",
     to: email,
     subject: "Please set your password for Inbox",
@@ -178,7 +170,8 @@ export const sendToken = async (email: string) => {
     const updatedUserInfo = await getUser({ id });
     const { expiry } = updatedUserInfo;
     if (expiry === undefined) return;
-    if (expiry < Date.now()) {
+    const expiryDate = expiry && new Date(expiry);
+    if (expiryDate && expiryDate.getTime() < Date.now()) {
       await deleteUser(id);
       console.info("Deleted user with expired token.", `User Email: ${email}`);
     }
@@ -197,21 +190,23 @@ export const setUserInfo = async (
     );
   }
 
-  const findUserInfoByEmail = await getUser({ email });
-  if (!findUserInfoByEmail) {
+  const existingUser = await getUser({ email });
+  if (!existingUser) {
     throw new Error("Setting userInfo failed because user data is not found.");
   }
 
-  const { id } = findUserInfoByEmail;
-
-  if (findUserInfoByEmail.token !== token) {
+  if (existingUser.token !== token) {
     throw new Error(
       "Setting userInfo failed because user token does not match."
     );
   }
 
-  if (!findUserInfoByEmail.username) {
-    if (findUserInfoByEmail.expiry && findUserInfoByEmail.expiry < Date.now()) {
+  const { id } = existingUser;
+
+  if (!existingUser.username) {
+    const { expiry } = existingUser;
+    const expiryDate = expiry && new Date(expiry);
+    if (expiryDate && expiryDate.getTime() < Date.now()) {
       await deleteUser(id);
       throw new Error("Setting userInfo failed because user token is expired.");
     }
@@ -226,7 +221,7 @@ export const setUserInfo = async (
       );
     }
   } else {
-    username = findUserInfoByEmail.username;
+    username = existingUser.username;
   }
 
   const encryptedPassword = await bcrypt.hash(password, 10);
@@ -236,7 +231,7 @@ export const setUserInfo = async (
       password: encryptedPassword,
       username,
       token: null,
-      expiry: 0
+      expiry: null
     }
   });
 

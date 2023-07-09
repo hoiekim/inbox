@@ -19,7 +19,7 @@ import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
 import "./index.scss";
-import { ApiResponse, SendMailPostResponse } from "server";
+import { ApiResponse, SendMailPostBody, SendMailPostResponse } from "server";
 
 const replyDataToOriginalMessage = (replyData: any) => {
   if (!replyData) {
@@ -141,7 +141,7 @@ const Writer = () => {
     setEditorContent
   ]);
 
-  const sendMail = (data: any) => {
+  const sendMail = (data: BodyInit) => {
     return fetch("/api/mails/send", {
       method: "POST",
       headers: {},
@@ -216,8 +216,8 @@ const Writer = () => {
         .replace(">", "&gt;")}</p>` +
       originalMessage.html;
 
-    const mailData: any = {
-      name,
+    const mailData: SendMailPostBody = {
+      senderFullName: name,
       sender,
       to,
       cc,
@@ -228,7 +228,9 @@ const Writer = () => {
     };
 
     for (const key in mailData) {
-      formData.append(key, mailData[key]);
+      const value = mailData[key as keyof SendMailPostBody];
+      if (!value) continue;
+      formData.append(key, value);
     }
 
     for (const key in attachments) {

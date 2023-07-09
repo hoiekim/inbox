@@ -1,4 +1,4 @@
-import { Account, Route, getAccounts } from "server";
+import { Route, Account, getAccounts, AUTH_ERROR_MESSAGE } from "server";
 
 export interface AccountsGetResponse {
   received: Account[];
@@ -10,9 +10,7 @@ export const getAccountsRoute = new Route<AccountsGetResponse>(
   "/accounts",
   async (req) => {
     const { user } = req.session;
-    if (!user) {
-      return { status: "failed", message: "Request user is not logged in." };
-    }
+    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
     const accounts = await getAccounts(user.username);
     return { status: "success", body: { ...accounts } };

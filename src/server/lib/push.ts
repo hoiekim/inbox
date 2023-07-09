@@ -1,5 +1,10 @@
 import webPush, { PushSubscription } from "web-push";
-import { elasticsearchClient, index, getNotifications } from "server";
+import {
+  elasticsearchClient,
+  index,
+  getNotifications,
+  Pagination
+} from "server";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
@@ -83,6 +88,8 @@ export const getSubscriptions = async (
     return { term: { "user.username": username } };
   });
 
+  const { from, size } = new Pagination();
+
   const response = await elasticsearchClient.search<{
     type: string;
     user?: { username: string };
@@ -90,8 +97,8 @@ export const getSubscriptions = async (
     updated?: string;
   }>({
     index,
-    from: 0,
-    size: 10000,
+    from,
+    size,
     query: {
       bool: {
         filter: [
@@ -118,7 +125,7 @@ export const getSubscriptions = async (
         updated: updated ? new Date(updated) : new Date()
       };
     })
-    .filter((e) => e) as StoredPushSubscription[];
+    .filter((e): e is StoredPushSubscription => !!e);
 };
 
 export const refreshSubscription = async (id: string) => {
@@ -164,14 +171,10 @@ export const notifyNewMails = async (usernames: string[]) => {
 
       return webPush
         .sendNotification(subscription, JSON.stringify(notificationPayload))
-        .catch((error) => {
+        .catch(async (error) => {
           if (error.statusCode === 410) {
             console.log("Subscription has expired. Removing from database...");
-            try {
-              deleteSubscription(push_subscription_id);
-            } catch (err: any) {
-              console.error(err);
-            }
+            deleteSubscription(push_subscription_id).catch(console.error);
           } else {
             console.error("Error sending push notification:", error);
           }
@@ -205,11 +208,7 @@ export const decrementBadgeCount = async (usernames: string[]) => {
         .catch((error) => {
           if (error.statusCode === 410) {
             console.log("Subscription has expired. Removing from database...");
-            try {
-              deleteSubscription(push_subscription_id);
-            } catch (err: any) {
-              console.error(err);
-            }
+            deleteSubscription(push_subscription_id).catch(console.error);
           } else {
             console.error("Error sending push notification:", error);
           }

@@ -1,22 +1,22 @@
 import {
-  GetMailsOptions,
-  MailHeaderType,
+  MailHeaderData,
   Route,
+  getMailHeaders,
   addressToUsername,
-  getMails
+  GetMailsOptions,
+  AUTH_ERROR_MESSAGE
 } from "server";
 
-export type HeadersGetResponse = MailHeaderType[];
+export type HeadersGetResponse = MailHeaderData[];
 
 export const getHeadersRoute = new Route<HeadersGetResponse>(
   "GET",
   "/headers/:account",
   async (req) => {
-    if (!req.session.user) {
-      return { status: "failed", message: "Request user is not logged in." };
-    }
+    const { user } = req.session;
+    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const { username } = req.session.user;
+    const { username } = user;
     const usernameInAccount = addressToUsername(req.params.account);
     const valid = ["admin", usernameInAccount].includes(username);
 
@@ -33,7 +33,7 @@ export const getHeadersRoute = new Route<HeadersGetResponse>(
       saved: !!req.query.saved
     };
 
-    const mails = await getMails(req.params.account, options);
+    const mails = await getMailHeaders(req.params.account, options);
     return { status: "success", body: mails };
   }
 );

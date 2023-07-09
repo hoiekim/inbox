@@ -1,5 +1,6 @@
 import mappings from "./mappings.json";
 import { elasticsearchClient, index } from "./client";
+import { getUser } from "server";
 
 const { properties }: any = mappings;
 
@@ -29,7 +30,7 @@ const elasticsearchIsAvailable = async () => {
  * If this operations fail, budget app might not work in many situations.
  * Check server logs and try resolve the issues in this case.
  */
-export const initializeIndex = async (): Promise<void> => {
+export const initializeIndex = async () => {
   console.info("Initialization started.");
 
   await elasticsearchIsAvailable();
@@ -59,4 +60,18 @@ export const initializeIndex = async (): Promise<void> => {
   }
 
   console.info(`Successfully initialized Elasticsearch index: ${index}`);
+};
+
+export const initializeAdminUser = async () => {
+  const { ADMIN_PW } = process.env;
+
+  const existingAdminUser = await getUser({ username: "admin" });
+
+  // const indexingAdminUserResult = await indexUser({
+  //   user_id: existingAdminUser?.user_id,
+  //   username: "admin",
+  //   password: ADMIN_PW || "inbox"
+  // });
+
+  console.info("Successfully initialized admin user.");
 };

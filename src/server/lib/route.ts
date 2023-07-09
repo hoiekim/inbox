@@ -68,3 +68,5 @@ export class Route<T> {
     router.use(this.path, this.handler);
   };
 }
+
+export const AUTH_ERROR_MESSAGE = "Request user is not logged in.";
