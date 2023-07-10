@@ -52,12 +52,14 @@ export const getNotifications = async (
   await response.then((r) => {
     const buckets = r.aggregations?.address.buckets;
     if (!Array.isArray(buckets)) return;
-    buckets?.forEach((e: any) => {
+    buckets?.forEach((e) => {
       const { buckets } = e.read;
-      const badgeCount = buckets.find((f: any) => !f.key)?.doc_count || 0;
+      if (!Array.isArray(buckets)) return;
+      const badgeCount = buckets.find((f) => !f.key)?.doc_count;
+      if (!badgeCount) return;
       const username = addressToUsername(e.key);
-      const existing = notifications.get(username);
-      notifications.set(username, badgeCount + (existing || 0));
+      const existing = notifications.get(username) || 0;
+      notifications.set(username, badgeCount + existing);
     });
   });
 
