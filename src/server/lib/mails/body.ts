@@ -3,7 +3,7 @@ import { MailBodyData, elasticsearchClient, index } from "server";
 export const getMailBody = async (
   userId: string,
   mailId: string
-): Promise<MailBodyData> => {
+): Promise<MailBodyData | undefined> => {
   type SearchReturn = Omit<MailBodyData, "id">;
 
   const mailBodyKeys: (keyof SearchReturn)[] = [
@@ -13,9 +13,9 @@ export const getMailBody = async (
     "insight"
   ];
 
-  const response = await elasticsearchClient.search<SearchReturn>({
+  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
     index,
-    _source: mailBodyKeys,
+    _source: mailBodyKeys.map((k) => `mail.${k}`),
     query: {
       bool: {
         must: [{ term: { "user.id": userId } }, { term: { _id: mailId } }]
@@ -23,7 +23,10 @@ export const getMailBody = async (
     }
   });
 
-  const { _id, _source } = response.hits.hits[0];
-  const source = _source as SearchReturn;
-  return { id: _id, ...source };
+  const hit = response.hits.hits[0];
+  if (!hit) return;
+
+  const { _id, _source } = hit;
+  const mail = _source?.mail;
+  return mail && { id: _id, ...mail };
 };

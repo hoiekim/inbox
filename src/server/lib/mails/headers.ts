@@ -49,17 +49,19 @@ export const getMailHeaders = async (
     "insight"
   ];
 
-  const response = await elasticsearchClient.search<SearchReturn>({
+  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
     index,
-    _source: mailHeaderKeys,
+    _source: mailHeaderKeys.map((k) => `mail.${k}`),
     from,
     size,
     query,
     sort: { date: "desc" }
   });
 
-  return response.hits.hits.map(({ _id, _source }) => {
-    const source = _source as SearchReturn;
-    return { id: _id, ...source };
-  });
+  return response.hits.hits
+    .map(({ _id, _source }): MailHeaderData | undefined => {
+      const mail = _source?.mail;
+      return mail && { id: _id, ...mail };
+    })
+    .filter((m): m is MailHeaderData => !!m);
 };

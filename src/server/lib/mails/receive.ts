@@ -29,7 +29,9 @@ export const saveMailHandler = async (_: any, data: IncomingMail) => {
 
   const domain = getDomain();
   if (!validateMailAddress(data, domain)) {
-    console.warn("Not saved because address is wrong");
+    console.warn(
+      "Skipped saving incoming mail because recipient is not valid."
+    );
     return;
   }
 
@@ -47,10 +49,10 @@ const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
     convertMail(incoming)
   ]);
 
-  return saveMail(user.id, mail);
+  return saveMail(user?.id, mail);
 };
 
-export const saveMail = async (userId: string, mail: Mail) => {
+export const saveMail = async (userId: string | undefined, mail: Mail) => {
   return elasticsearchClient
     .index({
       index,

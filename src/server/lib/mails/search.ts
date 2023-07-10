@@ -42,11 +42,11 @@ export const searchMail = async (
     "read"
   ];
 
-  const response = await elasticsearchClient.search<SearchReturn>({
+  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
     index,
     from,
     size,
-    _source: searchResultKeys,
+    _source: searchResultKeys.map((k) => `mail.${k}`),
     query: {
       bool: {
         must: [
@@ -63,18 +63,21 @@ export const searchMail = async (
     highlight
   });
 
-  return response.hits.hits.map((e) => {
-    const { _id, _source } = e;
-    const source = _source as SearchReturn;
-    const { read, date, from, to, subject } = source;
-    return {
-      id: _id,
-      subject,
-      date,
-      from,
-      to,
-      read,
-      highlight: e.highlight
-    };
-  });
+  return response.hits.hits
+    .map((e): MailSearchResult | undefined => {
+      const { _id, _source } = e;
+      const mail = _source?.mail;
+      if (!mail) return;
+      const { read, date, from, to, subject } = mail;
+      return {
+        id: _id,
+        subject,
+        date,
+        from,
+        to,
+        read,
+        highlight: e.highlight
+      };
+    })
+    .filter((m): m is MailSearchResult => !!m);
 };
