@@ -3,7 +3,6 @@ import {
   elasticsearchClient,
   index,
   getUser,
-  getInsight,
   IncomingMail,
   IncomingMailAddressValue,
   IncomingAttachment,
@@ -161,7 +160,7 @@ const convertAttachments = (
 export const saveBuffer = (buffer: Buffer | string) => {
   const id = getAttachmentId();
   if (!fs.existsSync(ATTACHMENT_FOLDER)) fs.mkdirSync(ATTACHMENT_FOLDER);
-  fs.writeFile(getAttachmentFilePath(id), Buffer.from(buffer), (err) => {
+  fs.writeFile(getAttachmentFilePath(id), Buffer.from(buffer || ""), (err) => {
     if (err) throw err;
   });
   return id;
