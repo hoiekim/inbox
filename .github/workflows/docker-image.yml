@@ -5,8 +5,25 @@ on:
     branches: ["main"]
 
 jobs:
-  build:
+  check-secrets:
     runs-on: ubuntu-latest
+    outputs:
+      secrets-exist: ${{ steps.check-secrets-step.outputs.defined }}
+    steps:
+      - name: Check for Secret availability
+        id: check-secrets-step
+        shell: bash
+        run: |
+          if [[ '${{ secrets.DOCKER_HUB_USERNAME }}' != '' && '${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}' != '' && '${{ secrets.DEPLOY_URL }}' != '' && '${{ secrets.DEPLOY_SECRET }}' != '' ]]; then
+            echo "defined=true" >> $GITHUB_OUTPUT;
+          else
+            echo "defined=false" >> $GITHUB_OUTPUT;
+          fi
+
+  build:
+    needs: check-secrets
+    runs-on: ubuntu-latest
+    if: needs.check-secrets.outputs.secrets-exist == 'true'
 
     steps:
       - name: Checkout
@@ -27,9 +44,10 @@ jobs:
           tags: ${{ secrets.DOCKER_HUB_USERNAME }}/inbox:latest
 
   deploy:
-    needs: build
+    needs: [check-secrets, build]
 
     runs-on: ubuntu-latest
+    if: needs.check-secrets.outputs.secrets-exist == 'true'
 
     steps:
       - name: Trigger deploy
