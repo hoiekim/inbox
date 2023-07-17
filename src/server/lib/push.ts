@@ -3,7 +3,12 @@ import {
   elasticsearchClient,
   index,
   getNotifications,
-  Pagination
+  Pagination,
+  MaskedUser,
+  getUsers,
+  getSignedUser,
+  SignedUser,
+  maskUser
 } from "server";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
@@ -33,7 +38,7 @@ export const storeSubscription = async (
       type: "push_subscription",
       user: { username },
       push_subscription,
-      updated: new Date()
+      updated: new Date().toISOString()
     }
   });
 
@@ -82,20 +87,15 @@ export type StoredPushSubscription = {
 } & PushSubscription;
 
 export const getSubscriptions = async (
-  usernames: string[]
+  users: MaskedUser[]
 ): Promise<StoredPushSubscription[]> => {
-  const matchUsername = usernames.map((username) => {
-    return { term: { "user.username": username } };
+  const matchUsername = users.map((user) => {
+    return { term: { "user.id": user.id } };
   });
 
   const { from, size } = new Pagination();
 
-  const response = await elasticsearchClient.search<{
-    type: string;
-    user?: { username: string };
-    push_subscription?: PushSubscription;
-    updated?: string;
-  }>({
+  const response = await elasticsearchClient.search({
     index,
     from,
     size,
@@ -143,9 +143,14 @@ export const refreshSubscription = async (id: string) => {
 };
 
 export const notifyNewMails = async (usernames: string[]) => {
+  const users = await getUsers(usernames.map((username) => ({ username })));
+  const signedUsers = users
+    .map(getSignedUser)
+    .filter((u): u is SignedUser => !!u);
+  const maskedUsers = signedUsers.map(maskUser);
   const [notifications, storedSubscriptions] = await Promise.all([
-    getNotifications(usernames),
-    getSubscriptions(usernames)
+    getNotifications(maskedUsers),
+    getSubscriptions(maskedUsers)
   ]);
 
   return Promise.all(
@@ -183,10 +188,10 @@ export const notifyNewMails = async (usernames: string[]) => {
   );
 };
 
-export const decrementBadgeCount = async (usernames: string[]) => {
+export const decrementBadgeCount = async (users: MaskedUser[]) => {
   const [notifications, storedSubscriptions] = await Promise.all([
-    getNotifications(usernames),
-    getSubscriptions(usernames)
+    getNotifications(users),
+    getSubscriptions(users)
   ]);
 
   return Promise.all(

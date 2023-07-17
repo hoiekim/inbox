@@ -5,8 +5,8 @@ import {
 import {
   addressToUsername,
   elasticsearchClient,
-  getUserDomain,
   index,
+  MaskedUser,
   TO_ADDRESS_FIELD
 } from "server";
 
@@ -23,22 +23,22 @@ type AddressAggregationBucket = AggregationsStringTermsBucket & {
 };
 
 export const getNotifications = async (
-  usernames: string[]
+  users: MaskedUser[]
 ): Promise<Notifications> => {
-  const matchUsername = usernames.map((username) => {
-    const userDomain = getUserDomain(username);
+  const matchUserIds = users.map((user) => {
     return {
-      query_string: {
-        default_field: TO_ADDRESS_FIELD,
-        query: `*@${userDomain}`
-      }
+      term: { "user.id": user.id }
     };
   });
 
-  const response = elasticsearchClient.search<Document, AddressAggregation>({
+  const response = elasticsearchClient.search<AddressAggregation>({
     index,
     size: 0,
-    query: { bool: { should: matchUsername } },
+    query: {
+      bool: {
+        must: [{ term: { type: "mail" } }, { bool: { should: matchUserIds } }]
+      }
+    },
     aggs: {
       address: {
         terms: { field: TO_ADDRESS_FIELD, size: 10000 },

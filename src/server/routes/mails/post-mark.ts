@@ -1,8 +1,6 @@
 import {
   Route,
   decrementBadgeCount,
-  validateMailAddress,
-  getUserDomain,
   getMailBody,
   markRead,
   markSaved,
@@ -24,7 +22,6 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const { username } = user;
     const body: MarkMailPostBody = req.body;
     const { mail_id, read, save } = body;
 
@@ -38,11 +35,11 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
     }
 
     if (read === true) {
-      decrementBadgeCount([username]).catch(console.error);
+      decrementBadgeCount([user]).catch(console.error);
       await markRead(mail_id);
     }
 
-    if (save !== undefined) await markSaved(req.params.id, save);
+    if (typeof save === "boolean") await markSaved(mail_id, save);
 
     return { status: "success" };
   }

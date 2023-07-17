@@ -1,6 +1,6 @@
 import mappings from "./mappings.json";
 import { elasticsearchClient, index } from "./client";
-import { getUser } from "server";
+import { encryptPassword, getDomain, getUser } from "server";
 
 const { properties }: any = mappings;
 
@@ -64,14 +64,39 @@ export const initializeIndex = async () => {
 
 export const initializeAdminUser = async () => {
   const { ADMIN_PW } = process.env;
+  if (!ADMIN_PW) {
+    throw new Error("Admin password is not set. Check environment variables.");
+  }
 
-  const existingAdminUser = await getUser({ username: "admin" });
+  let existingAdminUser = await getUser({ username: "admin" });
 
-  // const indexingAdminUserResult = await indexUser({
-  //   user_id: existingAdminUser?.user_id,
-  //   username: "admin",
-  //   password: ADMIN_PW || "inbox"
-  // });
+  if (!existingAdminUser) {
+    const domain = getDomain();
+    existingAdminUser = { username: "admin", email: `admin@${domain}` };
+
+    const response = await elasticsearchClient.index({
+      index,
+      document: {
+        type: "user",
+        user: existingAdminUser,
+        updated: new Date().toISOString()
+      }
+    });
+
+    existingAdminUser.id = response._id;
+  }
+
+  const encryptedPassword = await encryptPassword(ADMIN_PW);
+
+  await elasticsearchClient.index({
+    index,
+    id: existingAdminUser.id,
+    document: {
+      type: "user",
+      user: { ...existingAdminUser, password: encryptedPassword },
+      updated: new Date().toISOString()
+    }
+  });
 
   console.info("Successfully initialized admin user.");
 };

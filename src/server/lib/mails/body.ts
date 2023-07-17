@@ -1,4 +1,4 @@
-import { MailBodyData, elasticsearchClient, index } from "server";
+import { MailBodyData, elasticsearchClient } from "server";
 
 export const getMailBody = async (
   userId: string,
@@ -13,8 +13,7 @@ export const getMailBody = async (
     "insight"
   ];
 
-  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
-    index,
+  const response = await elasticsearchClient.search({
     _source: mailBodyKeys.map((k) => `mail.${k}`),
     query: {
       bool: {

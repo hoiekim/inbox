@@ -1,14 +1,14 @@
 import {
   MailSearchResult,
+  MaskedUser,
   Pagination,
   elasticsearchClient,
-  getUserDomain,
   index
 } from "server";
 
 export const searchMail = async (
+  user: MaskedUser,
   value: string,
-  username: string,
   field?: string
 ): Promise<MailSearchResult[]> => {
   value = value.replace(/</g, "").replace(/>/g, "");
@@ -22,13 +22,11 @@ export const searchMail = async (
     .join(" ");
 
   const highlight: any = { fields: {} };
-  const fields = field ? [field] : ["subject", "text"];
+  const fields = field ? [field] : ["mail.subject", "mail.text"];
   fields.forEach((e, i) => {
     highlight.fields[e] = {};
     fields[i] += "^" + (fields.length - i);
   });
-
-  const userDomain = getUserDomain(username);
 
   const { from, size } = new Pagination();
 
@@ -50,13 +48,9 @@ export const searchMail = async (
     query: {
       bool: {
         must: [
-          { query_string: { fields, query: value } },
-          {
-            query_string: {
-              default_field: "envelopeTo.address",
-              query: `*@${userDomain}`
-            }
-          }
+          { term: { type: "mail" } },
+          { term: { "user.id": user.id } },
+          { query_string: { fields, query: value } }
         ]
       }
     },

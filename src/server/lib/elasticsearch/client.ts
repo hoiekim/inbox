@@ -1,5 +1,22 @@
 import { Client } from "@elastic/elasticsearch";
+import {
+  AggregateName,
+  AggregationsAggregate,
+  ClusterHealthRequest,
+  DeleteByQueryRequest,
+  DeleteRequest,
+  IndexRequest,
+  IndicesCreateRequest,
+  IndicesExistsRequest,
+  IndicesPutMappingRequest,
+  MsearchRequest,
+  SearchRequest,
+  UpdateByQueryRequest,
+  UpdateRequest
+} from "@elastic/elasticsearch/lib/api/types";
+import { WithOptional, WithRequired } from "server";
 import mappings from "./mappings.json";
+import Document from "./mappings";
 
 const {
   ELASTIC_HOST: node,
@@ -8,8 +25,50 @@ const {
   ELASTIC_INDEX: indexPrefix
 } = process.env;
 
-const auth = username && password ? { username, password } : undefined;
-export const elasticsearchClient = new Client({ node, auth });
-
 export const { version } = mappings;
 export const index = (indexPrefix || "inbox") + (version ? `-${version}` : "");
+
+const auth = username && password ? { username, password } : undefined;
+const client = new Client({ node, auth });
+
+const indexDocument = (r: WithOptional<IndexRequest<Document>, "index">) => {
+  return client.index<Document>({ index, ...r });
+};
+
+const updateDocument = (
+  r: WithOptional<UpdateRequest<WithRequired<Document, "updated">>, "index">
+) => {
+  return client.update<Document>({ index, ...r });
+};
+
+const deleteDocument = (r: WithOptional<DeleteRequest, "index">) => {
+  return client.delete({ index, ...r });
+};
+
+const searchDocument = <A = Record<AggregateName, AggregationsAggregate>>(
+  r: WithOptional<SearchRequest, "index">
+) => {
+  return client.search<Document, A>({ index, ...r });
+};
+
+const multiSearchDocument = <A = Record<AggregateName, AggregationsAggregate>>(
+  r: MsearchRequest
+) => client.msearch<Document, A>(r);
+
+export const elasticsearchClient = {
+  index: indexDocument,
+  update: updateDocument,
+  updateByQuery: (r: UpdateByQueryRequest) => client.updateByQuery(r),
+  delete: deleteDocument,
+  deleteByQuery: (r: DeleteByQueryRequest) => client.deleteByQuery(r),
+  search: searchDocument,
+  msearch: multiSearchDocument,
+  cluster: {
+    health: (r: ClusterHealthRequest) => client.cluster.health(r)
+  },
+  indices: {
+    exists: (r: IndicesExistsRequest) => client.indices.exists(r),
+    create: (r: IndicesCreateRequest) => client.indices.create(r),
+    putMapping: (r: IndicesPutMappingRequest) => client.indices.putMapping(r)
+  }
+};

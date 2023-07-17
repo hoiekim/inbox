@@ -33,7 +33,7 @@ export const getHeadersRoute = new Route<HeadersGetResponse>(
       saved: !!req.query.saved
     };
 
-    const mails = await getMailHeaders(req.params.account, options);
+    const mails = await getMailHeaders(user, req.params.account, options);
     return { status: "success", body: mails };
   }
 );

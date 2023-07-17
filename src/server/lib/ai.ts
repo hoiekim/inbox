@@ -1,6 +1,6 @@
 import fs from "fs";
 import { Configuration, OpenAIApi } from "openai";
-import { IncomingMail, MailAddress } from "server";
+import { IncomingMail } from "server";
 
 const apiKey = process.env.OPENAI_KEY;
 const configuration = new Configuration({ apiKey });
@@ -24,14 +24,7 @@ I will show you an email and you will answer as JSON with 3 properties; summary,
 Here's the email:
 `;
 
-export interface InsightInput {
-  subject: string;
-  from: MailAddress;
-  to: MailAddress;
-  text: string;
-}
-
-export const getInsight = async (mail: InsightInput) => {
+export const getInsight = async (mail: IncomingMail) => {
   if (disabled) return new Insight();
 
   const { subject, from, to, text } = mail;

@@ -82,7 +82,7 @@ const MailBody = ({ mailId }: Props) => {
   const data = query.data;
 
   if (query.isSuccess && data) {
-    const attachments: JSX.Element[] = data.attachments?.map(
+    const attachments: JSX.Element[] | undefined = data.attachments?.map(
       (attachment: Attachment, i: number) => {
         const onClickAttachment = () => {
           fetch(`/api/mails/attachment/${attachment.content.data}`)

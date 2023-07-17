@@ -13,7 +13,8 @@ import {
   initializeIndex,
   cleanSubscriptions,
   getDomain,
-  saveMailHandler
+  saveMailHandler,
+  initializeAdminUser
 } from "server";
 
 import apiRouter from "./routes";
@@ -54,7 +55,8 @@ const port = process.env.PORT || 3004;
 
 app.listen(port, async () => {
   await initializeIndex();
-  cleanSubscriptions();
+  await initializeAdminUser();
+  // cleanSubscriptions();
   console.info(`${domain} mail server is listening`);
 });
 

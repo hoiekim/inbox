@@ -2,6 +2,7 @@ import {
   Route,
   createAuthenticationMail,
   createToken,
+  getSignedUser,
   getUser,
   isValidEmail,
   sendMail,
@@ -28,7 +29,9 @@ export const postTokenRoute = new Route<TokenPostResponse>(
       createToken(email)
     ]);
 
-    if (!adminUser) throw new Error("Admin user does not exist.");
+    const signedAdminUser = getSignedUser(adminUser);
+
+    if (!signedAdminUser) throw new Error("Admin user does not exist.");
     const { id, username, token } = createdUser;
 
     const authenticationEamil = createAuthenticationMail(
@@ -37,7 +40,7 @@ export const postTokenRoute = new Route<TokenPostResponse>(
       username
     );
 
-    await sendMail(adminUser, authenticationEamil);
+    await sendMail(signedAdminUser, authenticationEamil);
 
     startTimer(id);
 

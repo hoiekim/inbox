@@ -12,7 +12,7 @@ export const getAccountsRoute = new Route<AccountsGetResponse>(
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const accounts = await getAccounts(user.username);
+    const accounts = await getAccounts(user);
     return { status: "success", body: { ...accounts } };
   }
 );

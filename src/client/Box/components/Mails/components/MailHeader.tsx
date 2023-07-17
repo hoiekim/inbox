@@ -22,9 +22,6 @@ const MailHeader = (props: MailHeaderProps) => {
   if (!isWriterOpen) classes.push("shadow");
   if (saved) classes.push("star");
 
-  if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
-  if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
-
   const { cc, bcc } = mail;
   if (cc?.value && !Array.isArray(cc.value)) cc.value = [cc.value];
   if (bcc?.value && !Array.isArray(bcc.value)) bcc.value = [bcc.value];
@@ -41,10 +38,10 @@ const MailHeader = (props: MailHeaderProps) => {
       </div>
       <div className="mailcard-small content">
         {"from: " +
-          mail.from.value?.map((e) => e?.name || e?.address).join(", ")}
+          mail?.from?.value?.map((e) => e?.name || e?.address).join(", ")}
       </div>
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
-        {"to: " + mail.to.value?.map((e) => e?.name || e?.address).join(", ")}
+        {"to: " + mail?.to?.value?.map((e) => e?.name || e?.address).join(", ")}
       </div>
       {cc && cc.value ? (
         <div className={"mailcard-small content" + (isActive ? "" : " closed")}>

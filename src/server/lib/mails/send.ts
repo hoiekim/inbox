@@ -95,7 +95,9 @@ const getSentMail = (
       value: [{ name: senderFullName, address: fromEmail }],
       text: fromEmail
     },
-    read: true
+    read: true,
+    sent: true,
+    saved: false
   };
 };
 

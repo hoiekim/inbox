@@ -1,10 +1,12 @@
+import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
 import {
   elasticsearchClient,
   index,
   MailHeaderData,
   FROM_ADDRESS_FIELD,
   TO_ADDRESS_FIELD,
-  Pagination
+  Pagination,
+  MaskedUser
 } from "server";
 
 export interface GetMailsOptions {
@@ -15,23 +17,11 @@ export interface GetMailsOptions {
 }
 
 export const getMailHeaders = async (
+  user: MaskedUser,
   address: string,
   options: GetMailsOptions
 ): Promise<MailHeaderData[]> => {
-  let searchFiled, query;
-
-  if (options.sent) searchFiled = FROM_ADDRESS_FIELD;
-  else searchFiled = TO_ADDRESS_FIELD;
-
-  const queryByAddress = { term: { [searchFiled]: address } };
-
-  if (options.new) {
-    query = { bool: { must: [queryByAddress, { term: { read: false } }] } };
-  } else if (options.saved) {
-    query = { bool: { must: [queryByAddress, { term: { label: "saved" } }] } };
-  } else {
-    query = queryByAddress;
-  }
+  const searchFiled = options.sent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
   const { from, size } = options.pagination || new Pagination();
 
@@ -49,13 +39,27 @@ export const getMailHeaders = async (
     "insight"
   ];
 
-  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
+  const must: QueryDslQueryContainer[] = [
+    { term: { type: "mail" } },
+    { term: { "user.id": user.id } },
+    { term: { [searchFiled]: address } },
+    { term: { "mail.sent": options.sent } }
+  ];
+
+  if (options.new) must.push({ term: { "mail.read": false } });
+  else if (options.saved) must.push({ term: { "mail.saved": true } });
+
+  const response = await elasticsearchClient.search({
     index,
     _source: mailHeaderKeys.map((k) => `mail.${k}`),
     from,
     size,
-    query,
-    sort: { date: "desc" }
+    query: {
+      bool: {
+        must
+      }
+    },
+    sort: { "mail.date": "desc" }
   });
 
   return response.hits.hits

@@ -8,11 +8,11 @@ import {
   FROM_ADDRESS_FIELD,
   Document,
   elasticsearchClient,
-  getUserDomain,
   index,
   TO_ADDRESS_FIELD,
   DateString,
-  AccountsGetResponse
+  AccountsGetResponse,
+  MaskedUser
 } from "server";
 
 export class Account {
@@ -37,19 +37,14 @@ interface AddressAggregation {
 
 type AddressAggregationBucket = AggregationsStringTermsBucket & {
   read?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
-  label?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
+  saved?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
   updated: { value: DateString };
 };
 
 export const getAccounts = async (
-  username: string
+  user: MaskedUser
 ): Promise<AccountsGetResponse> => {
-  const userDomain = getUserDomain(username);
-
-  const response = await elasticsearchClient.msearch<
-    Document,
-    AddressAggregation
-  >({
+  const response = await elasticsearchClient.msearch<AddressAggregation>({
     index,
     searches: [
       // Query1: Accounts that have received mails
@@ -57,9 +52,12 @@ export const getAccounts = async (
       {
         size: 0,
         query: {
-          query_string: {
-            default_field: TO_ADDRESS_FIELD,
-            query: `*@${userDomain}`
+          bool: {
+            must: [
+              { term: { type: "mail" } },
+              { term: { "user.id": user.id } },
+              { term: { "mail.sent": false } }
+            ]
           }
         },
         aggs: {
@@ -70,9 +68,9 @@ export const getAccounts = async (
               order: { updated: "desc" }
             },
             aggs: {
-              updated: { max: { field: "date" } },
-              read: { terms: { field: "read", size: 10000 } },
-              label: { terms: { field: "label", size: 10000 } }
+              updated: { max: { field: "mail.date" } },
+              read: { terms: { field: "mail.read", size: 10000 } },
+              saved: { terms: { field: "mail.saved", size: 10000 } }
             }
           }
         }
@@ -82,15 +80,18 @@ export const getAccounts = async (
       {
         size: 0,
         query: {
-          query_string: {
-            default_field: FROM_ADDRESS_FIELD,
-            query: `*@${userDomain}`
+          bool: {
+            must: [
+              { term: { type: "mail" } },
+              { term: { "user.id": user.id } },
+              { term: { "mail.sent": true } }
+            ]
           }
         },
         aggs: {
           address: {
             terms: { field: FROM_ADDRESS_FIELD, size: 10000 },
-            aggs: { updated: { max: { field: "date" } } }
+            aggs: { updated: { max: { field: "mail.date" } } }
           }
         }
       }
@@ -125,16 +126,15 @@ const convertAggregation = (aggregation: AddressAggregationBucket): Account => {
   const account = new Account({ key, updated, doc_count });
 
   const readBuckets = aggregation.read?.buckets;
-  const labelBuckets = aggregation.label?.buckets;
+  const savedBuckets = aggregation.saved?.buckets;
 
   if (Array.isArray(readBuckets)) {
     const unread_doc_count = readBuckets.find((b) => !b.key)?.doc_count;
     if (unread_doc_count) account.unread_doc_count = unread_doc_count;
   }
 
-  if (Array.isArray(labelBuckets)) {
-    const isSaved = (b: AggregationsStringTermsBucket) => b.key === "saved";
-    const saved_doc_count = labelBuckets.find(isSaved)?.doc_count;
+  if (Array.isArray(savedBuckets)) {
+    const saved_doc_count = savedBuckets.find((b) => b.key)?.doc_count;
     if (saved_doc_count) account.saved_doc_count = saved_doc_count;
   }
 

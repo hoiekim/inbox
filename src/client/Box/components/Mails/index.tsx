@@ -219,9 +219,6 @@ const RenderedMail = ({
     });
   }
 
-  if (!Array.isArray(mail.from.value)) mail.from.value = [mail.from.value];
-  if (!Array.isArray(mail.to.value)) mail.to.value = [mail.to.value];
-
   const isKebabOpen = openedKebab === mail.id;
 
   const summary = ("insight" in mail ? mail.insight?.summary : undefined)?.map(

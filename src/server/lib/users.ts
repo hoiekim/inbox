@@ -1,11 +1,30 @@
+import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
 import bcrypt from "bcrypt";
-import { User, elasticsearchClient, index, sendMail } from "server";
+import {
+  User,
+  elasticsearchClient,
+  index,
+  WithRequired,
+  callWithDelay
+} from "server";
 
 const { APP_HOSTNAME } = process.env;
 
-export type MaskedUser = Omit<User, "password">;
+export type SignedUser = WithRequired<
+  User,
+  "id" | "email" | "username" | "password"
+>;
 
-export const maskUser = (user: User): MaskedUser => {
+export const getSignedUser = (user?: User) => {
+  if (!user) return;
+  const { id, username, email, password } = user;
+  if (!id || !username || !password || !email) return;
+  return user as SignedUser;
+};
+
+export type MaskedUser = Omit<SignedUser, "password">;
+
+export const maskUser = (user: SignedUser): MaskedUser => {
   const { id, email, username, token, expiry } = user;
   return { id, email, username, token, expiry };
 };
@@ -13,22 +32,42 @@ export const maskUser = (user: User): MaskedUser => {
 export const getUser = async (
   user: Partial<User>
 ): Promise<User | undefined> => {
-  type Term = Partial<Omit<User, "id"> & { _id: string }>;
-  const term: Term = {};
+  const must: QueryDslQueryContainer[] = [];
+  must.push({ term: { type: "user" } });
+
   Object.entries(user).forEach(([key, value]) => {
-    if (key === "id") term._id = value;
-    else term[key as keyof Term] = value;
+    if (key === "password") return;
+    must.push({ term: { [`user.${key}`]: value } });
   });
 
-  const response = await elasticsearchClient.search<{ user: User }>({
-    index,
-    query: { term }
+  const response = await elasticsearchClient.search({
+    query: { bool: { must } }
   });
 
-  const hit = response.hits.hits[0];
+  return response.hits.hits[0]?._source?.user;
+};
 
-  if (!hit?._source) return;
-  return { ...hit._source.user, id: hit._id };
+export const getUsers = async (users: Partial<User>[]): Promise<User[]> => {
+  const userQueries = users.map((user) => {
+    const must: QueryDslQueryContainer[] = [];
+    Object.entries(user).forEach(([key, value]) => {
+      if (key === "password") return;
+      must.push({ term: { [`user.${key}`]: value } });
+    });
+    return { bool: { must } };
+  });
+
+  const response = await elasticsearchClient.search({
+    query: {
+      bool: {
+        must: [{ term: { type: "user" } }, { bool: { should: userQueries } }]
+      }
+    }
+  });
+
+  return response.hits.hits
+    .map(({ _source }) => _source?.user)
+    .filter((u): u is User => !!u);
 };
 
 const deleteUser = (id: string) => {
@@ -47,30 +86,35 @@ export const createToken = async (
   username?: string;
 }> => {
   const token = Math.floor(Math.random() * 1_000_000_000).toString(36);
+  const expiry = new Date(Date.now() + TOKEN_DURATION).toISOString();
 
-  const expiry = Date.now() + TOKEN_DURATION;
   const existing = await getUser({ email });
-  if (existing) {
+  if (existing?.id) {
     await elasticsearchClient.update({
-      index,
       id: existing.id,
-      doc: { token }
+      doc: { user: { token } }
     });
     return { id: existing.id, username: existing.username, token };
   }
 
   const createResponse = await elasticsearchClient.index({
-    index,
     document: {
-      user: {
-        email,
-        token,
-        expiry
-      }
+      type: "user",
+      user: { email, token, expiry },
+      updated: new Date().toISOString()
     }
   });
 
-  return { id: createResponse._id, token };
+  const { _id } = createResponse;
+
+  await callWithDelay(() => {
+    return elasticsearchClient.update({
+      id: _id,
+      doc: { user: { id: _id }, updated: new Date().toISOString() }
+    });
+  }, 1000);
+
+  return { id: _id, token };
 };
 
 export const isValidEmail = (email: string) => {
@@ -93,6 +137,11 @@ export const startTimer = (userId: string) => {
   }, TOKEN_DURATION);
 };
 
+export const encryptPassword = (password: string) => {
+  const salt = 10;
+  return bcrypt.hash(password, salt);
+};
+
 export const setUserInfo = async (
   userInfo: Partial<User>
 ): Promise<MaskedUser> => {
@@ -104,14 +153,11 @@ export const setUserInfo = async (
   }
 
   const existingUser = await getUser({ email });
-  if (!existingUser) {
-    throw new Error("Setting userInfo failed because user data is not found.");
+  if (!existingUser?.id) {
+    throw new Error("`setUserInfo` failed because user doesn't exist.");
   }
-
-  if (existingUser.token !== token) {
-    throw new Error(
-      "Setting userInfo failed because user token does not match."
-    );
+  if (!existingUser.token || existingUser.token !== token) {
+    throw new Error("`setUserInfo` failed because token doesn't match.");
   }
 
   const { id } = existingUser;
@@ -129,22 +175,17 @@ export const setUserInfo = async (
 
     const findUserInfoByUsername = await getUser({ username });
     if (findUserInfoByUsername) {
-      throw new Error(
-        "Setting userInfo failed because username already exists."
-      );
+      throw new Error("`setUserInfo` failed because username already exists.");
     }
   } else {
     username = existingUser.username;
   }
 
-  const salt = 10;
-  const encryptedPassword = await bcrypt.hash(password, salt);
-
   await elasticsearchClient.update({
     index,
     id,
     doc: {
-      password: encryptedPassword,
+      password: await encryptPassword(password),
       username,
       token: null,
       expiry: null

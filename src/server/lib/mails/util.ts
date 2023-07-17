@@ -2,8 +2,11 @@ import fs from "fs";
 import { htmlToText } from "html-to-text";
 import { v4 as uuid } from "uuid";
 
-export const TO_ADDRESS_FIELD = "envelopeTo.address";
-export const FROM_ADDRESS_FIELD = "from.value.address";
+export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
+export const FROM_ADDRESS_FIELD = "mail.from.value.address";
+export const nestedPath = (field: string) => {
+  return field.slice(0, field.lastIndexOf("."));
+};
 
 export const getDomain = () => process.env.EMAIL_DOMAIN || "mydomain";
 

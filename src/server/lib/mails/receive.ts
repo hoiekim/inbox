@@ -15,28 +15,29 @@ import {
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
   getAttachmentId,
-  notifyNewMails
+  notifyNewMails,
+  IncomingMailAddress,
+  Attachment
 } from "server";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
   console.info("Received an email at", new Date());
   console.group();
-  console.log("envelopeFrom:", JSON.stringify(data.envelopeFrom));
-  console.log("envelopeTo:", JSON.stringify(data.envelopeTo));
-  console.log("from:", data.from?.text);
-  console.log("to:", data.to?.text);
+  const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));
+  console.log("envelopeTo:", envelopeTo);
+  const from = JSON.stringify(convertMailAddress(data.from)?.value);
+  console.log("from:", from);
   console.groupEnd();
 
   const domain = getDomain();
-  if (!validateMailAddress(data, domain)) {
-    console.warn(
-      "Skipped saving incoming mail because recipient is not valid."
-    );
+  const validData = validateIncomingMail(data, domain);
+  if (!validData) {
+    console.warn("Recipient is not valid. Mails is not saved.");
     return;
   }
 
-  const usernames = getUsernamesFromIncomingMail(data);
-  await Promise.all(usernames.map((u) => saveIncomingMail(u, data)));
+  const usernames = getUsernamesFromIncomingMail(validData);
+  await Promise.all(usernames.map((u) => saveIncomingMail(u, validData)));
   console.info("Successfully saved an email");
 
   await notifyNewMails(usernames);
@@ -70,30 +71,33 @@ export const saveMail = async (userId: string | undefined, mail: Mail) => {
     });
 };
 
-const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
-  const from: MailAddress = {
-    value: convertAddressValue(incoming.from.value),
-    text: incoming.from.text.toLowerCase()
-  };
-
-  const to: MailAddress = {
-    value: convertAddressValue(incoming.to.value),
-    text: incoming.to.text.toLowerCase()
-  };
+export const convertMail = (incoming: IncomingMail): Mail => {
+  const from = convertMailAddress(incoming.from);
+  const to = convertMailAddress(incoming.to);
+  const cc = convertMailAddress(incoming.cc);
+  const bcc = convertMailAddress(incoming.bcc);
+  const replyTo = convertMailAddress(incoming.replyTo);
 
   const envelopeFrom = convertAddressValue(incoming.envelopeFrom);
-  const envelopeTo = convertAddressValue(incoming.envelopeTo);
+  const envelopeTo = convertAddressValue(
+    incoming.envelopeTo
+  ) as MailAddressValue[];
+
   const attachments = convertAttachments(incoming.attachments);
 
-  const { subject, date, html } = incoming;
+  const { subject = "", date = new Date().toISOString(), html = "" } = incoming;
 
   const text = getText(html);
-  const insight = await getInsight({ subject, from, to, text });
+  // const insight = await getInsight({ subject, from, to, text });
+  const insight = (incoming as any).insight;
 
   return {
     attachments,
     to,
     from,
+    cc,
+    bcc,
+    replyTo,
     envelopeTo,
     envelopeFrom,
     text,
@@ -101,27 +105,53 @@ const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
     date,
     html,
     subject,
-    read: false
+    read: false,
+    saved: false,
+    sent: false
   };
 };
 
-const convertAddressValue = (incoming: IncomingMailAddressValue) => {
-  const array: MailAddressValue[] = [];
+const convertMailAddress = (
+  incoming?: IncomingMailAddress | IncomingMailAddress[]
+): MailAddress | undefined => {
+  if (!incoming) return undefined;
+  if (Array.isArray(incoming)) {
+    if (!incoming.length) return undefined;
+    const value = convertAddressValue(incoming.flatMap(({ value }) => value));
+    if (!value) return undefined;
+    const text = incoming.map(({ text }) => text).join(", ");
+    return { value, text };
+  }
+  const value = convertAddressValue(incoming.value);
+  if (!value) return undefined;
+  const { text } = incoming;
+  return { value, text };
+};
 
-  const push = (v: MailAddressValue) => {
-    const value = { ...v };
-    value.address = value.address.toLowerCase();
+const convertAddressValue = (
+  incoming?: IncomingMailAddressValue | IncomingMailAddressValue[]
+) => {
+  if (!incoming) return undefined;
+  const array: MailAddressValue[] = [];
+  const push = ({ address, name }: IncomingMailAddressValue) => {
+    const value = { address: address?.toLowerCase(), name };
     array.push(value);
   };
-
-  if (Array.isArray(incoming)) incoming.forEach(push);
-  else if (incoming) push(incoming);
-
+  if (Array.isArray(incoming)) {
+    if (incoming.length) incoming.forEach(push);
+    else return undefined;
+  } else if (incoming) push(incoming);
   return array;
 };
 
-const convertAttachments = (incoming: IncomingAttachment[]) => {
-  return incoming.map(({ content, filename, contentType }) => {
+const convertAttachments = (
+  incoming?: IncomingAttachment | IncomingAttachment[]
+): Attachment[] | undefined => {
+  if (!incoming) return undefined;
+  const array: IncomingAttachment[] = [];
+  if (Array.isArray(incoming)) array.push(...incoming);
+  else array.push(incoming);
+  return array.map(({ content, filename, contentType }) => {
     const data = typeof content === "string" ? content : content.data;
     const id = saveBuffer(data);
     return { filename, contentType, content: { data: id } };
@@ -138,11 +168,15 @@ export const saveBuffer = (buffer: Buffer | string) => {
 };
 
 const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
-  if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
+  const { envelopeTo } = data;
+  if (!envelopeTo) return [];
+  const array: MailAddressValue[] = [];
+  if (Array.isArray(envelopeTo)) array.push(...envelopeTo);
+  else array.push(envelopeTo);
   const domain = getDomain();
-  return data.envelopeTo
+  return array
     .filter((e) => e.address && isValidAddress(e.address, domain))
-    .map((e) => addressToUsername(e.address));
+    .map((e) => addressToUsername(e.address as string));
 };
 
 const isValidAddress = (address: string, domain: string) => {
@@ -151,16 +185,25 @@ const isValidAddress = (address: string, domain: string) => {
   return domainInData.toLowerCase().includes(domain.toLowerCase());
 };
 
-export const validateMailAddress = (
-  data: { envelopeTo: MailAddressValue | MailAddressValue[] },
-  domainName: string
-) => {
-  if (!data || !domainName) return false;
-  if (!Array.isArray(data.envelopeTo)) data.envelopeTo = [data.envelopeTo];
-  const isAddressCorrect = !!data.envelopeTo.find((e) => {
+export const validateIncomingMail = (
+  data?: IncomingMail,
+  domainName?: string
+): IncomingMail | undefined => {
+  if (!data || !domainName) return undefined;
+
+  const { envelopeTo } = data;
+  if (!envelopeTo) return undefined;
+
+  const addressArray: MailAddressValue[] = [];
+  if (Array.isArray(envelopeTo)) addressArray.push(...envelopeTo);
+  else addressArray.push(envelopeTo);
+
+  const isAddressCorrect = !!addressArray.find((e) => {
     return e.address && isValidAddress(e.address, domainName);
   });
-  return isAddressCorrect;
+
+  if (isAddressCorrect) return data as IncomingMail;
+  return undefined;
 };
 
 export const addressToUsername = (address: string) => {

@@ -4,7 +4,7 @@ import { Insight } from "server";
 export type DateString = string;
 
 export interface MailAddressValue {
-  address: string;
+  address?: string;
   name?: string;
 }
 
@@ -20,30 +20,30 @@ export interface Attachment {
 }
 
 export interface Mail {
-  attachments: Attachment[];
-  // TODO: DB needs migration for dynamic Array to be consistent Array
-  from: MailAddress;
-  to: MailAddress;
+  attachments?: Attachment[];
+  from?: MailAddress;
+  to?: MailAddress;
   cc?: MailAddress;
   bcc?: MailAddress;
-  envelopeFrom: MailAddressValue[];
-  envelopeTo: MailAddressValue[];
   replyTo?: MailAddress;
+  envelopeFrom?: MailAddressValue[];
+  envelopeTo: MailAddressValue[];
   date: DateString;
   html: string;
   text: string;
   subject: string;
   messageId?: string;
   read: boolean;
-  label?: string;
+  saved: boolean;
+  sent: boolean;
   insight?: Insight;
 }
 
 export interface User {
-  id: string;
-  email: string;
-  username: string;
-  password: string;
+  id?: string;
+  email?: string;
+  username?: string;
+  password?: string;
   token?: string;
   expiry?: DateString;
 }
