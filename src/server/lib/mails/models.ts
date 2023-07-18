@@ -58,7 +58,7 @@ export interface MailBodyData {
   id: string;
   html: string;
   attachments?: Attachment[];
-  messageId?: string;
+  messageId: string;
   insight?: Insight;
 }
 

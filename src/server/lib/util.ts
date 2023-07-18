@@ -14,3 +14,6 @@ export type WithOptional<T, K extends keyof T> = Omit<T, K> & {
 export const callWithDelay = <T>(callback: () => Promise<T>, delay: number) => {
   return new Promise((res) => setTimeout(() => res(callback()), delay));
 };
+
+export const getRandomId = () =>
+  (65536 + Math.floor(Math.random() * 983040)).toString(16);

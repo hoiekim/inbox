@@ -32,7 +32,7 @@ export interface Mail {
   html: string;
   text: string;
   subject: string;
-  messageId?: string;
+  messageId: string;
   read: boolean;
   saved: boolean;
   sent: boolean;

@@ -16,7 +16,9 @@ import {
   getAttachmentId,
   notifyNewMails,
   IncomingMailAddress,
-  Attachment
+  Attachment,
+  getInsight,
+  getRandomId
 } from "server";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
@@ -70,7 +72,7 @@ export const saveMail = async (userId: string | undefined, mail: Mail) => {
     });
 };
 
-export const convertMail = (incoming: IncomingMail): Mail => {
+export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -84,13 +86,18 @@ export const convertMail = (incoming: IncomingMail): Mail => {
 
   const attachments = convertAttachments(incoming.attachments);
 
-  const { subject = "", date = new Date().toISOString(), html = "" } = incoming;
+  const {
+    subject = "",
+    date = new Date().toISOString(),
+    html = "",
+    messageId = getRandomId()
+  } = incoming;
 
   const text = getText(html);
-  // const insight = await getInsight({ subject, from, to, text });
-  const insight = (incoming as any).insight;
+  const insight = await getInsight({ subject, from, to, text });
 
   return {
+    messageId,
     attachments,
     to,
     from,

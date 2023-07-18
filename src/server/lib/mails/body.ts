@@ -1,4 +1,4 @@
-import { MailBodyData, elasticsearchClient } from "server";
+import { MailBodyData, elasticsearchClient, getRandomId } from "server";
 
 export const getMailBody = async (
   userId: string,
@@ -27,5 +27,7 @@ export const getMailBody = async (
 
   const { _id, _source } = hit;
   const mail = _source?.mail;
-  return mail && { id: _id, ...mail };
+  return (
+    mail && { id: _id, ...mail, messageId: mail.messageId || getRandomId() }
+  );
 };
