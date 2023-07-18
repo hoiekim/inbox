@@ -11,10 +11,10 @@ import path from "path";
 
 import {
   initializeIndex,
-  cleanSubscriptions,
   getDomain,
   saveMailHandler,
-  initializeAdminUser
+  initializeAdminUser,
+  ElasticsearchSessionStore
 } from "server";
 
 import apiRouter from "./routes";
@@ -36,7 +36,8 @@ app.use(
     cookie: {
       secure: false,
       maxAge: 1000 * 60 * 60 * 24 * 7
-    }
+    },
+    store: new ElasticsearchSessionStore()
   })
 );
 

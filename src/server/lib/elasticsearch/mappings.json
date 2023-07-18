@@ -114,6 +114,36 @@
         "expiry": { "type": "date" }
       }
     },
+    "session": {
+      "type": "object",
+      "dynamic": "strict",
+      "properties": {
+        "user": {
+          "type": "object",
+          "dynamic": "strict",
+          "properties": {
+            "id": { "type": "keyword" },
+            "username": { "type": "keyword" },
+            "email": { "type": "keyword" }
+          }
+        },
+        "cookie": {
+          "type": "object",
+          "dynamic": "strict",
+          "properties": {
+            "originalMaxAge": { "type": "long" },
+            "maxAge": { "type": "long" },
+            "signed": { "type": "boolean" },
+            "_expires": { "type": "date" },
+            "httpOnly": { "type": "boolean" },
+            "path": { "type": "text" },
+            "domain": { "type": "text" },
+            "secure": { "type": "keyword" },
+            "sameSite": { "type": "keyword" }
+          }
+        }
+      }
+    },
     "push_subscription": {
       "type": "object",
       "dynamic": "strict",

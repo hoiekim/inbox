@@ -1,5 +1,5 @@
 import { PushSubscription } from "web-push";
-import { Insight } from "server";
+import { Insight, StoredSessionData } from "server";
 
 export type DateString = string;
 
@@ -48,10 +48,13 @@ export interface User {
   expiry?: DateString;
 }
 
+export type Session = StoredSessionData;
+
 export interface Document {
   type: string;
   mail?: Mail;
   user?: User;
+  session?: Session;
   push_subscription?: PushSubscription;
   updated: DateString;
 }

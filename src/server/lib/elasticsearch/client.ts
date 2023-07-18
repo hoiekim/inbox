@@ -5,6 +5,7 @@ import {
   ClusterHealthRequest,
   DeleteByQueryRequest,
   DeleteRequest,
+  GetRequest,
   IndexRequest,
   IndicesCreateRequest,
   IndicesExistsRequest,
@@ -63,6 +64,7 @@ export const elasticsearchClient = {
   deleteByQuery: (r: DeleteByQueryRequest) => client.deleteByQuery(r),
   search: searchDocument,
   msearch: multiSearchDocument,
+  get: (r: GetRequest) => client.get<Document>(r),
   cluster: {
     health: (r: ClusterHealthRequest) => client.cluster.health(r)
   },
