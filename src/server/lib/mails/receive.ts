@@ -84,7 +84,7 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
     incoming.envelopeTo
   ) as MailAddressValue[];
 
-  const attachments = convertAttachments(incoming.attachments);
+  const attachments = await convertAttachments(incoming.attachments);
 
   const {
     subject = "",
@@ -150,27 +150,37 @@ const convertAddressValue = (
   return array;
 };
 
-const convertAttachments = (
+const convertAttachments = async (
   incoming?: IncomingAttachment | IncomingAttachment[]
-): Attachment[] | undefined => {
+): Promise<Attachment[] | undefined> => {
   if (!incoming) return undefined;
   const array: IncomingAttachment[] = [];
   if (Array.isArray(incoming)) array.push(...incoming);
   else array.push(incoming);
-  return array.map(({ content, filename, contentType }) => {
-    const data = typeof content === "string" ? content : content.data;
-    const id = saveBuffer(data);
-    return { filename, contentType, content: { data: id } };
-  });
+  return Promise.all(
+    array.map(async ({ content, filename, contentType }) => {
+      const data =
+        typeof content === "object" && "data" in content
+          ? content.data
+          : content;
+      const id = await saveBuffer(data);
+      return { filename, contentType, content: { data: id } };
+    })
+  );
 };
 
-export const saveBuffer = (buffer: Buffer | string) => {
+export const saveBuffer = (buffer: Buffer | string): Promise<string> => {
   const id = getAttachmentId();
   if (!fs.existsSync(ATTACHMENT_FOLDER)) fs.mkdirSync(ATTACHMENT_FOLDER);
-  fs.writeFile(getAttachmentFilePath(id), Buffer.from(buffer || ""), (err) => {
-    if (err) throw err;
+  const attachmentFilePath = getAttachmentFilePath(id);
+  return new Promise((res, rej) => {
+    try {
+      fs.writeFileSync(attachmentFilePath, Buffer.from(buffer));
+      res(id);
+    } catch (reason) {
+      rej(reason);
+    }
   });
-  return id;
 };
 
 const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {

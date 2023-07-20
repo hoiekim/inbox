@@ -22,7 +22,7 @@ export interface IncomingMail {
 }
 
 export interface IncomingAttachment {
-  content: { data: Buffer } | string;
+  content: { data: Buffer } | Buffer | string;
   contentType: string;
   filename: string;
 }

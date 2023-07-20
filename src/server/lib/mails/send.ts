@@ -31,7 +31,7 @@ export const sendMail = async (
 
   if (!isToMyself(mailToSend.to)) {
     const messageId = response[0].headers["x-message-id"];
-    const sentMail = getSentMail(username, mailToSend, messageId, files);
+    const sentMail = await getSentMail(username, mailToSend, messageId, files);
     await saveMail(userId, sentMail);
   }
 
@@ -63,24 +63,25 @@ const getSendgridMail = (
   };
 };
 
-const getSentMail = (
+const getSentMail = async (
   username: string,
   mailToSend: MailDataToSend,
   messageId: string,
   files?: UploadedFileDynamicArray
-): Mail => {
+): Promise<Mail> => {
   const { sender, senderFullName, to, cc, bcc, subject, html } = mailToSend;
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
   const fromEmail = `${sender}@${userDomain}`;
+  const attachments = (await getAttachmentsToSave(files)) || [];
 
   return {
     subject,
     text,
     html,
     date: new Date().toISOString(),
-    attachments: getAttachmentsToSave(files) || [],
+    attachments,
     messageId: `<${messageId}@${userDomain}>`,
     from: {
       value: [{ name: senderFullName, address: fromEmail }],
@@ -122,22 +123,22 @@ const getAttachmentsToSend = (files?: UploadedFileDynamicArray) => {
   return attachmentsToSend;
 };
 
-const getAttachmentsToSave = (files?: UploadedFileDynamicArray) => {
+const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
   const noFiles = Array.isArray(files) ? !files.length : !files;
   if (noFiles) return undefined;
 
   const attachmentsToSave: Attachment[] = [];
 
-  const parseFile = ({ name, data, mimetype }: UploadedFile) => {
+  const parseFile = async ({ name, data, mimetype }: UploadedFile) => {
     attachmentsToSave.push({
-      content: { data: saveBuffer(data) },
+      content: { data: await saveBuffer(data) },
       filename: name,
       contentType: mimetype
     });
   };
 
-  if (Array.isArray(files)) files.forEach(parseFile);
-  else if (files) parseFile(files as UploadedFile);
+  if (Array.isArray(files)) await Promise.all(files.map(parseFile));
+  else if (files) await parseFile(files as UploadedFile);
 
   return attachmentsToSave;
 };
