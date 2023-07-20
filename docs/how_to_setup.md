@@ -20,15 +20,18 @@ For detailed instruction, please keep reading this document.
 2. Copy `.env.example` file and name it `.env.local` then determine environment variables in `.env.local` file as following.
 
    ```
-   EMAIL_DOMAIN=                  // Domain name to use when sending & receiving mails.
-   APP_HOSTNAME=              // Domain name that hosts inbox web app.
+   EMAIL_DOMAIN=            // Domain name to use when sending & receiving mails.
+   APP_HOSTNAME=            // Domain name that hosts inbox web app.
 
    SECRET=                  // Encoding secret for session data. Any value works.
-   ADMIN_PW=                // Password to login to Inbox.
+   ADMIN_PW=                // Password to login to Inbox as admin user.
 
-   SENDGRID_KEY=            // API key that is issued by sendgrid.
+   SENDGRID_KEY=            // API key that is issued by sendgrid. Used to send mails.
 
    OPENAI_KEY=              // (optional) API key that is issued by openai. Used to get insight of emails.
+
+   PUSH_VAPID_PUBLIC_KEY    // (optional) API key that is issued by Push. Used to send push notifications.
+   PUSH_VAPID_PRIVATE_KEY   // (optional) API key that is issued by Push. Used to send push notifications.
    ```
 
 ## 2. Setup DNS Records
