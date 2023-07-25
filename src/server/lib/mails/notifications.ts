@@ -42,7 +42,7 @@ export const getNotifications = async (
     aggs: {
       address: {
         terms: { field: TO_ADDRESS_FIELD, size: 10000 },
-        aggs: { read: { terms: { field: "read", size: 10000 } } }
+        aggs: { read: { terms: { field: "mail.read", size: 10000 } } }
       }
     }
   });
