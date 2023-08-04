@@ -226,6 +226,6 @@ export const addressToUsername = (address: string) => {
   const domain = getDomain();
   const parsedAddress = address.split("@");
   const domainInAddress = parsedAddress[parsedAddress.length - 1];
-  const subDomain = domainInAddress.split(`.${domain}`)[0];
+  const subDomain = domainInAddress.split(`.${domain}`)[0]?.toLowerCase();
   return subDomain === domain ? "admin" : subDomain;
 };
