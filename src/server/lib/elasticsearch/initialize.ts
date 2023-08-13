@@ -1,6 +1,7 @@
 import mappings from "./mappings.json";
 import { elasticsearchClient, index } from "./client";
 import { encryptPassword, getDomain, getUser } from "server";
+import { User } from "common";
 
 const { properties }: any = mappings;
 
@@ -72,7 +73,10 @@ export const initializeAdminUser = async () => {
 
   if (!existingAdminUser) {
     const domain = getDomain();
-    existingAdminUser = { username: "admin", email: `admin@${domain}` };
+    existingAdminUser = new User({
+      username: "admin",
+      email: `admin@${domain}`
+    });
 
     const response = await elasticsearchClient.index({
       index,

@@ -4,12 +4,9 @@ import {
   index,
   getNotifications,
   Pagination,
-  MaskedUser,
-  getUsers,
-  getSignedUser,
-  SignedUser,
-  maskUser
+  getUsers
 } from "server";
+import { SignedUser } from "common";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
@@ -87,7 +84,7 @@ export type StoredPushSubscription = {
 } & PushSubscription;
 
 export const getSubscriptions = async (
-  users: MaskedUser[]
+  users: SignedUser[]
 ): Promise<StoredPushSubscription[]> => {
   const matchUsername = users.map((user) => {
     return { term: { "user.id": user.id } };
@@ -145,12 +142,11 @@ export const refreshSubscription = async (id: string) => {
 export const notifyNewMails = async (usernames: string[]) => {
   const users = await getUsers(usernames.map((username) => ({ username })));
   const signedUsers = users
-    .map(getSignedUser)
+    .map((u) => u.getSigned())
     .filter((u): u is SignedUser => !!u);
-  const maskedUsers = signedUsers.map(maskUser);
   const [notifications, storedSubscriptions] = await Promise.all([
-    getNotifications(maskedUsers),
-    getSubscriptions(maskedUsers)
+    getNotifications(signedUsers),
+    getSubscriptions(signedUsers)
   ]);
 
   return Promise.all(
@@ -188,7 +184,7 @@ export const notifyNewMails = async (usernames: string[]) => {
   );
 };
 
-export const decrementBadgeCount = async (users: MaskedUser[]) => {
+export const decrementBadgeCount = async (users: SignedUser[]) => {
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
     getSubscriptions(users)

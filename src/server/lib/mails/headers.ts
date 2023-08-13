@@ -5,9 +5,9 @@ import {
   MailHeaderData,
   FROM_ADDRESS_FIELD,
   TO_ADDRESS_FIELD,
-  Pagination,
-  MaskedUser
+  Pagination
 } from "server";
+import { MaskedUser } from "common";
 
 export interface GetMailsOptions {
   sent: boolean;

@@ -1,13 +1,13 @@
+import { SignedUser } from "common";
 import {
   MailSearchResult,
-  MaskedUser,
   Pagination,
   elasticsearchClient,
   index
 } from "server";
 
 export const searchMail = async (
-  user: MaskedUser,
+  user: SignedUser,
   value: string,
   field?: string
 ): Promise<MailSearchResult[]> => {

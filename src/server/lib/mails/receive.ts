@@ -6,9 +6,6 @@ import {
   IncomingMail,
   IncomingMailAddressValue,
   IncomingAttachment,
-  Mail,
-  MailAddress,
-  MailAddressValue,
   getText,
   getDomain,
   ATTACHMENT_FOLDER,
@@ -16,10 +13,15 @@ import {
   getAttachmentId,
   notifyNewMails,
   IncomingMailAddress,
-  Attachment,
-  getInsight,
-  getRandomId
+  getInsight
 } from "server";
+import {
+  Attachment,
+  Mail,
+  MailAddress,
+  MailAddressValue,
+  getRandomId
+} from "common";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
   console.info("Received an email at", new Date());

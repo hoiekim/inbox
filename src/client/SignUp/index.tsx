@@ -5,15 +5,11 @@ import { useParams, useLocation, Link } from "react-router-dom";
 import SignUpIcon from "./components/SignUpIcon";
 import UserEditIcon from "./components/UserEditIcon";
 
+import { SignedUser, SignedUserType } from "common";
+import { ApiResponse, SetInfoPostResponse, TokenPostResponse } from "server";
 import { Context, call } from "client";
 
 import "./index.scss";
-import {
-  ApiResponse,
-  MaskedUser,
-  SetInfoPostResponse,
-  TokenPostResponse
-} from "server";
 
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
@@ -78,7 +74,8 @@ const SignUp = () => {
   useEffect(() => {
     if ((mutation.data as any)?.username && setUserInfo) {
       setTimeout(() => {
-        setUserInfo(mutation.data as unknown as MaskedUser);
+        const user = new SignedUser(mutation.data as unknown as SignedUserType);
+        setUserInfo(user);
       }, 500);
     }
   }, [mutation.data, setUserInfo]);

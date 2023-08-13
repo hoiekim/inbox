@@ -2,7 +2,8 @@ import React, { useContext } from "react";
 
 import { Context } from "client";
 import { getDateForMailHeader } from "client";
-import { MailAddressValue, MailHeaderData } from "server";
+import { MailHeaderData } from "server";
+import { MailAddressValue } from "common";
 
 export interface MailHeaderProps extends React.ComponentProps<"div"> {
   mail: MailHeaderData;

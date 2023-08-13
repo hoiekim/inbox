@@ -12,8 +12,9 @@ import {
   getLocalStorageItem,
   call
 } from "client";
-import { Account, MaskedUser, RefreshGetResponse } from "server";
+import { Account, RefreshGetResponse } from "server";
 import { DomainGetResponse } from "server/routes/mails/get-domain";
+import { SignedUser } from "common";
 
 export enum Category {
   NewMails = "New Mails",
@@ -29,7 +30,7 @@ export interface ContextType {
     height: number;
   };
   domainName: string;
-  userInfo: MaskedUser | undefined;
+  userInfo: SignedUser | undefined;
   setUserInfo: React.Dispatch<React.SetStateAction<ContextType["userInfo"]>>;
   isAccountsOpen: boolean;
   setIsAccountsOpen: React.Dispatch<
@@ -86,7 +87,7 @@ export interface UserInfoType {
 }
 
 interface Props {
-  user?: MaskedUser;
+  user?: SignedUser;
 }
 
 const App = ({ user: session }: Props) => {

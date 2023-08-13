@@ -1,8 +1,8 @@
-import { MaskedUser } from "./lib";
+import { SignedUser } from "common";
 
 declare module "express-session" {
   export interface SessionData {
-    user: MaskedUser;
+    user: SignedUser;
   }
 }
 

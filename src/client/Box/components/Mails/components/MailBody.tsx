@@ -4,7 +4,8 @@ import { useQuery } from "react-query";
 import { Context, ContextType, call } from "client";
 import FileIcon from "client/Box/components/FileIcon";
 
-import { Attachment, BodyGetResponse, MailBodyData } from "server";
+import { BodyGetResponse, MailBodyData } from "server";
+import { Attachment } from "common";
 
 interface Props {
   mailId: string;

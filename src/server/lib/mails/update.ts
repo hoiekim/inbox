@@ -11,7 +11,6 @@ export const markRead = (id: string) => {
 
 // TODO: authentication
 export const markSaved = (id: string, save: boolean) => {
-  console.log(id, save);
   return elasticsearchClient.update({
     index,
     id,

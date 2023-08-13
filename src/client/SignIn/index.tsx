@@ -9,6 +9,7 @@ import { Context } from "..";
 
 import "./index.scss";
 import { LoginPostResponse } from "server";
+import { SignedUser, SignedUserType } from "common";
 
 const Home = () => {
   const { setUserInfo } = useContext(Context);
@@ -36,7 +37,10 @@ const Home = () => {
 
   useEffect(() => {
     if (mutation.data && setUserInfo) {
-      setTimeout(() => setUserInfo(mutation.data?.body), 500);
+      const user = new SignedUser(
+        mutation.data?.body as unknown as SignedUserType
+      );
+      setTimeout(() => setUserInfo(user), 500);
     }
   }, [mutation.data, setUserInfo]);
 

@@ -1,12 +1,6 @@
 import bcrypt from "bcrypt";
-import {
-  Route,
-  MaskedUser,
-  getUser,
-  User,
-  maskUser,
-  getSignedUser
-} from "server";
+import { Route, getUser } from "server";
+import { MaskedUser, User } from "common";
 
 export type LoginPostResponse = MaskedUser;
 
@@ -17,23 +11,22 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     const inputUser = req.body as User;
 
     const user = await getUser(inputUser);
-    const signedUser = getSignedUser(user);
+    const signedUser = user?.getSigned();
     if (!inputUser.password || !user || !signedUser) {
       return { status: "failed", message: "Invalid credentials." };
     }
 
     const pwMatches = await bcrypt.compare(
       inputUser.password,
-      signedUser.password
+      user.password as string
     );
 
     if (!pwMatches) {
       return { status: "failed", message: "Invalid credentials." };
     }
 
-    const maskedUser = maskUser(signedUser);
-    req.session.user = maskedUser;
+    req.session.user = signedUser;
 
-    return { status: "success", body: maskedUser };
+    return { status: "success", body: signedUser };
   }
 );

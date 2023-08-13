@@ -1,35 +1,12 @@
-import { Store, SessionData, Cookie } from "express-session";
+import { Store } from "express-session";
 import { elasticsearchClient, index } from "server";
-
-/**
- * The REAL `Cookie` type that's used by express-session in runtime.
- */
-export type RealCookie = Omit<Cookie, "expires"> & { _expires?: Date };
-
-/**
- * Redefines some properties as they should be stringified before storing because
- * Elasticsearch doesn't support multiple types mappings.
- */
-export type StoredCookie = Omit<RealCookie, "secure" | "sameSite"> & {
-  secure?: string;
-  sameSite?: string;
-};
-
-/**
- * `SessionData` imported from express-session contains cookie property which is
- * `Cookie` type, which doesn't match with runtime cookie object. `RealSessionData`
- * tries to define what's actually used in runtime.
- */
-export type RealSessionData = Omit<SessionData, "cookie"> & {
-  cookie: RealCookie;
-};
-
-/**
- * Redefines 'cookie' property to make it compatible with Elasticsearch mappings.
- */
-export type StoredSessionData = Omit<SessionData, "cookie"> & {
-  cookie: StoredCookie;
-};
+import {
+  Cookie,
+  RuntimeCookie,
+  RuntimeSession,
+  RuntimeSessionType,
+  Session
+} from "common";
 
 /**
  * Searches session data by id from Elasticsearch.
@@ -54,10 +31,7 @@ export const searchSession = async (session_id: string) => {
  * @param session
  * @returns A promise to be an Elasticsearch response object.
  */
-export const updateSession = async (
-  session_id: string,
-  session: StoredSessionData
-) => {
+export const updateSession = async (session_id: string, session: Session) => {
   return elasticsearchClient.index({
     index,
     id: session_id,
@@ -119,7 +93,7 @@ export class ElasticsearchSessionStore extends Store {
    */
   get = async (
     session_id: string,
-    callback: (err: any, session?: RealSessionData | null) => void
+    callback: (err: any, session?: RuntimeSessionType | null) => void
   ) => {
     try {
       const session = await searchSession(session_id);
@@ -136,14 +110,16 @@ export class ElasticsearchSessionStore extends Store {
         return callback(null, null);
       }
 
-      const cookie: RealCookie = {
+      const cookie = new RuntimeCookie({
         ...storedCookie,
         _expires: _expires && new Date(_expires),
         secure: secure && JSON.parse(secure),
         sameSite: sameSite && JSON.parse(sameSite)
-      };
+      });
 
-      return callback(null, { ...session, cookie });
+      const runtimeSession = new RuntimeSession({ ...session, cookie });
+
+      return callback(null, runtimeSession);
     } catch (error) {
       return callback(error);
     }
@@ -157,22 +133,40 @@ export class ElasticsearchSessionStore extends Store {
    */
   set = async (
     session_id: string,
-    session: RealSessionData,
+    session: RuntimeSessionType,
     callback?: (err?: any) => void
   ) => {
     if (!callback) return;
 
     try {
       const { cookie } = session;
-      const { secure, sameSite } = cookie;
+      const {
+        secure,
+        sameSite,
+        originalMaxAge,
+        maxAge,
+        signed,
+        httpOnly,
+        path,
+        domain,
+        _expires
+      } = cookie;
 
-      const storedCookie: StoredCookie = {
-        ...cookie,
+      const storedCookie = new Cookie({
         secure: JSON.stringify(secure),
-        sameSite: JSON.stringify(sameSite)
-      };
+        sameSite: JSON.stringify(sameSite),
+        originalMaxAge,
+        maxAge,
+        signed,
+        httpOnly,
+        path,
+        domain,
+        _expires
+      });
 
-      await updateSession(session_id, { ...session, cookie: storedCookie });
+      const storedSession = new Session({ ...session, cookie: storedCookie });
+
+      await updateSession(session_id, storedSession);
 
       callback(null);
     } catch (error) {

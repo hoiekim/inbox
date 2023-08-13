@@ -2,11 +2,11 @@ import {
   AggregationsStringTermsBucket,
   AggregationsTermsAggregateBase
 } from "@elastic/elasticsearch/lib/api/types";
+import { SignedUser } from "common";
 import {
   addressToUsername,
   elasticsearchClient,
   index,
-  MaskedUser,
   TO_ADDRESS_FIELD
 } from "server";
 
@@ -23,7 +23,7 @@ type AddressAggregationBucket = AggregationsStringTermsBucket & {
 };
 
 export const getNotifications = async (
-  users: MaskedUser[]
+  users: SignedUser[]
 ): Promise<Notifications> => {
   const matchUserIds = users.map((user) => {
     return {

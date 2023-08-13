@@ -1,7 +1,8 @@
-import { Route, MaskedUser, version } from "server";
+import { SignedUser } from "common";
+import { Route, version } from "server";
 
 export interface LoginGetResponse {
-  user?: MaskedUser;
+  user?: SignedUser;
   app: { version: string };
 }
 

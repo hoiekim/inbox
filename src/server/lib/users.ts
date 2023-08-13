@@ -1,32 +1,15 @@
 import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
 import bcrypt from "bcrypt";
-import {
-  User,
-  elasticsearchClient,
-  index,
-  WithRequired,
-  callWithDelay
-} from "server";
+import { User, SignedUser, callWithDelay } from "common";
+import { elasticsearchClient, index } from "server";
 
 const { APP_HOSTNAME } = process.env;
-
-export type SignedUser = WithRequired<
-  User,
-  "id" | "email" | "username" | "password"
->;
 
 export const getSignedUser = (user?: User) => {
   if (!user) return;
   const { id, username, email, password } = user;
   if (!id || !username || !password || !email) return;
   return user as SignedUser;
-};
-
-export type MaskedUser = Omit<SignedUser, "password">;
-
-export const maskUser = (user: SignedUser): MaskedUser => {
-  const { id, email, username, token, expiry } = user;
-  return { id, email, username, token, expiry };
 };
 
 export const getUser = async (
@@ -44,7 +27,8 @@ export const getUser = async (
     query: { bool: { must } }
   });
 
-  return response.hits.hits[0]?._source?.user;
+  const foundUser = response.hits.hits[0]?._source?.user;
+  return foundUser && new User(foundUser);
 };
 
 export const getUsers = async (users: Partial<User>[]): Promise<User[]> => {
@@ -66,7 +50,10 @@ export const getUsers = async (users: Partial<User>[]): Promise<User[]> => {
   });
 
   return response.hits.hits
-    .map(({ _source }) => _source?.user)
+    .map(({ _source }) => {
+      const foundUser = _source?.user;
+      return foundUser && new User(foundUser);
+    })
     .filter((u): u is User => !!u);
 };
 
@@ -144,7 +131,7 @@ export const encryptPassword = (password: string) => {
 
 export const setUserInfo = async (
   userInfo: Partial<User>
-): Promise<MaskedUser> => {
+): Promise<SignedUser> => {
   let { email, password, token, username } = userInfo;
   if (!email || !username || !password) {
     throw new Error(
@@ -192,7 +179,7 @@ export const setUserInfo = async (
     }
   });
 
-  return { id, email, username };
+  return new User({ id, email, username }).getSigned() as SignedUser;
 };
 
 export const createAuthenticationMail = (

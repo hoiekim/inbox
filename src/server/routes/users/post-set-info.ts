@@ -1,4 +1,5 @@
-import { Route, MaskedUser, setUserInfo } from "server";
+import { MaskedUser } from "common";
+import { Route, setUserInfo } from "server";
 
 export type SetInfoPostResponse = MaskedUser;
 

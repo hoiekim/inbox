@@ -1,4 +1,5 @@
-import { Attachment, Insight, MailAddress } from "server";
+import { Attachment, MailAddress } from "common";
+import { Insight } from "server";
 
 /**
  * I know it's annoying. Why are some types dynamically array or not array?

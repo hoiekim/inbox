@@ -8,18 +8,16 @@ import {
   saveMail,
   getText,
   MailDataToSend,
-  Mail,
-  Attachment,
-  saveBuffer,
-  MaskedUser
+  saveBuffer
 } from "server";
+import { Attachment, Mail, SignedUser } from "common";
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
 export type UploadedFileDynamicArray = UploadedFile | UploadedFile[];
 
 export const sendMail = async (
-  user: MaskedUser,
+  user: SignedUser,
   mailToSend: MailDataToSend,
   files?: UploadedFileDynamicArray
 ) => {

@@ -10,10 +10,10 @@ import {
   elasticsearchClient,
   index,
   TO_ADDRESS_FIELD,
-  DateString,
-  AccountsGetResponse,
-  MaskedUser
+  AccountsGetResponse
 } from "server";
+
+import { DateString, SignedUser } from "common";
 
 export class Account {
   key: string;
@@ -42,7 +42,7 @@ type AddressAggregationBucket = AggregationsStringTermsBucket & {
 };
 
 export const getAccounts = async (
-  user: MaskedUser
+  user: SignedUser
 ): Promise<AccountsGetResponse> => {
   const response = await elasticsearchClient.msearch<AddressAggregation>({
     index,

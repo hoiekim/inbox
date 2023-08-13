@@ -1,4 +1,5 @@
 import { Client } from "@elastic/elasticsearch";
+
 import {
   AggregateName,
   AggregationsAggregate,
@@ -15,9 +16,11 @@ import {
   UpdateByQueryRequest,
   UpdateRequest
 } from "@elastic/elasticsearch/lib/api/types";
-import { WithOptional, WithRequired } from "server";
+
+import { WithOptional, WithRequired } from "common";
+
+import { Document } from "./mappings";
 import mappings from "./mappings.json";
-import Document from "./mappings";
 
 const {
   ELASTIC_HOST: node,
