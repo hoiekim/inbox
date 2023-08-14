@@ -1,5 +1,5 @@
-import { MailBodyData, elasticsearchClient } from "server";
-import { getRandomId } from "common";
+import { elasticsearchClient } from "server";
+import { MailBodyData, getRandomId } from "common";
 
 export const getMailBody = async (
   userId: string,

@@ -1,4 +1,4 @@
-import { Model } from "./Model";
+import { Model } from "../Model";
 
 @Model.prefillable
 export class Insight extends Model<Insight> {

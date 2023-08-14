@@ -7,10 +7,10 @@ import {
   getUserDomain,
   saveMail,
   getText,
-  MailDataToSend,
   saveBuffer
 } from "server";
-import { Attachment, Mail, SignedUser } from "common";
+
+import { AttachmentType, MailDataToSend, MailType, SignedUser } from "common";
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
@@ -66,7 +66,7 @@ const getSentMail = async (
   mailToSend: MailDataToSend,
   messageId: string,
   files?: UploadedFileDynamicArray
-): Promise<Mail> => {
+): Promise<MailType> => {
   const { sender, senderFullName, to, cc, bcc, subject, html } = mailToSend;
 
   const text = getText(html);
@@ -125,7 +125,7 @@ const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
   const noFiles = Array.isArray(files) ? !files.length : !files;
   if (noFiles) return undefined;
 
-  const attachmentsToSave: Attachment[] = [];
+  const attachmentsToSave: AttachmentType[] = [];
 
   const parseFile = async ({ name, data, mimetype }: UploadedFile) => {
     attachmentsToSave.push({

@@ -1,31 +1,5 @@
-import { DateString } from "./miscellaneous";
-import { Model } from "./Model";
-import { WithRequired, getRandomId } from "common";
-
-export type SignedUserType = WithRequired<
-  MaskedUserType,
-  "id" | "email" | "username"
->;
-
-@Model.prefillable
-export class SignedUser extends Model<SignedUser> implements SignedUserType {
-  id = getRandomId();
-  email = "unknown";
-  username = "unknown";
-  token?: string;
-  expiry?: string;
-}
-
-export type MaskedUserType = Omit<UserType, "password">;
-
-@Model.prefillable
-export class MaskedUser extends Model<MaskedUser> implements MaskedUserType {
-  id?: string;
-  email?: string;
-  username?: string;
-  token?: string;
-  expiry?: string;
-}
+import { WithRequired, getRandomId, DateString } from "common";
+import { Model } from "../Model";
 
 export interface UserType {
   id?: string;
@@ -55,4 +29,29 @@ export class User extends Model<User> implements UserType {
     if (!id || !username || !password || !email) return undefined;
     return new SignedUser(this.mask() as SignedUser);
   };
+}
+
+export type MaskedUserType = Omit<UserType, "password">;
+
+@Model.prefillable
+export class MaskedUser extends Model<MaskedUser> implements MaskedUserType {
+  id?: string;
+  email?: string;
+  username?: string;
+  token?: string;
+  expiry?: string;
+}
+
+export type SignedUserType = WithRequired<
+  MaskedUserType,
+  "id" | "email" | "username"
+>;
+
+@Model.prefillable
+export class SignedUser extends Model<SignedUser> implements SignedUserType {
+  id = getRandomId();
+  email = "unknown";
+  username = "unknown";
+  token?: string;
+  expiry?: string;
 }

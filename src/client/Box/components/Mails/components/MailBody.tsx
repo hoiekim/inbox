@@ -4,8 +4,8 @@ import { useQuery } from "react-query";
 import { Context, ContextType, call } from "client";
 import FileIcon from "client/Box/components/FileIcon";
 
-import { BodyGetResponse, MailBodyData } from "server";
-import { Attachment } from "common";
+import { BodyGetResponse } from "server";
+import { AttachmentType, MailBodyData } from "common";
 
 interface Props {
   mailId: string;
@@ -84,7 +84,7 @@ const MailBody = ({ mailId }: Props) => {
 
   if (query.isSuccess && data) {
     const attachments: JSX.Element[] | undefined = data.attachments?.map(
-      (attachment: Attachment, i: number) => {
+      (attachment: AttachmentType, i: number) => {
         const onClickAttachment = () => {
           fetch(`/api/mails/attachment/${attachment.content.data}`)
             .then((r) => r.arrayBuffer())

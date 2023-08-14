@@ -2,6 +2,10 @@ import React, { useState, createContext, useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
+import { Account, SignedUser } from "common";
+import { RefreshGetResponse } from "server";
+import { DomainGetResponse } from "server/routes/mails/get-domain";
+
 import {
   Header,
   SignIn,
@@ -12,9 +16,6 @@ import {
   getLocalStorageItem,
   call
 } from "client";
-import { Account, RefreshGetResponse } from "server";
-import { DomainGetResponse } from "server/routes/mails/get-domain";
-import { SignedUser } from "common";
 
 export enum Category {
   NewMails = "New Mails",

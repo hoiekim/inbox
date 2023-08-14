@@ -1,6 +1,6 @@
 import fs from "fs";
 import { Configuration, OpenAIApi } from "openai";
-import { IncomingMail } from "server";
+import { IncomingMail, Insight } from "common";
 
 const apiKey = process.env.OPENAI_KEY;
 const configuration = new Configuration({ apiKey });
@@ -9,12 +9,6 @@ const openai = new OpenAIApi(configuration);
 export default openai;
 
 const disabled = !apiKey;
-
-export class Insight {
-  summary: string[] = [];
-  action_items: string[] = [];
-  suggested_reply = "";
-}
 
 const promptPrefix = `
 I will show you an email and you will answer as JSON with 3 properties; summary, action_items, suggested_reply.

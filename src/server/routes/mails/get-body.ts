@@ -1,4 +1,5 @@
-import { AUTH_ERROR_MESSAGE, MailBodyData, Route, getMailBody } from "server";
+import { MailBodyData } from "common";
+import { AUTH_ERROR_MESSAGE, Route, getMailBody } from "server";
 
 export type BodyGetResponse = MailBodyData;
 

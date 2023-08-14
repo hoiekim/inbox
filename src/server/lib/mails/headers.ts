@@ -2,12 +2,10 @@ import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
 import {
   elasticsearchClient,
   index,
-  MailHeaderData,
   FROM_ADDRESS_FIELD,
-  TO_ADDRESS_FIELD,
-  Pagination
+  TO_ADDRESS_FIELD
 } from "server";
-import { MaskedUser } from "common";
+import { MailHeaderData, MaskedUser, Pagination } from "common";
 
 export interface GetMailsOptions {
   sent: boolean;

@@ -13,23 +13,7 @@ import {
   AccountsGetResponse
 } from "server";
 
-import { DateString, SignedUser } from "common";
-
-export class Account {
-  key: string;
-  updated: Date;
-  doc_count = 0;
-  unread_doc_count = 0;
-  saved_doc_count = 0;
-
-  constructor(init: Partial<Account> & { key: string; updated: Date }) {
-    this.key = init.key;
-    this.updated = init.updated;
-    if (init.doc_count) this.doc_count = init.doc_count;
-    if (init.unread_doc_count) this.unread_doc_count = init.unread_doc_count;
-    if (init.saved_doc_count) this.saved_doc_count = init.saved_doc_count;
-  }
-}
+import { Account, DateString, SignedUser } from "common";
 
 interface AddressAggregation {
   address: AggregationsTermsAggregateBase<AddressAggregationBucket>;
@@ -113,13 +97,13 @@ export const getAccounts = async (
     }
   );
 
-  const received = receivedMailsResponse.map(convertAggregation);
-  const sent = sentMailsResponse.map(convertAggregation);
+  const received = receivedMailsResponse.map(toAccount);
+  const sent = sentMailsResponse.map(toAccount);
 
   return { received, sent };
 };
 
-const convertAggregation = (aggregation: AddressAggregationBucket): Account => {
+const toAccount = (aggregation: AddressAggregationBucket) => {
   const { key, doc_count } = aggregation;
   const updated = new Date(aggregation.updated.value);
 

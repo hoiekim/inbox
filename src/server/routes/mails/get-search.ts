@@ -1,9 +1,5 @@
-import {
-  AUTH_ERROR_MESSAGE,
-  MailSearchResult,
-  Route,
-  searchMail
-} from "server";
+import { MailSearchResult } from "common";
+import { AUTH_ERROR_MESSAGE, Route, searchMail } from "server";
 
 export type SearchGetResponse = MailSearchResult[];
 

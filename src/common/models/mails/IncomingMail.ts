@@ -1,6 +1,3 @@
-import { Attachment, MailAddress } from "common";
-import { Insight } from "server";
-
 /**
  * I know it's annoying. Why are some types dynamically array or not array?
  * It's just how our mail receiving framework handles the incoming mail data.
@@ -40,49 +37,4 @@ export interface IncomingMailAddressValue {
    * I don't know what this data is supposed to look like.
    */
   group?: any | any[];
-}
-
-export interface MailHeaderData {
-  id: string;
-  read: boolean;
-  date: string;
-  subject: string;
-  from?: MailAddress;
-  to?: MailAddress;
-  cc?: MailAddress;
-  bcc?: MailAddress;
-  label?: string;
-  insight?: Insight;
-}
-
-export interface MailBodyData {
-  id: string;
-  html: string;
-  attachments?: Attachment[];
-  messageId: string;
-  insight?: Insight;
-}
-
-export interface MailSearchResult {
-  id: string;
-  subject: string;
-  date: string;
-  from?: MailAddress;
-  to?: MailAddress;
-  read: boolean;
-  highlight?: {
-    subject?: string[];
-    text?: string[];
-  };
-}
-
-export interface MailDataToSend {
-  sender: string;
-  senderFullName: string;
-  to: string;
-  cc?: string;
-  bcc?: string;
-  subject: string;
-  html: string;
-  inReplyTo?: string;
 }

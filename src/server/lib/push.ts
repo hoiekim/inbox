@@ -1,12 +1,6 @@
 import webPush, { PushSubscription } from "web-push";
-import {
-  elasticsearchClient,
-  index,
-  getNotifications,
-  Pagination,
-  getUsers
-} from "server";
-import { SignedUser } from "common";
+import { Pagination, SignedUser, StoredPushSubscription } from "common";
+import { elasticsearchClient, index, getNotifications, getUsers } from "server";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
@@ -76,12 +70,6 @@ export const cleanSubscriptions = () => {
     .catch(console.error);
   setTimeout(cleanSubscriptions, ONE_DAY);
 };
-
-export type StoredPushSubscription = {
-  username: string;
-  push_subscription_id: string;
-  updated: Date;
-} & PushSubscription;
 
 export const getSubscriptions = async (
   users: SignedUser[]

@@ -11,9 +11,10 @@ import {
   SortUpIcon
 } from "./components";
 
+import { Account } from "common";
+import { AccountsGetResponse, LoginDeleteResponse } from "server";
 import { Context, Category, useLocalStorage, QueryCache, call } from "client";
 import { MailsSynchronizer } from "client/Box";
-import { Account, AccountsGetResponse, LoginDeleteResponse } from "server";
 
 import "./index.scss";
 
@@ -295,13 +296,13 @@ const Accounts = ({
     ) => {
       if (e.key === "Enter") {
         setSearchHistory([
-          {
+          new Account({
             key: e.target.value,
             doc_count: 0,
             unread_doc_count: 0,
             saved_doc_count: 0,
             updated: new Date()
-          },
+          }),
           ...searchHistory
         ]);
         setSelectedAccount(e.target.value);

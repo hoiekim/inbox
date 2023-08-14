@@ -1,4 +1,5 @@
-import { Route, sendMail, MailDataToSend, AUTH_ERROR_MESSAGE } from "server";
+import { MailDataToSend } from "common";
+import { Route, sendMail, AUTH_ERROR_MESSAGE } from "server";
 
 export type SendMailPostResponse = undefined;
 

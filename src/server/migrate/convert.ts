@@ -1,12 +1,17 @@
-import { Mail, MailAddress, MailAddressValue, getRandomId } from "common";
 import {
+  MailType,
+  MailAddressType,
+  MailAddressValueType,
+  getRandomId,
   IncomingMail,
-  IncomingMailAddressValue,
-  getText,
-  IncomingMailAddress
-} from "server";
+  IncomingMailAddress,
+  IncomingMailAddressValue
+} from "common";
+import { getText } from "server";
 
-export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
+export const convertMail = async (
+  incoming: IncomingMail
+): Promise<MailType> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -16,7 +21,7 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
   const envelopeFrom = convertAddressValue(incoming.envelopeFrom);
   const envelopeTo = convertAddressValue(
     incoming.envelopeTo
-  ) as MailAddressValue[];
+  ) as MailAddressValueType[];
 
   const attachments = incoming.attachments as any;
 
@@ -54,7 +59,7 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
 
 const convertMailAddress = (
   incoming?: IncomingMailAddress | IncomingMailAddress[]
-): MailAddress | undefined => {
+): MailAddressType | undefined => {
   if (!incoming) return undefined;
   if (Array.isArray(incoming)) {
     if (!incoming.length) return undefined;
@@ -73,7 +78,7 @@ const convertAddressValue = (
   incoming?: IncomingMailAddressValue | IncomingMailAddressValue[]
 ) => {
   if (!incoming) return undefined;
-  const array: MailAddressValue[] = [];
+  const array: MailAddressValueType[] = [];
   const push = ({ address, name }: IncomingMailAddressValue) => {
     const value = { address: address?.toLowerCase(), name };
     array.push(value);

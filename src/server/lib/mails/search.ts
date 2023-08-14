@@ -1,10 +1,5 @@
-import { SignedUser } from "common";
-import {
-  MailSearchResult,
-  Pagination,
-  elasticsearchClient,
-  index
-} from "server";
+import { MailSearchResult, SignedUser, Pagination } from "common";
+import { elasticsearchClient, index } from "server";
 
 export const searchMail = async (
   user: SignedUser,

@@ -23,18 +23,17 @@ import {
 import { Context, Category, QueryCache, call } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import {
-  MailHeaderData,
   HeadersGetResponse,
   MarkMailPostBody,
   MarkMailPostResponse,
   SearchGetResponse,
-  MailDeleteResponse,
-  MailSearchResult
+  MailDeleteResponse
 } from "server";
 
 import "./index.scss";
 
 import { marked } from "marked";
+import { MailHeaderData, MailSearchResult } from "common";
 
 const GettingStarted = () => {
   const queryUrl = "/text/getting_started.md";

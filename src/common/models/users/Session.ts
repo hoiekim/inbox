@@ -1,6 +1,6 @@
 import { SessionData as _Session, Cookie as _Cookie } from "express-session";
-import { Model } from "./Model";
 import { SignedUser, SignedUserType } from "./User";
+import { Model } from "../Model";
 
 /**
  * The REAL `Cookie` type that's used by express-session in runtime.

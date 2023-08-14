@@ -1,27 +1,29 @@
 import fs from "fs";
+
+import {
+  AttachmentType,
+  MailType,
+  MailAddressType,
+  MailAddressValueType,
+  getRandomId,
+  IncomingMail,
+  IncomingMailAddress,
+  IncomingMailAddressValue,
+  IncomingAttachment
+} from "common";
+
 import {
   elasticsearchClient,
   index,
   getUser,
-  IncomingMail,
-  IncomingMailAddressValue,
-  IncomingAttachment,
   getText,
   getDomain,
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
   getAttachmentId,
   notifyNewMails,
-  IncomingMailAddress,
   getInsight
 } from "server";
-import {
-  Attachment,
-  Mail,
-  MailAddress,
-  MailAddressValue,
-  getRandomId
-} from "common";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
   console.info("Received an email at", new Date());
@@ -56,7 +58,7 @@ const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
   return saveMail(user?.id, mail);
 };
 
-export const saveMail = async (userId: string | undefined, mail: Mail) => {
+export const saveMail = async (userId: string | undefined, mail: MailType) => {
   return elasticsearchClient
     .index({
       index,
@@ -74,7 +76,9 @@ export const saveMail = async (userId: string | undefined, mail: Mail) => {
     });
 };
 
-export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
+export const convertMail = async (
+  incoming: IncomingMail
+): Promise<MailType> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -84,7 +88,7 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
   const envelopeFrom = convertAddressValue(incoming.envelopeFrom);
   const envelopeTo = convertAddressValue(
     incoming.envelopeTo
-  ) as MailAddressValue[];
+  ) as MailAddressValueType[];
 
   const attachments = await convertAttachments(incoming.attachments);
 
@@ -121,7 +125,7 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
 
 const convertMailAddress = (
   incoming?: IncomingMailAddress | IncomingMailAddress[]
-): MailAddress | undefined => {
+): MailAddressType | undefined => {
   if (!incoming) return undefined;
   if (Array.isArray(incoming)) {
     if (!incoming.length) return undefined;
@@ -140,7 +144,7 @@ const convertAddressValue = (
   incoming?: IncomingMailAddressValue | IncomingMailAddressValue[]
 ) => {
   if (!incoming) return undefined;
-  const array: MailAddressValue[] = [];
+  const array: MailAddressValueType[] = [];
   const push = ({ address, name }: IncomingMailAddressValue) => {
     const value = { address: address?.toLowerCase(), name };
     array.push(value);
@@ -154,7 +158,7 @@ const convertAddressValue = (
 
 const convertAttachments = async (
   incoming?: IncomingAttachment | IncomingAttachment[]
-): Promise<Attachment[] | undefined> => {
+): Promise<AttachmentType[] | undefined> => {
   if (!incoming) return undefined;
   const array: IncomingAttachment[] = [];
   if (Array.isArray(incoming)) array.push(...incoming);
@@ -188,7 +192,7 @@ export const saveBuffer = (buffer: Buffer | string): Promise<string> => {
 const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
   const { envelopeTo } = data;
   if (!envelopeTo) return [];
-  const array: MailAddressValue[] = [];
+  const array: MailAddressValueType[] = [];
   if (Array.isArray(envelopeTo)) array.push(...envelopeTo);
   else array.push(envelopeTo);
   const domain = getDomain();
@@ -212,7 +216,7 @@ export const validateIncomingMail = (
   const { envelopeTo } = data;
   if (!envelopeTo) return undefined;
 
-  const addressArray: MailAddressValue[] = [];
+  const addressArray: MailAddressValueType[] = [];
   if (Array.isArray(envelopeTo)) addressArray.push(...envelopeTo);
   else addressArray.push(envelopeTo);
 

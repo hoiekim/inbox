@@ -1,9 +1,7 @@
 import React, { useContext } from "react";
 
-import { Context } from "client";
-import { getDateForMailHeader } from "client";
-import { MailHeaderData } from "server";
-import { MailAddressValue } from "common";
+import { Context, getDateForMailHeader } from "client";
+import { MailAddressValueType, MailHeaderData } from "common";
 
 export interface MailHeaderProps extends React.ComponentProps<"div"> {
   mail: MailHeaderData;
@@ -47,7 +45,7 @@ const MailHeader = (props: MailHeaderProps) => {
       {cc && cc.value ? (
         <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
           {"cc: " +
-            (cc.value as MailAddressValue[])
+            (cc.value as MailAddressValueType[])
               .map((e) => e?.name || e?.address)
               .join(", ")}
         </div>
@@ -57,7 +55,7 @@ const MailHeader = (props: MailHeaderProps) => {
       {bcc && bcc.value ? (
         <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
           {"bcc: " +
-            (bcc.value as MailAddressValue[])
+            (bcc.value as MailAddressValueType[])
               .map((e) => e?.name || e?.address)
               .join(", ")}
         </div>

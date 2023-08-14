@@ -2,17 +2,13 @@ import {
   AggregationsStringTermsBucket,
   AggregationsTermsAggregateBase
 } from "@elastic/elasticsearch/lib/api/types";
-import { SignedUser } from "common";
+import { Notifications, SignedUser } from "common";
 import {
   addressToUsername,
   elasticsearchClient,
   index,
   TO_ADDRESS_FIELD
 } from "server";
-
-export type Username = string;
-export type BadgeCount = number;
-export class Notifications extends Map<Username, BadgeCount> {}
 
 interface AddressAggregation {
   address: AggregationsTermsAggregateBase<AddressAggregationBucket>;
