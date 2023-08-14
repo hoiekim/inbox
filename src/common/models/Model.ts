@@ -43,7 +43,7 @@ const assign = (target: any, source: any) => {
  *
  * @example
  * //@Model.prefillable
- * class ExtendedModel extends Model<A> {
+ * class ExtendedModel extends Model<ExtendedModel> {
  *   prop = 123;
  * }
  * const a = new ExtendedModel({ prop: 456 })
@@ -54,13 +54,12 @@ export class Model<T = unknown> {
    * Class decorator that makes a class instantiable with optional properties to
    * "prefill" the instance.
    */
-  static prefillable = <T extends Constructor>(constFunc: T) => {
+  static prefillable = <C extends Constructor>(constFunc: C) => {
     //@ts-ignore
     class ExtendedClass extends constFunc {
-      constructor(init?: Partial<InstanceType<T>>) {
+      constructor(init?: Partial<InstanceType<C>>) {
         super(init);
         if (init) assign(this, init);
-        this.fromJSON();
       }
     }
 
@@ -71,14 +70,13 @@ export class Model<T = unknown> {
         Object.defineProperty(ExtendedClass, prop, descriptor);
     }
 
-    return ExtendedClass as T & {
-      new (init?: Partial<InstanceType<T>>): InstanceType<T>;
+    return ExtendedClass as C & {
+      new (init?: Partial<InstanceType<C>>): InstanceType<C>;
     };
   };
 
   constructor(init?: Partial<T>) {
     if (init) assign(this, init);
-    this.fromJSON();
   }
 
   /**
@@ -93,6 +91,4 @@ export class Model<T = unknown> {
     const constructor = this.constructor as Constructor;
     return new constructor(this) as typeof this;
   };
-
-  protected fromJSON = () => {};
 }
