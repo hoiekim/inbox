@@ -17,7 +17,7 @@
             },
             "contentType": { "type": "text" },
             "filename": { "type": "text" },
-            "size": { "type": "integer" }
+            "size": { "type": "long" }
           }
         },
         "cc": {
