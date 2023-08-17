@@ -25,7 +25,7 @@ export const searchMail = async (
 
   const { from, size } = new Pagination();
 
-  type SearchReturn = Omit<Omit<MailSearchResult, "id">, "highlight">;
+  type SearchReturn = Omit<MailSearchResult, "id" | "highlight">;
 
   const searchResultKeys: (keyof SearchReturn)[] = [
     "subject",

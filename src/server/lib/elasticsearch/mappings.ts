@@ -2,7 +2,7 @@ import { PushSubscription } from "web-push";
 import { DateString, MailType, SessionType, UserType } from "common";
 
 export interface Document {
-  type: string;
+  type: "mail" | "user" | "session" | "push_subscription";
   mail?: MailType;
   user?: UserType;
   session?: SessionType;

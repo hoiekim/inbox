@@ -6,7 +6,10 @@ import { PushSubscription } from "web-push";
  */
 export type DateString = string;
 
-export type Constructor = new (...args: any[]) => any;
+export type Username = string;
+export type BadgeCount = number;
+
+export type Constructor<T = any> = new (...args: any[]) => T;
 
 export class Pagination {
   from = 0;

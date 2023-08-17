@@ -34,6 +34,19 @@ const assign = (target: any, source: any) => {
 };
 
 /**
+ * Overrides all properties in `source` to `target` except for the properties that
+ * match names in `exclude` list.
+ */
+const override = (target: any, source: any, exclude: string[] = []) => {
+  for (const prop of Object.getOwnPropertyNames(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, prop)!;
+    if (exclude.includes(prop)) continue;
+    Object.defineProperty(target, prop, descriptor);
+  }
+  return target;
+};
+
+/**
  * A base class for all models. Models are instantiable with optional properties to
  * "prefill" the instance and have `clone` method that deep-copies the instance.
  *
@@ -63,16 +76,26 @@ export class Model<T = unknown> {
       }
     }
 
-    // Un-overrides `constFunc` properties and methods
-    for (const prop of Object.getOwnPropertyNames(constFunc)) {
-      const descriptor = Object.getOwnPropertyDescriptor(constFunc, prop)!;
-      if (prop !== "prototype")
-        Object.defineProperty(ExtendedClass, prop, descriptor);
-    }
-
-    return ExtendedClass as C & {
+    return override(ExtendedClass, constFunc, ["prototype"]) as C & {
       new (init?: Partial<InstanceType<C>>): InstanceType<C>;
     };
+  };
+
+  /**
+   * Mixes `Model` into a given class and returns the mixed class. All methods in
+   * `Model` will be overriden to the target class except for the constructor.
+   * @param constFunc a class to be mixed into.
+   * @returns the mixed class.
+   * @example
+   * class MapModel extends Model.mixin(Map<string, string>) {}
+   * const map = new MapModel()
+   * map.set("name", "Ruby")
+   * const cloned = map.clone()
+   */
+  static mixin = <C extends Constructor>(constFunc: C) => {
+    class MixinModel extends constFunc {}
+    override(MixinModel.prototype, Model.prototype, ["constructor"]);
+    return MixinModel as unknown as C & Constructor<Model>;
   };
 
   constructor(init?: Partial<T>) {
@@ -87,8 +110,8 @@ export class Model<T = unknown> {
    * const b = a.clone();
    * console.log(a === b); // false
    */
-  clone = (): typeof this => {
+  clone(): typeof this {
     const constructor = this.constructor as Constructor;
     return new constructor(this) as typeof this;
-  };
+  }
 }
