@@ -22,9 +22,7 @@ export const getNotifications = async (
   users: SignedUser[]
 ): Promise<Notifications> => {
   const matchUserIds = users.map((user) => {
-    return {
-      term: { "user.id": user.id }
-    };
+    return { term: { "user.id": user.id } };
   });
 
   const response = elasticsearchClient.search<AddressAggregation>({
@@ -52,7 +50,7 @@ export const getNotifications = async (
       const { buckets } = e.read;
       if (!Array.isArray(buckets)) return;
       const badgeCount = buckets.find((f) => !f.key)?.doc_count;
-      if (!badgeCount) return;
+      if (badgeCount === undefined) return;
       const username = addressToUsername(e.key);
       const existing = notifications.get(username) || 0;
       notifications.set(username, badgeCount + existing);
