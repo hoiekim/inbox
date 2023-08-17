@@ -23,6 +23,7 @@ export interface IncomingAttachment {
   content: { data: Buffer } | Buffer | string;
   contentType: string;
   filename: string;
+  size: number;
 }
 
 export interface IncomingMailAddress {

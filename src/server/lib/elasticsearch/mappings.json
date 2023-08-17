@@ -12,11 +12,12 @@
             "content": {
               "type": "object",
               "properties": {
-                "data": { "type": "keyword" },
-                "contentType": { "type": "keyword" },
-                "filename": { "type": "text" }
+                "data": { "type": "keyword" }
               }
-            }
+            },
+            "contentType": { "type": "text" },
+            "filename": { "type": "text" },
+            "size": { "type": "integer" }
           }
         },
         "cc": {

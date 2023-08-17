@@ -1,15 +1,15 @@
 import fs from "fs";
 
 import {
-  AttachmentType,
-  MailType,
   MailAddressType,
   MailAddressValueType,
   getRandomId,
   IncomingMail,
   IncomingMailAddress,
   IncomingMailAddressValue,
-  IncomingAttachment
+  IncomingAttachment,
+  Mail,
+  Attachment
 } from "common";
 
 import {
@@ -58,7 +58,7 @@ const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
   return saveMail(user?.id, mail);
 };
 
-export const saveMail = async (userId: string | undefined, mail: MailType) => {
+export const saveMail = async (userId: string | undefined, mail: Mail) => {
   return elasticsearchClient
     .index({
       index,
@@ -76,9 +76,7 @@ export const saveMail = async (userId: string | undefined, mail: MailType) => {
     });
 };
 
-export const convertMail = async (
-  incoming: IncomingMail
-): Promise<MailType> => {
+export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -102,7 +100,7 @@ export const convertMail = async (
   const text = getText(html);
   const insight = await getInsight({ subject, from, to, text });
 
-  return {
+  return new Mail({
     messageId,
     attachments,
     to,
@@ -120,7 +118,7 @@ export const convertMail = async (
     read: false,
     saved: false,
     sent: false
-  };
+  });
 };
 
 const convertMailAddress = (
@@ -158,21 +156,30 @@ const convertAddressValue = (
 
 const convertAttachments = async (
   incoming?: IncomingAttachment | IncomingAttachment[]
-): Promise<AttachmentType[] | undefined> => {
+): Promise<Attachment[] | undefined> => {
   if (!incoming) return undefined;
   const array: IncomingAttachment[] = [];
   if (Array.isArray(incoming)) array.push(...incoming);
   else array.push(incoming);
-  return Promise.all(
-    array.map(async ({ content, filename, contentType }) => {
-      const data =
-        typeof content === "object" && "data" in content
-          ? content.data
-          : content;
-      const id = await saveBuffer(data);
-      return { filename, contentType, content: { data: id } };
-    })
-  );
+  const attachments = array.map(convertAttachment);
+  return Promise.all(attachments);
+};
+
+const convertAttachment = async ({
+  content,
+  filename,
+  contentType,
+  size
+}: IncomingAttachment) => {
+  const isDataExist = typeof content === "object" && "data" in content;
+  const data = isDataExist ? content.data : content;
+  const id = await saveBuffer(data);
+  return new Attachment({
+    filename,
+    contentType,
+    content: { data: id },
+    size
+  });
 };
 
 export const saveBuffer = (buffer: Buffer | string): Promise<string> => {

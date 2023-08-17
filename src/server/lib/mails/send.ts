@@ -1,6 +1,7 @@
 import { UploadedFile } from "express-fileupload";
 import sgMail, { MailDataRequired as SendgridMail } from "@sendgrid/mail";
 import { AttachmentData as SendgridAttachment } from "@sendgrid/helpers/classes/attachment";
+import { AttachmentType, Mail, MailDataToSend, SignedUser } from "common";
 
 import {
   getDomain,
@@ -9,8 +10,6 @@ import {
   getText,
   saveBuffer
 } from "server";
-
-import { AttachmentType, MailDataToSend, MailType, SignedUser } from "common";
 
 sgMail.setApiKey(process.env.SENDGRID_KEY || "");
 
@@ -66,7 +65,7 @@ const getSentMail = async (
   mailToSend: MailDataToSend,
   messageId: string,
   files?: UploadedFileDynamicArray
-): Promise<MailType> => {
+): Promise<Mail> => {
   const { sender, senderFullName, to, cc, bcc, subject, html } = mailToSend;
 
   const text = getText(html);
@@ -74,7 +73,7 @@ const getSentMail = async (
   const fromEmail = `${sender}@${userDomain}`;
   const attachments = (await getAttachmentsToSave(files)) || [];
 
-  return {
+  return new Mail({
     subject,
     text,
     html,
@@ -97,7 +96,7 @@ const getSentMail = async (
     read: true,
     sent: true,
     saved: false
-  };
+  });
 };
 
 const getAttachmentsToSend = (files?: UploadedFileDynamicArray) => {
@@ -127,11 +126,12 @@ const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
 
   const attachmentsToSave: AttachmentType[] = [];
 
-  const parseFile = async ({ name, data, mimetype }: UploadedFile) => {
+  const parseFile = async ({ name, data, mimetype, size }: UploadedFile) => {
     attachmentsToSave.push({
       content: { data: await saveBuffer(data) },
       filename: name,
-      contentType: mimetype
+      contentType: mimetype,
+      size
     });
   };
 

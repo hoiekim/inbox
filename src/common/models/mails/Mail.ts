@@ -7,20 +7,39 @@ export interface MailAddressValueType {
   name?: string;
 }
 
+@Model.prefillable
+export class MailAddressValue
+  extends Model<MailAddressValue>
+  implements MailAddressValueType
+{
+  address?: string;
+  name?: string;
+}
+
 export interface MailAddressType {
   value: MailAddressValueType[];
   text: string;
 }
 
+@Model.prefillable
 export class MailAddress extends Model<MailAddress> implements MailAddressType {
-  value: MailAddressValueType[] = [];
-  text: string = "";
+  value: MailAddressValue[] = [];
+  text = "";
 }
 
 export interface AttachmentType {
   content: { data: string };
   contentType: string;
   filename: string;
+  size: number;
+}
+
+@Model.prefillable
+export class Attachment extends Model<Attachment> implements AttachmentType {
+  content: { data: string } = { data: "" };
+  contentType: string = "text/plain";
+  filename: string = "unnamed_file";
+  size: number = 0;
 }
 
 export interface MailType {

@@ -1,17 +1,15 @@
 import {
-  MailType,
   MailAddressType,
   MailAddressValueType,
   getRandomId,
   IncomingMail,
   IncomingMailAddress,
-  IncomingMailAddressValue
+  IncomingMailAddressValue,
+  Mail
 } from "common";
 import { getText } from "server";
 
-export const convertMail = async (
-  incoming: IncomingMail
-): Promise<MailType> => {
+export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -36,7 +34,7 @@ export const convertMail = async (
   const insight = (incoming as any).insight;
   const sent = !!from && isSentMail(from.value);
 
-  return {
+  return new Mail({
     messageId,
     attachments,
     to,
@@ -54,7 +52,7 @@ export const convertMail = async (
     read: true,
     saved: false,
     sent
-  };
+  });
 };
 
 const convertMailAddress = (
