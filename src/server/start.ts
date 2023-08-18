@@ -14,10 +14,12 @@ import {
   getDomain,
   saveMailHandler,
   initializeAdminUser,
-  ElasticsearchSessionStore
+  ElasticsearchSessionStore,
+  cleanSubscriptions
 } from "server";
 
 import apiRouter from "./routes";
+import { Mail } from "common";
 
 const nodeMailin = require("@umpacken/node-mailin");
 
@@ -57,7 +59,7 @@ const port = process.env.PORT || 3004;
 app.listen(port, async () => {
   await initializeIndex();
   await initializeAdminUser();
-  // cleanSubscriptions();
+  cleanSubscriptions();
   console.info(`${domain} mail server is listening`);
 });
 

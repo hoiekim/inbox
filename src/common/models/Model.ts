@@ -16,6 +16,13 @@ import { Constructor } from "./miscellaneous";
 const assign = (target: any, source: any) => {
   for (const key in source) {
     const value = source[key];
+    if (Array.isArray(value)) {
+      target[key] = [];
+      const targetArray = target[key];
+      const sourceArray = value;
+      assign(targetArray, sourceArray);
+      continue;
+    }
     if (typeof value === "function") continue;
     if (typeof value === "object" && value !== null) {
       // Method name `clone` must be reserved because of the following:
@@ -110,8 +117,8 @@ export class Model<T = unknown> {
    * const b = a.clone();
    * console.log(a === b); // false
    */
-  clone(): typeof this {
+  clone(): T {
     const constructor = this.constructor as Constructor;
-    return new constructor(this) as typeof this;
+    return new constructor(this) as T;
   }
 }
