@@ -15,9 +15,9 @@
                 "data": { "type": "keyword" }
               }
             },
-            "contentType": { "type": "text" },
+            "contentType": { "type": "keyword" },
             "filename": { "type": "text" },
-            "size": { "type": "long" }
+            "size": { "type": "integer" }
           }
         },
         "cc": {
