@@ -6,6 +6,7 @@ import { PushSubscription } from "web-push";
  */
 export type DateString = string;
 
+export type UserId = string;
 export type Username = string;
 export type BadgeCount = number;
 

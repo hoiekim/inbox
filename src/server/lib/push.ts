@@ -20,14 +20,14 @@ webPush.setVapidDetails(
 export const getPushPublicKey = () => PUSH_VAPID_PUBLIC_KEY;
 
 export const storeSubscription = async (
-  username: string,
+  userId: string,
   push_subscription: PushSubscription
 ) => {
   const response = await elasticsearchClient.index({
     index,
     document: {
       type: "push_subscription",
-      user: { username },
+      user: { id: userId },
       push_subscription,
       updated: new Date().toISOString()
     }
@@ -55,26 +55,32 @@ export const deleteSubscription = (push_subscription_id: string) => {
 const ONE_DAY = 1000 * 60 * 60 * 24;
 
 export const cleanSubscriptions = () => {
-  elasticsearchClient
-    .deleteByQuery({
-      index,
-      query: {
-        bool: {
-          must: [
-            { range: { updated: { lt: "now-7d" } } },
-            { term: { type: "push_subscription" } }
-          ]
+  setTimeout(async () => {
+    console.info("Cleaning old push subscriptions.");
+    const result = await elasticsearchClient
+      .deleteByQuery({
+        index,
+        query: {
+          bool: {
+            must: [
+              { range: { updated: { lt: "now-7d" } } },
+              { term: { type: "push_subscription" } }
+            ]
+          }
         }
-      }
-    })
-    .catch(console.error);
-  setTimeout(cleanSubscriptions, ONE_DAY);
+      })
+      .catch(console.error);
+
+    const deleted = result?.deleted || 0;
+    console.log(`Deleted ${deleted} old subscriptions`);
+    cleanSubscriptions;
+  }, ONE_DAY);
 };
 
 export const getSubscriptions = async (
   users: SignedUser[]
 ): Promise<StoredPushSubscription[]> => {
-  const matchUsername = users.map((user) => {
+  const matchUserId = users.map((user) => {
     return { term: { "user.id": user.id } };
   });
 
@@ -88,7 +94,7 @@ export const getSubscriptions = async (
       bool: {
         filter: [
           { term: { type: "push_subscription" } },
-          { bool: { should: matchUsername } }
+          { bool: { should: matchUserId } }
         ]
       }
     }
@@ -101,7 +107,9 @@ export const getSubscriptions = async (
       if (!source) return;
       const { push_subscription, updated } = source;
       if (!push_subscription) return;
-      const username = source.user?.username;
+      const user_id = source.user?.id;
+      if (!user_id) return;
+      const username = users.find((u) => u.id === user_id)?.username;
       if (!username) return;
       return {
         ...push_subscription,

@@ -20,12 +20,12 @@ export const postSubscribeRoute = new Route<SubscribePostResponse>(
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
 
-    const { username } = user;
+    const { id: userId } = user;
     const body: SubscribePostBody = req.body;
     const { old_subscription_id, subscription } = body;
 
     if (old_subscription_id) deleteSubscription(old_subscription_id);
-    const { _id: id } = await storeSubscription(username, subscription);
+    const { _id: id } = await storeSubscription(userId, subscription);
 
     return { status: "success", body: id };
   }

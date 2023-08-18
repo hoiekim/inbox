@@ -5,7 +5,7 @@ import { User } from "common";
 
 const { properties }: any = mappings;
 
-const elasticsearchIsAvailable = async () => {
+export const elasticsearchIsAvailable = async () => {
   try {
     const { status } = await elasticsearchClient.cluster.health({
       wait_for_status: "yellow",
@@ -32,15 +32,9 @@ const elasticsearchIsAvailable = async () => {
  * Check server logs and try resolve the issues in this case.
  */
 export const initializeIndex = async () => {
-  console.info("Initialization started.");
+  const indexExists = await elasticsearchClient.indices.exists({ index });
 
-  await elasticsearchIsAvailable();
-
-  const indexAlreadyExists = await elasticsearchClient.indices.exists({
-    index
-  });
-
-  if (indexAlreadyExists) {
+  if (indexExists) {
     console.info("Existing Elasticsearch index is found.");
 
     const response = await elasticsearchClient.indices

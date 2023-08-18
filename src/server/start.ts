@@ -1,12 +1,7 @@
-import { importConfig, setModulePaths } from "./config";
-
-importConfig();
-setModulePaths();
-
+import "./config";
 import express, { json } from "express";
 import fileupload from "express-fileupload";
 import session from "express-session";
-
 import path from "path";
 
 import {
@@ -15,14 +10,14 @@ import {
   saveMailHandler,
   initializeAdminUser,
   ElasticsearchSessionStore,
-  cleanSubscriptions
+  cleanSubscriptions,
+  elasticsearchIsAvailable
 } from "server";
 
 import apiRouter from "./routes";
 
-const nodeMailin = require("@umpacken/node-mailin");
-
 const initializeElasticsearch = async () => {
+  await elasticsearchIsAvailable();
   await initializeIndex();
   await initializeAdminUser();
 };
@@ -58,14 +53,18 @@ const initializeExpress = async () => {
   const domain = getDomain();
   const port = process.env.PORT || 3004;
 
-  app.listen(port, async () => {
-    console.info(`${domain} mail server is listening`);
-  });
+  await new Promise((res) =>
+    app.listen(port, () => {
+      console.info(`${domain} mail server is listening`);
+      res(undefined);
+    })
+  );
 
   return app;
 };
 
 const initializeMailin = () => {
+  const nodeMailin = require("@umpacken/node-mailin");
   nodeMailin.on("message", saveMailHandler);
   nodeMailin.on("error", console.error);
   nodeMailin.start({
