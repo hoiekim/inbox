@@ -70,8 +70,10 @@ export const saveMail = async (userId: string | undefined, mail: Mail) => {
       }
     })
     .catch((r) => {
+      console.error(r);
       const errorFilePath = `./error/${Date.now()}`;
       const errorContent = JSON.stringify({ ...mail, error: r });
+      if (!fs.existsSync("./error")) fs.mkdirSync("./error");
       fs.writeFileSync(errorFilePath, errorContent);
     });
 };
