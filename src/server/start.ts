@@ -19,7 +19,6 @@ import {
 } from "server";
 
 import apiRouter from "./routes";
-import { Mail } from "common";
 
 const nodeMailin = require("@umpacken/node-mailin");
 
@@ -32,9 +31,7 @@ const initializeExpress = async () => {
   const app = express();
 
   app.use(json({ limit: "50mb" }));
-
   app.use(fileupload());
-
   app.use(
     session({
       secret: process.env.SECRET || "secret",
@@ -52,7 +49,6 @@ const initializeExpress = async () => {
   app.use("/api", apiRouter);
 
   const clientPath = path.resolve(__dirname, "../../build/client");
-
   app.use(express.static(clientPath));
 
   app.get("*", (req, res) => {
@@ -72,7 +68,6 @@ const initializeExpress = async () => {
 const initializeMailin = () => {
   nodeMailin.on("message", saveMailHandler);
   nodeMailin.on("error", console.error);
-
   nodeMailin.start({
     port: 25,
     logLevel: "info"
