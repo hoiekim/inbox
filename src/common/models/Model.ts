@@ -16,25 +16,20 @@ import { Constructor } from "./miscellaneous";
 const assign = (target: any, source: any) => {
   for (const key in source) {
     const value = source[key];
-    if (Array.isArray(value)) {
-      const sourceArray = value;
-      const targetArray: typeof sourceArray = [];
-      target[key] = assign(targetArray, sourceArray);
-      continue;
-    }
     if (typeof value === "function") continue;
-    if (typeof value === "object" && value !== null) {
-      // Method name `clone` must be reserved because of the following:
-      if ("clone" in value && typeof value.clone === "function") {
+    if (Array.isArray(value)) {
+      target[key] = assign([], value);
+    } else if (typeof value === "object" && value !== null) {
+      if (typeof value.clone === "function") {
         target[key] = value.clone();
       } else if (value instanceof Date) {
         target[key] = new Date(value);
       } else {
         target[key] = assign({}, value);
       }
-      continue;
+    } else {
+      target[key] = value;
     }
-    target[key] = value;
   }
   return target;
 };
