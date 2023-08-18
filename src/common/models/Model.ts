@@ -17,10 +17,9 @@ const assign = (target: any, source: any) => {
   for (const key in source) {
     const value = source[key];
     if (Array.isArray(value)) {
-      target[key] = [];
-      const targetArray = target[key];
       const sourceArray = value;
-      assign(targetArray, sourceArray);
+      const targetArray: typeof sourceArray = [];
+      target[key] = assign(targetArray, sourceArray);
       continue;
     }
     if (typeof value === "function") continue;
@@ -117,8 +116,8 @@ export class Model<T = unknown> {
    * const b = a.clone();
    * console.log(a === b); // false
    */
-  clone(): T {
-    const constructor = this.constructor as Constructor;
-    return new constructor(this) as T;
+  clone() {
+    const constructor = this.constructor as Constructor<T>;
+    return new constructor(this);
   }
 }
