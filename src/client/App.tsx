@@ -1,4 +1,12 @@
-import React, { useState, createContext, useEffect, useRef } from "react";
+import {
+  useState,
+  createContext,
+  useEffect,
+  useRef,
+  StrictMode,
+  Dispatch,
+  SetStateAction
+} from "react";
 import { QueryClient, QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
@@ -32,37 +40,25 @@ export interface ContextType {
   };
   domainName: string;
   userInfo: SignedUser | undefined;
-  setUserInfo: React.Dispatch<React.SetStateAction<ContextType["userInfo"]>>;
+  setUserInfo: Dispatch<SetStateAction<ContextType["userInfo"]>>;
   isAccountsOpen: boolean;
-  setIsAccountsOpen: React.Dispatch<
-    React.SetStateAction<ContextType["isAccountsOpen"]>
-  >;
+  setIsAccountsOpen: Dispatch<SetStateAction<ContextType["isAccountsOpen"]>>;
   isWriterOpen: boolean;
-  setIsWriterOpen: React.Dispatch<
-    React.SetStateAction<ContextType["isWriterOpen"]>
-  >;
+  setIsWriterOpen: Dispatch<SetStateAction<ContextType["isWriterOpen"]>>;
   replyData: any;
-  setReplyData: React.Dispatch<React.SetStateAction<ContextType["replyData"]>>;
+  setReplyData: Dispatch<SetStateAction<ContextType["replyData"]>>;
   selectedAccount: string;
-  setSelectedAccount: React.Dispatch<
-    React.SetStateAction<ContextType["selectedAccount"]>
-  >;
+  setSelectedAccount: Dispatch<SetStateAction<ContextType["selectedAccount"]>>;
   selectedCategory: Category;
-  setSelectedCategory: React.Dispatch<
-    React.SetStateAction<ContextType["selectedCategory"]>
+  setSelectedCategory: Dispatch<
+    SetStateAction<ContextType["selectedCategory"]>
   >;
   searchHistory: Account[];
-  setSearchHistory: React.Dispatch<
-    React.SetStateAction<ContextType["searchHistory"]>
-  >;
+  setSearchHistory: Dispatch<SetStateAction<ContextType["searchHistory"]>>;
   newMailsTotal: number;
-  setNewMailsTotal: React.Dispatch<
-    React.SetStateAction<ContextType["newMailsTotal"]>
-  >;
+  setNewMailsTotal: Dispatch<SetStateAction<ContextType["newMailsTotal"]>>;
   lastUpdate: Date;
-  setLastUpdate: React.Dispatch<
-    React.SetStateAction<ContextType["lastUpdate"]>
-  >;
+  setLastUpdate: Dispatch<SetStateAction<ContextType["lastUpdate"]>>;
 }
 
 export const Context = createContext<ContextType>({} as ContextType);
@@ -225,7 +221,7 @@ const App = ({ user: session }: Props) => {
   };
 
   return (
-    <React.StrictMode>
+    <StrictMode>
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
           <BrowserRouter>
@@ -244,7 +240,7 @@ const App = ({ user: session }: Props) => {
           </BrowserRouter>
         </Context.Provider>
       </QueryClientProvider>
-    </React.StrictMode>
+    </StrictMode>
   );
 };
 

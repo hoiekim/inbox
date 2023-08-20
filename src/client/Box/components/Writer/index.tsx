@@ -1,13 +1,18 @@
-import React, {
+import {
   useContext,
   useState,
   useEffect,
   useRef,
-  useCallback
+  useCallback,
+  MouseEventHandler
 } from "react";
+
 import { useMutation } from "react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+
+import { ApiResponse, SendMailPostBody, SendMailPostResponse } from "server";
+
 import {
   Context,
   useLocalStorage,
@@ -19,7 +24,6 @@ import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
 import "./index.scss";
-import { ApiResponse, SendMailPostBody, SendMailPostResponse } from "server";
 
 const replyDataToOriginalMessage = (replyData: any) => {
   if (!replyData) {
@@ -262,7 +266,7 @@ const Writer = () => {
     );
   });
 
-  const onClickPadding: React.MouseEventHandler<HTMLDivElement> = (e) => {
+  const onClickPadding: MouseEventHandler<HTMLDivElement> = (e) => {
     const targetClassList = Array.from((e.target as any).classList);
     const targetIsPadding = !!targetClassList.find(
       (f) => f === "editor_container_bottom_padding"

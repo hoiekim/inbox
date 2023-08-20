@@ -1,6 +1,5 @@
 import { PushSubscription } from "web-push";
 import { PublicKeyGetResponse } from "server";
-import { getLocalStorageItem, setLocalStorageItem } from "./cache";
 import { call } from "client";
 import {
   SubscribePostBody,

@@ -1,5 +1,3 @@
-import React from "react";
-
 const SkeletonCategory = () => {
   return (
     <div className="flex">

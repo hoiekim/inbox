@@ -1,6 +1,6 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const SortDownIcon = (props) => (
+const KebabIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
   <svg
@@ -8,19 +8,18 @@ const SortDownIcon = (props) => (
     focusable="false"
     role="img"
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 320 512"
+    viewBox="0 0 512 512"
     {...props}
   >
     <path
       fill="currentColor"
-      d="M41 288h238c21.4 0 32.1 25.9 17 41L177 448c-9.4 9.4-24.6 9.4-33.9 0L24 329c-15.1-15.1-4.4-41 17-41z"
+      d="M328 256c0 39.8-32.2 72-72 72s-72-32.2-72-72 32.2-72 72-72 72 32.2 72 72zm104-72c-39.8 0-72 32.2-72 72s32.2 72 72 72 72-32.2 72-72-32.2-72-72-72zm-352 0c-39.8 0-72 32.2-72 72s32.2 72 72 72 72-32.2 72-72-32.2-72-72-72z"
     ></path>
   </svg>
-
   // ----------------until here---------------
   // edit note:
   //// 1. purged unused properties
   //// 2. added passed properties
 );
 
-export default SortDownIcon;
+export default KebabIcon;

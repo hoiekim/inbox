@@ -1,26 +1,26 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const FileIcon = (props) => (
+const SortUpIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
-
   <svg
     aria-hidden="true"
     focusable="false"
     role="img"
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 384 512"
+    viewBox="0 0 320 512"
     {...props}
   >
     <path
       fill="currentColor"
-      d="M224 136V0H24C10.7 0 0 10.7 0 24v464c0 13.3 10.7 24 24 24h336c13.3 0 24-10.7 24-24V160H248c-13.2 0-24-10.8-24-24zm160-14.1v6.1H256V0h6.1c6.4 0 12.5 2.5 17 7l97.9 98c4.5 4.5 7 10.6 7 16.9z"
+      d="M279 224H41c-21.4 0-32.1-25.9-17-41L143 64c9.4-9.4 24.6-9.4 33.9 0l119 119c15.2 15.1 4.5 41-16.9 41z"
     ></path>
   </svg>
+
   // ----------------until here---------------
   // edit note:
   //// 1. purged unused properties
   //// 2. added passed properties
 );
 
-export default FileIcon;
+export default SortUpIcon;

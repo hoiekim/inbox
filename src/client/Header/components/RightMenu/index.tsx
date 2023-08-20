@@ -1,8 +1,6 @@
-import React, { useContext } from "react";
-
+import { useContext } from "react";
+import { Context } from "client";
 import WriteIcon from "./components/WriteIcon";
-
-import { Context } from "../../..";
 
 const RightMenu = () => {
   const { isWriterOpen, setIsWriterOpen } = useContext(Context);

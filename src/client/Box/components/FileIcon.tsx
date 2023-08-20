@@ -1,19 +1,20 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const PreviewIcon = (props) => (
+const FileIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
+
   <svg
     aria-hidden="true"
     focusable="false"
     role="img"
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 640 512"
+    viewBox="0 0 384 512"
     {...props}
   >
     <path
       fill="currentColor"
-      d="M593.8 59.1H46.2C20.7 59.1 0 79.8 0 105.2v301.5c0 25.5 20.7 46.2 46.2 46.2h547.7c25.5 0 46.2-20.7 46.1-46.1V105.2c0-25.4-20.7-46.1-46.2-46.1zM338.5 360.6H277v-120l-61.5 76.9-61.5-76.9v120H92.3V151.4h61.5l61.5 76.9 61.5-76.9h61.5v209.2zm135.3 3.1L381.5 256H443V151.4h61.5V256H566z"
+      d="M224 136V0H24C10.7 0 0 10.7 0 24v464c0 13.3 10.7 24 24 24h336c13.3 0 24-10.7 24-24V160H248c-13.2 0-24-10.8-24-24zm160-14.1v6.1H256V0h6.1c6.4 0 12.5 2.5 17 7l97.9 98c4.5 4.5 7 10.6 7 16.9z"
     ></path>
   </svg>
   // ----------------until here---------------
@@ -22,4 +23,4 @@ const PreviewIcon = (props) => (
   //// 2. added passed properties
 );
 
-export default PreviewIcon;
+export default FileIcon;

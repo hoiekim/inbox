@@ -1,7 +1,6 @@
-import React, { useContext } from "react";
-
+import { useContext } from "react";
+import { Context } from "client";
 import HamburgerIcon from "./components/HamburgerIcon";
-import { Context } from "../../..";
 
 const LeftMenu = () => {
   const {

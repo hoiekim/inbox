@@ -1,6 +1,6 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const ShareIcon = (props) => (
+const SendIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
   <svg
@@ -13,7 +13,7 @@ const ShareIcon = (props) => (
   >
     <path
       fill="currentColor"
-      d="M503.691 189.836L327.687 37.851C312.281 24.546 288 35.347 288 56.015v80.053C127.371 137.907 0 170.1 0 322.326c0 61.441 39.581 122.309 83.333 154.132 13.653 9.931 33.111-2.533 28.077-18.631C66.066 312.814 132.917 274.316 288 272.085V360c0 20.7 24.3 31.453 39.687 18.164l176.004-152c11.071-9.562 11.086-26.753 0-36.328z"
+      d="M476 3.2L12.5 270.6c-18.1 10.4-15.8 35.6 2.2 43.2L121 358.4l287.3-253.2c5.5-4.9 13.3 2.6 8.6 8.3L176 407v80.5c0 23.6 28.5 32.9 42.5 15.8L282 426l124.6 52.2c14.2 6 30.4-2.9 33-18.2l72-432C515 7.8 493.3-6.8 476 3.2z"
     ></path>
   </svg>
   // ----------------until here---------------
@@ -22,4 +22,4 @@ const ShareIcon = (props) => (
   //// 2. added passed properties
 );
 
-export default ShareIcon;
+export default SendIcon;

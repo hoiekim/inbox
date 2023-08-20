@@ -1,4 +1,10 @@
-import React, { Suspense, useContext, useState } from "react";
+import {
+  Suspense,
+  TouchEventHandler,
+  UIEventHandler,
+  useContext,
+  useState
+} from "react";
 import { Writer, Accounts, Mails } from "./components";
 import { Context } from "client";
 import "./index.scss";
@@ -19,7 +25,7 @@ const Box = () => {
   const [swipeAmount, setSwipeAmount] = useState(0);
   const [page, setPage] = useState(1);
 
-  const onPaneScroll: React.UIEventHandler<HTMLDivElement> = (e) => {
+  const onPaneScroll: UIEventHandler<HTMLDivElement> = (e) => {
     const { scrollHeight, offsetHeight, scrollTop } = e.currentTarget;
     if (scrollHeight - 100 <= offsetHeight + scrollTop) setPage(page + 1);
   };
@@ -118,12 +124,12 @@ const Box = () => {
     }
   }
 
-  const onPaneTouchStart: React.TouchEventHandler<HTMLDivElement> = (e) => {
+  const onPaneTouchStart: TouchEventHandler<HTMLDivElement> = (e) => {
     touchStartPosition.x = e.changedTouches[0]?.clientX;
     touchStartPosition.y = e.changedTouches[0]?.clientY;
   };
 
-  const onPaneTouchMove: React.TouchEventHandler<HTMLDivElement> = (e) => {
+  const onPaneTouchMove: TouchEventHandler<HTMLDivElement> = (e) => {
     const { x, y } = touchStartPosition;
     const newX = e.changedTouches[0]?.clientX;
     const newY = e.changedTouches[0]?.clientY;
@@ -132,7 +138,7 @@ const Box = () => {
     else setSwipeAmount(newX - x);
   };
 
-  const onPaneTouchEnd: React.TouchEventHandler<HTMLDivElement> = () => {
+  const onPaneTouchEnd: TouchEventHandler<HTMLDivElement> = () => {
     if (swipeOpenAccounts) setIsAccountsOpen(true);
     if (swipeCloseAccounts) setIsAccountsOpen(false);
     if (swipeOpenWriter) setIsWriterOpen(true);

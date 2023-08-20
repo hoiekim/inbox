@@ -1,11 +1,15 @@
-import React, { useState, useContext, useEffect, useRef } from "react";
+import {
+  useState,
+  useContext,
+  useEffect,
+  useRef,
+  ReactEventHandler
+} from "react";
 import { useQuery } from "react-query";
-
-import { Context, ContextType, call } from "client";
-import FileIcon from "client/Box/components/FileIcon";
-
-import { BodyGetResponse } from "server";
 import { AttachmentType, MailBodyData } from "common";
+import { BodyGetResponse } from "server";
+import { Context, ContextType, call } from "client";
+import FileIcon from "client/Box";
 
 interface Props {
   mailId: string;
@@ -136,7 +140,7 @@ ${data.html}
 </script>
 `;
 
-    const onLoadIframe: React.ReactEventHandler<HTMLIFrameElement> = (e) => {
+    const onLoadIframe: ReactEventHandler<HTMLIFrameElement> = (e) => {
       setIsLoadingIframe(false);
       audjstMailContnetSize(e.target as HTMLIFrameElement);
     };

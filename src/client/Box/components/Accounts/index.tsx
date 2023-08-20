@@ -1,4 +1,12 @@
-import React, { useState, useContext, useEffect } from "react";
+import {
+  useState,
+  useContext,
+  useEffect,
+  Dispatch,
+  SetStateAction,
+  ChangeEventHandler,
+  KeyboardEventHandler
+} from "react";
 import { useQuery } from "react-query";
 
 import {
@@ -39,7 +47,7 @@ let searchDelay: NodeJS.Timeout;
 const Accounts = ({
   setPage
 }: {
-  setPage: React.Dispatch<React.SetStateAction<number>>;
+  setPage: Dispatch<SetStateAction<number>>;
 }) => {
   const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
     null
@@ -284,14 +292,14 @@ const Accounts = ({
       );
     });
 
-    const onChangeSearch: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const onChangeSearch: ChangeEventHandler<HTMLInputElement> = (e) => {
       clearTimeout(searchDelay);
       searchDelay = setTimeout(() => {
         setSelectedAccount(e.target.value);
       }, 500);
     };
 
-    const onKeyDownSearch: React.KeyboardEventHandler<HTMLInputElement> = (
+    const onKeyDownSearch: KeyboardEventHandler<HTMLInputElement> = (
       e: any
     ) => {
       if (e.key === "Enter") {

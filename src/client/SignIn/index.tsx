@@ -1,15 +1,11 @@
 import { useState, useContext, useEffect } from "react";
 import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
-import { Notifier, call } from "client";
-
-import LoginIcon from "./components/LoginIcon";
-
-import { Context } from "..";
-
-import "./index.scss";
-import { LoginPostResponse } from "server";
 import { SignedUser, SignedUserType } from "common";
+import { LoginPostResponse } from "server";
+import { Notifier, call, Context } from "client";
+import LoginIcon from "./components/LoginIcon";
+import "./index.scss";
 
 const Home = () => {
   const { setUserInfo } = useContext(Context);

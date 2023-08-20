@@ -6,6 +6,16 @@ import {
   SetStateAction
 } from "react";
 import { useQuery } from "react-query";
+import { marked } from "marked";
+import { MailHeaderData, MailSearchResult } from "common";
+
+import {
+  HeadersGetResponse,
+  MarkMailPostBody,
+  MarkMailPostResponse,
+  SearchGetResponse,
+  MailDeleteResponse
+} from "server";
 
 import {
   MailHeader,
@@ -22,18 +32,8 @@ import {
 
 import { Context, Category, QueryCache, call } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
-import {
-  HeadersGetResponse,
-  MarkMailPostBody,
-  MarkMailPostResponse,
-  SearchGetResponse,
-  MailDeleteResponse
-} from "server";
 
 import "./index.scss";
-
-import { marked } from "marked";
-import { MailHeaderData, MailSearchResult } from "common";
 
 const GettingStarted = () => {
   const queryUrl = "/text/getting_started.md";

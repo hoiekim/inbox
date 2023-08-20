@@ -1,6 +1,6 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const UserEditIcon = (props) => (
+const UserEditIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
   <svg

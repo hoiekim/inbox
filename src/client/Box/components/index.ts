@@ -1,12 +1,12 @@
-import React from "react";
+import { lazy } from "react";
 
 import { Category, queryClient } from "client";
 import { AccountsCache } from "./Accounts";
 import { MailsCache } from "./Mails";
 
-export const Writer = React.lazy(() => import("./Writer"));
-export const Mails = React.lazy(() => import("./Mails"));
-export const Accounts = React.lazy(() => import("./Accounts"));
+export const Writer = lazy(() => import("./Writer"));
+export const Mails = lazy(() => import("./Mails"));
+export const Accounts = lazy(() => import("./Accounts"));
 
 export { default as FileIcon } from "./FileIcon";
 

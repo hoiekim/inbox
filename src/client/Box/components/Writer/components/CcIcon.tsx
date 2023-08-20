@@ -1,6 +1,6 @@
-import React from "react";
+import { SVGProps } from "react";
 
-const CcIcon = (props) => (
+const CcIcon = (props: SVGProps<SVGSVGElement>) => (
   // license = https://fontawesome.com/license
   // ----------------from here----------------
   <svg

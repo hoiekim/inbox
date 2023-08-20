@@ -1,8 +1,7 @@
 import { useContext } from "react";
+import { Context } from "client";
 import LeftMenu from "./components/LeftMenu";
 import RightMenu from "./components/RightMenu";
-import { Context } from "..";
-
 import "./index.scss";
 
 const Header = () => {
