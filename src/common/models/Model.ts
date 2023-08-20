@@ -4,8 +4,6 @@ import { Constructor } from "./miscellaneous";
  * Similar to Object.assign, but it deep-copies the source's data and uses
  * `clone` method of the source's object if it exists. Also it doesn't copy
  * any functions.
- * @param target
- * @param source
  * @returns target with source's data copied to it.
  * @example
  * const target = { a: 1 };
@@ -37,6 +35,7 @@ const assign = (target: any, source: any) => {
 /**
  * Overrides all properties in `source` to `target` except for the properties that
  * match names in `exclude` list.
+ * @returns target with source's properties overridden to it.
  */
 const override = (target: any, source: any, exclude: string[] = []) => {
   for (const prop of Object.getOwnPropertyNames(source)) {
@@ -85,7 +84,7 @@ export class Model<T = unknown> {
   /**
    * Mixes `Model` into a given class and returns the mixed class. All methods in
    * `Model` will be overriden to the target class except for the constructor.
-   * @param constFunc a class to be mixed into.
+   * @param constFunc a class to mix `Model` into.
    * @returns the mixed class.
    * @example
    * class MapModel extends Model.mixin(Map<string, string>) {}

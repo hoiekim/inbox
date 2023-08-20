@@ -50,7 +50,11 @@ export class Notifier {
     if (!this.isNotificationAvailable) return;
     if (Notification.permission !== "granted") return;
 
-    const registered = getLocalStorageItem("push_subscription_id");
+    const existing = await navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .catch(console.error);
+
+    if (existing) return;
 
     try {
       const publicKey = await call
@@ -67,14 +71,10 @@ export class Notifier {
         })
         .then((s) => s as unknown as PushSubscription);
 
-      const push_subscription_id = await call
-        .post<SubscribePostResponse, SubscribePostBody>("/api/push/subscribe", {
-          old_subscription_id: registered,
-          subscription
-        })
-        .then(({ body }) => body);
-
-      setLocalStorageItem("push_subscription_id", push_subscription_id);
+      await call.post<SubscribePostResponse, SubscribePostBody>(
+        "/api/push/subscribe",
+        { subscription }
+      );
 
       console.log("Subscribed to push notifications");
     } catch (error) {

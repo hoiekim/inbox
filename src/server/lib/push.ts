@@ -149,9 +149,7 @@ export const notifyNewMails = async (usernames: string[]) => {
     storedSubscriptions.map((subscription) => {
       const { push_subscription_id, username } = subscription;
 
-      const badge_count = notifications.get(username);
-      if (badge_count === undefined) return;
-
+      const badge_count = notifications.get(username) || 0;
       const incrementedBadgeCount = badge_count + 1;
 
       const message =

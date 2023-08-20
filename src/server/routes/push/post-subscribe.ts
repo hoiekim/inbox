@@ -1,15 +1,9 @@
 import { PushSubscription } from "web-push";
-import {
-  Route,
-  storeSubscription,
-  deleteSubscription,
-  AUTH_ERROR_MESSAGE
-} from "server";
+import { Route, storeSubscription, AUTH_ERROR_MESSAGE } from "server";
 
 export type SubscribePostResponse = string;
 
 export interface SubscribePostBody {
-  old_subscription_id: string;
   subscription: PushSubscription;
 }
 
@@ -22,9 +16,7 @@ export const postSubscribeRoute = new Route<SubscribePostResponse>(
 
     const { id: userId } = user;
     const body: SubscribePostBody = req.body;
-    const { old_subscription_id, subscription } = body;
-
-    if (old_subscription_id) deleteSubscription(old_subscription_id);
+    const { subscription } = body;
     const { _id: id } = await storeSubscription(userId, subscription);
 
     return { status: "success", body: id };

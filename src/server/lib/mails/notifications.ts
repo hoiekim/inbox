@@ -41,7 +41,7 @@ export const getNotifications = async (
     }
   });
 
-  const notifications = new Notifications();
+  const notifications = new Notifications(users.map((u) => [u.username, 0]));
 
   await response.then((r) => {
     const buckets = r.aggregations?.address.buckets;
