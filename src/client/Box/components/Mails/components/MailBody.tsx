@@ -9,7 +9,7 @@ import { useQuery } from "react-query";
 import { AttachmentType, MailBodyData } from "common";
 import { BodyGetResponse } from "server";
 import { Context, ContextType, call } from "client";
-import FileIcon from "client/Box";
+import FileIcon from "client/Box/components/FileIcon";
 
 interface Props {
   mailId: string;
@@ -91,9 +91,8 @@ const MailBody = ({ mailId }: Props) => {
       (attachment: AttachmentType, i: number) => {
         const onClickAttachment = () => {
           fetch(`/api/mails/attachment/${attachment.content.data}`)
-            .then((r) => Promise.all([r.arrayBuffer(), r.json()]))
-            .then(([buffer, json]) => {
-              if (json?.status === "failed") return;
+            .then((r) => r.arrayBuffer())
+            .then((buffer) => {
               const link = document.createElement("a");
               const blob = new Blob([buffer], { type: attachment.contentType });
               const objectUrl = URL.createObjectURL(blob);
