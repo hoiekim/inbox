@@ -36,7 +36,9 @@ export const getAttachmentFilePath = (id?: string) => {
 };
 
 export const getAttachment = (id: string) => {
-  return fs.readFileSync(`./attachments/${id}`);
+  const filePath = getAttachmentFilePath(id);
+  if (fs.existsSync(filePath)) return fs.readFileSync(filePath);
+  return undefined;
 };
 
 export const getText = (html: string) => {

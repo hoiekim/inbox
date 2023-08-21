@@ -52,18 +52,14 @@ export const getMailHeaders = async (
     _source: mailHeaderKeys.map((k) => `mail.${k}`),
     from,
     size,
-    query: {
-      bool: {
-        must
-      }
-    },
+    query: { bool: { must } },
     sort: { "mail.date": "desc" }
   });
 
   return response.hits.hits
     .map(({ _id, _source }): MailHeaderData | undefined => {
       const mail = _source?.mail;
-      return mail && { id: _id, ...mail };
+      return mail && new MailHeaderData({ id: _id, ...mail });
     })
     .filter((m): m is MailHeaderData => !!m);
 };

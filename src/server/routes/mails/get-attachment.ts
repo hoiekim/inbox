@@ -6,7 +6,8 @@ export const getAttachmentRoute = new Route<Buffer>(
   async (req) => {
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
-
-    return getAttachment(req.params.id);
+    const attachment = await getAttachment(req.params.id);
+    if (attachment === undefined) return { status: "failed" };
+    return attachment;
   }
 );

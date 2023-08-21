@@ -1,11 +1,11 @@
-import { MailSearchResult, SignedUser, Pagination } from "common";
+import { MailHeaderData, SignedUser, Pagination } from "common";
 import { elasticsearchClient, index } from "server";
 
 export const searchMail = async (
   user: SignedUser,
   value: string,
   field?: string
-): Promise<MailSearchResult[]> => {
+): Promise<MailHeaderData[]> => {
   value = value.replace(/</g, "").replace(/>/g, "");
 
   const pattern = /([\!\*\+\-\=\<\>\&\|\(\)\[\]\{\}\^\~\?\:\\/"])/g;
@@ -25,7 +25,7 @@ export const searchMail = async (
 
   const { from, size } = new Pagination();
 
-  type SearchReturn = Omit<MailSearchResult, "id" | "highlight">;
+  type SearchReturn = Omit<MailHeaderData, "id" | "highlight">;
 
   const searchResultKeys: (keyof SearchReturn)[] = [
     "subject",
@@ -53,12 +53,12 @@ export const searchMail = async (
   });
 
   return response.hits.hits
-    .map((e): MailSearchResult | undefined => {
+    .map((e): MailHeaderData | undefined => {
       const { _id, _source } = e;
       const mail = _source?.mail;
       if (!mail) return;
       const { read, date, from, to, subject } = mail;
-      return {
+      return new MailHeaderData({
         id: _id,
         subject,
         date,
@@ -66,7 +66,7 @@ export const searchMail = async (
         to,
         read,
         highlight: e.highlight
-      };
+      });
     })
-    .filter((m): m is MailSearchResult => !!m);
+    .filter((m): m is MailHeaderData => !!m);
 };

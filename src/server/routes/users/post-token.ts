@@ -1,3 +1,4 @@
+import { MailDataToSend } from "common";
 import {
   Route,
   createAuthenticationMail,
@@ -40,7 +41,7 @@ export const postTokenRoute = new Route<TokenPostResponse>(
       username
     );
 
-    await sendMail(signedAdminUser, authenticationEamil);
+    await sendMail(signedAdminUser, new MailDataToSend(authenticationEamil));
 
     startTimer(id);
 

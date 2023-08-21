@@ -1,7 +1,7 @@
-import { MailBodyData } from "common";
+import { MailBodyDataType } from "common";
 import { AUTH_ERROR_MESSAGE, Route, getMailBody } from "server";
 
-export type BodyGetResponse = MailBodyData;
+export type BodyGetResponse = MailBodyDataType;
 
 export const getBodyRoute = new Route<BodyGetResponse>(
   "GET",

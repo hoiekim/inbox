@@ -1,4 +1,4 @@
-import { MailHeaderData } from "common";
+import { MailHeaderDataType } from "common";
 import {
   Route,
   getMailHeaders,
@@ -7,7 +7,7 @@ import {
   AUTH_ERROR_MESSAGE
 } from "server";
 
-export type HeadersGetResponse = MailHeaderData[];
+export type HeadersGetResponse = MailHeaderDataType[];
 
 export const getHeadersRoute = new Route<HeadersGetResponse>(
   "GET",

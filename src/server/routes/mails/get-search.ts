@@ -1,7 +1,7 @@
-import { MailSearchResult } from "common";
+import { MailHeaderDataType } from "common";
 import { AUTH_ERROR_MESSAGE, Route, searchMail } from "server";
 
-export type SearchGetResponse = MailSearchResult[];
+export type SearchGetResponse = MailHeaderDataType[];
 
 export const getSearchRoute = new Route<SearchGetResponse>(
   "GET",

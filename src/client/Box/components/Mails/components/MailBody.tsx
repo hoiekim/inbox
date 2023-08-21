@@ -26,7 +26,7 @@ const MailBody = ({ mailId }: Props) => {
 
   const getMail = async () => {
     const { status, body, message } = await call.get<BodyGetResponse>(queryUrl);
-    if (status === "success") return body as BodyGetResponse;
+    if (status === "success") return new MailBodyData(body);
     else throw new Error(message);
   };
   const query = useQuery<MailBodyData>(queryUrl, getMail);
@@ -91,17 +91,18 @@ const MailBody = ({ mailId }: Props) => {
       (attachment: AttachmentType, i: number) => {
         const onClickAttachment = () => {
           fetch(`/api/mails/attachment/${attachment.content.data}`)
-            .then((r) => r.arrayBuffer())
-            .then((r) => {
+            .then((r) => Promise.all([r.arrayBuffer(), r.json()]))
+            .then(([buffer, json]) => {
+              if (json?.status === "failed") return;
               const link = document.createElement("a");
-              const blob = new Blob([r], { type: attachment.contentType });
+              const blob = new Blob([buffer], { type: attachment.contentType });
               const objectUrl = URL.createObjectURL(blob);
               link.href = objectUrl;
               link.target = "_black";
               link.download = attachment.filename;
-              return link;
+              link.click();
             })
-            .then((link) => link.click());
+            .catch(console.error);
         };
         return (
           <div

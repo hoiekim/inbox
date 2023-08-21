@@ -7,7 +7,7 @@ import {
 } from "react";
 import { useQuery } from "react-query";
 import { marked } from "marked";
-import { MailHeaderData, MailSearchResult } from "common";
+import { MailHeaderData } from "common";
 
 import {
   HeadersGetResponse,
@@ -81,7 +81,7 @@ export class MailsCache extends QueryCache<MailHeaderData[]> {
 }
 
 interface RenderedMailProps {
-  mail: MailHeaderData | MailSearchResult;
+  mail: MailHeaderData;
   i: number;
   activeMailId: ActiveMailMap;
   setActiveMailId: Dispatch<SetStateAction<ActiveMailMap>>;
@@ -365,8 +365,9 @@ const RenderedMails = ({ page }: { page: number }) => {
     const { status, body, message } = await call.get<
       HeadersGetResponse | SearchGetResponse
     >(queryUrl);
-    if (status === "success") return body || [];
-    else throw new Error(message);
+    if (status === "success") {
+      return body?.map((d) => new MailHeaderData(d)) || [];
+    } else throw new Error(message);
   };
   const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
     onSuccess: (data) => {
@@ -494,7 +495,7 @@ const RenderedMails = ({ page }: { page: number }) => {
           else {
             let i = 0;
             while (new Date(newData[i]?.date) > new Date(mail.date)) i++;
-            newData.splice(i, 0, { ...mail });
+            newData.splice(i, 0, new MailHeaderData({ ...mail }));
           }
         }
 

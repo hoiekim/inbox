@@ -1,9 +1,9 @@
-import { MailDataToSend } from "common";
+import { MailDataToSend, MailDataToSendType } from "common";
 import { Route, sendMail, AUTH_ERROR_MESSAGE } from "server";
 
 export type SendMailPostResponse = undefined;
 
-export type SendMailPostBody = MailDataToSend;
+export type SendMailPostBody = MailDataToSendType;
 
 export const postSendMailRoute = new Route<SendMailPostResponse>(
   "POST",
@@ -15,7 +15,7 @@ export const postSendMailRoute = new Route<SendMailPostResponse>(
     const body: SendMailPostBody = req.body;
     const attachments = req.files?.attachments;
 
-    await sendMail(user, { ...body }, attachments);
+    await sendMail(user, new MailDataToSend({ ...body }), attachments);
 
     return { status: "success" };
   }
