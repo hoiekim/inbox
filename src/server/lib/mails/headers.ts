@@ -27,13 +27,13 @@ export const getMailHeaders = async (
 
   const mailHeaderKeys: (keyof SearchReturn)[] = [
     "read",
+    "saved",
     "date",
     "subject",
     "from",
     "to",
     "cc",
     "bcc",
-    "label",
     "insight"
   ];
 

@@ -41,7 +41,7 @@ export class MailsSynchronizer {
             if (!e.read) return acc + 1;
             return acc;
           case Category.SavedMails:
-            if (e.label === "saved") return acc + 1;
+            if (e.saved) return acc + 1;
             return acc;
           default:
             return acc + 1;

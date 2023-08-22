@@ -12,13 +12,11 @@ const MailHeader = (props: MailHeaderProps) => {
   const { isWriterOpen } = useContext(Context);
   const { date, time, duration } = getDateForMailHeader(new Date(mail.date));
 
-  const saved = "label" in mail && mail.label === "saved";
-
   const classes = ["mailcard"];
 
   if (!mail.read) classes.push("unread");
+  if (mail.saved) classes.push("star");
   if (!isWriterOpen) classes.push("shadow");
-  if (saved) classes.push("star");
 
   const cc = "cc" in mail ? mail.cc : undefined;
   const bcc = "bcc" in mail ? mail.bcc : undefined;

@@ -119,7 +119,6 @@ const RenderedMail = ({
   openedKebab,
   setOpenedKebab
 }: RenderedMailProps) => {
-  const saved = "label" in mail && mail.label === "saved";
   const isActive = !!activeMailId[mail.id];
 
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
@@ -195,8 +194,8 @@ const RenderedMail = ({
   };
 
   const onClickStar = () => {
-    requestMarkSaved(mail, !saved);
-    markSavedInQueryData(mail, !saved);
+    requestMarkSaved(mail, !mail.saved);
+    markSavedInQueryData(mail, !mail.saved);
   };
 
   const onClickRobot = () => {
@@ -207,7 +206,7 @@ const RenderedMail = ({
 
   if (!mail.read) classes.push("unread");
   if (!isWriterOpen) classes.push("shadow");
-  if (saved) classes.push("star");
+  if (mail.saved) classes.push("star");
 
   let searchHighlight;
 
@@ -265,7 +264,9 @@ const RenderedMail = ({
       ) : null}
       <div
         className={
-          "actionBox" + (isKebabOpen ? " open" : "") + (saved ? " saved" : "")
+          "actionBox" +
+          (isKebabOpen ? " open" : "") +
+          (mail.saved ? " saved" : "")
         }
       >
         {isKebabOpen ? (
@@ -276,7 +277,11 @@ const RenderedMail = ({
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
             >
-              {saved ? <SolidStarIcon className="star" /> : <EmptyStarIcon />}
+              {mail.saved ? (
+                <SolidStarIcon className="star" />
+              ) : (
+                <EmptyStarIcon />
+              )}
             </div>
             <div
               className="iconBox cursor"
@@ -310,7 +315,7 @@ const RenderedMail = ({
                 <RobotIcon />
               </div>
             )}
-            {saved && (
+            {mail.saved && (
               <div className="iconBox cursor" onClick={onClickStar}>
                 <SolidStarIcon className="star" />
               </div>
@@ -485,7 +490,7 @@ const RenderedMails = ({ page }: { page: number }) => {
         newData.find((e, i) => {
           if (e.id === mailId) {
             foundIndex = i;
-            e.label = save ? "saved" : "";
+            e.saved = save;
             return true;
           }
           return false;

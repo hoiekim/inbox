@@ -6,13 +6,13 @@ import { Model } from "../Model";
 export interface MailHeaderDataType {
   id: string;
   read: boolean;
+  saved: boolean;
   date: DateString;
   subject: string;
   from?: MailAddressType;
   to?: MailAddressType;
   cc?: MailAddressType;
   bcc?: MailAddressType;
-  label?: string;
   insight?: Insight;
   highlight?: {
     subject?: string[];
@@ -29,11 +29,11 @@ export class MailHeaderData
   subject: string = "No Subject";
   date: DateString = new Date().toISOString();
   read: boolean = false;
+  saved: boolean = false;
   from?: MailAddressType;
   to?: MailAddressType;
   cc?: MailAddressType;
   bcc?: MailAddressType;
-  label?: string;
   insight?: Insight;
   highlight?: {
     subject?: string[];
