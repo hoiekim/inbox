@@ -1,6 +1,6 @@
 import { PushSubscription } from "web-push";
-import { PublicKeyGetResponse } from "server";
-import { call } from "client";
+import { PublicKeyGetResponse, RefreshGetResponse } from "server";
+import { call, getLocalStorageItem, setLocalStorageItem } from "client";
 import {
   SubscribePostBody,
   SubscribePostResponse
@@ -53,10 +53,18 @@ export class Notifier {
       .then((registration) => registration.pushManager.getSubscription())
       .catch(console.error);
 
-    if (existing) return;
+    const savedSubscriptionId = getLocalStorageItem("push_subscription_id");
+
+    if (existing && savedSubscriptionId) {
+      const apiPath = "/api/push/refresh/" + savedSubscriptionId;
+      const refreshResult = await call.get<RefreshGetResponse>(apiPath);
+      if (refreshResult.status === "success") return;
+    }
+
+    existing?.unsubscribe();
 
     try {
-      const publicKey = await call
+      const applicationServerKey = await call
         .get<PublicKeyGetResponse>("/api/push/public-key")
         .then(({ body }) => body);
 
@@ -64,16 +72,15 @@ export class Notifier {
       const registration = await navigator.serviceWorker.ready;
 
       const subscription = await registration.pushManager
-        .subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: publicKey
-        })
+        .subscribe({ userVisibleOnly: true, applicationServerKey })
         .then((s) => s as unknown as PushSubscription);
 
-      await call.post<SubscribePostResponse, SubscribePostBody>(
-        "/api/push/subscribe",
-        { subscription }
-      );
+      const callPost = call.post<SubscribePostResponse, SubscribePostBody>;
+      const apiPath = "/api/push/subscribe";
+      const postResult = await callPost(apiPath, { subscription });
+      const { body: newSubscriptionId } = postResult;
+
+      setLocalStorageItem("push_subscription_id", newSubscriptionId);
 
       console.log("Subscribed to push notifications");
     } catch (error) {

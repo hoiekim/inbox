@@ -22,5 +22,6 @@ export const getLocalStorageItem = (key: string) => {
 };
 
 export const setLocalStorageItem = (key: string, item: any) => {
+  console.log(key, item);
   window.localStorage.setItem(key, JSON.stringify(item));
 };

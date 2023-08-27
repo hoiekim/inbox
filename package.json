@@ -74,7 +74,10 @@
     "extends": [
       "react-app",
       "react-app/jest"
-    ]
+    ],
+    "rules": {
+      "@typescript-eslint/no-useless-constructor": "off"
+    }
   },
   "browserslist": {
     "production": [

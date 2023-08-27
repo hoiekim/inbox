@@ -6,7 +6,11 @@ export const getRefreshRoute = new Route<RefreshGetResponse>(
   "GET",
   "/refresh/:id",
   async (req) => {
-    await refreshSubscription(req.params.id);
-    return { status: "success" };
+    const result = await refreshSubscription(req.params.id);
+    if (result.updated) {
+      return { status: "success" };
+    } else {
+      return { status: "failed", message: "No subscription found" };
+    }
   }
 );

@@ -11,8 +11,7 @@ import { QueryClient, QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
 import { Account, SignedUser } from "common";
-import { RefreshGetResponse } from "server";
-import { DomainGetResponse } from "server/routes/mails/get-domain";
+import { DomainGetResponse } from "server";
 
 import {
   Header,
@@ -21,8 +20,8 @@ import {
   SignUp,
   useLocalStorage,
   Notifier,
-  getLocalStorageItem,
-  call
+  call,
+  getUser as callUser
 } from "client";
 
 export enum Category {
@@ -130,20 +129,15 @@ const App = ({ user: session }: Props) => {
     window.addEventListener("scroll", () => {
       window.scrollTo(window.scrollX, window.scrollY);
     });
-
-    const refresh = () => {
-      const push_subscription_id = getLocalStorageItem("push_subscription_id");
-      if (!push_subscription_id) return;
-      call.get<RefreshGetResponse>("/api/push/refresh/" + push_subscription_id);
-    };
-
-    window.addEventListener("focus", () => {
-      if (Date.now() - lastRefresh.current < 1000 * 60 * 60 * 24) return;
-      refresh();
+    window.addEventListener("focus", async () => {
+      const user = await callUser();
+      if (!user) return;
+      const duration = Date.now() - lastRefresh.current;
+      const oneDay = 1000 * 60 * 60 * 24;
+      if (duration < oneDay) return;
+      new Notifier().subscribe();
       lastRefresh.current = Date.now();
     });
-
-    refresh();
   }, []);
 
   useEffect(() => {
