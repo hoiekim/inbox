@@ -17,10 +17,20 @@ export class QueryCache<T> {
 }
 
 export const getLocalStorageItem = (key: string) => {
-  const item = window.localStorage.getItem(key);
-  return item && JSON.parse(item);
+  try {
+    const item = window.localStorage.getItem(key);
+    return item && JSON.parse(item);
+  } catch (e) {
+    console.log("LocalStorage error");
+    console.log(e);
+    return undefined;
+  }
 };
 
 export const setLocalStorageItem = (key: string, item: any) => {
-  window.localStorage.setItem(key, JSON.stringify(item));
+  if (item === undefined) {
+    window.localStorage.removeItem(key);
+  } else {
+    window.localStorage.setItem(key, JSON.stringify(item));
+  }
 };
