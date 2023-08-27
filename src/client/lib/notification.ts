@@ -25,12 +25,12 @@ export class Notifier {
 
   setBadge = (number: number) => {
     if (!this.isBadgeAvailable) return;
-    (navigator as any).setAppBadge(number).catch(console.log);
+    (navigator as any).setAppBadge(number).catch(console.error);
   };
 
   clearBadge = () => {
     if (!this.isBadgeAvailable) return;
-    (navigator as any).clearAppBadge().catch(console.log);
+    (navigator as any).clearAppBadge().catch(console.error);
   };
 
   requestPermission = () => {
@@ -49,9 +49,9 @@ export class Notifier {
     if (!this.isNotificationAvailable) return;
     if (Notification.permission !== "granted") return;
 
-    const existing = await navigator.serviceWorker.ready
-      .then((registration) => registration.pushManager.getSubscription())
-      .catch(console.error);
+    await navigator.serviceWorker.register("/service-worker.js");
+    const registration = await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
 
     const savedSubscriptionId = getLocalStorageItem("push_subscription_id");
 
@@ -62,14 +62,12 @@ export class Notifier {
     }
 
     existing?.unsubscribe();
+    setLocalStorageItem("push_subscription_id", undefined);
 
     try {
       const applicationServerKey = await call
         .get<PublicKeyGetResponse>("/api/push/public-key")
         .then(({ body }) => body);
-
-      await navigator.serviceWorker.register("/service-worker.js");
-      const registration = await navigator.serviceWorker.ready;
 
       const subscription = await registration.pushManager
         .subscribe({ userVisibleOnly: true, applicationServerKey })

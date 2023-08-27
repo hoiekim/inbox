@@ -57,6 +57,63 @@ export const getUsers = async (users: Partial<User>[]): Promise<User[]> => {
     .filter((u): u is User => !!u);
 };
 
+export const getActiveUsers = async (
+  users: Partial<User>[]
+): Promise<SignedUser[]> => {
+  const userQueries = users.map((user) => {
+    const must: QueryDslQueryContainer[] = [];
+    Object.entries(user).forEach(([key, value]) => {
+      if (key === "password") return;
+      must.push({ term: { [`user.${key}`]: value } });
+    });
+    return { bool: { must } };
+  });
+
+  const matchUsers = {
+    bool: {
+      must: [{ term: { type: "user" } }, { bool: { should: userQueries } }]
+    }
+  };
+
+  const sessionQueries = users.map((user) => {
+    const must: QueryDslQueryContainer[] = [];
+    Object.entries(user).forEach(([key, value]) => {
+      if (key === "password") return;
+      must.push({ term: { [`session.user.${key}`]: value } });
+    });
+    return { bool: { must } };
+  });
+
+  const matchSessions = {
+    bool: {
+      must: [
+        { term: { type: "session" } },
+        { bool: { should: sessionQueries } }
+      ]
+    }
+  };
+
+  const response = await elasticsearchClient.search({
+    query: { bool: { should: [matchUsers, matchSessions] } }
+  });
+
+  const activeUserIds = new Set<string>();
+
+  response.hits.hits.forEach(({ _source }) => {
+    const session = _source?.session;
+    if (!session?.user.id) return;
+    activeUserIds.add(session.user.id);
+  });
+
+  return response.hits.hits
+    .map(({ _source }) => {
+      const foundUser = _source?.user;
+      return foundUser && new User(foundUser);
+    })
+    .map((u) => u?.getSigned())
+    .filter((u): u is SignedUser => !!u && activeUserIds.has(u.id));
+};
+
 const deleteUser = (id: string) => {
   return elasticsearchClient.delete({ index, id });
 };

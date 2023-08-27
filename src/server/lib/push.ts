@@ -1,6 +1,12 @@
 import webPush, { PushSubscription } from "web-push";
 import { Pagination, SignedUser, StoredPushSubscription } from "common";
-import { elasticsearchClient, index, getNotifications, getUsers } from "server";
+import {
+  elasticsearchClient,
+  index,
+  getNotifications,
+  getUsers,
+  getActiveUsers
+} from "server";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
@@ -136,13 +142,11 @@ export const refreshSubscription = async (id: string) => {
 };
 
 export const notifyNewMails = async (usernames: string[]) => {
-  const users = await getUsers(usernames.map((username) => ({ username })));
-  const signedUsers = users
-    .map((u) => u.getSigned())
-    .filter((u): u is SignedUser => !!u);
+  const partialUsers = usernames.map((username) => ({ username }));
+  const users = await getActiveUsers(partialUsers);
   const [notifications, storedSubscriptions] = await Promise.all([
-    getNotifications(signedUsers),
-    getSubscriptions(signedUsers)
+    getNotifications(users),
+    getSubscriptions(users)
   ]);
 
   return Promise.all(

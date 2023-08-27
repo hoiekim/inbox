@@ -32,7 +32,8 @@ const Home = () => {
   if (mutation.data?.status === "failed") infoMessage = "🤔 Wrong Password";
 
   useEffect(() => {
-    if (mutation.data && setUserInfo) {
+    const isSuccess = mutation.data?.status === "success";
+    if (isSuccess && setUserInfo) {
       const user = new SignedUser(
         mutation.data?.body as unknown as SignedUserType
       );
