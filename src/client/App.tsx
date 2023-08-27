@@ -21,7 +21,7 @@ import {
   useLocalStorage,
   Notifier,
   call,
-  getUser as callUser
+  callUser
 } from "client";
 
 export enum Category {
