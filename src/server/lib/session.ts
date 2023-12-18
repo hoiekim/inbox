@@ -81,7 +81,7 @@ export class ElasticsearchSessionStore extends Store {
    * Repeatedly run every hour to remove expired session data.
    */
   private autoRemoveScheduler = () => {
-    purgeSessions();
+    purgeSessions().catch(console.error);
     setTimeout(this.autoRemoveScheduler, 1000 * 60 * 60);
   };
 
