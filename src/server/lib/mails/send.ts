@@ -1,8 +1,6 @@
+import { randomUUID } from "crypto";
 import { UploadedFile } from "express-fileupload";
-import sgMail, { MailDataRequired as SendgridMail } from "@sendgrid/mail";
-import { AttachmentData as SendgridAttachment } from "@sendgrid/helpers/classes/attachment";
 import { AttachmentType, Mail, MailDataToSend, SignedUser } from "common";
-
 import {
   getDomain,
   getUserDomain,
@@ -10,8 +8,7 @@ import {
   getText,
   saveBuffer
 } from "server";
-
-sgMail.setApiKey(process.env.SENDGRID_KEY || "");
+import { sendMailgunMail } from "./mailgun";
 
 export type UploadedFileDynamicArray = UploadedFile | UploadedFile[];
 
@@ -21,43 +18,27 @@ export const sendMail = async (
   files?: UploadedFileDynamicArray
 ) => {
   const { id: userId, username } = user;
-  const sendgridMail = getSendgridMail(username, mailToSend, files);
-  const response = await sgMail.send(sendgridMail);
+  try {
+    const response = await sendMailgunMail(username, mailToSend, files);
 
-  console.info("Sendgrid email sending request succeeded");
+    console.info("Email sending request succeeded");
 
-  if (!isToMyself(mailToSend.to)) {
-    const messageId = response[0].headers["x-message-id"];
-    const sentMail = await getSentMail(username, mailToSend, messageId, files);
-    await saveMail(userId, sentMail);
+    if (!isToMyself(mailToSend.to)) {
+      const messageId = response.id || randomUUID();
+      const sentMail = await getSentMail(
+        username,
+        mailToSend,
+        messageId,
+        files
+      );
+      await saveMail(userId, sentMail);
+    }
+
+    return response;
+  } catch (error: any) {
+    console.error("Email sending request failed");
+    throw error;
   }
-
-  return response;
-};
-
-const getSendgridMail = (
-  username: string,
-  mailToSend: MailDataToSend,
-  files?: UploadedFileDynamicArray
-): SendgridMail => {
-  const { sender, senderFullName, to, cc, bcc, subject, html, inReplyTo } =
-    mailToSend;
-
-  const text = getText(html);
-  const userDomain = getUserDomain(username);
-  const from = { name: senderFullName, email: `${sender}@${userDomain}` };
-
-  return {
-    from,
-    subject,
-    text,
-    html,
-    to: addressParser(to),
-    cc: cc && addressParser(cc),
-    bcc: bcc && addressParser(bcc),
-    attachments: getAttachmentsToSend(files),
-    headers: inReplyTo ? { inReplyTo } : undefined
-  };
 };
 
 const getSentMail = async (
@@ -99,27 +80,6 @@ const getSentMail = async (
   });
 };
 
-const getAttachmentsToSend = (files?: UploadedFileDynamicArray) => {
-  const noFiles = Array.isArray(files) ? !files.length : !files;
-  if (noFiles) return undefined;
-
-  const attachmentsToSend: SendgridAttachment[] = [];
-
-  const parseFile = ({ name, data, mimetype }: UploadedFile) => {
-    attachmentsToSend.push({
-      filename: name,
-      content: data.toString("base64"),
-      type: mimetype,
-      disposition: "attachment"
-    });
-  };
-
-  if (Array.isArray(files)) files.forEach(parseFile);
-  else if (files) parseFile(files as UploadedFile);
-
-  return attachmentsToSend;
-};
-
 const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
   const noFiles = Array.isArray(files) ? !files.length : !files;
   if (noFiles) return undefined;
@@ -141,7 +101,7 @@ const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
   return attachmentsToSave;
 };
 
-const addressParser = (str: string) => {
+export const addressParser = (str: string) => {
   const result = str
     .split(",")
     .map((e) => e.replace(/ /g, ""))

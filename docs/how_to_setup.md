@@ -7,7 +7,7 @@ You need these to use Inbox:
 - A domain name
 - A server to run Inbox
 
-If you want to send emails using Inbox. You need a 3rd party email sending service.(Currently we're using [Sendgrid](https://sendgrid.com/))
+If you want to send emails using Inbox. You need a 3rd party email sending service.(Currently we're using [Mailgun](https://mailgun.com))
 
 For detailed instruction, please keep reading this document.
 
@@ -20,18 +20,18 @@ For detailed instruction, please keep reading this document.
 2. Copy `.env.example` file and name it `.env.local` then determine environment variables in `.env.local` file as following.
 
    ```
-   EMAIL_DOMAIN=            // Domain name to use when sending & receiving mails.
-   APP_HOSTNAME=            // Domain name that hosts inbox web app.
+   EMAIL_DOMAIN             // Domain name to use when sending & receiving mails.
+   APP_HOSTNAME             // Domain name that hosts inbox web app.
 
-   SECRET=                  // Encoding secret for session data. Any value works.
-   ADMIN_PW=                // Password to login to Inbox as admin user.
+   SECRET                   // Encoding secret for session data. Any value works.
+   ADMIN_PW                 // Password to login to Inbox as admin user.
 
-   SENDGRID_KEY=            // API key that is issued by sendgrid. Used to send mails.
+   MAILGUN_KEY              // (optional) API key issued by Mailgun. Used to send emails.
 
-   OPENAI_KEY=              // (optional) API key that is issued by openai. Used to get insight of emails.
+   OPENAI_KEY               // (optional) API key issued by OpenAI. Used to get insight of emails.
 
-   PUSH_VAPID_PUBLIC_KEY    // (optional) API key that is issued by Push. Used to send push notifications.
-   PUSH_VAPID_PRIVATE_KEY   // (optional) API key that is issued by Push. Used to send push notifications.
+   PUSH_VAPID_PUBLIC_KEY    // (optional) API key issued by Push. Used to send push notifications.
+   PUSH_VAPID_PRIVATE_KEY   // (optional) API key issued by Push. Used to send push notifications.
    ```
 
 ## 2. Setup DNS Records
@@ -46,11 +46,10 @@ Make sure your domain's MX record points to the server you're running Inbox. In 
 
 In the example above, `A` record is pointing `mail.domain.com` to `0.0.0.0` and `MX` record is pointing emails to `mail.domain.com`. When some email is sent to `something@domain.com`, it will look up `domain.com`'s `MX` record and send the email data to where it points to. So it will be eventually delivered to `0.0.0.0`
 
-## 3. Setup Sendgrid
+## 3. Setup Mailgun
 
-1. Go to [Sendgrid](https://sendgrid.com/) and make an account.
-2. Go to [dashboard](https://app.sendgrid.com/guide/integrate/langs/nodejs) and get api key.
-3. Copy api key and paste it in `.env.local` file.
+1. Go to [Mailgun](https://mailgun.com) and follow instructions to get started.
+2. Get the API key and paste it in `.env.local` file.
 
 If you want to use this app only for receiving mails, skip this step.
 

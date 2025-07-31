@@ -27,7 +27,7 @@ export const getInsight = async (mail: IncomingMail) => {
   const prompt = promptPrefix + promptBody;
   const completion = await openai
     .createChatCompletion({
-      model: "gpt-3.5-turbo-0301",
+      model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }]
     })
     .catch((err) => {
