@@ -1,5 +1,6 @@
 import "./config";
 import express, { json } from "express";
+import net from "net";
 import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
@@ -11,7 +12,8 @@ import {
   initializeAdminUser,
   ElasticsearchSessionStore,
   cleanSubscriptions,
-  elasticsearchIsAvailable
+  elasticsearchIsAvailable,
+  imapListener
 } from "server";
 
 import apiRouter from "./routes";
@@ -73,10 +75,21 @@ const initializeMailin = () => {
   });
 };
 
+const initializeImap = () => {
+  return new Promise<void>((res) => {
+    const server = net.createServer(imapListener);
+    server.listen(1430, () => {
+      console.log("IMAP server listening on port 1430");
+      res();
+    });
+  });
+};
+
 const start = async () => {
   await initializeElasticsearch();
   await initializeExpress();
   initializeMailin();
+  await initializeImap();
   cleanSubscriptions();
 };
 
