@@ -80,18 +80,21 @@ export class ImapSession {
 
     try {
       this.selectedMailbox = cleanName;
-      const count = await this.store.countMessages(cleanName);
+      const countResult = await this.store.countMessages(cleanName);
 
-      if (count === null) {
+      if (countResult === null) {
         this.selectedMailbox = null;
         return this.write(`${tag} NO Mailbox does not exist\r\n`);
       }
 
-      this.write(`* ${count} EXISTS\r\n`);
-      this.write(`* ${count} RECENT\r\n`);
-      this.write(`* OK [UNSEEN ${count}] Message ${count} is first unseen\r\n`);
+      const { total, unread } = countResult;
+
+      this.write(`* ${total} EXISTS\r\n`);
+      this.write(
+        `* OK [UNSEEN ${unread}] Message ${unread} is first unseen\r\n`
+      );
       this.write(`* OK [UIDVALIDITY 1] UIDs valid\r\n`);
-      this.write(`* OK [UIDNEXT ${count + 1}] Predicted next UID\r\n`);
+      this.write(`* OK [UIDNEXT ${total + 1}] Predicted next UID\r\n`);
       this.write(`* FLAGS (\\Flagged \\Seen)\r\n`);
       this.write(`* OK [PERMANENTFLAGS (\\Flagged \\Seen)] Limited\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
@@ -281,31 +284,7 @@ export class ImapSession {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
-    if (!this.selectedMailbox) {
-      return this.write(`${tag} BAD No mailbox selected\r\n`);
-    }
-
-    if (args.length < 2) {
-      return this.write(
-        `${tag} BAD COPY requires sequence set and destination mailbox\r\n`
-      );
-    }
-
-    const [seq, dest] = args;
-    const cleanDest = dest.replace(/^"(.*)"$/, "$1");
-
-    try {
-      const idx = parseInt(seq) - 1;
-      if (isNaN(idx) || idx < 0) {
-        return this.write(`${tag} BAD Invalid sequence number\r\n`);
-      }
-
-      await this.store.copyMessage(this.selectedMailbox, cleanDest, idx);
-      this.write(`${tag} OK COPY completed\r\n`);
-    } catch (error) {
-      console.error("Copying message failed:", error);
-      this.write(`${tag} NO COPY failed\r\n`);
-    }
+    return this.write(`${tag} NO [UNSUPPORTED] COPY not supported\r\n`);
   };
 
   expunge = async (tag: string) => {

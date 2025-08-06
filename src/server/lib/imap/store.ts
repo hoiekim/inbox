@@ -9,6 +9,10 @@ import {
   TO_ADDRESS_FIELD
 } from "server";
 import { accountToBox, boxToAccount } from "./util";
+import {
+  AggregationsStringTermsBucket,
+  AggregationsTermsAggregateBase
+} from "@elastic/elasticsearch/lib/api/types";
 
 // class that creates "store" object
 export class Store {
@@ -44,30 +48,47 @@ export class Store {
     }
   };
 
-  countMessages = async (box: string): Promise<number | null> => {
+  countMessages = async (
+    box: string
+  ): Promise<{ total: number; unread: number } | null> => {
     try {
       const isSent = box.startsWith("Sent/");
       const accountName = boxToAccount(this.user.username, box);
       const accountField = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
-      const response = await elasticsearchClient.search({
-        index,
-        size: 0,
-        query: {
-          bool: {
-            must: [
-              { term: { type: "mail" } },
-              { term: { "user.id": this.user.id } },
-              { term: { [accountField]: accountName } },
-              { term: { "mail.sent": isSent } }
-            ]
-          }
-        }
-      });
+      type AddressAggregationBucket = AggregationsStringTermsBucket & {
+        read?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
+      };
 
-      return response.hits.total && typeof response.hits.total === "object"
-        ? response.hits.total.value
-        : 0;
+      const response =
+        await elasticsearchClient.search<AddressAggregationBucket>({
+          index,
+          size: 0,
+          query: {
+            bool: {
+              must: [
+                { term: { type: "mail" } },
+                { term: { "user.id": this.user.id } },
+                { term: { [accountField]: accountName } },
+                { term: { "mail.sent": isSent } }
+              ]
+            }
+          },
+          aggs: { read: { terms: { field: "mail.read", size: 10000 } } }
+        });
+
+      let total = response.hits.total ?? 0;
+      if (typeof total === "object") total = total.value;
+
+      let unread = 0;
+      const readBuckets = response.aggregations?.read?.buckets;
+
+      if (Array.isArray(readBuckets)) {
+        const unread_doc_count = readBuckets.find((b) => !b.key)?.doc_count;
+        if (unread_doc_count) unread = unread_doc_count;
+      }
+
+      return { total, unread };
     } catch (error) {
       console.error("Error counting messages:", error);
       return null;
@@ -169,47 +190,6 @@ export class Store {
     } catch (error) {
       console.error("Error setting flags:", error);
       return false;
-    }
-  };
-
-  copyMessage = async (
-    fromBox: string,
-    toBox: string,
-    index: number
-  ): Promise<void> => {
-    try {
-      const cachedMessages = this.messageCache.get(fromBox);
-      if (!cachedMessages || index >= cachedMessages.length) {
-        throw new Error("Message not found");
-      }
-
-      const message = cachedMessages[index];
-      const body = await getMailBody(this.user.id, message.id);
-
-      if (!body) {
-        throw new Error("Message body not found");
-      }
-
-      // Create a copy of the message in the destination mailbox
-      // This is a simplified implementation - in a real scenario,
-      // you might want to create a new document with different metadata
-      const isSentBox = toBox.startsWith("Sent/");
-      const targetAccount = isSentBox ? toBox.replace("Sent/", "") : toBox;
-
-      const newMail = new Mail({
-        ...message,
-        html: body.html,
-        text: this.extractTextFromHtml(body.html),
-        attachments: body.attachments,
-        sent: isSentBox
-      });
-
-      // In a real implementation, you would save this to Elasticsearch
-      // For now, we'll just log the operation
-      console.log(`Copied message from ${fromBox} to ${toBox}`);
-    } catch (error) {
-      console.error("Error copying message:", error);
-      throw error;
     }
   };
 
