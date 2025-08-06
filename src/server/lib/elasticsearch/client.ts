@@ -67,6 +67,7 @@ export const elasticsearchClient = {
   deleteByQuery: (r: DeleteByQueryRequest) => client.deleteByQuery(r),
   search: searchDocument,
   msearch: multiSearchDocument,
+  count: (r: SearchRequest) => client.count(r),
   get: (r: GetRequest) => client.get<Document>(r),
   cluster: {
     health: (r: ClusterHealthRequest) => client.cluster.health(r)
