@@ -2,7 +2,8 @@ import bcrypt from "bcrypt";
 import { Socket } from "net";
 import { Store } from "./store";
 import { getUser } from "server";
-import { formatAddressList, formatHeaders } from "./util";
+import { formatAddressList, formatBodyStructure, formatHeaders } from "./util";
+import { MailType } from "common";
 
 export class ImapSession {
   private selectedMailbox: string | null = null;
@@ -104,7 +105,7 @@ export class ImapSession {
     }
   };
 
-  fetchMessages = async (tag: string, args: string[]) => {
+  fetchMessagesV1 = async (tag: string, args: string[]) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -144,7 +145,7 @@ export class ImapSession {
       const sectionStr = dataItemsStr.toUpperCase();
 
       if (sectionStr.includes("ENVELOPE")) {
-        // envelope needs those fields only
+        // already included
       } else if (
         sectionStr.includes("HEADER") ||
         sectionStr.includes("RFC822.HEADER")
@@ -178,7 +179,7 @@ export class ImapSession {
 
         if (sectionStr.includes("ENVELOPE")) {
           const e = {
-            date: new Date(mail.date).toUTCString(),
+            date: new Date(mail.date!).toUTCString(),
             subject: mail.subject || "",
             from: formatAddressList(mail.from?.value),
             to: formatAddressList(mail.to?.value),
@@ -229,6 +230,143 @@ export class ImapSession {
       this.write(`${tag} OK FETCH completed\r\n`);
     } catch (error) {
       console.error("Error fetching messages:", error);
+      this.write(`${tag} NO FETCH failed\r\n`);
+    }
+  };
+
+  fetchMessages = async (tag: string, args: string[]) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    if (!this.selectedMailbox) {
+      return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    if (args.length < 2) {
+      return this.write(
+        `${tag} BAD FETCH requires sequence set and data items\r\n`
+      );
+    }
+
+    const [sequenceSet, ...dataItems] = args;
+    const dataItemsStr = dataItems.join(" ").toUpperCase();
+
+    try {
+      const isUidFetch =
+        tag.startsWith("UID") ||
+        dataItemsStr.includes("UID") ||
+        args.includes("UID");
+      const [startStr, endStr] = sequenceSet.split(":");
+      const start = parseInt(startStr, 10);
+      const end = endStr ? parseInt(endStr, 10) : start;
+
+      if (isNaN(start) || (endStr && isNaN(end))) {
+        return this.write(`${tag} BAD Invalid sequence number\r\n`);
+      }
+
+      const requestedFields = new Set<keyof MailType>(["uid"]);
+      let needsBody = false;
+
+      if (dataItemsStr.includes("ENVELOPE")) {
+        requestedFields.add("subject");
+        requestedFields.add("from");
+        requestedFields.add("to");
+        requestedFields.add("cc");
+        requestedFields.add("bcc");
+        requestedFields.add("date");
+        requestedFields.add("messageId");
+      }
+      if (dataItemsStr.includes("FLAGS")) {
+        requestedFields.add("read");
+        requestedFields.add("saved");
+      }
+      if (dataItemsStr.includes("BODYSTRUCTURE")) {
+        requestedFields.add("attachments");
+      }
+      if (
+        dataItemsStr.includes("BODY[TEXT]") ||
+        dataItemsStr.includes("RFC822.TEXT")
+      ) {
+        requestedFields.add("text");
+        needsBody = true;
+      }
+      if (dataItemsStr.includes("BODY[]") || dataItemsStr.includes("RFC822")) {
+        requestedFields.add("text");
+        requestedFields.add("html");
+        requestedFields.add("subject");
+        requestedFields.add("from");
+        requestedFields.add("to");
+        requestedFields.add("cc");
+        requestedFields.add("bcc");
+        requestedFields.add("date");
+        needsBody = true;
+      }
+
+      const messages = await this.store.getMessages(
+        this.selectedMailbox,
+        start,
+        end,
+        Array.from(requestedFields)
+      );
+
+      const isDomainInbox = this.selectedMailbox === "INBOX";
+      let i = start - 1;
+
+      for (const mail of messages) {
+        const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+        const seqNum = isUidFetch ? uid : ++i;
+
+        const parts: string[] = [];
+        if (dataItemsStr.includes("UID")) {
+          parts.push(`UID ${mail.uid}`);
+        }
+        if (dataItemsStr.includes("FLAGS")) {
+          const flags = [];
+          if (mail.read) flags.push("\\Seen");
+          if (mail.saved) flags.push("\\Flagged");
+          parts.push(`FLAGS (${flags.join(" ")})`);
+        }
+        if (dataItemsStr.includes("ENVELOPE")) {
+          const dateString = new Date(mail.date!).toUTCString();
+          const subject = mail.subject || "";
+          const from = formatAddressList(mail.from?.value);
+          const to = formatAddressList(mail.to?.value);
+          const cc = formatAddressList(mail.cc?.value);
+          const bcc = formatAddressList(mail.bcc?.value);
+          const messageId = mail.messageId || "<unknown@local>";
+          const envelope = `ENVELOPE ("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
+          parts.push(envelope);
+        }
+        if (dataItemsStr.includes("BODYSTRUCTURE")) {
+          const bodyStructure = formatBodyStructure(mail);
+          parts.push(`BODYSTRUCTURE (${bodyStructure})`);
+        }
+
+        if (
+          dataItemsStr.includes("BODY[]") ||
+          dataItemsStr.includes("RFC822")
+        ) {
+          const full = `${formatHeaders(mail)}\r\n\r\n${
+            mail.text || mail.html || ""
+          }`;
+          const len = Buffer.byteLength(full);
+          parts.push(`BODY[] {${len}}\r\n${full}`);
+        } else if (
+          dataItemsStr.includes("BODY[TEXT]") ||
+          dataItemsStr.includes("RFC822.TEXT")
+        ) {
+          const bodyText = mail.text || "";
+          const len = Buffer.byteLength(bodyText);
+          parts.push(`BODY[TEXT] {${len}}\r\n${bodyText}`);
+        }
+
+        this.write(`* ${seqNum} FETCH (${parts.join(" ")})\r\n`);
+      }
+
+      this.write(`${tag} OK FETCH completed\r\n`);
+    } catch (error) {
+      console.error("FETCH error", error);
       this.write(`${tag} NO FETCH failed\r\n`);
     }
   };
@@ -322,6 +460,20 @@ export class ImapSession {
       console.error("Search failed:", error);
       this.write(`${tag} NO SEARCH failed\r\n`);
     }
+  };
+
+  closeMailbox = (tag: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    if (!this.selectedMailbox) {
+      return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    // Clear the selected mailbox
+    this.selectedMailbox = null;
+    this.write(`${tag} OK CLOSE completed\r\n`);
   };
 
   logout = async (tag: string) => {

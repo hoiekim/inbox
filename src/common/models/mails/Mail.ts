@@ -93,5 +93,5 @@ export class Mail extends Model<Mail> implements MailType {
   saved: boolean = false;
   sent: boolean = false;
   insight?: Insight;
-  uid = new MailUid();
+  uid: MailUidType = new MailUid();
 }

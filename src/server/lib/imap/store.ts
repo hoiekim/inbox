@@ -1,4 +1,4 @@
-import { Mail, SignedUser, MailHeaderData, Pagination } from "common";
+import { Mail, SignedUser, MailHeaderData, Pagination, MailType } from "common";
 import {
   elasticsearchClient,
   index,
@@ -6,12 +6,14 @@ import {
   getMailHeaders,
   getMailBody,
   FROM_ADDRESS_FIELD,
-  TO_ADDRESS_FIELD
+  TO_ADDRESS_FIELD,
+  getText
 } from "server";
 import { accountToBox, boxToAccount } from "./util";
 import {
   AggregationsStringTermsBucket,
-  AggregationsTermsAggregateBase
+  AggregationsTermsAggregateBase,
+  QueryDslQueryContainer
 } from "@elastic/elasticsearch/lib/api/types";
 
 // class that creates "store" object
@@ -54,7 +56,7 @@ export class Store {
     try {
       const isSent = box.startsWith("Sent/");
       const accountName = boxToAccount(this.user.username, box);
-      const accountField = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
       type AddressAggregationBucket = AggregationsStringTermsBucket & {
         read?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
@@ -69,7 +71,7 @@ export class Store {
               must: [
                 { term: { type: "mail" } },
                 { term: { "user.id": this.user.id } },
-                { term: { [accountField]: accountName } },
+                { term: { [searchFiled]: accountName } },
                 { term: { "mail.sent": isSent } }
               ]
             }
@@ -100,54 +102,39 @@ export class Store {
     start: number,
     end: number,
     fields: string[]
-  ): Promise<Mail[]> => {
+  ): Promise<Partial<Mail>[]> => {
     try {
+      const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent/");
-      const accountName = isSent ? box.replace("Sent/", "") : box;
+      const accountName = boxToAccount(this.user.username, box);
+      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
-      const pageSize = end - start + 1;
-      const page = Math.ceil(start / pageSize);
+      const must: QueryDslQueryContainer[] = [
+        { term: { type: "mail" } },
+        { term: { "user.id": this.user.id } },
+        { term: { "mail.sent": isSent } }
+      ];
 
-      // Get mail headers first
-      const headers = await getMailHeaders(this.user, accountName, {
-        sent: isSent,
-        new: false,
-        saved: false,
-        pagination: new Pagination(page, pageSize)
+      if (!isDomainInbox) {
+        must.push({ term: { [searchFiled]: accountName } });
+      }
+
+      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
+
+      const response = await elasticsearchClient.search({
+        index,
+        _source: fields.map((f) => `mail.${f}`),
+        from: start - 1,
+        size: end - start + 1,
+        query: { bool: { must } },
+        sort: { [uidField]: "asc" }
       });
 
-      // Cache the headers for this mailbox
-      this.messageCache.set(box, headers);
+      const mails: Partial<Mail>[] = [];
 
-      // Convert to Mail objects and fetch additional data if needed
-      const mails: Mail[] = [];
-
-      for (const header of headers) {
-        const mail = new Mail({
-          date: header.date,
-          subject: header.subject,
-          from: header.from,
-          to: header.to,
-          cc: header.cc,
-          bcc: header.bcc,
-          read: header.read,
-          saved: header.saved,
-          sent: isSent,
-          messageId: header.id,
-          text: "",
-          html: ""
-        });
-
-        // If body content is requested, fetch it
-        if (fields.includes("text") || fields.includes("html")) {
-          const body = await getMailBody(this.user.id, header.id);
-          if (body) {
-            mail.html = body.html;
-            mail.text = this.extractTextFromHtml(body.html);
-            mail.attachments = body.attachments;
-          }
-        }
-
+      for (const hit of response.hits.hits) {
+        const mailJson = hit._source?.mail as MailType;
+        const mail = new Mail(mailJson);
         mails.push(mail);
       }
 
@@ -294,19 +281,4 @@ export class Store {
       return [];
     }
   };
-
-  private extractTextFromHtml(html: string): string {
-    if (!html) return "";
-
-    // Simple HTML to text conversion
-    return html
-      .replace(/<[^>]*>/g, "") // Remove HTML tags
-      .replace(/&nbsp;/g, " ") // Replace &nbsp; with space
-      .replace(/&amp;/g, "&") // Replace &amp; with &
-      .replace(/&lt;/g, "<") // Replace &lt; with <
-      .replace(/&gt;/g, ">") // Replace &gt; with >
-      .replace(/&quot;/g, '"') // Replace &quot; with "
-      .replace(/&#39;/g, "'") // Replace &#39; with '
-      .trim();
-  }
 }

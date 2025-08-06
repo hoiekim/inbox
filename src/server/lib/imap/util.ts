@@ -1,3 +1,4 @@
+import { MailType } from "common";
 import { getUserDomain } from "server";
 
 export const formatAddressList = (value?: any): string => {
@@ -95,18 +96,40 @@ export const formatEnvelope = (mail: any): string => {
   return `(${date} ${subject} (${from}) (${sender}) (${replyTo}) (${to}) (${cc}) (${bcc}) ${inReplyTo} ${messageId})`;
 };
 
-export const formatBodyStructure = (mail: any): string => {
-  // Simple body structure for text/html emails
-  if (mail.html && mail.text) {
-    // Multipart/alternative
-    return '(("text" "plain" ("charset" "utf-8") NIL NIL "8bit" 0 0)("text" "html" ("charset" "utf-8") NIL NIL "8bit" 0 0) "alternative")';
+export const formatBodyStructure = (mail: Partial<MailType>): string => {
+  const parts: string[] = [];
+
+  const buildTextPart = (type: "plain" | "html", content: string) => {
+    const size = Buffer.byteLength(content, "utf-8");
+    return `("text" "${type}" ("charset" "utf-8") NIL NIL "8bit" ${size} ${
+      content.split("\n").length
+    })`;
+  };
+
+  if (mail.text && mail.html) {
+    // multipart/alternative with text and html
+    parts.push(buildTextPart("plain", mail.text));
+    parts.push(buildTextPart("html", mail.html));
+    return `(${parts.join(" ")} "alternative")`;
+  } else if (mail.text) {
+    parts.push(buildTextPart("plain", mail.text));
   } else if (mail.html) {
-    // Single HTML part
-    return '("text" "html" ("charset" "utf-8") NIL NIL "8bit" 0 0)';
-  } else {
-    // Single text part
-    return '("text" "plain" ("charset" "utf-8") NIL NIL "8bit" 0 0)';
+    parts.push(buildTextPart("html", mail.html));
   }
+
+  if (mail.attachments && mail.attachments.length > 0) {
+    const attachmentParts = mail.attachments.map((att) => {
+      const [type, subtype] = att.contentType.split("/");
+      const disposition = "attachment";
+      const size = att.size || 0;
+      return `("${type}" "${subtype}" ("name" "${att.filename}") NIL NIL "base64" ${size} NIL NIL ("${disposition}" ("filename" "${att.filename}")))`;
+    });
+
+    const allParts = [...parts, ...attachmentParts];
+    return `(${allParts.join(" ")} "mixed")`;
+  }
+
+  return parts[0] ?? '("text" "plain" ("charset" "utf-8") NIL NIL "8bit" 0 0)';
 };
 
 export const escapeImapString = (str: string): string => {
