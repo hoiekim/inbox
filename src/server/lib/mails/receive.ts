@@ -9,7 +9,9 @@ import {
   IncomingMailAddressValue,
   IncomingAttachment,
   Mail,
-  Attachment
+  Attachment,
+  MailUid,
+  MaskedUser
 } from "common";
 
 import {
@@ -22,7 +24,9 @@ import {
   getAttachmentFilePath,
   getAttachmentId,
   notifyNewMails,
-  getInsight
+  getInsight,
+  getDomainUidNext,
+  getAccountUidNext
 } from "server";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
@@ -50,10 +54,14 @@ export const saveMailHandler = async (_: any, data: IncomingMail) => {
 };
 
 const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
-  const [user, mail] = await Promise.all([
-    getUser({ username }),
-    convertMail(incoming)
-  ]);
+  const user = await getUser({ username });
+  if (!user) {
+    console.warn(`User not found for username: ${username}`);
+    console.warn("Skipping saving mail:", incoming);
+    return;
+  }
+
+  const mail = await convertMail(user, incoming);
 
   return saveMail(user?.id, mail);
 };
@@ -78,7 +86,10 @@ export const saveMail = async (userId: string | undefined, mail: Mail) => {
     });
 };
 
-export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
+export const convertMail = async (
+  user: MaskedUser,
+  incoming: IncomingMail
+): Promise<Mail> => {
   const from = convertMailAddress(incoming.from);
   const to = convertMailAddress(incoming.to);
   const cc = convertMailAddress(incoming.cc);
@@ -101,6 +112,13 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
 
   const text = getText(html);
   const insight = await getInsight({ subject, from, to, text });
+  const envelopeToAddress = envelopeTo[0]?.address || "";
+  const [domainUid, accountUid] = await Promise.all([
+    getDomainUidNext(user),
+    getAccountUidNext(user, envelopeToAddress)
+  ]);
+
+  const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
 
   return new Mail({
     messageId,
@@ -119,7 +137,8 @@ export const convertMail = async (incoming: IncomingMail): Promise<Mail> => {
     subject,
     read: false,
     saved: false,
-    sent: false
+    sent: false,
+    uid
   });
 };
 
@@ -190,7 +209,10 @@ export const saveBuffer = (buffer: Buffer | string): Promise<string> => {
   const attachmentFilePath = getAttachmentFilePath(id);
   return new Promise((res, rej) => {
     try {
-      fs.writeFileSync(attachmentFilePath, Buffer.from(buffer));
+      if (typeof buffer === "string") {
+        buffer = Buffer.from(buffer, "base64");
+      }
+      fs.writeFileSync(attachmentFilePath, buffer as unknown as Uint8Array);
       res(id);
     } catch (reason) {
       rej(reason);

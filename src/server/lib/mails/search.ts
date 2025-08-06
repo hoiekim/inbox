@@ -1,5 +1,10 @@
-import { MailHeaderData, SignedUser, Pagination } from "common";
-import { elasticsearchClient, index } from "server";
+import { MailHeaderData, SignedUser, Pagination, MaskedUser } from "common";
+import {
+  elasticsearchClient,
+  FROM_ADDRESS_FIELD,
+  index,
+  TO_ADDRESS_FIELD
+} from "server";
 
 export const searchMail = async (
   user: SignedUser,
@@ -69,4 +74,66 @@ export const searchMail = async (
       });
     })
     .filter((m): m is MailHeaderData => !!m);
+};
+
+interface MaxUidAggregation {
+  maxUid: { value: number };
+}
+
+export const getDomainUidNext = async (
+  user: MaskedUser,
+  sent: boolean = false
+): Promise<number | null> => {
+  try {
+    const response = await elasticsearchClient.search<MaxUidAggregation>({
+      index,
+      size: 0,
+      query: {
+        bool: {
+          must: [
+            { term: { type: "mail" } },
+            { term: { "user.id": user.id } },
+            { term: { "mail.sent": sent } }
+          ]
+        }
+      },
+      aggs: { maxUid: { max: { field: "mail.uid.domain" } } }
+    });
+
+    return (response.aggregations?.maxUid?.value ?? 0) + 1;
+  } catch (error) {
+    console.error("Error getting next UID:", error);
+    return 1;
+  }
+};
+
+export const getAccountUidNext = async (
+  user: MaskedUser,
+  account: string,
+  sent: boolean = false
+): Promise<number | null> => {
+  try {
+    const addressField = sent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+
+    const response = await elasticsearchClient.search<MaxUidAggregation>({
+      index,
+      size: 0,
+      query: {
+        bool: {
+          must: [
+            { term: { type: "mail" } },
+            { term: { "user.id": user.id } },
+            { term: { [addressField]: account } },
+            { term: { "mail.sent": sent } }
+          ]
+        }
+      },
+      aggs: { maxUid: { max: { field: "mail.uid.account" } } }
+    });
+
+    return (response.aggregations?.maxUid?.value ?? 0) + 1;
+  } catch (error) {
+    console.error("Error getting next UID:", error);
+    return 1;
+  }
 };

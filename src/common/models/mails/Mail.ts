@@ -42,6 +42,17 @@ export class Attachment extends Model<Attachment> implements AttachmentType {
   size: number = 0;
 }
 
+export interface MailUidType {
+  domain: number;
+  account: number;
+}
+
+@Model.prefillable
+export class MailUid extends Model<MailUid> implements MailUidType {
+  domain = 0;
+  account = 0;
+}
+
 export interface MailType {
   attachments?: AttachmentType[];
   from?: MailAddressType;
@@ -60,6 +71,7 @@ export interface MailType {
   saved: boolean;
   sent: boolean;
   insight?: Insight;
+  uid: MailUidType;
 }
 
 @Model.prefillable
@@ -81,4 +93,5 @@ export class Mail extends Model<Mail> implements MailType {
   saved: boolean = false;
   sent: boolean = false;
   insight?: Insight;
+  uid = new MailUid();
 }

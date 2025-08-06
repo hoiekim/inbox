@@ -1,12 +1,20 @@
 import { randomUUID } from "crypto";
 import { UploadedFile } from "express-fileupload";
-import { AttachmentType, Mail, MailDataToSend, SignedUser } from "common";
+import {
+  AttachmentType,
+  Mail,
+  MailDataToSend,
+  MailUid,
+  SignedUser
+} from "common";
 import {
   getDomain,
   getUserDomain,
   saveMail,
   getText,
-  saveBuffer
+  saveBuffer,
+  getDomainUidNext,
+  getAccountUidNext
 } from "server";
 import { sendMailgunMail } from "./mailgun";
 
@@ -25,12 +33,7 @@ export const sendMail = async (
 
     if (!isToMyself(mailToSend.to)) {
       const messageId = response.id || randomUUID();
-      const sentMail = await getSentMail(
-        username,
-        mailToSend,
-        messageId,
-        files
-      );
+      const sentMail = await getSentMail(user, mailToSend, messageId, files);
       await saveMail(userId, sentMail);
     }
 
@@ -42,17 +45,25 @@ export const sendMail = async (
 };
 
 const getSentMail = async (
-  username: string,
+  user: SignedUser,
   mailToSend: MailDataToSend,
   messageId: string,
   files?: UploadedFileDynamicArray
 ): Promise<Mail> => {
+  const { username } = user;
   const { sender, senderFullName, to, cc, bcc, subject, html } = mailToSend;
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
   const fromEmail = `${sender}@${userDomain}`;
   const attachments = (await getAttachmentsToSave(files)) || [];
+
+  const [domainUid, accountUid] = await Promise.all([
+    getDomainUidNext(user, true),
+    getAccountUidNext(user, fromEmail, true)
+  ]);
+
+  const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
 
   return new Mail({
     subject,
@@ -76,7 +87,8 @@ const getSentMail = async (
     },
     read: true,
     sent: true,
-    saved: false
+    saved: false,
+    uid
   });
 };
 

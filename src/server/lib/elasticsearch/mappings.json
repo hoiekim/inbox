@@ -100,6 +100,13 @@
             "action_items": { "type": "text" },
             "suggested_reply": { "type": "text" }
           }
+        },
+        "uid": {
+          "type": "object",
+          "properties": {
+            "domain": { "type": "integer" },
+            "account": { "type": "integer" }
+          }
         }
       }
     },
