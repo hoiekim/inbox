@@ -66,15 +66,26 @@ export const formatHeaders = (mail: any): string => {
   // Add MIME headers
   headers.push("MIME-Version: 1.0");
 
-  if (mail.html && mail.text) {
-    headers.push('Content-Type: multipart/alternative; boundary="boundary123"');
-  } else if (mail.html) {
+  const hasText = mail.text && mail.text.trim().length > 0;
+  const hasHtml = mail.html && mail.html.trim().length > 0;
+  const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+  // Determine Content-Type based on message structure
+  if (hasAttachments) {
+    // multipart/mixed for messages with attachments
+    const boundary = "boundary_" + Date.now();
+    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  } else if (hasText && hasHtml) {
+    // multipart/alternative for messages with both text and HTML
+    const boundary = "boundary_" + Date.now();
+    headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  } else if (hasHtml) {
     headers.push("Content-Type: text/html; charset=utf-8");
+    headers.push("Content-Transfer-Encoding: 8bit");
   } else {
     headers.push("Content-Type: text/plain; charset=utf-8");
+    headers.push("Content-Transfer-Encoding: 8bit");
   }
-
-  headers.push("Content-Transfer-Encoding: 8bit");
 
   return headers.join("\r\n");
 };
@@ -97,39 +108,141 @@ export const formatEnvelope = (mail: any): string => {
 };
 
 export const formatBodyStructure = (mail: Partial<MailType>): string => {
-  const parts: string[] = [];
+  /**
+   * IMAP BODYSTRUCTURE format:
+   * For single part: (type subtype (param-list) id description encoding size [lines] [md5] [disposition] [language] [location])
+   * For multipart: ((part1)(part2)...(partN) subtype (param-list) [disposition] [language] [location])
+   */
 
-  const buildTextPart = (type: "plain" | "html", content: string) => {
+  const buildSinglePart = (
+    type: string,
+    subtype: string,
+    content: string,
+    params: Record<string, string> = {},
+    encoding: string = "8bit",
+    disposition?: { type: string; params: Record<string, string> }
+  ): string => {
     const size = Buffer.byteLength(content, "utf-8");
-    return `("text" "${type}" ("charset" "utf-8") NIL NIL "8bit" ${size} ${
-      content.split("\n").length
-    })`;
+    const lines = type === "text" ? content.split(/\r?\n/).length : undefined;
+    
+    // Build parameter list
+    const paramList = Object.keys(params).length > 0 
+      ? `(${Object.entries(params).map(([k, v]) => `"${k}" "${v}"`).join(" ")})`
+      : "NIL";
+    
+    // Build disposition
+    const dispositionStr = disposition 
+      ? `("${disposition.type}" (${Object.entries(disposition.params).map(([k, v]) => `"${k}" "${v}"`).join(" ")}))`
+      : "NIL";
+    
+    const parts = [
+      `"${type}"`,
+      `"${subtype}"`,
+      paramList,
+      "NIL", // body ID
+      "NIL", // body description
+      `"${encoding}"`,
+      size.toString()
+    ];
+    
+    if (lines !== undefined) {
+      parts.push(lines.toString());
+    }
+    
+    parts.push("NIL"); // MD5
+    parts.push(dispositionStr);
+    parts.push("NIL"); // language
+    parts.push("NIL"); // location
+    
+    return `(${parts.join(" ")})`;
   };
 
-  if (mail.text && mail.html) {
-    // multipart/alternative with text and html
-    parts.push(buildTextPart("plain", mail.text));
-    parts.push(buildTextPart("html", mail.html));
-    return `(${parts.join(" ")} "alternative")`;
-  } else if (mail.text) {
-    parts.push(buildTextPart("plain", mail.text));
-  } else if (mail.html) {
-    parts.push(buildTextPart("html", mail.html));
+  const buildTextPart = (subtype: "plain" | "html", content: string): string => {
+    return buildSinglePart("text", subtype, content, { charset: "utf-8" });
+  };
+
+  const buildAttachmentPart = (attachment: any): string => {
+    const [type, subtype] = (attachment.contentType || "application/octet-stream").split("/");
+    const filename = attachment.filename || "unnamed";
+    const size = attachment.size || 0;
+    
+    const params: Record<string, string> = {};
+    if (filename) {
+      params.name = filename;
+    }
+    
+    const disposition = {
+      type: "attachment",
+      params: { filename }
+    };
+    
+    // For non-text types, don't include line count
+    const parts = [
+      `"${type}"`,
+      `"${subtype}"`,
+      Object.keys(params).length > 0 
+        ? `(${Object.entries(params).map(([k, v]) => `"${k}" "${v}"`).join(" ")})`
+        : "NIL",
+      "NIL", // body ID
+      "NIL", // body description
+      '"base64"', // encoding
+      size.toString(),
+      "NIL", // MD5
+      `("${disposition.type}" (${Object.entries(disposition.params).map(([k, v]) => `"${k}" "${v}"`).join(" ")}))`,
+      "NIL", // language
+      "NIL"  // location
+    ];
+    
+    return `(${parts.join(" ")})`;
+  };
+
+  const hasText = mail.text && mail.text.trim().length > 0;
+  const hasHtml = mail.html && mail.html.trim().length > 0;
+  const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+  // Case 1: Single text part (no HTML, no attachments)
+  if (hasText && !hasHtml && !hasAttachments) {
+    return buildTextPart("plain", mail.text!);
   }
 
-  if (mail.attachments && mail.attachments.length > 0) {
-    const attachmentParts = mail.attachments.map((att) => {
-      const [type, subtype] = att.contentType.split("/");
-      const disposition = "attachment";
-      const size = att.size || 0;
-      return `("${type}" "${subtype}" ("name" "${att.filename}") NIL NIL "base64" ${size} NIL NIL ("${disposition}" ("filename" "${att.filename}")))`;
+  // Case 2: Single HTML part (no text, no attachments)
+  if (!hasText && hasHtml && !hasAttachments) {
+    return buildTextPart("html", mail.html!);
+  }
+
+  // Case 3: Text and HTML (multipart/alternative)
+  if (hasText && hasHtml && !hasAttachments) {
+    const textPart = buildTextPart("plain", mail.text!);
+    const htmlPart = buildTextPart("html", mail.html!);
+    return `(${textPart} ${htmlPart} "alternative" NIL NIL NIL NIL)`;
+  }
+
+  // Case 4: Content with attachments (multipart/mixed)
+  if (hasAttachments) {
+    const bodyParts: string[] = [];
+    
+    // If we have both text and HTML, create a multipart/alternative first
+    if (hasText && hasHtml) {
+      const textPart = buildTextPart("plain", mail.text!);
+      const htmlPart = buildTextPart("html", mail.html!);
+      const alternativePart = `(${textPart} ${htmlPart} "alternative" NIL NIL NIL NIL)`;
+      bodyParts.push(alternativePart);
+    } else if (hasText) {
+      bodyParts.push(buildTextPart("plain", mail.text!));
+    } else if (hasHtml) {
+      bodyParts.push(buildTextPart("html", mail.html!));
+    }
+    
+    // Add attachment parts
+    mail.attachments!.forEach(attachment => {
+      bodyParts.push(buildAttachmentPart(attachment));
     });
-
-    const allParts = [...parts, ...attachmentParts];
-    return `(${allParts.join(" ")} "mixed")`;
+    
+    return `(${bodyParts.join(" ")} "mixed" NIL NIL NIL NIL)`;
   }
 
-  return parts[0] ?? '("text" "plain" ("charset" "utf-8") NIL NIL "8bit" 0 0)';
+  // Default case: empty text part
+  return buildTextPart("plain", "");
 };
 
 export const escapeImapString = (str: string): string => {

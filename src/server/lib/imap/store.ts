@@ -18,7 +18,7 @@ import {
 
 // class that creates "store" object
 export class Store {
-  private messageCache: Map<string, MailHeaderData[]> = new Map();
+  private messageCache: Map<string, Map<string, Partial<Mail>>> = new Map();
 
   constructor(private user: SignedUser) {}
 
@@ -102,7 +102,7 @@ export class Store {
     start: number,
     end: number,
     fields: string[]
-  ): Promise<Partial<Mail>[]> => {
+  ): Promise<Map<string, Partial<Mail>>> => {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent/");
@@ -130,18 +130,21 @@ export class Store {
         sort: { [uidField]: "asc" }
       });
 
-      const mails: Partial<Mail>[] = [];
+      const mails = new Map<string, Partial<Mail>>();
+      if (!this.messageCache.has(box)) this.messageCache.set(box, new Map());
 
       for (const hit of response.hits.hits) {
         const mailJson = hit._source?.mail as MailType;
         const mail = new Mail(mailJson);
-        mails.push(mail);
+        mails.set(hit._id, mail);
+        const cachedMails = this.messageCache.get(box)!;
+        cachedMails.set(hit._id, mail);
       }
 
       return mails;
     } catch (error) {
       console.error("Error getting messages:", error);
-      return [];
+      return new Map();
     }
   };
 
@@ -152,11 +155,23 @@ export class Store {
   ): Promise<boolean> => {
     try {
       const cachedMessages = this.messageCache.get(box);
-      if (!cachedMessages || i >= cachedMessages.length) {
+      if (!cachedMessages || i >= cachedMessages.size) {
         return false;
       }
 
-      const message = cachedMessages[i];
+      let messageId: string | undefined;
+      let message: Partial<Mail> | undefined;
+      cachedMessages.forEach((msg, id) => {
+        // TODO: handle case where i is seq number
+        if (msg.uid?.account === i) {
+          messageId = id;
+          message = msg;
+        }
+      });
+
+      if (!messageId || !message) {
+        return false;
+      }
 
       const read = flags.includes("\\Seen");
       const saved = flags.includes("\\Flagged");
@@ -164,7 +179,7 @@ export class Store {
       if (read || saved) {
         await elasticsearchClient.update({
           index,
-          id: message.id,
+          id: messageId,
           doc: { mail: { read, saved } }
         });
 

@@ -1,9 +1,10 @@
 import bcrypt from "bcrypt";
 import { Socket } from "net";
 import { Store } from "./store";
-import { getUser } from "server";
+import { getUser, markRead } from "server";
 import { formatAddressList, formatBodyStructure, formatHeaders } from "./util";
 import { MailType } from "common";
+import { FetchRequest, FetchDataItem, BodyFetch, BodySection, PartialRange, SequenceSet } from "./types";
 
 export class ImapSession {
   private selectedMailbox: string | null = null;
@@ -13,6 +14,332 @@ export class ImapSession {
   constructor(private socket: Socket) {}
 
   write = this.socket.write;
+
+  // New typed command handlers
+  capability = (tag: string) => {
+    this.write(
+      `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE STARTTLS AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
+    );
+  };
+
+  noop = (tag: string) => {
+    this.write(`${tag} OK NOOP completed\r\n`);
+  };
+
+  examineMailbox = async (tag: string, name: string) => {
+    // EXAMINE is like SELECT but read-only - for now, treat the same
+    return this.selectMailbox(tag, name);
+  };
+
+  fetchMessagesTyped = async (tag: string, fetchRequest: FetchRequest) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    if (!this.selectedMailbox) {
+      return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    try {
+      // Convert sequence set to start/end range
+      const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
+      
+      // Determine required fields based on data items
+      const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
+      
+      // Fetch messages from store
+      const messages = await this.store.getMessages(
+        this.selectedMailbox,
+        start,
+        end,
+        Array.from(requestedFields)
+      );
+
+      const isDomainInbox = this.selectedMailbox === "INBOX";
+      const isUidFetch = fetchRequest.sequenceSet.type === 'uid';
+      let i = start - 1;
+
+      // Process each message
+      const iterator = messages.entries();
+      let current = iterator.next();
+
+      while (!current.done) {
+        const [id, mail] = current.value;
+        const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+        const seqNum = isUidFetch ? uid : ++i;
+
+        // Build response parts
+        const parts = await this.buildFetchResponseParts(mail, fetchRequest.dataItems);
+        
+        // Write response
+        this.write(`* ${seqNum} FETCH (${parts.join(" ")})\r\n`);
+
+        // Mark as read if not using PEEK
+        const shouldMarkAsRead = this.shouldMarkAsRead(fetchRequest.dataItems);
+        if (shouldMarkAsRead) {
+          await markRead(id);
+        }
+
+        current = iterator.next();
+      }
+
+      this.write(`${tag} OK FETCH completed\r\n`);
+    } catch (error) {
+      console.error("FETCH error", error);
+      this.write(`${tag} NO FETCH failed\r\n`);
+    }
+  };
+
+  // Helper methods for typed FETCH
+  private convertSequenceSet(sequenceSet: SequenceSet): { start: number; end: number } {
+    // For simplicity, take the first range - TODO: Handle multiple ranges properly
+    const firstRange = sequenceSet.ranges[0];
+    return {
+      start: firstRange.start,
+      end: firstRange.end || firstRange.start
+    };
+  }
+
+  private getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailType> {
+    const fields = new Set<keyof MailType>(["uid"]);
+
+    for (const item of dataItems) {
+      switch (item.type) {
+        case 'ENVELOPE':
+          fields.add("subject");
+          fields.add("from");
+          fields.add("to");
+          fields.add("cc");
+          fields.add("bcc");
+          fields.add("date");
+          fields.add("messageId");
+          break;
+        
+        case 'FLAGS':
+          fields.add("read");
+          fields.add("saved");
+          break;
+        
+        case 'BODYSTRUCTURE':
+          fields.add("attachments");
+          fields.add("text");
+          fields.add("html");
+          break;
+        
+        case 'BODY':
+          this.addBodyFields(item, fields);
+          break;
+      }
+    }
+
+    return fields;
+  }
+
+  private addBodyFields(bodyFetch: BodyFetch, fields: Set<keyof MailType>): void {
+    switch (bodyFetch.section.type) {
+      case 'FULL':
+        fields.add("text");
+        fields.add("html");
+        fields.add("subject");
+        fields.add("from");
+        fields.add("to");
+        fields.add("cc");
+        fields.add("bcc");
+        fields.add("date");
+        fields.add("messageId");
+        break;
+      
+      case 'TEXT':
+        fields.add("text");
+        break;
+      
+      case 'HEADER':
+        fields.add("subject");
+        fields.add("from");
+        fields.add("to");
+        fields.add("cc");
+        fields.add("bcc");
+        fields.add("date");
+        fields.add("messageId");
+        break;
+      
+      case 'MIME_PART':
+        fields.add("text");
+        fields.add("html");
+        fields.add("attachments");
+        break;
+    }
+  }
+
+  private async buildFetchResponseParts(mail: any, dataItems: FetchDataItem[]): Promise<string[]> {
+    const parts: string[] = [];
+
+    for (const item of dataItems) {
+      switch (item.type) {
+        case 'UID':
+          const uid = mail.uid!.domain || mail.uid!.account;
+          parts.push(`UID ${uid}`);
+          break;
+        
+        case 'FLAGS':
+          const flags = [];
+          if (mail.read) flags.push("\\Seen");
+          if (mail.saved) flags.push("\\Flagged");
+          parts.push(`FLAGS (${flags.join(" ")})`);
+          break;
+        
+        case 'ENVELOPE':
+          const envelope = this.buildEnvelope(mail);
+          parts.push(`ENVELOPE ${envelope}`);
+          break;
+        
+        case 'BODYSTRUCTURE':
+          const bodyStructure = formatBodyStructure(mail);
+          parts.push(`BODYSTRUCTURE ${bodyStructure}`);
+          break;
+        
+        case 'BODY':
+          const bodyPart = await this.buildBodyPart(mail, item);
+          if (bodyPart) {
+            parts.push(bodyPart);
+          }
+          break;
+      }
+    }
+
+    return parts;
+  }
+
+  private buildEnvelope(mail: any): string {
+    const dateString = new Date(mail.date!).toUTCString();
+    const subject = (mail.subject || "").replace(/"/g, '\\"');
+    const from = formatAddressList(mail.from?.value);
+    const to = formatAddressList(mail.to?.value);
+    const cc = formatAddressList(mail.cc?.value);
+    const bcc = formatAddressList(mail.bcc?.value);
+    const messageId = mail.messageId || "<unknown@local>";
+    
+    return `("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
+  }
+
+  private async buildBodyPart(mail: any, bodyFetch: BodyFetch): Promise<string | null> {
+    let content = this.getBodyContent(mail, bodyFetch.section);
+    if (content === null) {
+      return null;
+    }
+
+    // Apply partial fetch if specified
+    if (bodyFetch.partial) {
+      content = this.applyPartialFetch(content, bodyFetch.partial);
+    }
+
+    const length = Buffer.byteLength(content, "utf8");
+    const sectionKey = this.getBodySectionKey(bodyFetch.section);
+    
+    return `${sectionKey} {${length}}\r\n${content}`;
+  }
+
+  private getBodyContent(mail: any, section: BodySection): string | null {
+    switch (section.type) {
+      case 'FULL':
+        return this.buildFullMessage(mail);
+      
+      case 'TEXT':
+        return mail.text || "";
+      
+      case 'HEADER':
+        return formatHeaders(mail);
+      
+      case 'MIME_PART':
+        return this.getBodyPart(mail, section.partNumber);
+      
+      default:
+        return null;
+    }
+  }
+
+  private applyPartialFetch(content: string, partial: PartialRange): string {
+    const contentBuffer = Buffer.from(content, "utf8");
+    const endPos = Math.min(partial.start + partial.length, contentBuffer.length);
+    
+    if (partial.start < contentBuffer.length) {
+      return contentBuffer.subarray(partial.start, endPos).toString("utf8");
+    } else {
+      return "";
+    }
+  }
+
+  private getBodySectionKey(section: BodySection): string {
+    switch (section.type) {
+      case 'FULL':
+        return 'BODY[]';
+      case 'TEXT':
+        return 'BODY[TEXT]';
+      case 'HEADER':
+        return 'BODY[HEADER]';
+      case 'MIME_PART':
+        return `BODY[${section.partNumber}]`;
+      default:
+        return 'BODY[]';
+    }
+  }
+
+  private shouldMarkAsRead(dataItems: FetchDataItem[]): boolean {
+    return dataItems.some(item => 
+      item.type === 'BODY' && !item.peek
+    );
+  }
+
+  // Additional command handlers for complete IMAP support
+  authenticate = async (tag: string, mechanism: string, initialResponse?: string) => {
+    // Basic AUTHENTICATE implementation - for now just reject
+    this.write(`${tag} NO AUTHENTICATE not supported\r\n`);
+  };
+
+  createMailbox = async (tag: string, mailbox: string) => {
+    this.write(`${tag} NO CREATE not supported\r\n`);
+  };
+
+  deleteMailbox = async (tag: string, mailbox: string) => {
+    this.write(`${tag} NO DELETE not supported\r\n`);
+  };
+
+  renameMailbox = async (tag: string, oldName: string, newName: string) => {
+    this.write(`${tag} NO RENAME not supported\r\n`);
+  };
+
+  subscribeMailbox = async (tag: string, mailbox: string) => {
+    this.write(`${tag} OK SUBSCRIBE completed\r\n`);
+  };
+
+  unsubscribeMailbox = async (tag: string, mailbox: string) => {
+    this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
+  };
+
+  statusMailbox = async (tag: string, mailbox: string, items: any[]) => {
+    this.write(`${tag} OK STATUS completed\r\n`);
+  };
+
+  check = async (tag: string) => {
+    this.write(`${tag} OK CHECK completed\r\n`);
+  };
+
+  searchTyped = async (tag: string, searchRequest: any) => {
+    // Convert typed search request to legacy format
+    return this.search(tag, []);
+  };
+
+  storeFlagsTyped = async (tag: string, storeRequest: any) => {
+    // Convert typed store request to legacy format
+    const { sequenceSet, operation, flags } = storeRequest;
+    const { start } = this.convertSequenceSet(sequenceSet);
+    return this.storeFlags(tag, [start.toString(), operation, ...flags]);
+  };
+
+  copyMessageTyped = async (tag: string, copyRequest: any) => {
+    // Convert typed copy request to legacy format
+    return this.copyMessage(tag, []);
+  };
 
   login = async (tag: string, args: string[]) => {
     if (args.length < 2) {
@@ -105,135 +432,6 @@ export class ImapSession {
     }
   };
 
-  fetchMessagesV1 = async (tag: string, args: string[]) => {
-    if (!this.authenticated || !this.store) {
-      return this.write(`${tag} NO Not authenticated.\r\n`);
-    }
-
-    if (!this.selectedMailbox) {
-      return this.write(`${tag} BAD No mailbox selected\r\n`);
-    }
-
-    if (args.length < 2) {
-      return this.write(
-        `${tag} BAD FETCH requires sequence set and data items\r\n`
-      );
-    }
-
-    const [seq, ...dataItems] = args;
-    const dataItemsStr = dataItems.join(" ");
-
-    try {
-      const [startStr, endStr] = seq.split(":");
-      const start = parseInt(startStr, 10);
-      const end = endStr ? parseInt(endStr, 10) : start;
-
-      if (isNaN(start) || (endStr && isNaN(end))) {
-        return this.write(`${tag} BAD Invalid sequence number\r\n`);
-      }
-
-      const requestedFields: string[] = [
-        "read",
-        "date",
-        "subject",
-        "from",
-        "to",
-        "cc",
-        "bcc"
-      ];
-
-      const sectionStr = dataItemsStr.toUpperCase();
-
-      if (sectionStr.includes("ENVELOPE")) {
-        // already included
-      } else if (
-        sectionStr.includes("HEADER") ||
-        sectionStr.includes("RFC822.HEADER")
-      ) {
-        requestedFields.push("subject", "from", "to", "cc", "bcc", "date");
-      } else if (
-        sectionStr.includes("TEXT") ||
-        sectionStr.includes("RFC822.TEXT")
-      ) {
-        requestedFields.push("text");
-      } else if (
-        sectionStr.includes("BODY[]") ||
-        sectionStr.includes("RFC822")
-      ) {
-        requestedFields.push("text", "html");
-      }
-
-      const messages = await this.store.getMessages(
-        this.selectedMailbox,
-        start,
-        end,
-        requestedFields
-      );
-
-      let i = start - 1;
-      for (const mail of messages) {
-        i++;
-        const flags = [];
-        if (mail.read) flags.push("\\Seen");
-        if (mail.saved) flags.push("\\Flagged");
-
-        if (sectionStr.includes("ENVELOPE")) {
-          const e = {
-            date: new Date(mail.date!).toUTCString(),
-            subject: mail.subject || "",
-            from: formatAddressList(mail.from?.value),
-            to: formatAddressList(mail.to?.value),
-            cc: formatAddressList(mail.cc?.value),
-            bcc: formatAddressList(mail.bcc?.value),
-            inReplyTo: null,
-            messageId: mail.messageId || "<unknown@local>"
-          };
-
-          this.write(
-            `* ${i} FETCH (ENVELOPE ("${e.date}" "${e.subject}" NIL NIL NIL (${e.from}) (${e.to}) (${e.cc}) (${e.bcc}) NIL "${e.messageId}"))\r\n`
-          );
-          continue;
-        }
-
-        let content = "";
-        if (
-          sectionStr.includes("HEADER") ||
-          sectionStr.includes("RFC822.HEADER")
-        ) {
-          content = formatHeaders(mail);
-        } else if (
-          sectionStr.includes("TEXT") ||
-          sectionStr.includes("RFC822.TEXT")
-        ) {
-          content = mail.text || "";
-        } else if (
-          sectionStr.includes("BODY[]") ||
-          sectionStr.includes("RFC822")
-        ) {
-          content = `${formatHeaders(mail)}\r\n\r\n${
-            mail.text || mail.html || ""
-          }`;
-        }
-
-        const length = Buffer.byteLength(content, "utf8");
-        const flagsStr = flags.join(" ");
-
-        if (sectionStr.includes("FLAGS")) {
-          this.write(`* ${i} FETCH (FLAGS (${flagsStr}))\r\n`);
-        } else {
-          this.write(
-            `* ${i} FETCH (FLAGS (${flagsStr}) BODY[] {${length}}\r\n${content})\r\n`
-          );
-        }
-      }
-
-      this.write(`${tag} OK FETCH completed\r\n`);
-    } catch (error) {
-      console.error("Error fetching messages:", error);
-      this.write(`${tag} NO FETCH failed\r\n`);
-    }
-  };
-
   fetchMessages = async (tag: string, args: string[]) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
@@ -268,6 +466,7 @@ export class ImapSession {
       const requestedFields = new Set<keyof MailType>(["uid"]);
       let needsBody = false;
 
+      // Parse requested data items
       if (dataItemsStr.includes("ENVELOPE")) {
         requestedFields.add("subject");
         requestedFields.add("from");
@@ -281,15 +480,34 @@ export class ImapSession {
         requestedFields.add("read");
         requestedFields.add("saved");
       }
-      if (dataItemsStr.includes("BODYSTRUCTURE")) {
+      if (
+        dataItemsStr.includes("BODYSTRUCTURE") ||
+        dataItemsStr.includes("BODY.PEEK[")
+      ) {
         requestedFields.add("attachments");
+        requestedFields.add("text");
+        requestedFields.add("html");
       }
       if (
         dataItemsStr.includes("BODY[TEXT]") ||
-        dataItemsStr.includes("RFC822.TEXT")
+        dataItemsStr.includes("RFC822.TEXT") ||
+        dataItemsStr.includes("BODY.PEEK[TEXT]")
       ) {
         requestedFields.add("text");
         needsBody = true;
+      }
+      if (
+        dataItemsStr.includes("BODY[HEADER]") ||
+        dataItemsStr.includes("RFC822.HEADER") ||
+        dataItemsStr.includes("BODY.PEEK[HEADER]")
+      ) {
+        requestedFields.add("subject");
+        requestedFields.add("from");
+        requestedFields.add("to");
+        requestedFields.add("cc");
+        requestedFields.add("bcc");
+        requestedFields.add("date");
+        requestedFields.add("messageId");
       }
       if (dataItemsStr.includes("BODY[]") || dataItemsStr.includes("RFC822")) {
         requestedFields.add("text");
@@ -300,6 +518,7 @@ export class ImapSession {
         requestedFields.add("cc");
         requestedFields.add("bcc");
         requestedFields.add("date");
+        requestedFields.add("messageId");
         needsBody = true;
       }
 
@@ -313,23 +532,30 @@ export class ImapSession {
       const isDomainInbox = this.selectedMailbox === "INBOX";
       let i = start - 1;
 
-      for (const mail of messages) {
+      const iterator = messages.entries();
+      let current = iterator.next();
+
+      while (!current.done) {
+        const [id, mail] = current.value;
         const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
         const seqNum = isUidFetch ? uid : ++i;
 
         const parts: string[] = [];
+
         if (dataItemsStr.includes("UID")) {
-          parts.push(`UID ${mail.uid}`);
+          parts.push(`UID ${uid}`);
         }
+
         if (dataItemsStr.includes("FLAGS")) {
           const flags = [];
           if (mail.read) flags.push("\\Seen");
           if (mail.saved) flags.push("\\Flagged");
           parts.push(`FLAGS (${flags.join(" ")})`);
         }
+
         if (dataItemsStr.includes("ENVELOPE")) {
           const dateString = new Date(mail.date!).toUTCString();
-          const subject = mail.subject || "";
+          const subject = (mail.subject || "").replace(/"/g, '\\"');
           const from = formatAddressList(mail.from?.value);
           const to = formatAddressList(mail.to?.value);
           const cc = formatAddressList(mail.cc?.value);
@@ -338,30 +564,91 @@ export class ImapSession {
           const envelope = `ENVELOPE ("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
           parts.push(envelope);
         }
+
         if (dataItemsStr.includes("BODYSTRUCTURE")) {
           const bodyStructure = formatBodyStructure(mail);
-          parts.push(`BODYSTRUCTURE (${bodyStructure})`);
+          parts.push(`BODYSTRUCTURE ${bodyStructure}`);
         }
 
-        if (
-          dataItemsStr.includes("BODY[]") ||
-          dataItemsStr.includes("RFC822")
-        ) {
-          const full = `${formatHeaders(mail)}\r\n\r\n${
-            mail.text || mail.html || ""
-          }`;
-          const len = Buffer.byteLength(full);
-          parts.push(`BODY[] {${len}}\r\n${full}`);
-        } else if (
-          dataItemsStr.includes("BODY[TEXT]") ||
-          dataItemsStr.includes("RFC822.TEXT")
-        ) {
-          const bodyText = mail.text || "";
-          const len = Buffer.byteLength(bodyText);
-          parts.push(`BODY[TEXT] {${len}}\r\n${bodyText}`);
+        const isPreview = dataItemsStr.includes("BODY.PEEK");
+
+        // Handle all BODY requests with unified partial fetch support
+        // This regex captures all possible BODY request formats with optional partial fetch
+        const allBodyMatches = dataItemsStr.matchAll(
+          /(BODY(?:\.PEEK)?\[([^\]]*)\]|RFC822(?:\.TEXT|\.HEADER)?|BODY(?:\.PEEK)?\[\])(?:<(\d+)\.(\d+)>)?/g
+        );
+        
+        let bodyMatch = allBodyMatches.next();
+        while (!bodyMatch.done) {
+          const [fullMatch, bodyExpr, partSpec, startStr, lengthStr] = bodyMatch.value;
+          const isPartialFetch = startStr !== undefined && lengthStr !== undefined;
+          const start = isPartialFetch ? parseInt(startStr, 10) : 0;
+          const length = isPartialFetch ? parseInt(lengthStr, 10) : 0;
+          
+          let content = "";
+          let bodyKey = "";
+          
+          // Determine content and key based on the body expression
+          if (fullMatch.includes("RFC822.TEXT")) {
+            content = mail.text || "";
+            bodyKey = "BODY[TEXT]";
+          } else if (fullMatch.includes("RFC822.HEADER")) {
+            content = formatHeaders(mail);
+            bodyKey = "BODY[HEADER]";
+          } else if (fullMatch.includes("RFC822")) {
+            content = this.buildFullMessage(mail);
+            bodyKey = "BODY[]";
+          } else if (partSpec === "") {
+            // BODY[] or BODY.PEEK[]
+            content = this.buildFullMessage(mail);
+            bodyKey = "BODY[]";
+          } else if (partSpec === "TEXT") {
+            content = mail.text || "";
+            bodyKey = "BODY[TEXT]";
+          } else if (partSpec === "HEADER") {
+            content = formatHeaders(mail);
+            bodyKey = "BODY[HEADER]";
+          } else if (partSpec && /^\d+(?:\.\d+)*$/.test(partSpec)) {
+            // Numeric part like "1", "1.2", etc.
+            const partContent = this.getBodyPart(mail, partSpec);
+            if (partContent !== null) {
+              content = partContent;
+              bodyKey = `BODY[${partSpec}]`;
+            }
+          }
+          
+          if (content && bodyKey) {
+            let finalContent = content;
+            let actualLength = Buffer.byteLength(content, "utf8");
+            
+            // Apply partial fetch if requested
+            if (isPartialFetch) {
+              const contentBuffer = Buffer.from(content, "utf8");
+              const endPos = Math.min(start + length, contentBuffer.length);
+              
+              if (start < contentBuffer.length) {
+                finalContent = contentBuffer.subarray(start, endPos).toString("utf8");
+                actualLength = Buffer.byteLength(finalContent, "utf8");
+              } else {
+                // Start position is beyond content length
+                finalContent = "";
+                actualLength = 0;
+              }
+            }
+            
+            parts.push(`${bodyKey} {${actualLength}}\r\n${finalContent}`);
+          }
+          
+          bodyMatch = allBodyMatches.next();
         }
 
         this.write(`* ${seqNum} FETCH (${parts.join(" ")})\r\n`);
+
+        if (!isPreview) {
+          await markRead(id);
+        }
+
+        current = iterator.next();
       }
 
       this.write(`${tag} OK FETCH completed\r\n`);
@@ -369,6 +656,145 @@ export class ImapSession {
       console.error("FETCH error", error);
       this.write(`${tag} NO FETCH failed\r\n`);
     }
+  };
+
+  private buildFullMessage = (mail: any): string => {
+    const headers = formatHeaders(mail);
+    const hasText = mail.text && mail.text.trim().length > 0;
+    const hasHtml = mail.html && mail.html.trim().length > 0;
+    const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+    if (!hasText && !hasHtml && !hasAttachments) {
+      return `${headers}\r\n\r\n`;
+    }
+
+    if (hasText && !hasHtml && !hasAttachments) {
+      return `${headers}\r\n\r\n${mail.text}`;
+    }
+
+    if (!hasText && hasHtml && !hasAttachments) {
+      return `${headers}\r\n\r\n${mail.html}`;
+    }
+
+    // For multipart messages, we need to build the MIME structure
+    const boundary = "boundary_" + Date.now();
+    let body = "";
+
+    if (hasText && hasHtml && !hasAttachments) {
+      // multipart/alternative
+      const updatedHeaders = headers.replace(
+        /Content-Type: [^\r\n]+/,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`
+      );
+
+      body = `${updatedHeaders}\r\n\r\n`;
+      body += `--${boundary}\r\n`;
+      body += `Content-Type: text/plain; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: 8bit\r\n\r\n`;
+      body += `${mail.text}\r\n`;
+      body += `--${boundary}\r\n`;
+      body += `Content-Type: text/html; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: 8bit\r\n\r\n`;
+      body += `${mail.html}\r\n`;
+      body += `--${boundary}--\r\n`;
+    } else if (hasAttachments) {
+      // multipart/mixed
+      const updatedHeaders = headers.replace(
+        /Content-Type: [^\r\n]+/,
+        `Content-Type: multipart/mixed; boundary="${boundary}"`
+      );
+
+      body = `${updatedHeaders}\r\n\r\n`;
+
+      // Add text/html parts
+      if (hasText && hasHtml) {
+        const altBoundary = "alt_" + Date.now();
+        body += `--${boundary}\r\n`;
+        body += `Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`;
+        body += `--${altBoundary}\r\n`;
+        body += `Content-Type: text/plain; charset=utf-8\r\n\r\n`;
+        body += `${mail.text}\r\n`;
+        body += `--${altBoundary}\r\n`;
+        body += `Content-Type: text/html; charset=utf-8\r\n\r\n`;
+        body += `${mail.html}\r\n`;
+        body += `--${altBoundary}--\r\n`;
+      } else if (hasText) {
+        body += `--${boundary}\r\n`;
+        body += `Content-Type: text/plain; charset=utf-8\r\n\r\n`;
+        body += `${mail.text}\r\n`;
+      } else if (hasHtml) {
+        body += `--${boundary}\r\n`;
+        body += `Content-Type: text/html; charset=utf-8\r\n\r\n`;
+        body += `${mail.html}\r\n`;
+      }
+
+      // Add attachments
+      mail.attachments.forEach((att: any) => {
+        body += `--${boundary}\r\n`;
+        body += `Content-Type: ${att.contentType}\r\n`;
+        body += `Content-Transfer-Encoding: base64\r\n`;
+        body += `Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`;
+        body += `${att.content.data}\r\n`;
+      });
+
+      body += `--${boundary}--\r\n`;
+    }
+
+    return body;
+  };
+
+  private getBodyPart = (mail: any, partNum: string): string | null => {
+    const parts = partNum.split(".");
+    const mainPart = parseInt(parts[0], 10);
+
+    const hasText = mail.text && mail.text.trim().length > 0;
+    const hasHtml = mail.html && mail.html.trim().length > 0;
+    const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+    // Simple case: single part message
+    if (!hasAttachments && !hasText && !hasHtml) {
+      return null;
+    }
+
+    if (!hasAttachments) {
+      if (hasText && hasHtml) {
+        // multipart/alternative
+        if (mainPart === 1) return mail.text;
+        if (mainPart === 2) return mail.html;
+      } else if (hasText && mainPart === 1) {
+        return mail.text;
+      } else if (hasHtml && mainPart === 1) {
+        return mail.html;
+      }
+      return null;
+    }
+
+    // multipart/mixed with attachments
+    let partIndex = 1;
+
+    // First part is the body content
+    if (mainPart === partIndex) {
+      if (hasText && hasHtml) {
+        // This would be a multipart/alternative part
+        const subPart = parts[1] ? parseInt(parts[1], 10) : 1;
+        if (subPart === 1) return mail.text;
+        if (subPart === 2) return mail.html;
+      } else if (hasText) {
+        return mail.text;
+      } else if (hasHtml) {
+        return mail.html;
+      }
+    }
+
+    partIndex++;
+
+    // Subsequent parts are attachments
+    const attachmentIndex = mainPart - partIndex;
+    if (attachmentIndex >= 0 && attachmentIndex < mail.attachments.length) {
+      return mail.attachments[attachmentIndex].content.data;
+    }
+
+    return null;
   };
 
   storeFlags = async (tag: string, args: string[]) => {
