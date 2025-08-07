@@ -13,7 +13,8 @@ import { accountToBox, boxToAccount } from "./util";
 import {
   AggregationsStringTermsBucket,
   AggregationsTermsAggregateBase,
-  QueryDslQueryContainer
+  QueryDslQueryContainer,
+  SearchRequest as ElasticsearchSearchRequest
 } from "@elastic/elasticsearch/lib/api/types";
 
 // class that creates "store" object
@@ -101,7 +102,8 @@ export class Store {
     box: string,
     start: number,
     end: number,
-    fields: string[]
+    fields: string[],
+    useUid: boolean = false
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
       const isDomainInbox = box === "INBOX";
@@ -121,14 +123,31 @@ export class Store {
 
       const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
 
-      const response = await elasticsearchClient.search({
+      let query: ElasticsearchSearchRequest = {
         index,
         _source: fields.map((f) => `mail.${f}`),
-        from: start - 1,
-        size: end - start + 1,
         query: { bool: { must } },
         sort: { [uidField]: "asc" }
-      });
+      };
+
+      if (useUid) {
+        // For UID-based queries, filter by UID range and get all matching
+        must.push({
+          range: {
+            [uidField]: {
+              gte: start,
+              lte: end === Number.MAX_SAFE_INTEGER ? 999999999 : end
+            }
+          }
+        });
+        query.size = 10000; // Large size for UID queries
+      } else {
+        // For sequence-based queries, use from/size (current implementation is correct)
+        query.from = start - 1;
+        query.size = end - start + 1;
+      }
+
+      const response = await elasticsearchClient.search(query);
 
       const mails = new Map<string, Partial<Mail>>();
       if (!this.messageCache.has(box)) this.messageCache.set(box, new Map());
@@ -150,24 +169,39 @@ export class Store {
 
   setFlags = async (
     box: string,
-    i: number,
-    flags: string[]
+    identifier: number,
+    flags: string[],
+    useUid: boolean = false
   ): Promise<boolean> => {
     try {
       const cachedMessages = this.messageCache.get(box);
-      if (!cachedMessages || i >= cachedMessages.size) {
+      if (!cachedMessages) {
         return false;
       }
 
       let messageId: string | undefined;
       let message: Partial<Mail> | undefined;
-      cachedMessages.forEach((msg, id) => {
-        // TODO: handle case where i is seq number
-        if (msg.uid?.account === i) {
-          messageId = id;
-          message = msg;
-        }
-      });
+
+      if (useUid) {
+        // Find message by UID
+        cachedMessages.forEach((msg, id) => {
+          const uid = msg.uid?.domain || msg.uid?.account;
+          if (uid === identifier) {
+            messageId = id;
+            message = msg;
+          }
+        });
+      } else {
+        // Find message by sequence number (1-based index)
+        let currentIndex = 0;
+        cachedMessages.forEach((msg, id) => {
+          currentIndex++;
+          if (currentIndex === identifier) {
+            messageId = id;
+            message = msg;
+          }
+        });
+      }
 
       if (!messageId || !message) {
         return false;
@@ -214,22 +248,23 @@ export class Store {
     }
   };
 
-  search = async (box: string, criteria: string[]): Promise<number[]> => {
+  search = async (box: string, criteria: string[], useUid: boolean = false): Promise<number[]> => {
     try {
+      const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent/");
-      const accountName = isSent ? box.replace("Sent/", "") : box;
+      const accountName = boxToAccount(this.user.username, box);
+      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
       // Build search query based on criteria
-      const must: any[] = [
+      const must: QueryDslQueryContainer[] = [
         { term: { type: "mail" } },
         { term: { "user.id": this.user.id } },
-        {
-          term: {
-            [isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD]: accountName
-          }
-        },
         { term: { "mail.sent": isSent } }
       ];
+
+      if (!isDomainInbox) {
+        must.push({ term: { [searchFiled]: accountName } });
+      }
 
       // Parse IMAP search criteria
       for (let i = 0; i < criteria.length; i++) {
@@ -281,16 +316,26 @@ export class Store {
         }
       }
 
+      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
+
       const response = await elasticsearchClient.search({
         index,
         size: 10000, // Reasonable limit
         query: { bool: { must } },
-        sort: { "mail.date": "desc" },
-        _source: false // We only need the IDs
+        sort: { [uidField]: "asc" },
+        _source: [uidField] // Only need UID field for search results
       });
 
-      // Return sequence numbers (1-based indexing)
-      return response.hits.hits.map((_, index) => index + 1);
+      if (useUid) {
+        // Return UIDs directly
+        return response.hits.hits.map(hit => {
+          const mailJson = hit._source?.mail as MailType;
+          return isDomainInbox ? mailJson.uid?.domain || 0 : mailJson.uid?.account || 0;
+        }).filter(uid => uid > 0);
+      } else {
+        // Return sequence numbers (1-based indexing)
+        return response.hits.hits.map((_, index) => index + 1);
+      }
     } catch (error) {
       console.error("Error searching messages:", error);
       return [];

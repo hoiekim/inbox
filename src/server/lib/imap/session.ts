@@ -4,7 +4,7 @@ import { Store } from "./store";
 import { getUser, markRead } from "server";
 import { formatAddressList, formatBodyStructure, formatHeaders } from "./util";
 import { MailType } from "common";
-import { FetchRequest, FetchDataItem, BodyFetch, BodySection, PartialRange, SequenceSet } from "./types";
+import { FetchRequest, FetchDataItem, BodyFetch, BodySection, PartialRange, SequenceSet, SearchRequest, StoreRequest, CopyRequest, StatusResponseData, StatusItem } from "./types";
 
 export class ImapSession {
   private selectedMailbox: string | null = null;
@@ -31,7 +31,7 @@ export class ImapSession {
     return this.selectMailbox(tag, name);
   };
 
-  fetchMessagesTyped = async (tag: string, fetchRequest: FetchRequest) => {
+  fetchMessagesTyped = async (tag: string, fetchRequest: FetchRequest, isUidCommand: boolean = false) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -52,11 +52,12 @@ export class ImapSession {
         this.selectedMailbox,
         start,
         end,
-        Array.from(requestedFields)
+        Array.from(requestedFields),
+        fetchRequest.sequenceSet.type === 'uid' || isUidCommand
       );
 
       const isDomainInbox = this.selectedMailbox === "INBOX";
-      const isUidFetch = fetchRequest.sequenceSet.type === 'uid';
+      const isUidFetch = fetchRequest.sequenceSet.type === 'uid' || isUidCommand;
       let i = start - 1;
 
       // Process each message
@@ -69,7 +70,7 @@ export class ImapSession {
         const seqNum = isUidFetch ? uid : ++i;
 
         // Build response parts
-        const parts = await this.buildFetchResponseParts(mail, fetchRequest.dataItems);
+        const parts = await this.buildFetchResponseParts(mail, fetchRequest.dataItems, isUidCommand);
         
         // Write response
         this.write(`* ${seqNum} FETCH (${parts.join(" ")})\r\n`);
@@ -171,7 +172,7 @@ export class ImapSession {
     }
   }
 
-  private async buildFetchResponseParts(mail: any, dataItems: FetchDataItem[]): Promise<string[]> {
+  private async buildFetchResponseParts(mail: Partial<MailType>, dataItems: FetchDataItem[], isUidCommand: boolean = false): Promise<string[]> {
     const parts: string[] = [];
 
     for (const item of dataItems) {
@@ -210,7 +211,7 @@ export class ImapSession {
     return parts;
   }
 
-  private buildEnvelope(mail: any): string {
+  private buildEnvelope(mail: Partial<MailType>): string {
     const dateString = new Date(mail.date!).toUTCString();
     const subject = (mail.subject || "").replace(/"/g, '\\"');
     const from = formatAddressList(mail.from?.value);
@@ -222,7 +223,7 @@ export class ImapSession {
     return `("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
   }
 
-  private async buildBodyPart(mail: any, bodyFetch: BodyFetch): Promise<string | null> {
+  private async buildBodyPart(mail: Partial<MailType>, bodyFetch: BodyFetch): Promise<string | null> {
     let content = this.getBodyContent(mail, bodyFetch.section);
     if (content === null) {
       return null;
@@ -239,7 +240,7 @@ export class ImapSession {
     return `${sectionKey} {${length}}\r\n${content}`;
   }
 
-  private getBodyContent(mail: any, section: BodySection): string | null {
+  private getBodyContent(mail: Partial<MailType>, section: BodySection): string | null {
     switch (section.type) {
       case 'FULL':
         return this.buildFullMessage(mail);
@@ -316,7 +317,7 @@ export class ImapSession {
     this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
   };
 
-  statusMailbox = async (tag: string, mailbox: string, items: any[]) => {
+  statusMailbox = async (tag: string, mailbox: string, items: StatusItem[]) => {
     this.write(`${tag} OK STATUS completed\r\n`);
   };
 
@@ -324,21 +325,67 @@ export class ImapSession {
     this.write(`${tag} OK CHECK completed\r\n`);
   };
 
-  searchTyped = async (tag: string, searchRequest: any) => {
-    // Convert typed search request to legacy format
-    return this.search(tag, []);
+  searchTyped = async (tag: string, searchRequest: SearchRequest, isUidCommand: boolean = false) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    if (!this.selectedMailbox) {
+      return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    try {
+      const result = await this.store.search(this.selectedMailbox, [], isUidCommand);
+      const resultType = isUidCommand ? "UID SEARCH" : "SEARCH";
+      this.write(`* ${resultType} ${result.join(" ")}\r\n`);
+      this.write(`${tag} OK SEARCH completed\r\n`);
+    } catch (error) {
+      console.error("Search failed:", error);
+      this.write(`${tag} NO SEARCH failed\r\n`);
+    }
   };
 
-  storeFlagsTyped = async (tag: string, storeRequest: any) => {
-    // Convert typed store request to legacy format
-    const { sequenceSet, operation, flags } = storeRequest;
-    const { start } = this.convertSequenceSet(sequenceSet);
-    return this.storeFlags(tag, [start.toString(), operation, ...flags]);
+  storeFlagsTyped = async (tag: string, storeRequest: StoreRequest, isUidCommand: boolean = false) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    if (!this.selectedMailbox) {
+      return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    try {
+      const { sequenceSet, operation, flags, silent } = storeRequest;
+      const { start } = this.convertSequenceSet(sequenceSet);
+      
+      // Use UID-based lookup if this is a UID command or sequence set is UID-based
+      const useUid = isUidCommand || sequenceSet.type === 'uid';
+      const updated = await this.store.setFlags(
+        this.selectedMailbox,
+        start,
+        flags,
+        useUid
+      );
+
+      if (!updated) {
+        this.write(`${tag} NO STORE failed\r\n`);
+      } else {
+        // Send untagged response unless silent
+        if (!silent && !operation.includes('SILENT')) {
+          const responseNum = useUid ? start : start; // In real implementation, convert UID to sequence number
+          this.write(`* ${responseNum} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+        }
+        this.write(`${tag} OK STORE completed\r\n`);
+      }
+    } catch (error) {
+      console.error("Error storing flags:", error);
+      this.write(`${tag} NO STORE failed\r\n`);
+    }
   };
 
-  copyMessageTyped = async (tag: string, copyRequest: any) => {
-    // Convert typed copy request to legacy format
-    return this.copyMessage(tag, []);
+  copyMessageTyped = async (tag: string, copyRequest: CopyRequest, isUidCommand: boolean = false) => {
+    // Reject all COPY operations - we don't want clients moving messages around
+    this.write(`${tag} NO [CANNOT] COPY not permitted\r\n`);
   };
 
   login = async (tag: string, args: string[]) => {
@@ -658,7 +705,7 @@ export class ImapSession {
     }
   };
 
-  private buildFullMessage = (mail: any): string => {
+  private buildFullMessage = (mail: Partial<MailType>): string => {
     const headers = formatHeaders(mail);
     const hasText = mail.text && mail.text.trim().length > 0;
     const hasHtml = mail.html && mail.html.trim().length > 0;
@@ -729,7 +776,7 @@ export class ImapSession {
       }
 
       // Add attachments
-      mail.attachments.forEach((att: any) => {
+      mail.attachments?.forEach((att) => {
         body += `--${boundary}\r\n`;
         body += `Content-Type: ${att.contentType}\r\n`;
         body += `Content-Transfer-Encoding: base64\r\n`;
@@ -743,7 +790,7 @@ export class ImapSession {
     return body;
   };
 
-  private getBodyPart = (mail: any, partNum: string): string | null => {
+  private getBodyPart = (mail: Partial<MailType>, partNum: string): string | null => {
     const parts = partNum.split(".");
     const mainPart = parseInt(parts[0], 10);
 
@@ -759,12 +806,12 @@ export class ImapSession {
     if (!hasAttachments) {
       if (hasText && hasHtml) {
         // multipart/alternative
-        if (mainPart === 1) return mail.text;
-        if (mainPart === 2) return mail.html;
+        if (mainPart === 1) return mail.text || null;
+        if (mainPart === 2) return mail.html || null;
       } else if (hasText && mainPart === 1) {
-        return mail.text;
+        return mail.text || null;
       } else if (hasHtml && mainPart === 1) {
-        return mail.html;
+        return mail.html || null;
       }
       return null;
     }
@@ -777,12 +824,12 @@ export class ImapSession {
       if (hasText && hasHtml) {
         // This would be a multipart/alternative part
         const subPart = parts[1] ? parseInt(parts[1], 10) : 1;
-        if (subPart === 1) return mail.text;
-        if (subPart === 2) return mail.html;
+        if (subPart === 1) return mail.text || null;
+        if (subPart === 2) return mail.html || null;
       } else if (hasText) {
-        return mail.text;
+        return mail.text || null;
       } else if (hasHtml) {
-        return mail.html;
+        return mail.html || null;
       }
     }
 
@@ -790,7 +837,7 @@ export class ImapSession {
 
     // Subsequent parts are attachments
     const attachmentIndex = mainPart - partIndex;
-    if (attachmentIndex >= 0 && attachmentIndex < mail.attachments.length) {
+    if (mail.attachments && attachmentIndex >= 0 && attachmentIndex < mail.attachments.length) {
       return mail.attachments[attachmentIndex].content.data;
     }
 

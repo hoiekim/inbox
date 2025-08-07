@@ -2,6 +2,84 @@
  * TypeScript interfaces for IMAP protocol requests and responses
  */
 
+import { MailType } from "common";
+import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
+
+// IMAP-specific request interfaces
+export interface SearchRequest {
+  criteria: SearchCriterion[];
+}
+
+export interface StoreRequest {
+  sequenceSet: SequenceSet;
+  operation: StoreOperation;
+  flags: string[];
+  silent?: boolean;
+}
+
+export type StoreOperation = 'FLAGS' | 'FLAGS.SILENT' | '+FLAGS' | '+FLAGS.SILENT' | '-FLAGS' | '-FLAGS.SILENT';
+
+export interface CopyRequest {
+  sequenceSet: SequenceSet;
+  mailbox: string;
+}
+
+export interface AppendRequest {
+  mailbox: string;
+  flags?: string[];
+  date?: string;
+  message: string;
+}
+
+// Response data interfaces using existing models
+export interface StatusResponseData {
+  mailbox: string;
+  items: Array<{
+    attribute: 'MESSAGES' | 'RECENT' | 'UIDNEXT' | 'UIDVALIDITY' | 'UNSEEN';
+    value: number;
+  }>;
+}
+
+export interface ListResponseData {
+  flags: string[];
+  delimiter: string;
+  mailbox: string;
+}
+
+export interface FetchResponseData {
+  uid?: number;
+  flags?: string[];
+  envelope?: string;
+  bodystructure?: string;
+  body?: Record<string, string>;
+  size?: number;
+}
+
+export interface SearchResponseData {
+  results: number[];
+}
+
+// Union type for all possible untagged response data
+export type UntaggedResponseData = 
+  | { type: 'EXISTS'; count: number }
+  | { type: 'RECENT'; count: number }
+  | { type: 'EXPUNGE'; sequenceNumber: number }
+  | { type: 'FETCH'; sequenceNumber: number; data: FetchResponseData }
+  | { type: 'SEARCH'; data: SearchResponseData }
+  | { type: 'LIST'; data: ListResponseData }
+  | { type: 'LSUB'; data: ListResponseData }
+  | { type: 'STATUS'; data: StatusResponseData }
+  | { type: 'FLAGS'; flags: string[] }
+  | { type: 'BYE'; message: string }
+  | { type: 'CAPABILITY'; capabilities: string[] };
+
+// Elasticsearch query building helpers
+export interface ElasticsearchQueryBuilder {
+  must: QueryDslQueryContainer[];
+  should?: QueryDslQueryContainer[];
+  must_not?: QueryDslQueryContainer[];
+}
+
 // Basic IMAP command structure
 export interface ImapCommand {
   tag: string;
@@ -212,8 +290,6 @@ export interface StoreRequest {
   silent?: boolean; // true for .SILENT operations
 }
 
-export type StoreOperation = 'FLAGS' | 'FLAGS.SILENT' | '+FLAGS' | '+FLAGS.SILENT' | '-FLAGS' | '-FLAGS.SILENT';
-
 // COPY request
 export interface CopyRequest {
   sequenceSet: SequenceSet;
@@ -265,7 +341,7 @@ export type ImapRequest =
   | { type: 'SUBSCRIBE'; data: { mailbox: string } }
   | { type: 'UNSUBSCRIBE'; data: { mailbox: string } }
   | { type: 'STATUS'; data: StatusRequest }
-  | { type: 'APPEND'; data: any } // TODO: Define append structure
+  | { type: 'APPEND'; data: AppendRequest }
   | { type: 'CHECK' }
   | { type: 'CLOSE' }
   | { type: 'EXPUNGE' }
@@ -286,7 +362,7 @@ export interface ImapResponse {
 
 export interface UntaggedResponse {
   type: 'EXISTS' | 'RECENT' | 'EXPUNGE' | 'FETCH' | 'SEARCH' | 'LIST' | 'LSUB' | 'STATUS' | 'FLAGS' | 'BYE' | 'CAPABILITY';
-  data: any;
+  data: UntaggedResponseData;
 }
 
 // Helper types for parsing

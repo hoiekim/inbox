@@ -1,14 +1,10 @@
-import { MailType } from "common";
+import { MailType, MailAddressType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
 
-export const formatAddressList = (value?: any): string => {
-  if (!value) return "NIL";
+export const formatAddressList = (value?: MailAddressValueType[]): string => {
+  if (!value || value.length === 0) return "NIL";
 
-  const arr = Array.isArray(value) ? value : [value];
-
-  if (arr.length === 0) return "NIL";
-
-  const formatted = arr
+  const formatted = value
     .map(({ name = "", address = "" }) => {
       if (!address) return null;
 
@@ -26,7 +22,7 @@ export const formatAddressList = (value?: any): string => {
   return formatted || "NIL";
 };
 
-export const formatHeaders = (mail: any): string => {
+export const formatHeaders = (mail: Partial<MailType>): string => {
   const headers: string[] = [];
 
   // Add standard headers in proper order
@@ -90,7 +86,7 @@ export const formatHeaders = (mail: any): string => {
   return headers.join("\r\n");
 };
 
-export const formatEnvelope = (mail: any): string => {
+export const formatEnvelope = (mail: Partial<MailType>): string => {
   const date = mail.date ? `"${new Date(mail.date).toUTCString()}"` : "NIL";
   const subject = mail.subject
     ? `"${mail.subject.replace(/"/g, '\\"')}"`
@@ -161,7 +157,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     return buildSinglePart("text", subtype, content, { charset: "utf-8" });
   };
 
-  const buildAttachmentPart = (attachment: any): string => {
+  const buildAttachmentPart = (attachment: AttachmentType): string => {
     const [type, subtype] = (attachment.contentType || "application/octet-stream").split("/");
     const filename = attachment.filename || "unnamed";
     const size = attachment.size || 0;
@@ -269,14 +265,13 @@ export const parseImapString = (str: string): string => {
   return str;
 };
 
-export const formatFlags = (mail: any): string[] => {
+export const formatFlags = (mail: Partial<MailType>): string[] => {
   const flags: string[] = [];
 
   if (mail.read) flags.push("\\Seen");
   if (mail.saved) flags.push("\\Flagged");
-  if (mail.answered) flags.push("\\Answered");
-  if (mail.draft) flags.push("\\Draft");
-  if (mail.deleted) flags.push("\\Deleted");
+  // Note: MailType doesn't have answered, draft, or deleted properties
+  // These would need to be added to the Mail model if needed
 
   return flags;
 };

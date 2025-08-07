@@ -76,19 +76,19 @@ export class ImapRequestHandler {
           break;
         
         case 'FETCH':
-          await this.session.fetchMessagesTyped(tag, request.data);
+          await this.session.fetchMessagesTyped(tag, request.data, false);
           break;
         
         case 'SEARCH':
-          await this.session.searchTyped(tag, request.data);
+          await this.session.searchTyped(tag, request.data, false);
           break;
         
         case 'STORE':
-          await this.session.storeFlagsTyped(tag, request.data);
+          await this.session.storeFlagsTyped(tag, request.data, false);
           break;
         
         case 'COPY':
-          await this.session.copyMessageTyped(tag, request.data);
+          await this.session.copyMessageTyped(tag, request.data, false);
           break;
         
         case 'UID':
@@ -118,11 +118,37 @@ export class ImapRequestHandler {
   }
 
   /**
-   * Handle UID commands by delegating to the appropriate sub-command
+   * Handle UID commands by delegating to the appropriate sub-command with UID context
    */
   private async handleUidCommand(tag: string, data: { command: string; request: ImapRequest }): Promise<void> {
-    // The UID command wraps another command, so we handle the inner request
-    // but the session methods need to know it's a UID command
-    return this.handleRequest(tag, data.request);
+    // Handle the inner request but pass UID context to session methods
+    const { command, request } = data;
+    
+    try {
+      switch (request.type) {
+        case 'FETCH':
+          await this.session.fetchMessagesTyped(tag, request.data, true);
+          break;
+        
+        case 'SEARCH':
+          await this.session.searchTyped(tag, request.data, true);
+          break;
+        
+        case 'STORE':
+          await this.session.storeFlagsTyped(tag, request.data, true);
+          break;
+        
+        case 'COPY':
+          await this.session.copyMessageTyped(tag, request.data, true);
+          break;
+        
+        default:
+          this.session.write(`${tag} BAD UID ${command} not supported\r\n`);
+          break;
+      }
+    } catch (error) {
+      console.error('Error handling UID command:', error);
+      this.session.write(`${tag} BAD Internal server error\r\n`);
+    }
   }
 }

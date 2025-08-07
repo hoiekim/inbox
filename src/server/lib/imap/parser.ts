@@ -15,6 +15,7 @@ import {
   SearchRequest,
   SearchCriterion,
   StoreRequest,
+  StoreOperation,
   StatusItem,
   ParseContext,
   ParseResult
@@ -685,7 +686,7 @@ export class ImapParser {
         type: 'STORE',
         data: {
           sequenceSet: sequenceSet.value!,
-          operation: operationStr as any,
+          operation: operationStr as StoreOperation,
           flags,
           silent
         }
