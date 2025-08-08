@@ -8,6 +8,9 @@ import {
   getActiveUsers
 } from "server";
 
+// Import IDLE manager for real-time IMAP notifications
+import { idleManager } from "./imap/idle-manager";
+
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
 const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
@@ -148,6 +151,9 @@ export const notifyNewMails = async (usernames: string[]) => {
     getNotifications(users),
     getSubscriptions(users)
   ]);
+
+  // Notify IDLE IMAP sessions immediately
+  idleManager.notifyNewMail(usernames);
 
   return Promise.all(
     storedSubscriptions.map((subscription) => {

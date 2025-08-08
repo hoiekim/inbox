@@ -71,6 +71,10 @@ export class ImapRequestHandler {
           this.session.write(`${tag} NO APPEND not supported\r\n`);
           break;
         
+        case 'IDLE':
+          await this.session.startIdle(tag);
+          break;
+        
         case 'CHECK':
           await this.session.check(tag);
           break;

@@ -23,6 +23,13 @@ export class Store {
 
   constructor(private user: SignedUser) {}
 
+  /**
+   * Get the username for this store
+   */
+  getUsername(): string {
+    return this.user.username;
+  }
+
   listMailboxes = async (): Promise<string[]> => {
     try {
       const accounts = await getAccounts(this.user);

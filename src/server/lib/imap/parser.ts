@@ -110,6 +110,9 @@ export class ImapParser {
       case 'APPEND':
         return { success: false, error: 'APPEND not implemented', consumed: 0 };
       
+      case 'IDLE':
+        return ImapParser.parseIdle(context);
+      
       case 'CHECK':
         return { success: true, value: { type: 'CHECK' }, consumed: 0 };
       
@@ -954,6 +957,17 @@ export class ImapParser {
       value: {
         type: 'UNSUBSCRIBE',
         data: { mailbox: mailbox.value! }
+      },
+      consumed: context.position
+    };
+  }
+
+  private static parseIdle(context: ParseContext): ParseResult<ImapRequest> {
+    // IDLE command has no parameters
+    return {
+      success: true,
+      value: {
+        type: 'IDLE'
       },
       consumed: context.position
     };

@@ -5,13 +5,19 @@ import { getUser, markRead } from "server";
 import { formatAddressList, formatBodyStructure, formatHeaders } from "./util";
 import { MailType } from "common";
 import { FetchRequest, FetchDataItem, BodyFetch, BodySection, PartialRange, SequenceSet, SearchRequest, StoreRequest, CopyRequest, StatusResponseData, StatusItem } from "./types";
+import { idleManager } from "./idle-manager";
 
 export class ImapSession {
   private selectedMailbox: string | null = null;
   private store: Store | null = null;
   private authenticated: boolean = false;
+  private isIdling: boolean = false;
+  private idleTag: string | null = null;
+  private sessionId: string;
 
-  constructor(private socket: Socket) {}
+  constructor(private socket: Socket) {
+    this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
 
   write = this.socket.write;
 
@@ -950,11 +956,88 @@ export class ImapSession {
   };
 
   logout = async (tag: string) => {
+    // End IDLE if active
+    if (this.isIdling) {
+      this.endIdle();
+    }
+    
     this.store = null;
     this.selectedMailbox = null;
     this.authenticated = false;
     this.write("* BYE IMAP4rev1 Server logging out\r\n");
     this.write(`${tag} OK LOGOUT completed\r\n`);
     this.socket.end();
+  };
+
+  /**
+   * Start IDLE mode for real-time notifications
+   */
+  startIdle = async (tag: string) => {
+    if (!this.authenticated || !this.selectedMailbox || !this.store) {
+      return this.write(`${tag} NO Not authenticated or no mailbox selected\r\n`);
+    }
+
+    if (this.isIdling) {
+      return this.write(`${tag} BAD Already in IDLE mode\r\n`);
+    }
+
+    this.isIdling = true;
+    this.idleTag = tag;
+
+    // Register with IDLE manager
+    const username = this.store.getUsername();
+    idleManager.addIdleSession(this.sessionId, this, tag, this.selectedMailbox, username);
+
+    // Send continuation response
+    this.write("+ idling\r\n");
+
+    // Set up socket listener for DONE command
+    this.socket.on('data', this.handleIdleData);
+  };
+
+  /**
+   * Handle data received during IDLE mode
+   */
+  private handleIdleData = (data: Buffer) => {
+    if (!this.isIdling) return;
+
+    const command = data.toString().trim().toUpperCase();
+    if (command === 'DONE') {
+      this.endIdle();
+    }
+  };
+
+  /**
+   * End IDLE mode
+   */
+  private endIdle = () => {
+    if (!this.isIdling || !this.idleTag) return;
+
+    this.isIdling = false;
+    const tag = this.idleTag;
+    this.idleTag = null;
+
+    // Remove from IDLE manager
+    idleManager.removeIdleSession(this.sessionId);
+
+    // Remove socket listener
+    this.socket.off('data', this.handleIdleData);
+
+    // Send completion response
+    this.write(`${tag} OK IDLE terminated\r\n`);
+  };
+
+  /**
+   * Check if session is in IDLE mode
+   */
+  isInIdleMode = (): boolean => {
+    return this.isIdling;
+  };
+
+  /**
+   * Get session ID
+   */
+  getSessionId = (): string => {
+    return this.sessionId;
   };
 }

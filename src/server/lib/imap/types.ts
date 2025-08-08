@@ -342,6 +342,7 @@ export type ImapRequest =
   | { type: 'UNSUBSCRIBE'; data: { mailbox: string } }
   | { type: 'STATUS'; data: StatusRequest }
   | { type: 'APPEND'; data: AppendRequest }
+  | { type: 'IDLE' }
   | { type: 'CHECK' }
   | { type: 'CLOSE' }
   | { type: 'EXPUNGE' }
