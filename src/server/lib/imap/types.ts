@@ -111,7 +111,10 @@ export type FetchDataItem =
   | BodyFetch
   | UidFetch
   | InternalDateFetch
-  | Rfc822SizeFetch;
+  | Rfc822Fetch
+  | Rfc822HeaderFetch
+  | Rfc822SizeFetch
+  | Rfc822TextFetch;
 
 export interface EnvelopeFetch {
   type: 'ENVELOPE';
@@ -133,8 +136,20 @@ export interface InternalDateFetch {
   type: 'INTERNALDATE';
 }
 
+export interface Rfc822Fetch {
+  type: 'RFC822';
+}
+
+export interface Rfc822HeaderFetch {
+  type: 'RFC822.HEADER';
+}
+
 export interface Rfc822SizeFetch {
   type: 'RFC822.SIZE';
+}
+
+export interface Rfc822TextFetch {
+  type: 'RFC822.TEXT';
 }
 
 // Body fetch requests with all variations

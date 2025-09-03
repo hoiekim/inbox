@@ -1,13 +1,11 @@
-import { Mail, SignedUser, MailHeaderData, Pagination, MailType } from "common";
+import { Mail, SignedUser, MailType } from "common";
 import {
   elasticsearchClient,
   index,
   getAccounts,
-  getMailHeaders,
-  getMailBody,
   FROM_ADDRESS_FIELD,
   TO_ADDRESS_FIELD,
-  getText
+  saveMail
 } from "server";
 import { accountToBox, boxToAccount } from "./util";
 import {
@@ -24,10 +22,10 @@ export class Store {
   constructor(private user: SignedUser) {}
 
   /**
-   * Get the username for this store
+   * Get the user for this store
    */
-  getUsername(): string {
-    return this.user.username;
+  getUser(): SignedUser {
+    return this.user;
   }
 
   listMailboxes = async (): Promise<string[]> => {
@@ -238,9 +236,6 @@ export class Store {
 
   expunge = async (box: string): Promise<void> => {
     try {
-      const isSent = box.startsWith("Sent/");
-      const accountName = isSent ? box.replace("Sent/", "") : box;
-
       // Delete messages marked for deletion (in IMAP, this would be messages with \Deleted flag)
       // Since we don't have a \Deleted flag in our system, we'll skip this operation
       // In a real implementation, you might want to add a 'deleted' field to track this
@@ -255,7 +250,11 @@ export class Store {
     }
   };
 
-  search = async (box: string, criteria: string[], useUid: boolean = false): Promise<number[]> => {
+  search = async (
+    box: string,
+    criteria: string[],
+    useUid: boolean = false
+  ): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent/");
@@ -335,10 +334,14 @@ export class Store {
 
       if (useUid) {
         // Return UIDs directly
-        return response.hits.hits.map(hit => {
-          const mailJson = hit._source?.mail as MailType;
-          return isDomainInbox ? mailJson.uid?.domain || 0 : mailJson.uid?.account || 0;
-        }).filter(uid => uid > 0);
+        return response.hits.hits
+          .map((hit) => {
+            const mailJson = hit._source?.mail as MailType;
+            return isDomainInbox
+              ? mailJson.uid?.domain || 0
+              : mailJson.uid?.account || 0;
+          })
+          .filter((uid) => uid > 0);
       } else {
         // Return sequence numbers (1-based indexing)
         return response.hits.hits.map((_, index) => index + 1);
@@ -346,6 +349,19 @@ export class Store {
     } catch (error) {
       console.error("Error searching messages:", error);
       return [];
+    }
+  };
+
+  /**
+   * Store a new mail message using the existing saveMail function
+   */
+  storeMail = async (mail: Mail): Promise<boolean> => {
+    try {
+      const result = await saveMail(this.user.id, mail);
+      return !!result; // Convert to boolean
+    } catch (error) {
+      console.error("Error storing mail:", error);
+      return false;
     }
   };
 }

@@ -23,7 +23,13 @@ class IdleManager {
   /**
    * Register a session for IDLE
    */
-  addIdleSession(sessionId: string, session: ImapSession, tag: string, mailbox: string, username: string) {
+  addIdleSession(
+    sessionId: string,
+    session: ImapSession,
+    tag: string,
+    mailbox: string,
+    username: string
+  ) {
     const idleSession: IdleSession = {
       session,
       tag,
@@ -43,7 +49,9 @@ class IdleManager {
     const idleSession = this.idleSessions.get(sessionId);
     if (idleSession) {
       this.idleSessions.delete(sessionId);
-      console.log(`IDLE session ended for ${idleSession.username} on ${idleSession.mailbox}`);
+      console.log(
+        `IDLE session ended for ${idleSession.username} on ${idleSession.mailbox}`
+      );
     }
   }
 
@@ -52,23 +60,25 @@ class IdleManager {
    */
   notifyNewMail(usernames: string[]) {
     const usernameSet = new Set(usernames);
-    
-    for (const [sessionId, idleSession] of this.idleSessions) {
+
+    this.idleSessions.forEach((idleSession, sessionId) => {
       if (usernameSet.has(idleSession.username)) {
         try {
           // Send EXISTS notification (new message count)
           // In a real implementation, you'd query the actual count
           idleSession.session.write("* 1 EXISTS\r\n");
           idleSession.session.write("* 1 RECENT\r\n");
-          
-          console.log(`Notified IDLE session for ${idleSession.username} about new mail`);
+
+          console.log(
+            `Notified IDLE session for ${idleSession.username} about new mail`
+          );
         } catch (error) {
           console.error(`Error notifying IDLE session ${sessionId}:`, error);
           // Remove broken session
           this.removeIdleSession(sessionId);
         }
       }
-    }
+    });
   }
 
   /**
@@ -78,23 +88,28 @@ class IdleManager {
     // Send heartbeat every 29 minutes (IMAP standard allows 30 min timeout)
     this.heartbeatInterval = setInterval(() => {
       const now = new Date();
-      
-      for (const [sessionId, idleSession] of this.idleSessions) {
+
+      this.idleSessions.forEach((idleSession, sessionId) => {
         try {
           // Send a comment as heartbeat (RFC 3501 allows this)
           idleSession.session.write("* OK Still here\r\n");
-          
+
           // Remove sessions older than 25 minutes to prevent timeout
           const sessionAge = now.getTime() - idleSession.startTime.getTime();
           if (sessionAge > 25 * 60 * 1000) {
-            idleSession.session.write(`${idleSession.tag} OK IDLE terminated (timeout)\r\n`);
+            idleSession.session.write(
+              `${idleSession.tag} OK IDLE terminated (timeout)\r\n`
+            );
             this.removeIdleSession(sessionId);
           }
         } catch (error) {
-          console.error(`Error sending heartbeat to session ${sessionId}:`, error);
+          console.error(
+            `Error sending heartbeat to session ${sessionId}:`,
+            error
+          );
           this.removeIdleSession(sessionId);
         }
-      }
+      });
     }, 29 * 60 * 1000); // 29 minutes
   }
 
@@ -110,7 +125,7 @@ class IdleManager {
    */
   getUserSessions(username: string): IdleSession[] {
     return Array.from(this.idleSessions.values()).filter(
-      session => session.username === username
+      (session) => session.username === username
     );
   }
 
@@ -121,16 +136,15 @@ class IdleManager {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }
-    
-    // Notify all sessions that server is shutting down
-    for (const [sessionId, idleSession] of this.idleSessions) {
+
+    this.idleSessions.forEach((idleSession, _) => {
       try {
         idleSession.session.write("* BYE Server shutting down\r\n");
       } catch (error) {
         // Ignore errors during shutdown
       }
-    }
-    
+    });
+
     this.idleSessions.clear();
   }
 }

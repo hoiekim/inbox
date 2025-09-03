@@ -93,6 +93,8 @@
         "read": { "type": "boolean" },
         "saved": { "type": "boolean" },
         "sent": { "type": "boolean" },
+        "deleted": { "type": "boolean" },
+        "draft": { "type": "boolean" },
         "insight": {
           "type": "object",
           "properties": {

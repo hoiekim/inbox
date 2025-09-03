@@ -1,6 +1,6 @@
 import { Socket } from "net";
 import { ImapSession } from "./session";
-import { ImapParser } from "./parser";
+import { parseCommand } from "./parsers";
 import { ImapRequestHandler } from "./handler";
 
 export const imapListener = (socket: Socket) => {
@@ -24,7 +24,7 @@ export const imapListener = (socket: Socket) => {
       if (line.trim()) {
         try {
           // Parse the command using the typed parser
-          const parseResult = ImapParser.parseCommand(line.trim());
+          const parseResult = parseCommand(line.trim());
           
           if (parseResult.success && parseResult.value) {
             const { tag, request } = parseResult.value;

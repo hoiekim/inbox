@@ -2,8 +2,8 @@
  * IMAP request handler - translates parsed commands to session method calls
  */
 
-import { ImapSession } from './session';
-import { ImapRequest, FetchRequest } from './types';
+import { ImapSession } from "./session";
+import { ImapRequest } from "./types";
 
 export class ImapRequestHandler {
   constructor(private session: ImapSession) {}
@@ -14,109 +14,128 @@ export class ImapRequestHandler {
   async handleRequest(tag: string, request: ImapRequest): Promise<void> {
     try {
       switch (request.type) {
-        case 'CAPABILITY':
+        case "CAPABILITY":
           this.session.capability(tag);
           break;
-        
-        case 'NOOP':
+
+        case "NOOP":
           this.session.noop(tag);
           break;
-        
-        case 'LOGIN':
-          await this.session.login(tag, [request.data.username, request.data.password]);
+
+        case "LOGIN":
+          await this.session.login(tag, [
+            request.data.username,
+            request.data.password
+          ]);
           break;
-        
-        case 'AUTHENTICATE':
-          await this.session.authenticate(tag, request.data.mechanism, request.data.initialResponse);
+
+        case "AUTHENTICATE":
+          await this.session.authenticate(
+            tag,
+            request.data.mechanism,
+            request.data.initialResponse
+          );
           break;
-        
-        case 'LIST':
-        case 'LSUB':
+
+        case "LIST":
+        case "LSUB":
           await this.session.listMailboxes(tag);
           break;
-        
-        case 'SELECT':
+
+        case "SELECT":
           await this.session.selectMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'EXAMINE':
+
+        case "EXAMINE":
           await this.session.examineMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'CREATE':
+
+        case "CREATE":
           await this.session.createMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'DELETE':
+
+        case "DELETE":
           await this.session.deleteMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'RENAME':
-          await this.session.renameMailbox(tag, request.data.oldName, request.data.newName);
+
+        case "RENAME":
+          await this.session.renameMailbox(
+            tag,
+            request.data.oldName,
+            request.data.newName
+          );
           break;
-        
-        case 'SUBSCRIBE':
+
+        case "SUBSCRIBE":
           await this.session.subscribeMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'UNSUBSCRIBE':
+
+        case "UNSUBSCRIBE":
           await this.session.unsubscribeMailbox(tag, request.data.mailbox);
           break;
-        
-        case 'STATUS':
-          await this.session.statusMailbox(tag, request.data.mailbox, request.data.items);
+
+        case "STATUS":
+          await this.session.statusMailbox(
+            tag,
+            request.data.mailbox,
+            request.data.items
+          );
           break;
-        
-        case 'APPEND':
+
+        case "APPEND":
           this.session.write(`${tag} NO APPEND not supported\r\n`);
           break;
-        
-        case 'IDLE':
+
+        case "IDLE":
           await this.session.startIdle(tag);
           break;
-        
-        case 'CHECK':
+
+        case "CHECK":
           await this.session.check(tag);
           break;
-        
-        case 'FETCH':
+
+        case "FETCH":
           await this.session.fetchMessagesTyped(tag, request.data, false);
           break;
-        
-        case 'SEARCH':
+
+        case "SEARCH":
           await this.session.searchTyped(tag, request.data, false);
           break;
-        
-        case 'STORE':
+
+        case "STORE":
           await this.session.storeFlagsTyped(tag, request.data, false);
           break;
-        
-        case 'COPY':
+
+        case "COPY":
           await this.session.copyMessageTyped(tag, request.data, false);
           break;
-        
-        case 'UID':
+
+        case "APPEND":
+          await this.session.appendMessage(tag, request.data);
+          break;
+
+        case "UID":
           await this.handleUidCommand(tag, request.data);
           break;
-        
-        case 'CLOSE':
+
+        case "CLOSE":
           this.session.closeMailbox(tag);
           break;
-        
-        case 'EXPUNGE':
+
+        case "EXPUNGE":
           await this.session.expunge(tag);
           break;
-        
-        case 'LOGOUT':
+
+        case "LOGOUT":
           await this.session.logout(tag);
           break;
-        
+
         default:
           this.session.write(`${tag} BAD Unknown command\r\n`);
           break;
       }
     } catch (error) {
-      console.error('Error handling IMAP request:', error);
+      console.error("Error handling IMAP request:", error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
     }
   }
@@ -124,34 +143,37 @@ export class ImapRequestHandler {
   /**
    * Handle UID commands by delegating to the appropriate sub-command with UID context
    */
-  private async handleUidCommand(tag: string, data: { command: string; request: ImapRequest }): Promise<void> {
+  private async handleUidCommand(
+    tag: string,
+    data: { command: string; request: ImapRequest }
+  ): Promise<void> {
     // Handle the inner request but pass UID context to session methods
     const { command, request } = data;
-    
+
     try {
       switch (request.type) {
-        case 'FETCH':
+        case "FETCH":
           await this.session.fetchMessagesTyped(tag, request.data, true);
           break;
-        
-        case 'SEARCH':
+
+        case "SEARCH":
           await this.session.searchTyped(tag, request.data, true);
           break;
-        
-        case 'STORE':
+
+        case "STORE":
           await this.session.storeFlagsTyped(tag, request.data, true);
           break;
-        
-        case 'COPY':
+
+        case "COPY":
           await this.session.copyMessageTyped(tag, request.data, true);
           break;
-        
+
         default:
           this.session.write(`${tag} BAD UID ${command} not supported\r\n`);
           break;
       }
     } catch (error) {
-      console.error('Error handling UID command:', error);
+      console.error("Error handling UID command:", error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
     }
   }

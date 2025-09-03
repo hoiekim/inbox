@@ -70,6 +70,8 @@ export interface MailType {
   read: boolean;
   saved: boolean;
   sent: boolean;
+  deleted: boolean;
+  draft: boolean;
   insight?: Insight;
   uid: MailUidType;
 }
@@ -92,6 +94,8 @@ export class Mail extends Model<Mail> implements MailType {
   read: boolean = false;
   saved: boolean = false;
   sent: boolean = false;
+  deleted: boolean = false;
+  draft: boolean = false;
   insight?: Insight;
   uid: MailUidType = new MailUid();
 }
