@@ -25,23 +25,27 @@ export const imapListener = (socket: Socket) => {
         try {
           // Parse the command using the typed parser
           const parseResult = parseCommand(line.trim());
-          
+
           if (parseResult.success && parseResult.value) {
             const { tag, request } = parseResult.value;
             await handler.handleRequest(tag, request);
           } else {
-            // If parsing failed, send error response
-            const parts = line.trim().split(' ');
-            const tag = parts[0] || "BAD";
-            const errorMsg = parseResult.error || "Invalid command syntax";
-            session.write(`${tag} BAD ${errorMsg}\r\n`);
+            // If parsing failed, send error response only if socket is writable
+            if (!socket.destroyed && socket.writable) {
+              const parts = line.trim().split(" ");
+              const tag = parts[0] || "BAD";
+              const errorMsg = parseResult.error || "Invalid command syntax";
+              session.write(`${tag} BAD ${errorMsg}\r\n`);
+            }
           }
         } catch (error) {
           console.error("Error processing command:", error);
-          // Extract tag for error response
-          const parts = line.trim().split(' ');
-          const tag = parts[0] || "BAD";
-          session.write(`${tag} BAD Internal server error\r\n`);
+          // Only send error response if socket is still writable
+          if (!socket.destroyed && socket.writable) {
+            const parts = line.trim().split(" ");
+            const tag = parts[0] || "BAD";
+            session.write(`${tag} BAD Internal server error\r\n`);
+          }
         }
       }
     }

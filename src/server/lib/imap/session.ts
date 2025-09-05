@@ -44,7 +44,12 @@ export class ImapSession {
       .substr(2, 9)}`;
   }
 
-  write = this.socket.write;
+  write = (data: string) => {
+    if (this.socket.destroyed || !this.socket.writable) {
+      return false;
+    }
+    return this.socket.write(data);
+  };
 
   // New typed command handlers
   capability = (tag: string) => {
