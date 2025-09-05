@@ -78,8 +78,8 @@ const initializeMailin = () => {
 const initializeImap = () => {
   return new Promise<void>((res) => {
     const server = net.createServer(imapListener);
-    server.listen(1430, () => {
-      console.log("IMAP server listening on port 1430");
+    server.listen(143, () => {
+      console.log("IMAP server listening on port 143");
       res();
     });
   });
