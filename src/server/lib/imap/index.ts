@@ -9,7 +9,7 @@ export const imapListener = (socket: Socket) => {
   let buffer = "";
 
   socket.write(
-    "* OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE STARTTLS AUTH=PLAIN] IMAP4rev1 Service Ready\r\n"
+    "* OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN] IMAP4rev1 Service Ready\r\n"
   );
 
   socket.on("data", async (data) => {

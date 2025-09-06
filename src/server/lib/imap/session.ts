@@ -54,7 +54,7 @@ export class ImapSession {
   // New typed command handlers
   capability = (tag: string) => {
     this.write(
-      `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE STARTTLS AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
+      `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
     );
   };
 
@@ -561,7 +561,7 @@ export class ImapSession {
     this.authenticated = true;
 
     return this.write(
-      `${tag} OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE STARTTLS AUTH=PLAIN] LOGIN completed\r\n`
+      `${tag} OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN] LOGIN completed\r\n`
     );
   };
 
