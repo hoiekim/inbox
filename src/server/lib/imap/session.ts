@@ -53,6 +53,7 @@ export class ImapSession {
 
   // New typed command handlers
   capability = (tag: string) => {
+    console.log(`[IMAP] CAPABILITY command called`);
     this.write(
       `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
     );
@@ -72,6 +73,7 @@ export class ImapSession {
     fetchRequest: FetchRequest,
     isUidCommand: boolean = false
   ) => {
+    console.log(`FETCH request: ${JSON.stringify(fetchRequest)}`);
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -324,8 +326,59 @@ export class ImapSession {
     mechanism: string,
     initialResponse?: string
   ) => {
-    // Basic AUTHENTICATE implementation - for now just reject
-    this.write(`${tag} NO AUTHENTICATE not supported\r\n`);
+    console.log(`[IMAP] AUTHENTICATE ${mechanism} for user ${initialResponse}`);
+
+    if (mechanism !== "PLAIN") {
+      return this.write(`${tag} NO Only PLAIN authentication supported\r\n`);
+    }
+
+    if (!initialResponse) {
+      return this.write(`${tag} BAD Missing initial response\r\n`);
+    }
+
+    try {
+      // Decode base64 initial response
+      const decoded = Buffer.from(initialResponse, "base64").toString("utf8");
+      const parts = decoded.split("\0"); // PLAIN format: \0username\0password
+
+      if (parts.length !== 3) {
+        return this.write(`${tag} BAD Invalid PLAIN response format\r\n`);
+      }
+
+      const [, username, password] = parts;
+      console.log(`[IMAP] AUTHENTICATE PLAIN attempt for: ${username}`);
+
+      // Use the same authentication logic as login
+      const inputUser = { username, password };
+      const user = await getUser(inputUser);
+      const signedUser = user?.getSigned();
+
+      if (!password || !user || !signedUser) {
+        this.authenticated = false;
+        return this.write(
+          `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
+        );
+      }
+
+      const pwMatches = await bcrypt.compare(password, user.password as string);
+
+      if (!pwMatches) {
+        this.authenticated = false;
+        return this.write(
+          `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
+        );
+      }
+
+      this.store = new Store(signedUser);
+      this.authenticated = true;
+
+      this.write(
+        `${tag} OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN] AUTHENTICATE completed\r\n`
+      );
+    } catch (error) {
+      console.error("[IMAP] AUTHENTICATE error:", error);
+      this.write(`${tag} BAD AUTHENTICATE failed\r\n`);
+    }
   };
 
   createMailbox = async (tag: string, mailbox: string) => {
@@ -566,40 +619,85 @@ export class ImapSession {
   };
 
   listMailboxes = async (tag: string) => {
+    console.log(
+      `[IMAP] LIST command for user: ${this.store?.getUser().username}`
+    );
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
     try {
       const boxes = await this.store.listMailboxes();
+      console.log(`[IMAP] Found ${boxes.length} mailboxes:`, boxes);
       boxes.forEach((box) => {
-        this.write(`* LIST (\\HasNoChildren) "/" "${box}"\r\n`);
+        const response = `* LIST (\\HasNoChildren) "/" "${box}"\r\n`;
+        console.log(`[IMAP] Sending: ${response.trim()}`);
+        this.write(response);
       });
       this.write(`${tag} OK LIST completed\r\n`);
+      console.log(`[IMAP] LIST completed - sent ${boxes.length} mailboxes`);
     } catch (error) {
-      console.error("Error listing mailboxes:", error);
+      console.error("[IMAP] Error listing mailboxes:", error);
       this.write(`${tag} NO LIST failed\r\n`);
     }
   };
 
+  listSubscribedMailboxes = async (tag: string) => {
+    console.log(
+      `[IMAP] LSUB command for user: ${this.store?.getUser().username}`
+    );
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    try {
+      const boxes = await this.store.listMailboxes();
+      console.log(`[IMAP] Found ${boxes.length} subscribed mailboxes:`, boxes);
+      boxes.forEach((box) => {
+        const response = `* LSUB (\\HasNoChildren) "/" "${box}"\r\n`;
+        console.log(`[IMAP] Sending: ${response.trim()}`);
+        this.write(response);
+      });
+      this.write(`${tag} OK LSUB completed\r\n`);
+      console.log(`[IMAP] LSUB completed - sent ${boxes.length} mailboxes`);
+    } catch (error) {
+      console.error("[IMAP] Error listing subscribed mailboxes:", error);
+      this.write(`${tag} NO LSUB failed\r\n`);
+    }
+  };
+
   selectMailbox = async (tag: string, name: string) => {
+    console.log(
+      `[IMAP] SELECT ${name} for user: ${this.store?.getUser().username}`
+    );
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
     // Remove quotes if present
     const cleanName = name.replace(/^"(.*)"$/, "$1");
+    console.log(`[IMAP] Clean mailbox name: ${cleanName}`);
+
+    if (!cleanName) {
+      console.log(`[IMAP] Empty mailbox name - rejecting`);
+      return this.write(`${tag} NO Empty mailbox name\r\n`);
+    }
 
     try {
       this.selectedMailbox = cleanName;
       const countResult = await this.store.countMessages(cleanName);
+      console.log(`[IMAP] Count result for ${cleanName}:`, countResult);
 
       if (countResult === null) {
+        console.log(`[IMAP] Mailbox ${cleanName} does not exist`);
         this.selectedMailbox = null;
         return this.write(`${tag} NO Mailbox does not exist\r\n`);
       }
 
       const { total, unread } = countResult;
+      console.log(
+        `[IMAP] Mailbox ${cleanName} - Total: ${total}, Unread: ${unread}`
+      );
 
       this.write(`* ${total} EXISTS\r\n`);
       this.write(
@@ -611,7 +709,7 @@ export class ImapSession {
       this.write(`* OK [PERMANENTFLAGS (\\Flagged \\Seen)] Limited\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
     } catch (error) {
-      console.error("Error selecting mailbox:", error);
+      console.error("[IMAP] Error selecting mailbox:", error);
       this.write(`${tag} NO SELECT failed\r\n`);
     }
   };

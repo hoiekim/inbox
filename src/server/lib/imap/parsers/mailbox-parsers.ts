@@ -11,17 +11,33 @@ import { skipWhitespace, parseString, parseAtom, peek, consume } from './primiti
 export const parseList = (command: string, context: ParseContext): ParseResult<ImapRequest> => {
   skipWhitespace(context);
   
+  // Parse reference name (can be quoted string or atom)
   const referenceName = parseString(context);
   if (!referenceName.success) {
+    console.log(`[PARSER] Failed to parse reference name at position ${context.position}`);
     return { success: false, error: 'Invalid reference name in LIST', consumed: 0 };
   }
   
   skipWhitespace(context);
   
-  const mailboxName = parseString(context);
+  // Parse mailbox pattern - handle wildcards specially
+  let mailboxName: ParseResult<string>;
+  if (context.position < context.length && (context.input[context.position] === '*' || context.input[context.position] === '%')) {
+    // Handle wildcard patterns
+    const wildcard = context.input[context.position];
+    context.position++;
+    mailboxName = { success: true, value: wildcard, consumed: 1 };
+  } else {
+    // Parse as normal string
+    mailboxName = parseString(context);
+  }
+  
   if (!mailboxName.success) {
+    console.log(`[PARSER] Failed to parse mailbox name at position ${context.position}`);
     return { success: false, error: 'Invalid mailbox name in LIST', consumed: 0 };
   }
+  
+  console.log(`[PARSER] LIST parsed: reference="${referenceName.value}", pattern="${mailboxName.value}"`);
   
   return {
     success: true,

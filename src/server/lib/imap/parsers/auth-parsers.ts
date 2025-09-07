@@ -47,12 +47,24 @@ export const parseAuthenticate = (context: ParseContext): ParseResult<ImapReques
     return { success: false, error: 'Invalid mechanism in AUTHENTICATE', consumed: 0 };
   }
   
+  // Check for optional initial response
+  let initialResponse: string | undefined;
+  skipWhitespace(context);
+  
+  if (context.position < context.length) {
+    const response = parseString(context);
+    if (response.success) {
+      initialResponse = response.value!;
+    }
+  }
+  
   return {
     success: true,
     value: {
       type: 'AUTHENTICATE',
       data: {
-        mechanism: mechanism.value!
+        mechanism: mechanism.value!,
+        initialResponse
       }
     },
     consumed: context.position

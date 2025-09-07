@@ -22,6 +22,7 @@ export const imapListener = (socket: Socket) => {
       buffer = buffer.substring(lineEnd + 2);
 
       if (line.trim()) {
+        console.log(`[RAW] Received: "${line.trim()}"`);
         try {
           // Parse the command using the typed parser
           const parseResult = parseCommand(line.trim());
@@ -31,6 +32,7 @@ export const imapListener = (socket: Socket) => {
             await handler.handleRequest(tag, request);
           } else {
             // If parsing failed, send error response only if socket is writable
+            console.log(`[PARSER] Parse failed for "${line.trim()}": ${parseResult.error}`);
             if (!socket.destroyed && socket.writable) {
               const parts = line.trim().split(" ");
               const tag = parts[0] || "BAD";

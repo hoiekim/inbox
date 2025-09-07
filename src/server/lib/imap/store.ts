@@ -29,8 +29,13 @@ export class Store {
   }
 
   listMailboxes = async (): Promise<string[]> => {
+    console.log(`[STORE] listMailboxes for user: ${this.user.username}`);
     try {
       const accounts = await getAccounts(this.user);
+      console.log(
+        `[STORE] Found ${accounts.received.length} received, ${accounts.sent.length} sent accounts`
+      );
+
       const mailboxes = ["INBOX"];
 
       // Add received mail accounts as mailboxes
@@ -49,9 +54,10 @@ export class Store {
         }
       });
 
+      console.log(`[STORE] Finally ${mailboxes.length} mailboxes`);
       return mailboxes;
     } catch (error) {
-      console.error("Error listing mailboxes:", error);
+      console.error("[STORE] Error listing mailboxes:", error);
       return ["INBOX"];
     }
   };

@@ -14,6 +14,7 @@ import { parseAppend } from './append-parser';
  * Parse a complete IMAP command line
  */
 export const parseCommand = (line: string): ParseResult<{ tag: string; request: ImapRequest }> => {
+  console.log(`[PARSER] Parsing command: "${line}"`);
   const context: ParseContext = {
     input: line.trim(),
     position: 0,

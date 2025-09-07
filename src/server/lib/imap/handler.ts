@@ -12,6 +12,7 @@ export class ImapRequestHandler {
    * Handle a parsed IMAP request by delegating to appropriate session methods
    */
   async handleRequest(tag: string, request: ImapRequest): Promise<void> {
+    console.log(`[HANDLER] Processing command: ${request.type} with tag: ${tag}`);
     try {
       switch (request.type) {
         case "CAPABILITY":
@@ -38,8 +39,10 @@ export class ImapRequestHandler {
           break;
 
         case "LIST":
-        case "LSUB":
           await this.session.listMailboxes(tag);
+          break;
+        case "LSUB":
+          await this.session.listSubscribedMailboxes(tag);
           break;
 
         case "SELECT":
