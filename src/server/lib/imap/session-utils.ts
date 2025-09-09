@@ -76,6 +76,9 @@ export const buildFullMessage = (mail: Partial<MailType>, docId?: string): strin
 
   // For multipart messages, extract boundary from headers or use deterministic one
   const boundaryMatch = headers.match(/boundary="([^"]+)"/);
+  if (!docId) {
+    console.warn(`[IMAP] Warning: docId is missing in buildFullMessage, falling back to messageId: ${mail.messageId}`);
+  }
   const stableId = docId || mail.messageId || "default";
   const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
   let body = "";

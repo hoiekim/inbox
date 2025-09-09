@@ -128,7 +128,7 @@ export class ImapSession {
             this.selectedMailbox
           }: isDomainInbox=${isDomainInbox}, uid.domain=${
             mail.uid!.domain
-          }, uid.account=${mail.uid!.account}, using uid=${uid}`
+          }, uid.account=${mail.uid!.account}, using uid=${uid}, docId=${id}`
         );
 
         try {
@@ -150,24 +150,31 @@ export class ImapSession {
           );
 
           // Write response - handle IMAP literals properly
-          this.write(`* ${seqNum} FETCH (`);
-
+          let response = `* ${seqNum} FETCH (`;
+          
           for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
-
+            
+            if (i > 0) response += " ";
+            
             if (part.includes("}\r\n")) {
-              // This is a literal - write header, then content
+              // This is a literal - split header and content
               const [header, content] = part.split("}\r\n", 2);
-              if (i > 0) this.write(" ");
-              this.write(`${header}}\r\n${content}`);
+              response += `${header}}\r\n`;
+              // Send the response up to the literal
+              this.write(response);
+              // Send the literal content
+              this.write(content);
+              // Reset response for next parts
+              response = "";
             } else {
-              // Regular part - add space before if needed
-              if (i > 0) this.write(" ");
-              this.write(part);
+              // Regular part
+              response += part;
             }
           }
 
-          this.write(")\r\n");
+          // Close the FETCH response
+          this.write(response + ")\r\n");
           console.log(`[IMAP] Sent FETCH response for message ${seqNum}`);
         } catch (partError) {
           console.error(
@@ -376,11 +383,11 @@ export class ImapSession {
     // Apply partial fetch if specified
     if (bodyFetch.partial) {
       content = applyPartialFetch(content, bodyFetch.partial);
-    }
-
-    // Only add \r\n if content actually has data
-    if (content && !content.endsWith("\r\n")) {
-      content += "\r\n";
+    } else {
+      // Only add \r\n if content actually has data and not doing partial fetch
+      if (content && !content.endsWith("\r\n")) {
+        content += "\r\n";
+      }
     }
 
     const length = Buffer.byteLength(content, "utf8");

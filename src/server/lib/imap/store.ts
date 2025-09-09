@@ -29,7 +29,9 @@ export class Store {
   }
 
   listMailboxes = async (): Promise<string[]> => {
-    console.log(`[STORE] listMailboxes for user: ${this.user.username}`);
+    console.log(
+      `[STORE] listMailboxes for user: ${this.user.username} ${this.user.id}`
+    );
     try {
       const accounts = await getAccounts(this.user);
       console.log(
@@ -170,8 +172,7 @@ export class Store {
 
       for (const hit of response.hits.hits) {
         const mailJson = hit._source?.mail as MailType;
-        const mail = new Mail(mailJson);
-        mails.set(hit._id!, mail);
+        mails.set(hit._id!, mailJson);
       }
 
       return mails;

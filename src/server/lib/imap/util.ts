@@ -66,7 +66,10 @@ export const formatHeaders = (mail: Partial<MailType>, docId?: string): string =
   const hasHtml = mail.html && mail.html.trim().length > 0;
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
 
-  // Use stable boundary based on docId or messageId
+  // Use stable boundary based on docId - docId should always exist
+  if (!docId) {
+    console.warn(`[IMAP] Warning: docId is missing, falling back to messageId: ${mail.messageId}`);
+  }
   const stableId = docId || mail.messageId || "default";
 
   // Determine Content-Type based on message structure
