@@ -73,7 +73,7 @@ export class ImapSession {
     fetchRequest: FetchRequest,
     isUidCommand: boolean = false
   ) => {
-    console.log(`FETCH request: ${JSON.stringify(fetchRequest)}`);
+    console.log(`[IMAP] FETCH request: ${JSON.stringify(fetchRequest)}`);
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -85,9 +85,16 @@ export class ImapSession {
     try {
       // Convert sequence set to start/end range
       const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
+      console.log(
+        `[IMAP] FETCH range: ${start}-${end}, isUidCommand: ${isUidCommand}`
+      );
 
       // Determine required fields based on data items
       const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
+      console.log(
+        `[IMAP] Requested fields for FETCH:`,
+        Array.from(requestedFields)
+      );
 
       // Fetch messages from store
       const messages = await this.store.getMessages(
@@ -96,6 +103,10 @@ export class ImapSession {
         end,
         Array.from(requestedFields),
         fetchRequest.sequenceSet.type === "uid" || isUidCommand
+      );
+
+      console.log(
+        `[IMAP] FETCH found ${messages.size} messages for ${this.selectedMailbox}, range ${start}-${end}`
       );
 
       const isDomainInbox = this.selectedMailbox === "INBOX";
@@ -112,14 +123,59 @@ export class ImapSession {
         const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
         const seqNum = isUidFetch ? uid : ++i;
 
-        // Build response parts
-        const parts = await this.buildFetchResponseParts(
-          mail,
-          fetchRequest.dataItems
+        console.log(
+          `[IMAP] Processing message for ${
+            this.selectedMailbox
+          }: isDomainInbox=${isDomainInbox}, uid.domain=${
+            mail.uid!.domain
+          }, uid.account=${mail.uid!.account}, using uid=${uid}`
         );
 
-        // Write response
-        this.write(`* ${seqNum} FETCH (${parts.join(" ")})\r\n`);
+        try {
+          // Build response parts
+          const parts = await this.buildFetchResponseParts(
+            mail,
+            fetchRequest.dataItems,
+            id
+          );
+
+          // For UID FETCH commands, always include UID in response if not already present
+          if (isUidFetch && !parts.some((part) => part.startsWith("UID "))) {
+            parts.unshift(`UID ${uid}`);
+          }
+
+          console.log(
+            `[IMAP] Built ${parts.length} response parts:`,
+            parts.map((p) => p.substring(0, 50) + (p.length > 50 ? "..." : ""))
+          );
+
+          // Write response - handle IMAP literals properly
+          this.write(`* ${seqNum} FETCH (`);
+
+          for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+
+            if (part.includes("}\r\n")) {
+              // This is a literal - write header, then content
+              const [header, content] = part.split("}\r\n", 2);
+              if (i > 0) this.write(" ");
+              this.write(`${header}}\r\n${content}`);
+            } else {
+              // Regular part - add space before if needed
+              if (i > 0) this.write(" ");
+              this.write(part);
+            }
+          }
+
+          this.write(")\r\n");
+          console.log(`[IMAP] Sent FETCH response for message ${seqNum}`);
+        } catch (partError) {
+          console.error(
+            `[IMAP] Error building parts for message ${seqNum}:`,
+            partError
+          );
+          // Continue to next message
+        }
 
         // Mark as read if not using PEEK
         const shouldMarkAsRead = checkShouldMarkAsRead(fetchRequest.dataItems);
@@ -131,6 +187,7 @@ export class ImapSession {
       }
 
       this.write(`${tag} OK FETCH completed\r\n`);
+      console.log(`[IMAP] FETCH completed for ${tag}`);
     } catch (error) {
       console.error("FETCH error", error);
       this.write(`${tag} NO FETCH failed\r\n`);
@@ -177,7 +234,17 @@ export class ImapSession {
           break;
 
         case "BODY":
+          console.log(`[IMAP] Adding BODY fields for:`, item);
           this.addBodyFields(item, fields);
+          break;
+
+        case "INTERNALDATE":
+          fields.add("date");
+          break;
+
+        case "RFC822.SIZE":
+          fields.add("text");
+          fields.add("html");
           break;
       }
     }
@@ -204,6 +271,8 @@ export class ImapSession {
 
       case "TEXT":
         fields.add("text");
+        fields.add("html");
+        fields.add("attachments");
         break;
 
       case "HEADER":
@@ -226,14 +295,16 @@ export class ImapSession {
 
   private async buildFetchResponseParts(
     mail: Partial<MailType>,
-    dataItems: FetchDataItem[]
+    dataItems: FetchDataItem[],
+    docId: string
   ): Promise<string[]> {
     const parts: string[] = [];
 
     for (const item of dataItems) {
       switch (item.type) {
         case "UID":
-          const uid = mail.uid!.domain || mail.uid!.account;
+          const isDomainInbox = this.selectedMailbox === "INBOX";
+          const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
           parts.push(`UID ${uid}`);
           break;
 
@@ -242,6 +313,20 @@ export class ImapSession {
           if (mail.read) flags.push("\\Seen");
           if (mail.saved) flags.push("\\Flagged");
           parts.push(`FLAGS (${flags.join(" ")})`);
+          break;
+
+        case "INTERNALDATE":
+          const date = mail.date ? new Date(mail.date) : new Date();
+          // IMAP INTERNALDATE format: "17-Jul-1996 02:44:25 -0700"
+          const internalDate = date.toUTCString().replace(/GMT$/, "+0000");
+          parts.push(`INTERNALDATE "${internalDate}"`);
+          break;
+
+        case "RFC822.SIZE":
+          const textSize = mail.text ? mail.text.length : 0;
+          const htmlSize = mail.html ? mail.html.length : 0;
+          const size = textSize + htmlSize;
+          parts.push(`RFC822.SIZE ${size}`);
           break;
 
         case "ENVELOPE":
@@ -255,7 +340,7 @@ export class ImapSession {
           break;
 
         case "BODY":
-          const bodyPart = await this.buildBodyPart(mail, item);
+          const bodyPart = await this.buildBodyPart(mail, item, docId);
           if (bodyPart) {
             parts.push(bodyPart);
           }
@@ -280,9 +365,10 @@ export class ImapSession {
 
   private async buildBodyPart(
     mail: Partial<MailType>,
-    bodyFetch: BodyFetch
+    bodyFetch: BodyFetch,
+    docId: string
   ): Promise<string | null> {
-    let content = this.getBodyContent(mail, bodyFetch.section);
+    let content = this.getBodyContent(mail, bodyFetch.section, docId);
     if (content === null) {
       return null;
     }
@@ -292,25 +378,64 @@ export class ImapSession {
       content = applyPartialFetch(content, bodyFetch.partial);
     }
 
+    // Only add \r\n if content actually has data
+    if (content && !content.endsWith("\r\n")) {
+      content += "\r\n";
+    }
+
     const length = Buffer.byteLength(content, "utf8");
     const sectionKey = getBodySectionKey(bodyFetch.section);
+
+    console.log(
+      `[IMAP] Literal: declared ${length} bytes, content ends with: ${JSON.stringify(
+        content.slice(-10)
+      )}`
+    );
 
     return `${sectionKey} {${length}}\r\n${content}`;
   }
 
   private getBodyContent(
     mail: Partial<MailType>,
-    section: BodySection
+    section: BodySection,
+    docId: string
   ): string | null {
+    console.log(
+      `[IMAP] Building body content for section ${section.type}, mail has:`,
+      {
+        from: mail.from?.text,
+        to: mail.to?.text,
+        subject: mail.subject,
+        messageId: mail.messageId,
+        date: mail.date
+      }
+    );
+
     switch (section.type) {
       case "FULL":
-        return buildFullMessage(mail);
+        return buildFullMessage(mail, docId);
 
       case "TEXT":
+        // For multipart messages, TEXT should return the body after headers
+        const hasText = mail.text && mail.text.trim().length > 0;
+        const hasHtml = mail.html && mail.html.trim().length > 0;
+        const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+        // If it's a multipart message, build the multipart body
+        if ((hasText && hasHtml) || hasAttachments) {
+          const fullMessage = buildFullMessage(mail, docId);
+          // Extract body part after headers (after first \r\n\r\n)
+          const headerEndIndex = fullMessage.indexOf("\r\n\r\n");
+          if (headerEndIndex !== -1) {
+            return fullMessage.substring(headerEndIndex + 4);
+          }
+        }
+
+        // For simple messages, return just the text content
         return mail.text || "";
 
       case "HEADER":
-        return formatHeaders(mail);
+        return formatHeaders(mail, docId);
 
       case "MIME_PART":
         return getBodyPart(mail, section.partNumber);
@@ -402,7 +527,53 @@ export class ImapSession {
   };
 
   statusMailbox = async (tag: string, mailbox: string, items: StatusItem[]) => {
-    this.write(`${tag} OK STATUS completed\r\n`);
+    console.log(`[IMAP] STATUS ${mailbox} for items:`, items);
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+
+    try {
+      const countResult = await this.store.countMessages(mailbox);
+
+      if (countResult === null) {
+        return this.write(`${tag} NO Mailbox does not exist\r\n`);
+      }
+
+      const { total, unread } = countResult;
+
+      // Build STATUS response
+      let statusItems: string[] = [];
+
+      items.forEach((item) => {
+        switch (item) {
+          case "MESSAGES":
+            statusItems.push("MESSAGES", total.toString());
+            break;
+          case "UIDNEXT":
+            statusItems.push("UIDNEXT", (total + 1).toString());
+            break;
+          case "UIDVALIDITY":
+            statusItems.push("UIDVALIDITY", "1");
+            break;
+          case "UNSEEN":
+            statusItems.push("UNSEEN", unread.toString());
+            break;
+          case "RECENT":
+            statusItems.push("RECENT", "0");
+            break;
+        }
+      });
+
+      this.write(`* STATUS "${mailbox}" (${statusItems.join(" ")})\r\n`);
+      this.write(`${tag} OK STATUS completed\r\n`);
+
+      console.log(
+        `[IMAP] STATUS ${mailbox} - MESSAGES: ${total}, UNSEEN: ${unread}`
+      );
+    } catch (error) {
+      console.error("[IMAP] Error getting mailbox status:", error);
+      this.write(`${tag} NO STATUS failed\r\n`);
+    }
   };
 
   check = async (tag: string) => {

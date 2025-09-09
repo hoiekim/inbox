@@ -10,6 +10,13 @@ import { parseList, parseSelect, parseStatus, parseCreate, parseDelete, parseRen
 import { parseSearch, parseStore, parseCopy } from './search-store-parsers';
 import { parseAppend } from './append-parser';
 
+// Simple ID parser
+const parseId = (context: ParseContext): ParseResult<ImapRequest> => {
+  // Skip the ID parameters - we don't need to parse them
+  context.position = context.length;
+  return { success: true, value: { type: 'ID' }, consumed: context.position };
+};
+
 /**
  * Parse a complete IMAP command line
  */
@@ -67,6 +74,12 @@ const parseImapRequest = (command: string, context: ParseContext): ParseResult<I
     
     case 'LOGOUT':
       return { success: true, value: { type: 'LOGOUT' }, consumed: context.position };
+    
+    case 'ID':
+      return parseId(context);
+    
+    case 'DONE':
+      return { success: true, value: { type: 'DONE' }, consumed: context.position };
     
     case 'LOGIN':
       return parseLogin(context);

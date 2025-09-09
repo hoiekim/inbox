@@ -22,7 +22,7 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
   return formatted || "NIL";
 };
 
-export const formatHeaders = (mail: Partial<MailType>): string => {
+export const formatHeaders = (mail: Partial<MailType>, docId?: string): string => {
   const headers: string[] = [];
 
   // Add standard headers in proper order
@@ -66,14 +66,17 @@ export const formatHeaders = (mail: Partial<MailType>): string => {
   const hasHtml = mail.html && mail.html.trim().length > 0;
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
 
+  // Use stable boundary based on docId or messageId
+  const stableId = docId || mail.messageId || "default";
+
   // Determine Content-Type based on message structure
   if (hasAttachments) {
     // multipart/mixed for messages with attachments
-    const boundary = "boundary_" + Date.now();
+    const boundary = "boundary_" + stableId;
     headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
   } else if (hasText && hasHtml) {
     // multipart/alternative for messages with both text and HTML
-    const boundary = "boundary_" + Date.now();
+    const boundary = "boundary_" + stableId;
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
   } else if (hasHtml) {
     headers.push("Content-Type: text/html; charset=utf-8");

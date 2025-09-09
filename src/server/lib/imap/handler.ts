@@ -133,6 +133,10 @@ export class ImapRequestHandler {
           await this.session.logout(tag);
           break;
 
+        case "ID":
+          this.session.write(`* ID NIL\r\n${tag} OK ID completed\r\n`);
+          break;
+
         default:
           this.session.write(`${tag} BAD Unknown command\r\n`);
           break;

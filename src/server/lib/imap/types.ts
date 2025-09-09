@@ -366,6 +366,8 @@ export type ImapRequest =
   | { type: 'STORE'; data: StoreRequest }
   | { type: 'COPY'; data: CopyRequest }
   | { type: 'UID'; data: { command: string; request: ImapRequest } }
+  | { type: 'ID' }
+  | { type: 'DONE' }
   | { type: 'LOGOUT' };
 
 // Response types for better type safety

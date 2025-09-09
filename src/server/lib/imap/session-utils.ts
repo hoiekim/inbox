@@ -12,13 +12,16 @@ import { formatHeaders } from './util';
  */
 export const applyPartialFetch = (content: string, partial: PartialRange): string => {
   const contentBuffer = Buffer.from(content, "utf8");
-  const endPos = Math.min(partial.start + partial.length, contentBuffer.length);
   
-  if (partial.start < contentBuffer.length) {
-    return contentBuffer.subarray(partial.start, endPos).toString("utf8");
-  } else {
+  // If start is beyond content length, return empty string
+  if (partial.start >= contentBuffer.length) {
     return "";
   }
+  
+  // Calculate end position, ensuring we don't go beyond content length
+  const endPos = Math.min(partial.start + partial.length, contentBuffer.length);
+  
+  return contentBuffer.subarray(partial.start, endPos).toString("utf8");
 };
 
 /**
@@ -53,8 +56,8 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
 /**
  * Build complete RFC822 message from mail data
  */
-export const buildFullMessage = (mail: Partial<MailType>): string => {
-  const headers = formatHeaders(mail);
+export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
+  const headers = formatHeaders(mail, docId);
   const hasText = mail.text && mail.text.trim().length > 0;
   const hasHtml = mail.html && mail.html.trim().length > 0;
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
@@ -71,8 +74,10 @@ export const buildFullMessage = (mail: Partial<MailType>): string => {
     return `${headers}\r\n\r\n${mail.html}`;
   }
 
-  // For multipart messages, we need to build the MIME structure
-  const boundary = "boundary_" + Date.now();
+  // For multipart messages, extract boundary from headers or use deterministic one
+  const boundaryMatch = headers.match(/boundary="([^"]+)"/);
+  const stableId = docId || mail.messageId || "default";
+  const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
   let body = "";
 
   if (hasText && hasHtml && !hasAttachments) {

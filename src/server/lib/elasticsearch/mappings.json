@@ -1,11 +1,12 @@
 {
-  "version": "1",
+  "version": "2",
   "properties": {
     "type": { "type": "keyword" },
     "mail": {
       "type": "object",
       "dynamic": true,
       "properties": {
+        "messageId": { "type": "keyword" },
         "attachments": {
           "type": "object",
           "properties": {

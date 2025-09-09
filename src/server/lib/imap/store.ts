@@ -136,13 +136,16 @@ export class Store {
 
       let query: ElasticsearchSearchRequest = {
         index,
-        _source: fields.map((f) => `mail.${f}`),
+        _source: [...fields, "messageId"].map((f) => `mail.${f}`),
         query: { bool: { must } },
         sort: { [uidField]: "asc" }
       };
 
       if (useUid) {
         // For UID-based queries, filter by UID range and get all matching
+        console.log(
+          `[STORE] UID query: searching ${uidField} between ${start}-${end}`
+        );
         must.push({
           range: {
             [uidField]: {
@@ -159,16 +162,16 @@ export class Store {
       }
 
       const response = await elasticsearchClient.search(query);
+      console.log(
+        `[STORE] Elasticsearch returned ${response.hits.hits.length} hits for ${box}`
+      );
 
       const mails = new Map<string, Partial<Mail>>();
-      if (!this.messageCache.has(box)) this.messageCache.set(box, new Map());
 
       for (const hit of response.hits.hits) {
         const mailJson = hit._source?.mail as MailType;
         const mail = new Mail(mailJson);
-        mails.set(hit._id, mail);
-        const cachedMails = this.messageCache.get(box)!;
-        cachedMails.set(hit._id, mail);
+        mails.set(hit._id!, mail);
       }
 
       return mails;
