@@ -30,6 +30,15 @@ import {
 } from "./types";
 import { idleManager } from "./idle-manager";
 
+type FetchResponsePart = {
+  type: 'simple';
+  content: string;
+} | {
+  type: 'literal';
+  content: string;
+  header: string;
+};
+
 export class ImapSession {
   private selectedMailbox: string | null = null;
   private store: Store | null = null;
@@ -80,6 +89,7 @@ export class ImapSession {
     isUidCommand: boolean = false
   ) => {
     console.log(`[IMAP] FETCH request: ${JSON.stringify(fetchRequest)}`);
+    
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -89,118 +99,176 @@ export class ImapSession {
     }
 
     try {
-      // Convert sequence set to start/end range
-      const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
-      console.log(
-        `[IMAP] FETCH range: ${start}-${end}, isUidCommand: ${isUidCommand}`
-      );
-
-      // Determine required fields based on data items
-      const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
-      console.log(
-        `[IMAP] Requested fields for FETCH:`,
-        Array.from(requestedFields)
-      );
-
-      // Fetch messages from store
-      const messages = await this.store.getMessages(
-        this.selectedMailbox,
-        start,
-        end,
-        Array.from(requestedFields),
-        fetchRequest.sequenceSet.type === "uid" || isUidCommand
-      );
-
-      console.log(
-        `[IMAP] FETCH found ${messages.size} messages for ${this.selectedMailbox}, range ${start}-${end}`
-      );
-
-      const isDomainInbox = this.selectedMailbox === "INBOX";
-      const isUidFetch =
-        fetchRequest.sequenceSet.type === "uid" || isUidCommand;
-      let i = start - 1;
-
-      // Process each message
-      const iterator = messages.entries();
-      let current = iterator.next();
-
-      while (!current.done) {
-        const [id, mail] = current.value;
-        const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
-        const seqNum = isUidFetch ? uid : ++i;
-
-        console.log(
-          `[IMAP] Processing message for ${
-            this.selectedMailbox
-          }: isDomainInbox=${isDomainInbox}, uid.domain=${
-            mail.uid!.domain
-          }, uid.account=${mail.uid!.account}, using uid=${uid}, docId=${id}`
-        );
-
-        try {
-          // Build response parts
-          const parts = await this.buildFetchResponseParts(
-            mail,
-            fetchRequest.dataItems,
-            id
-          );
-
-          // For UID FETCH commands, always include UID in response if not already present
-          if (isUidFetch && !parts.some((part) => part.startsWith("UID "))) {
-            parts.unshift(`UID ${uid}`);
-          }
-
-          console.log(
-            `[IMAP] Built ${parts.length} response parts:`,
-            parts.map((p) => p.substring(0, 50) + (p.length > 50 ? "..." : ""))
-          );
-
-          // Write response - handle IMAP literals properly
-          this.write(`* ${seqNum} FETCH (`);
-          
-          for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
-            
-            if (i > 0) this.write(" ");
-            
-            if (part.includes("}\r\n")) {
-              // This is a literal - send it properly
-              const [header, content] = part.split("}\r\n", 2);
-              this.write(`${header}}\r\n`);
-              this.write(content);
-            } else {
-              // Regular part
-              this.write(part);
-            }
-          }
-
-          // Close the FETCH response
-          this.write(")\r\n");
-          console.log(`[IMAP] Sent FETCH response for message ${seqNum}`);
-        } catch (partError) {
-          console.error(
-            `[IMAP] Error building parts for message ${seqNum}:`,
-            partError
-          );
-          // Continue to next message
-        }
-
-        // Mark as read if not using PEEK
-        const shouldMarkAsRead = checkShouldMarkAsRead(fetchRequest.dataItems);
-        if (shouldMarkAsRead) {
-          await markRead(id);
-        }
-
-        current = iterator.next();
-      }
-
+      const messages = await this.fetchMessages(fetchRequest, isUidCommand);
+      await this.processFetchMessages(messages, fetchRequest, isUidCommand);
       this.write(`${tag} OK FETCH completed\r\n`);
-      console.log(`[IMAP] FETCH completed for ${tag}`);
     } catch (error) {
       console.error("FETCH error", error);
       this.write(`${tag} NO FETCH failed\r\n`);
     }
   };
+
+  private async fetchMessages(fetchRequest: FetchRequest, isUidCommand: boolean) {
+    const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
+    const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
+    
+    console.log(`[IMAP] FETCH range: ${start}-${end}, fields:`, Array.from(requestedFields));
+
+    return await this.store!.getMessages(
+      this.selectedMailbox!,
+      start,
+      end,
+      Array.from(requestedFields),
+      fetchRequest.sequenceSet.type === "uid" || isUidCommand
+    );
+  }
+
+  private async processFetchMessages(
+    messages: Map<string, Partial<MailType>>,
+    fetchRequest: FetchRequest,
+    isUidCommand: boolean
+  ) {
+    const isDomainInbox = this.selectedMailbox === "INBOX";
+    const isUidFetch = fetchRequest.sequenceSet.type === "uid" || isUidCommand;
+    const { start } = this.convertSequenceSet(fetchRequest.sequenceSet);
+    let i = start - 1;
+
+    for (const [id, mail] of messages.entries()) {
+      const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+      const seqNum = isUidFetch ? uid : ++i;
+
+      try {
+        const response = await this.buildFetchResponse(mail, fetchRequest.dataItems, id, uid, seqNum, isUidFetch);
+        this.writeFetchResponse(seqNum, response);
+
+        // Mark as read if not using PEEK
+        if (checkShouldMarkAsRead(fetchRequest.dataItems)) {
+          await markRead(id);
+        }
+      } catch (error) {
+        console.error(`[IMAP] Error processing message ${seqNum}:`, error);
+      }
+    }
+  }
+
+  private async buildFetchResponse(
+    mail: Partial<MailType>,
+    dataItems: FetchDataItem[],
+    docId: string,
+    uid: number,
+    seqNum: number,
+    isUidFetch: boolean
+  ): Promise<FetchResponsePart[]> {
+    const parts: FetchResponsePart[] = [];
+
+    // Add UID if needed
+    if (isUidFetch) {
+      parts.push({ type: 'simple', content: `UID ${uid}` });
+    }
+
+    // Process each data item
+    for (const item of dataItems) {
+      const part = await this.buildFetchResponsePart(mail, item, docId);
+      if (part) {
+        parts.push(part);
+      }
+    }
+
+    return parts;
+  }
+
+  private async buildFetchResponsePart(
+    mail: Partial<MailType>,
+    item: FetchDataItem,
+    docId: string
+  ): Promise<FetchResponsePart | null> {
+    switch (item.type) {
+      case "UID":
+        const isDomainInbox = this.selectedMailbox === "INBOX";
+        const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+        return { type: 'simple', content: `UID ${uid}` };
+
+      case "FLAGS":
+        const flags = [];
+        if (mail.read) flags.push("\\Seen");
+        if (mail.saved) flags.push("\\Flagged");
+        return { type: 'simple', content: `FLAGS (${flags.join(" ")})` };
+
+      case "INTERNALDATE":
+        const date = mail.date ? new Date(mail.date) : new Date();
+        const internalDate = date.toUTCString().replace(/GMT$/, "+0000");
+        return { type: 'simple', content: `INTERNALDATE "${internalDate}"` };
+
+      case "RFC822.SIZE":
+        const textSize = mail.text ? mail.text.length : 0;
+        const htmlSize = mail.html ? mail.html.length : 0;
+        const size = textSize + htmlSize;
+        return { type: 'simple', content: `RFC822.SIZE ${size}` };
+
+      case "ENVELOPE":
+        const envelope = this.buildEnvelope(mail);
+        return { type: 'simple', content: `ENVELOPE ${envelope}` };
+
+      case "BODYSTRUCTURE":
+        const bodyStructure = formatBodyStructure(mail);
+        return { type: 'simple', content: `BODYSTRUCTURE ${bodyStructure}` };
+
+      case "BODY":
+        return await this.buildBodyResponsePart(mail, item, docId);
+
+      default:
+        return null;
+    }
+  }
+
+  private async buildBodyResponsePart(
+    mail: Partial<MailType>,
+    bodyFetch: BodyFetch,
+    docId: string
+  ): Promise<FetchResponsePart | null> {
+    const content = this.getBodyContent(mail, bodyFetch.section, docId);
+    if (content === null) {
+      return null;
+    }
+
+    let finalContent = content;
+    
+    // Apply partial fetch if specified
+    if (bodyFetch.partial) {
+      finalContent = applyPartialFetch(content, bodyFetch.partial);
+      if (finalContent === "" && bodyFetch.partial.start >= Buffer.byteLength(content, "utf8")) {
+        const sectionKey = getBodySectionKey(bodyFetch.section);
+        return { type: 'simple', content: `${sectionKey} NIL` };
+      }
+    }
+
+    const sectionKey = getBodySectionKey(bodyFetch.section);
+    
+    return {
+      type: 'literal',
+      content: finalContent,
+      header: sectionKey // Don't include length here
+    };
+  }
+
+  private writeFetchResponse(seqNum: number, parts: FetchResponsePart[]) {
+    this.write(`* ${seqNum} FETCH (`);
+    
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) this.write(" ");
+      
+      const part = parts[i];
+      if (part.type === 'literal') {
+        // Calculate length right before sending
+        const length = Buffer.byteLength(part.content, "utf8");
+        this.write(`${part.header} {${length}}\r\n${part.content}`);
+      } else {
+        this.write(part.content);
+      }
+    }
+    
+    this.write(")\r\n");
+  }
 
   // Helper methods for typed FETCH
   private convertSequenceSet(sequenceSet: SequenceSet): {
@@ -301,64 +369,6 @@ export class ImapSession {
     }
   }
 
-  private async buildFetchResponseParts(
-    mail: Partial<MailType>,
-    dataItems: FetchDataItem[],
-    docId: string
-  ): Promise<string[]> {
-    const parts: string[] = [];
-
-    for (const item of dataItems) {
-      switch (item.type) {
-        case "UID":
-          const isDomainInbox = this.selectedMailbox === "INBOX";
-          const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
-          parts.push(`UID ${uid}`);
-          break;
-
-        case "FLAGS":
-          const flags = [];
-          if (mail.read) flags.push("\\Seen");
-          if (mail.saved) flags.push("\\Flagged");
-          parts.push(`FLAGS (${flags.join(" ")})`);
-          break;
-
-        case "INTERNALDATE":
-          const date = mail.date ? new Date(mail.date) : new Date();
-          // IMAP INTERNALDATE format: "17-Jul-1996 02:44:25 -0700"
-          const internalDate = date.toUTCString().replace(/GMT$/, "+0000");
-          parts.push(`INTERNALDATE "${internalDate}"`);
-          break;
-
-        case "RFC822.SIZE":
-          const textSize = mail.text ? mail.text.length : 0;
-          const htmlSize = mail.html ? mail.html.length : 0;
-          const size = textSize + htmlSize;
-          parts.push(`RFC822.SIZE ${size}`);
-          break;
-
-        case "ENVELOPE":
-          const envelope = this.buildEnvelope(mail);
-          parts.push(`ENVELOPE ${envelope}`);
-          break;
-
-        case "BODYSTRUCTURE":
-          const bodyStructure = formatBodyStructure(mail);
-          parts.push(`BODYSTRUCTURE ${bodyStructure}`);
-          break;
-
-        case "BODY":
-          const bodyPart = await this.buildBodyPart(mail, item, docId);
-          if (bodyPart) {
-            parts.push(bodyPart);
-          }
-          break;
-      }
-    }
-
-    return parts;
-  }
-
   private buildEnvelope(mail: Partial<MailType>): string {
     const dateString = new Date(mail.date!).toUTCString();
     const subject = (mail.subject || "").replace(/"/g, '\\"');
@@ -369,44 +379,6 @@ export class ImapSession {
     const messageId = mail.messageId || "<unknown@local>";
 
     return `("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
-  }
-
-  private async buildBodyPart(
-    mail: Partial<MailType>,
-    bodyFetch: BodyFetch,
-    docId: string
-  ): Promise<string | null> {
-    let content = this.getBodyContent(mail, bodyFetch.section, docId);
-    if (content === null) {
-      return null;
-    }
-
-    // Apply partial fetch if specified
-    if (bodyFetch.partial) {
-      const originalLength = Buffer.byteLength(content, "utf8");
-      content = applyPartialFetch(content, bodyFetch.partial);
-      
-      console.log(
-        `[IMAP] Partial fetch: start=${bodyFetch.partial.start}, length=${bodyFetch.partial.length}, originalLength=${originalLength}, resultLength=${Buffer.byteLength(content, "utf8")}`
-      );
-      
-      // If partial fetch results in empty content (start beyond boundaries), return NIL
-      if (content === "" && bodyFetch.partial.start >= originalLength) {
-        const sectionKey = getBodySectionKey(bodyFetch.section);
-        return `${sectionKey} NIL`;
-      }
-    }
-
-    const length = Buffer.byteLength(content, "utf8");
-    const sectionKey = getBodySectionKey(bodyFetch.section);
-
-    console.log(
-      `[IMAP] Literal: declared ${length} bytes, content ends with: ${JSON.stringify(
-        content.slice(-10)
-      )}`
-    );
-
-    return `${sectionKey} {${length}}\r\n${content}`;
   }
 
   private getBodyContent(
