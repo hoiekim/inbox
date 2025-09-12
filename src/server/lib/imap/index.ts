@@ -13,42 +13,49 @@ export const imapListener = (socket: Socket) => {
   );
 
   socket.on("data", async (data) => {
-    buffer += data.toString();
+    try {
+      buffer += data.toString();
 
-    // Process complete lines
-    let lineEnd;
-    while ((lineEnd = buffer.indexOf("\r\n")) !== -1) {
-      const line = buffer.substring(0, lineEnd);
-      buffer = buffer.substring(lineEnd + 2);
+      // Process complete lines
+      let lineEnd;
+      while ((lineEnd = buffer.indexOf("\r\n")) !== -1) {
+        const line = buffer.substring(0, lineEnd);
+        buffer = buffer.substring(lineEnd + 2);
 
-      if (line.trim()) {
-        console.log(`[RAW] Received: "${line.trim()}"`);
-        try {
-          // Parse the command using the typed parser
-          const parseResult = parseCommand(line.trim());
+        if (line.trim()) {
+          console.log(`[RAW] Received: "${line.trim()}"`);
+          try {
+            // Parse the command using the typed parser
+            const parseResult = parseCommand(line.trim());
 
-          if (parseResult.success && parseResult.value) {
-            const { tag, request } = parseResult.value;
-            await handler.handleRequest(tag, request);
-          } else {
-            // If parsing failed, send error response only if socket is writable
-            console.log(`[PARSER] Parse failed for "${line.trim()}": ${parseResult.error}`);
+            if (parseResult.success && parseResult.value) {
+              const { tag, request } = parseResult.value;
+              await handler.handleRequest(tag, request);
+            } else {
+              // If parsing failed, send error response only if socket is writable
+              console.log(`[PARSER] Parse failed for "${line.trim()}": ${parseResult.error}`);
+              if (!socket.destroyed && socket.writable) {
+                const parts = line.trim().split(" ");
+                const tag = parts[0] || "BAD";
+                const errorMsg = parseResult.error || "Invalid command syntax";
+                session.write(`${tag} BAD ${errorMsg}\r\n`);
+              }
+            }
+          } catch (error) {
+            console.error("Error processing command:", error);
+            // Only send error response if socket is still writable
             if (!socket.destroyed && socket.writable) {
               const parts = line.trim().split(" ");
               const tag = parts[0] || "BAD";
-              const errorMsg = parseResult.error || "Invalid command syntax";
-              session.write(`${tag} BAD ${errorMsg}\r\n`);
+              session.write(`${tag} BAD Internal server error\r\n`);
             }
           }
-        } catch (error) {
-          console.error("Error processing command:", error);
-          // Only send error response if socket is still writable
-          if (!socket.destroyed && socket.writable) {
-            const parts = line.trim().split(" ");
-            const tag = parts[0] || "BAD";
-            session.write(`${tag} BAD Internal server error\r\n`);
-          }
         }
+      }
+    } catch (error) {
+      console.error("Error processing data:", error);
+      if (!socket.destroyed) {
+        socket.destroy();
       }
     }
   });
@@ -59,5 +66,18 @@ export const imapListener = (socket: Socket) => {
 
   socket.on("error", (error) => {
     console.error("IMAP socket error:", error);
+    if (!socket.destroyed) {
+      socket.destroy();
+    }
+  });
+
+  // Set socket timeout to prevent hanging connections
+  socket.setTimeout(300000); // 5 minutes
+  socket.on("timeout", () => {
+    console.log("IMAP socket timeout");
+    if (!socket.destroyed) {
+      socket.write("* BYE Timeout\r\n");
+      socket.destroy();
+    }
   });
 };

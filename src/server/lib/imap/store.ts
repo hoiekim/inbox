@@ -68,6 +68,7 @@ export class Store {
     box: string
   ): Promise<{ total: number; unread: number } | null> => {
     try {
+      const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent/");
       const accountName = boxToAccount(this.user.username, box);
       const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
@@ -76,20 +77,22 @@ export class Store {
         read?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
       };
 
+      const must: QueryDslQueryContainer[] = [
+        { term: { type: "mail" } },
+        { term: { "user.id": this.user.id } },
+        { term: { "mail.sent": isSent } }
+      ];
+
+      // For INBOX, don't filter by account - get all messages
+      if (!isDomainInbox) {
+        must.push({ term: { [searchFiled]: accountName } });
+      }
+
       const response =
         await elasticsearchClient.search<AddressAggregationBucket>({
           index,
           size: 0,
-          query: {
-            bool: {
-              must: [
-                { term: { type: "mail" } },
-                { term: { "user.id": this.user.id } },
-                { term: { [searchFiled]: accountName } },
-                { term: { "mail.sent": isSent } }
-              ]
-            }
-          },
+          query: { bool: { must } },
           aggs: { read: { terms: { field: "mail.read", size: 10000 } } }
         });
 

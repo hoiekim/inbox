@@ -46,9 +46,15 @@ export class ImapSession {
 
   write = (data: string) => {
     if (this.socket.destroyed || !this.socket.writable) {
+      console.log("[IMAP] Attempted to write to destroyed/unwritable socket");
       return false;
     }
-    return this.socket.write(data);
+    try {
+      return this.socket.write(data);
+    } catch (error) {
+      console.error("[IMAP] Error writing to socket:", error);
+      return false;
+    }
   };
 
   // New typed command handlers
@@ -150,31 +156,26 @@ export class ImapSession {
           );
 
           // Write response - handle IMAP literals properly
-          let response = `* ${seqNum} FETCH (`;
+          this.write(`* ${seqNum} FETCH (`);
           
           for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
             
-            if (i > 0) response += " ";
+            if (i > 0) this.write(" ");
             
             if (part.includes("}\r\n")) {
-              // This is a literal - split header and content
+              // This is a literal - send it properly
               const [header, content] = part.split("}\r\n", 2);
-              response += `${header}}\r\n`;
-              // Send the response up to the literal
-              this.write(response);
-              // Send the literal content
+              this.write(`${header}}\r\n`);
               this.write(content);
-              // Reset response for next parts
-              response = "";
             } else {
               // Regular part
-              response += part;
+              this.write(part);
             }
           }
 
           // Close the FETCH response
-          this.write(response + ")\r\n");
+          this.write(")\r\n");
           console.log(`[IMAP] Sent FETCH response for message ${seqNum}`);
         } catch (partError) {
           console.error(
@@ -382,11 +383,17 @@ export class ImapSession {
 
     // Apply partial fetch if specified
     if (bodyFetch.partial) {
+      const originalLength = Buffer.byteLength(content, "utf8");
       content = applyPartialFetch(content, bodyFetch.partial);
-    } else {
-      // Only add \r\n if content actually has data and not doing partial fetch
-      if (content && !content.endsWith("\r\n")) {
-        content += "\r\n";
+      
+      console.log(
+        `[IMAP] Partial fetch: start=${bodyFetch.partial.start}, length=${bodyFetch.partial.length}, originalLength=${originalLength}, resultLength=${Buffer.byteLength(content, "utf8")}`
+      );
+      
+      // If partial fetch results in empty content (start beyond boundaries), return NIL
+      if (content === "" && bodyFetch.partial.start >= originalLength) {
+        const sectionKey = getBodySectionKey(bodyFetch.section);
+        return `${sectionKey} NIL`;
       }
     }
 
