@@ -190,27 +190,58 @@ export class Store {
     useUid: boolean = false
   ): Promise<boolean> => {
     try {
-      let messageId: string | undefined;
-      let message: Partial<Mail> | undefined;
+      const isDomainInbox = box === "INBOX";
+      const isSent = box.startsWith("Sent/");
+      const accountName = boxToAccount(this.user.username, box);
+      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
 
-      if (!messageId || !message) {
+      const must: QueryDslQueryContainer[] = [
+        { term: { type: "mail" } },
+        { term: { "user.id": this.user.id } },
+        { term: { "mail.sent": isSent } }
+      ];
+
+      if (!isDomainInbox) {
+        must.push({ term: { [searchFiled]: accountName } });
+      }
+
+      let query: ElasticsearchSearchRequest;
+
+      if (useUid) {
+        must.push({ term: { [uidField]: identifier } });
+        query = {
+          index,
+          size: 1,
+          query: { bool: { must } },
+          _source: false
+        };
+      } else {
+        query = {
+          index,
+          from: identifier - 1,
+          size: 1,
+          query: { bool: { must } },
+          sort: { [uidField]: "asc" },
+          _source: false
+        };
+      }
+
+      const response = await elasticsearchClient.search(query);
+
+      if (response.hits.hits.length === 0) {
         return false;
       }
 
+      const messageId = response.hits.hits[0]._id!;
       const read = flags.includes("\\Seen");
       const saved = flags.includes("\\Flagged");
 
-      if (read || saved) {
-        await elasticsearchClient.update({
-          index,
-          id: messageId,
-          doc: { mail: { read, saved } }
-        });
-
-        // Update cached message
-        message.read = read;
-        message.saved = saved;
-      }
+      await elasticsearchClient.update({
+        index,
+        id: messageId,
+        doc: { mail: { read, saved } }
+      });
 
       return true;
     } catch (error) {
