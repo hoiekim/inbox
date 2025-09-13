@@ -1,4 +1,9 @@
-import { MailType, MailAddressType, MailAddressValueType, AttachmentType } from "common";
+import {
+  MailType,
+  MailAddressType,
+  MailAddressValueType,
+  AttachmentType
+} from "common";
 import { getUserDomain } from "server";
 
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
@@ -22,7 +27,10 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
   return formatted || "NIL";
 };
 
-export const formatHeaders = (mail: Partial<MailType>, docId?: string): string => {
+export const formatHeaders = (
+  mail: Partial<MailType>,
+  docId?: string
+): string => {
   const headers: string[] = [];
 
   // Add standard headers in proper order
@@ -68,7 +76,9 @@ export const formatHeaders = (mail: Partial<MailType>, docId?: string): string =
 
   // Use stable boundary based on docId - docId should always exist
   if (!docId) {
-    console.warn(`[IMAP] Warning: docId is missing, falling back to messageId: ${mail.messageId}`);
+    console.warn(
+      `[IMAP] Warning: docId is missing, falling back to messageId: ${mail.messageId}`
+    );
   }
   const stableId = docId || mail.messageId || "default";
 
@@ -126,17 +136,22 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
   ): string => {
     const size = Buffer.byteLength(content, "utf-8");
     const lines = type === "text" ? content.split(/\r?\n/).length : undefined;
-    
+
     // Build parameter list
-    const paramList = Object.keys(params).length > 0 
-      ? `(${Object.entries(params).map(([k, v]) => `"${k}" "${v}"`).join(" ")})`
-      : "NIL";
-    
+    const paramList =
+      Object.keys(params).length > 0
+        ? `(${Object.entries(params)
+            .map(([k, v]) => `"${k}" "${v}"`)
+            .join(" ")})`
+        : "NIL";
+
     // Build disposition
-    const dispositionStr = disposition 
-      ? `("${disposition.type}" (${Object.entries(disposition.params).map(([k, v]) => `"${k}" "${v}"`).join(" ")}))`
+    const dispositionStr = disposition
+      ? `("${disposition.type}" (${Object.entries(disposition.params)
+          .map(([k, v]) => `"${k}" "${v}"`)
+          .join(" ")}))`
       : "NIL";
-    
+
     const parts = [
       `"${type}"`,
       `"${subtype}"`,
@@ -146,55 +161,64 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
       `"${encoding}"`,
       size.toString()
     ];
-    
+
     if (lines !== undefined) {
       parts.push(lines.toString());
     }
-    
+
     parts.push("NIL"); // MD5
     parts.push(dispositionStr);
     parts.push("NIL"); // language
     parts.push("NIL"); // location
-    
+
     return `(${parts.join(" ")})`;
   };
 
-  const buildTextPart = (subtype: "plain" | "html", content: string): string => {
+  const buildTextPart = (
+    subtype: "plain" | "html",
+    content: string
+  ): string => {
     return buildSinglePart("text", subtype, content, { charset: "utf-8" });
   };
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
-    const [type, subtype] = (attachment.contentType || "application/octet-stream").split("/");
+    const [type, subtype] = (
+      attachment.contentType || "application/octet-stream"
+    ).split("/");
     const filename = attachment.filename || "unnamed";
     const size = attachment.size || 0;
-    
+
     const params: Record<string, string> = {};
     if (filename) {
       params.name = filename;
     }
-    
+
     const disposition = {
       type: "attachment",
       params: { filename }
     };
-    
+
     // For non-text types, don't include line count
     const parts = [
       `"${type}"`,
       `"${subtype}"`,
-      Object.keys(params).length > 0 
-        ? `(${Object.entries(params).map(([k, v]) => `"${k}" "${v}"`).join(" ")})`
+      Object.keys(params).length > 0
+        ? `(${Object.entries(params)
+            .map(([k, v]) => `"${k}" "${v}"`)
+            .join(" ")})`
         : "NIL",
       "NIL", // body ID
       "NIL", // body description
       '"base64"', // encoding
       size.toString(),
       "NIL", // MD5
-      `("${disposition.type}" (${Object.entries(disposition.params).map(([k, v]) => `"${k}" "${v}"`).join(" ")}))`,
+      `("${disposition.type}" (${Object.entries(disposition.params)
+        .map(([k, v]) => `"${k}" "${v}"`)
+        .join(" ")}))`,
       "NIL", // language
-      "NIL"  // location
+      "NIL" // location
     ];
-    
+
     return `(${parts.join(" ")})`;
   };
 
@@ -222,7 +246,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
   // Case 4: Content with attachments (multipart/mixed)
   if (hasAttachments) {
     const bodyParts: string[] = [];
-    
+
     // If we have both text and HTML, create a multipart/alternative first
     if (hasText && hasHtml) {
       const textPart = buildTextPart("plain", mail.text!);
@@ -234,12 +258,12 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     } else if (hasHtml) {
       bodyParts.push(buildTextPart("html", mail.html!));
     }
-    
+
     // Add attachment parts
-    mail.attachments!.forEach(attachment => {
+    mail.attachments!.forEach((attachment) => {
       bodyParts.push(buildAttachmentPart(attachment));
     });
-    
+
     return `(${bodyParts.join(" ")} "mixed" NIL NIL NIL NIL)`;
   }
 
@@ -316,8 +340,7 @@ export const accountToBox = (accountName: string): string => {
 };
 
 export const boxToAccount = (username: string, box: string): string => {
-  const isSent = box.startsWith("Sent/");
-  const cleanBoxname = isSent ? box.replace("Sent/", "") : box;
+  const cleanBoxname = box.replace("Sent/", "").replace("Received/", "");
   const domain = getUserDomain(username);
   return `${cleanBoxname}@${domain}`;
 };

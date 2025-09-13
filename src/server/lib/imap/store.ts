@@ -17,8 +17,6 @@ import {
 
 // class that creates "store" object
 export class Store {
-  private messageCache: Map<string, Map<string, Partial<Mail>>> = new Map();
-
   constructor(private user: SignedUser) {}
 
   /**
@@ -44,7 +42,7 @@ export class Store {
       accounts.received.forEach((account) => {
         if (account.key && account.key !== "INBOX") {
           const boxName = accountToBox(account.key);
-          mailboxes.push(boxName);
+          mailboxes.push(`Received/${boxName}`);
         }
       });
 
@@ -192,34 +190,8 @@ export class Store {
     useUid: boolean = false
   ): Promise<boolean> => {
     try {
-      const cachedMessages = this.messageCache.get(box);
-      if (!cachedMessages) {
-        return false;
-      }
-
       let messageId: string | undefined;
       let message: Partial<Mail> | undefined;
-
-      if (useUid) {
-        // Find message by UID
-        cachedMessages.forEach((msg, id) => {
-          const uid = msg.uid?.domain || msg.uid?.account;
-          if (uid === identifier) {
-            messageId = id;
-            message = msg;
-          }
-        });
-      } else {
-        // Find message by sequence number (1-based index)
-        let currentIndex = 0;
-        cachedMessages.forEach((msg, id) => {
-          currentIndex++;
-          if (currentIndex === identifier) {
-            messageId = id;
-            message = msg;
-          }
-        });
-      }
 
       if (!messageId || !message) {
         return false;
@@ -254,9 +226,6 @@ export class Store {
       // In a real implementation, you might want to add a 'deleted' field to track this
 
       console.log(`Expunge operation completed for ${box}`);
-
-      // Clear the cache for this mailbox
-      this.messageCache.delete(box);
     } catch (error) {
       console.error("Error expunging messages:", error);
       throw error;
