@@ -41,6 +41,8 @@ type FetchResponsePart =
       header: string;
     };
 
+const throttler = new Throttler();
+
 export class ImapSession {
   private selectedMailbox: string | null = null;
   private store: Store | null = null;
@@ -48,7 +50,6 @@ export class ImapSession {
   private isIdling: boolean = false;
   private idleTag: string | null = null;
   private sessionId: string;
-  private throttler: Throttler = new Throttler();
 
   constructor(private socket: Socket) {
     this.sessionId = `session_${Date.now()}_${Math.random()
@@ -70,7 +71,7 @@ export class ImapSession {
   };
 
   isThrottled(): boolean {
-    return this.throttler.isThrottled();
+    return throttler.isThrottled();
   }
 
   // New typed command handlers
@@ -257,12 +258,13 @@ export class ImapSession {
     if (bodyFetch.partial) {
       finalContent = applyPartialFetch(content, bodyFetch.partial);
       if (
-        finalContent === "" &&
+        finalContent === "" ||
         bodyFetch.partial.start >= Buffer.byteLength(content, "utf8")
       ) {
         const sectionKey = getBodySectionKey(bodyFetch.section);
         return { type: "simple", content: `${sectionKey} NIL` };
       }
+      finalContent += "\r\n";
     }
 
     const sectionKey = getBodySectionKey(bodyFetch.section);

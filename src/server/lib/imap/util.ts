@@ -340,7 +340,7 @@ export const accountToBox = (accountName: string): string => {
 };
 
 export const boxToAccount = (username: string, box: string): string => {
-  const cleanBoxname = box.replace("Sent/", "").replace("Received/", "");
+  const cleanBoxname = box.replace("Sent Messages/", "").replace("INBOX/", "");
   const domain = getUserDomain(username);
   return `${cleanBoxname}@${domain}`;
 };

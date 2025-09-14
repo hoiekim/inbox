@@ -24,13 +24,15 @@ export const imapListener = (socket: Socket) => {
 
         if (line.trim()) {
           console.log(`[RAW] Received: "${line.trim()}"`);
-          
+
           // Check throttling before processing
           if (session.isThrottled()) {
-            session.write("* NO [TEMPORARY UNAVAILABLE] Server is busy. Please try again later.\r\n");
+            session.write(
+              "* NO [TEMPORARY UNAVAILABLE] Server is busy. Please try again later.\r\n"
+            );
             continue;
           }
-          
+
           try {
             // Parse the command using the typed parser
             const parseResult = parseCommand(line.trim());
@@ -40,22 +42,22 @@ export const imapListener = (socket: Socket) => {
               await handler.handleRequest(tag, request);
             } else {
               // If parsing failed, send error response only if socket is writable
-              console.log(`[PARSER] Parse failed for "${line.trim()}": ${parseResult.error}`);
-              if (!socket.destroyed && socket.writable) {
-                const parts = line.trim().split(" ");
-                const tag = parts[0] || "BAD";
-                const errorMsg = parseResult.error || "Invalid command syntax";
-                session.write(`${tag} BAD ${errorMsg}\r\n`);
-              }
+              console.log(
+                `[PARSER] Parse failed for "${line.trim()}": ${
+                  parseResult.error
+                }`
+              );
+              const parts = line.trim().split(" ");
+              const tag = parts[0] || "BAD";
+              const errorMsg = parseResult.error || "Invalid command syntax";
+              session.write(`${tag} BAD ${errorMsg}\r\n`);
             }
           } catch (error) {
             console.error("Error processing command:", error);
             // Only send error response if socket is still writable
-            if (!socket.destroyed && socket.writable) {
-              const parts = line.trim().split(" ");
-              const tag = parts[0] || "BAD";
-              session.write(`${tag} BAD Internal server error\r\n`);
-            }
+            const parts = line.trim().split(" ");
+            const tag = parts[0] || "BAD";
+            session.write(`${tag} BAD Internal server error\r\n`);
           }
         }
       }
@@ -72,7 +74,9 @@ export const imapListener = (socket: Socket) => {
   });
 
   socket.on("error", (error) => {
-    console.error("IMAP socket error:", error);
+    if (!error.message.includes("ECONNRESET")) {
+      console.error("IMAP socket error:", error);
+    }
     if (!socket.destroyed) {
       socket.destroy();
     }
@@ -82,8 +86,8 @@ export const imapListener = (socket: Socket) => {
   socket.setTimeout(300000); // 5 minutes
   socket.on("timeout", () => {
     console.log("IMAP socket timeout");
+    session.write("* BYE Timeout\r\n");
     if (!socket.destroyed) {
-      socket.write("* BYE Timeout\r\n");
       socket.destroy();
     }
   });

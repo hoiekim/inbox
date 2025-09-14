@@ -42,15 +42,15 @@ export class Store {
       accounts.received.forEach((account) => {
         if (account.key && account.key !== "INBOX") {
           const boxName = accountToBox(account.key);
-          mailboxes.push(`Received/${boxName}`);
+          mailboxes.push(`INBOX/${boxName}`);
         }
       });
 
-      // Add sent mail accounts as mailboxes with "Sent/" prefix
+      // Add sent mail accounts as mailboxes with "Sent Messages/" prefix
       accounts.sent.forEach((account) => {
         if (account.key) {
           const boxName = accountToBox(account.key);
-          mailboxes.push(`Sent/${boxName}`);
+          mailboxes.push(`Sent Messages/${boxName}`);
         }
       });
 
@@ -67,7 +67,7 @@ export class Store {
   ): Promise<{ total: number; unread: number } | null> => {
     try {
       const isDomainInbox = box === "INBOX";
-      const isSent = box.startsWith("Sent/");
+      const isSent = box.startsWith("Sent Messages/");
       const accountName = boxToAccount(this.user.username, box);
       const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
@@ -121,7 +121,7 @@ export class Store {
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
       const isDomainInbox = box === "INBOX";
-      const isSent = box.startsWith("Sent/");
+      const isSent = box.startsWith("Sent Messages/");
       const accountName = boxToAccount(this.user.username, box);
       const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
@@ -191,7 +191,7 @@ export class Store {
   ): Promise<boolean> => {
     try {
       const isDomainInbox = box === "INBOX";
-      const isSent = box.startsWith("Sent/");
+      const isSent = box.startsWith("Sent Messages/");
       const accountName = boxToAccount(this.user.username, box);
       const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
       const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
@@ -270,7 +270,7 @@ export class Store {
   ): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
-      const isSent = box.startsWith("Sent/");
+      const isSent = box.startsWith("Sent Messages/");
       const accountName = boxToAccount(this.user.username, box);
       const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
 
