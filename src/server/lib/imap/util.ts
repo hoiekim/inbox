@@ -99,7 +99,7 @@ export const formatHeaders = (
     headers.push("Content-Transfer-Encoding: 8bit");
   }
 
-  return headers.join("\r\n");
+  return headers.join("\r\n") + "\r\n";
 };
 
 export const formatEnvelope = (mail: Partial<MailType>): string => {
