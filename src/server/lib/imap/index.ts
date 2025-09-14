@@ -24,6 +24,13 @@ export const imapListener = (socket: Socket) => {
 
         if (line.trim()) {
           console.log(`[RAW] Received: "${line.trim()}"`);
+          
+          // Check throttling before processing
+          if (session.isThrottled()) {
+            session.write("* NO [TEMPORARY UNAVAILABLE] Server is busy. Please try again later.\r\n");
+            continue;
+          }
+          
           try {
             // Parse the command using the typed parser
             const parseResult = parseCommand(line.trim());

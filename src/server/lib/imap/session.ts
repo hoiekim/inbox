@@ -15,7 +15,7 @@ import {
   buildFullMessage,
   getBodyPart
 } from "./session-utils";
-import { MailType } from "common";
+import { MailType, Throttler } from "common";
 import {
   FetchRequest,
   FetchDataItem,
@@ -48,6 +48,7 @@ export class ImapSession {
   private isIdling: boolean = false;
   private idleTag: string | null = null;
   private sessionId: string;
+  private throttler: Throttler = new Throttler();
 
   constructor(private socket: Socket) {
     this.sessionId = `session_${Date.now()}_${Math.random()
@@ -67,6 +68,10 @@ export class ImapSession {
       return false;
     }
   };
+
+  isThrottled(): boolean {
+    return this.throttler.isThrottled();
+  }
 
   // New typed command handlers
   capability = (tag: string) => {
