@@ -2,26 +2,36 @@
  * Main IMAP command parser entry point
  */
 
-import { ParseContext, ParseResult, ImapRequest } from '../types';
-import { parseAtom, skipWhitespace } from './primitive-parsers';
-import { parseFetch } from './fetch-parsers';
-import { parseLogin, parseAuthenticate } from './auth-parsers';
-import { parseList, parseSelect, parseStatus, parseCreate, parseDelete, parseRename, parseSubscribe, parseUnsubscribe } from './mailbox-parsers';
-import { parseSearch, parseStore, parseCopy } from './search-store-parsers';
-import { parseAppend } from './append-parser';
+import { ParseContext, ParseResult, ImapRequest } from "../types";
+import { parseAtom, skipWhitespace } from "./primitive-parsers";
+import { parseFetch } from "./fetch-parsers";
+import { parseLogin, parseAuthenticate } from "./auth-parsers";
+import {
+  parseList,
+  parseSelect,
+  parseStatus,
+  parseCreate,
+  parseDelete,
+  parseRename,
+  parseSubscribe,
+  parseUnsubscribe
+} from "./mailbox-parsers";
+import { parseSearch, parseStore, parseCopy } from "./search-store-parsers";
+import { parseAppend } from "./append-parser";
 
 // Simple ID parser
 const parseId = (context: ParseContext): ParseResult<ImapRequest> => {
   // Skip the ID parameters - we don't need to parse them
   context.position = context.length;
-  return { success: true, value: { type: 'ID' }, consumed: context.position };
+  return { success: true, value: { type: "ID" }, consumed: context.position };
 };
 
 /**
  * Parse a complete IMAP command line
  */
-export const parseCommand = (line: string): ParseResult<{ tag: string; request: ImapRequest }> => {
-  console.log(`[PARSER] Parsing command: "${line}"`);
+export const parseCommand = (
+  line: string
+): ParseResult<{ tag: string; request: ImapRequest }> => {
   const context: ParseContext = {
     input: line.trim(),
     position: 0,
@@ -31,14 +41,14 @@ export const parseCommand = (line: string): ParseResult<{ tag: string; request: 
   try {
     const tag = parseAtom(context);
     if (!tag.success || !tag.value) {
-      return { success: false, error: 'Invalid tag', consumed: 0 };
+      return { success: false, error: "Invalid tag", consumed: 0 };
     }
 
     skipWhitespace(context);
-    
+
     const command = parseAtom(context);
     if (!command.success || !command.value) {
-      return { success: false, error: 'Invalid command', consumed: 0 };
+      return { success: false, error: "Invalid command", consumed: 0 };
     }
 
     skipWhitespace(context);
@@ -64,89 +74,124 @@ export const parseCommand = (line: string): ParseResult<{ tag: string; request: 
 /**
  * Parse IMAP request based on command type
  */
-const parseImapRequest = (command: string, context: ParseContext): ParseResult<ImapRequest> => {
+const parseImapRequest = (
+  command: string,
+  context: ParseContext
+): ParseResult<ImapRequest> => {
   switch (command) {
-    case 'CAPABILITY':
-      return { success: true, value: { type: 'CAPABILITY' }, consumed: context.position };
-    
-    case 'NOOP':
-      return { success: true, value: { type: 'NOOP' }, consumed: context.position };
-    
-    case 'LOGOUT':
-      return { success: true, value: { type: 'LOGOUT' }, consumed: context.position };
-    
-    case 'ID':
+    case "CAPABILITY":
+      return {
+        success: true,
+        value: { type: "CAPABILITY" },
+        consumed: context.position
+      };
+
+    case "NOOP":
+      return {
+        success: true,
+        value: { type: "NOOP" },
+        consumed: context.position
+      };
+
+    case "LOGOUT":
+      return {
+        success: true,
+        value: { type: "LOGOUT" },
+        consumed: context.position
+      };
+
+    case "ID":
       return parseId(context);
-    
-    case 'DONE':
-      return { success: true, value: { type: 'DONE' }, consumed: context.position };
-    
-    case 'LOGIN':
+
+    case "DONE":
+      return {
+        success: true,
+        value: { type: "DONE" },
+        consumed: context.position
+      };
+
+    case "LOGIN":
       return parseLogin(context);
-    
-    case 'AUTHENTICATE':
+
+    case "AUTHENTICATE":
       return parseAuthenticate(context);
-    
-    case 'LIST':
-    case 'LSUB':
+
+    case "LIST":
+    case "LSUB":
       return parseList(command, context);
-    
-    case 'SELECT':
+
+    case "SELECT":
       return parseSelect(false, context);
-    
-    case 'EXAMINE':
+
+    case "EXAMINE":
       return parseSelect(true, context);
-    
-    case 'CREATE':
+
+    case "CREATE":
       return parseCreate(context);
-    
-    case 'DELETE':
+
+    case "DELETE":
       return parseDelete(context);
-    
-    case 'RENAME':
+
+    case "RENAME":
       return parseRename(context);
-    
-    case 'SUBSCRIBE':
+
+    case "SUBSCRIBE":
       return parseSubscribe(context);
-    
-    case 'UNSUBSCRIBE':
+
+    case "UNSUBSCRIBE":
       return parseUnsubscribe(context);
-    
-    case 'STATUS':
+
+    case "STATUS":
       return parseStatus(context);
-    
-    case 'FETCH':
+
+    case "FETCH":
       return parseFetch(context);
-    
-    case 'SEARCH':
+
+    case "SEARCH":
       return parseSearch(context);
-    
-    case 'STORE':
+
+    case "STORE":
       return parseStore(context);
-    
-    case 'COPY':
+
+    case "COPY":
       return parseCopy(context);
-    
-    case 'UID':
+
+    case "UID":
       return parseUid(context);
-    
-    case 'CHECK':
-      return { success: true, value: { type: 'CHECK' }, consumed: context.position };
-    
-    case 'CLOSE':
-      return { success: true, value: { type: 'CLOSE' }, consumed: context.position };
-    
-    case 'EXPUNGE':
-      return { success: true, value: { type: 'EXPUNGE' }, consumed: context.position };
-    
-    case 'APPEND':
+
+    case "CHECK":
+      return {
+        success: true,
+        value: { type: "CHECK" },
+        consumed: context.position
+      };
+
+    case "CLOSE":
+      return {
+        success: true,
+        value: { type: "CLOSE" },
+        consumed: context.position
+      };
+
+    case "EXPUNGE":
+      return {
+        success: true,
+        value: { type: "EXPUNGE" },
+        consumed: context.position
+      };
+
+    case "APPEND":
       return parseAppend(context);
-    
-    case 'IDLE':
+
+    case "IDLE":
       return parseIdle(context);
-    
+
     default:
-      return { success: false, error: `Unknown command: ${command}`, consumed: 0 };
+      return {
+        success: false,
+        error: `Unknown command: ${command}`,
+        consumed: 0
+      };
   }
 };
 
@@ -156,7 +201,7 @@ const parseImapRequest = (command: string, context: ParseContext): ParseResult<I
 const parseUid = (context: ParseContext): ParseResult<ImapRequest> => {
   const subCommand = parseAtom(context);
   if (!subCommand.success) {
-    return { success: false, error: 'Invalid UID subcommand', consumed: 0 };
+    return { success: false, error: "Invalid UID subcommand", consumed: 0 };
   }
 
   skipWhitespace(context);
@@ -169,7 +214,7 @@ const parseUid = (context: ParseContext): ParseResult<ImapRequest> => {
   return {
     success: true,
     value: {
-      type: 'UID',
+      type: "UID",
       data: {
         command: subCommand.value!.toUpperCase(),
         request: subRequest.value!
@@ -187,7 +232,7 @@ const parseIdle = (context: ParseContext): ParseResult<ImapRequest> => {
   return {
     success: true,
     value: {
-      type: 'IDLE'
+      type: "IDLE"
     },
     consumed: context.position
   };

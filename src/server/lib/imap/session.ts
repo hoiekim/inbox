@@ -39,12 +39,13 @@ type FetchResponsePart =
       type: "literal";
       content: string;
       header: string;
+      length: number;
     };
 
 const throttler = new Throttler();
 
 export class ImapSession {
-  private selectedMailbox: string | null = null;
+  public selectedMailbox: string | null = null;
   private store: Store | null = null;
   private authenticated: boolean = false;
   private isIdling: boolean = false;
@@ -76,7 +77,6 @@ export class ImapSession {
 
   // New typed command handlers
   capability = (tag: string) => {
-    console.log(`[IMAP] CAPABILITY command called`);
     this.write(
       `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
     );
@@ -96,8 +96,6 @@ export class ImapSession {
     fetchRequest: FetchRequest,
     isUidCommand: boolean = false
   ) => {
-    console.log(`[IMAP] FETCH request: ${JSON.stringify(fetchRequest)}`);
-
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -122,11 +120,6 @@ export class ImapSession {
   ) {
     const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
     const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
-
-    console.log(
-      `[IMAP] FETCH range: ${start}-${end}, fields:`,
-      Array.from(requestedFields)
-    );
 
     return await this.store!.getMessages(
       this.selectedMailbox!,
@@ -253,27 +246,26 @@ export class ImapSession {
     }
 
     let finalContent = content;
+    let length = Buffer.byteLength(finalContent, "utf8");
 
     // Apply partial fetch if specified
     if (bodyFetch.partial) {
       finalContent = applyPartialFetch(content, bodyFetch.partial);
-      if (
-        finalContent === "" ||
-        bodyFetch.partial.start >= Buffer.byteLength(content, "utf8")
-      ) {
+      if (finalContent === "" || bodyFetch.partial.start >= length) {
         const sectionKey = getBodySectionKey(bodyFetch.section);
         return { type: "simple", content: `${sectionKey} NIL` };
       }
+      length = Buffer.byteLength(finalContent, "utf8");
       finalContent += "\r\n";
     }
 
     const sectionKey = getBodySectionKey(bodyFetch.section);
+    let header = sectionKey;
+    if (bodyFetch.partial) {
+      header += `<${bodyFetch.partial.start}>`;
+    }
 
-    return {
-      type: "literal",
-      content: finalContent,
-      header: sectionKey // Don't include length here
-    };
+    return { type: "literal", content: finalContent, header, length };
   }
 
   private writeFetchResponse(seqNum: number, parts: FetchResponsePart[]) {
@@ -284,9 +276,7 @@ export class ImapSession {
 
       const part = parts[i];
       if (part.type === "literal") {
-        // Calculate length right before sending
-        const length = Buffer.byteLength(part.content, "utf8");
-        this.write(`${part.header} {${length}}\r\n${part.content}`);
+        this.write(`${part.header} {${part.length}}\r\n${part.content}`);
       } else {
         this.write(part.content);
       }
@@ -335,7 +325,6 @@ export class ImapSession {
           break;
 
         case "BODY":
-          console.log(`[IMAP] Adding BODY fields for:`, item);
           this.addBodyFields(item, fields);
           break;
 
@@ -411,17 +400,6 @@ export class ImapSession {
     section: BodySection,
     docId: string
   ): string | null {
-    console.log(
-      `[IMAP] Building body content for section ${section.type}, mail has:`,
-      {
-        from: mail.from?.text,
-        to: mail.to?.text,
-        subject: mail.subject,
-        messageId: mail.messageId,
-        date: mail.date
-      }
-    );
-
     switch (section.type) {
       case "FULL":
         return buildFullMessage(mail, docId);
@@ -462,8 +440,6 @@ export class ImapSession {
     mechanism: string,
     initialResponse?: string
   ) => {
-    console.log(`[IMAP] AUTHENTICATE ${mechanism} for user ${initialResponse}`);
-
     if (mechanism !== "PLAIN") {
       return this.write(`${tag} NO Only PLAIN authentication supported\r\n`);
     }
@@ -482,7 +458,6 @@ export class ImapSession {
       }
 
       const [, username, password] = parts;
-      console.log(`[IMAP] AUTHENTICATE PLAIN attempt for: ${username}`);
 
       // Use the same authentication logic as login
       const inputUser = { username, password };
@@ -538,7 +513,6 @@ export class ImapSession {
   };
 
   statusMailbox = async (tag: string, mailbox: string, items: StatusItem[]) => {
-    console.log(`[IMAP] STATUS ${mailbox} for items:`, items);
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -577,10 +551,6 @@ export class ImapSession {
 
       this.write(`* STATUS "${mailbox}" (${statusItems.join(" ")})\r\n`);
       this.write(`${tag} OK STATUS completed\r\n`);
-
-      console.log(
-        `[IMAP] STATUS ${mailbox} - MESSAGES: ${total}, UNSEEN: ${unread}`
-      );
     } catch (error) {
       console.error("[IMAP] Error getting mailbox status:", error);
       this.write(`${tag} NO STATUS failed\r\n`);
@@ -801,23 +771,17 @@ export class ImapSession {
   };
 
   listMailboxes = async (tag: string) => {
-    console.log(
-      `[IMAP] LIST command for user: ${this.store?.getUser().username}`
-    );
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
     try {
       const boxes = await this.store.listMailboxes();
-      console.log(`[IMAP] Found ${boxes.length} mailboxes:`, boxes);
       boxes.forEach((box) => {
         const response = `* LIST (\\HasNoChildren) "/" "${box}"\r\n`;
-        console.log(`[IMAP] Sending: ${response.trim()}`);
         this.write(response);
       });
       this.write(`${tag} OK LIST completed\r\n`);
-      console.log(`[IMAP] LIST completed - sent ${boxes.length} mailboxes`);
     } catch (error) {
       console.error("[IMAP] Error listing mailboxes:", error);
       this.write(`${tag} NO LIST failed\r\n`);
@@ -825,23 +789,17 @@ export class ImapSession {
   };
 
   listSubscribedMailboxes = async (tag: string) => {
-    console.log(
-      `[IMAP] LSUB command for user: ${this.store?.getUser().username}`
-    );
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
     try {
       const boxes = await this.store.listMailboxes();
-      console.log(`[IMAP] Found ${boxes.length} subscribed mailboxes:`, boxes);
       boxes.forEach((box) => {
         const response = `* LSUB (\\HasNoChildren) "/" "${box}"\r\n`;
-        console.log(`[IMAP] Sending: ${response.trim()}`);
         this.write(response);
       });
       this.write(`${tag} OK LSUB completed\r\n`);
-      console.log(`[IMAP] LSUB completed - sent ${boxes.length} mailboxes`);
     } catch (error) {
       console.error("[IMAP] Error listing subscribed mailboxes:", error);
       this.write(`${tag} NO LSUB failed\r\n`);
@@ -849,37 +807,27 @@ export class ImapSession {
   };
 
   selectMailbox = async (tag: string, name: string) => {
-    console.log(
-      `[IMAP] SELECT ${name} for user: ${this.store?.getUser().username}`
-    );
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
 
     // Remove quotes if present
     const cleanName = name.replace(/^"(.*)"$/, "$1");
-    console.log(`[IMAP] Clean mailbox name: ${cleanName}`);
 
     if (!cleanName) {
-      console.log(`[IMAP] Empty mailbox name - rejecting`);
       return this.write(`${tag} NO Empty mailbox name\r\n`);
     }
 
     try {
       this.selectedMailbox = cleanName;
       const countResult = await this.store.countMessages(cleanName);
-      console.log(`[IMAP] Count result for ${cleanName}:`, countResult);
 
       if (countResult === null) {
-        console.log(`[IMAP] Mailbox ${cleanName} does not exist`);
         this.selectedMailbox = null;
         return this.write(`${tag} NO Mailbox does not exist\r\n`);
       }
 
       const { total, unread } = countResult;
-      console.log(
-        `[IMAP] Mailbox ${cleanName} - Total: ${total}, Unread: ${unread}`
-      );
 
       this.write(`* ${total} EXISTS\r\n`);
       this.write(

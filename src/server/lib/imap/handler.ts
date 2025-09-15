@@ -12,7 +12,6 @@ export class ImapRequestHandler {
    * Handle a parsed IMAP request by delegating to appropriate session methods
    */
   async handleRequest(tag: string, request: ImapRequest): Promise<void> {
-    console.log(`[HANDLER] Processing command: ${request.type} with tag: ${tag}`);
     try {
       switch (request.type) {
         case "CAPABILITY":

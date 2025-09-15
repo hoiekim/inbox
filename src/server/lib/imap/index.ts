@@ -23,7 +23,11 @@ export const imapListener = (socket: Socket) => {
         buffer = buffer.substring(lineEnd + 2);
 
         if (line.trim()) {
-          console.log(`[RAW] Received: "${line.trim()}"`);
+          console.log(
+            `[RAW] Received: "${line.trim()}"\n\tfor mailbox: ${
+              session.selectedMailbox
+            }`
+          );
 
           // Check throttling before processing
           if (session.isThrottled()) {

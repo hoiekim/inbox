@@ -27,14 +27,8 @@ export class Store {
   }
 
   listMailboxes = async (): Promise<string[]> => {
-    console.log(
-      `[STORE] listMailboxes for user: ${this.user.username} ${this.user.id}`
-    );
     try {
       const accounts = await getAccounts(this.user);
-      console.log(
-        `[STORE] Found ${accounts.received.length} received, ${accounts.sent.length} sent accounts`
-      );
 
       const mailboxes = ["INBOX"];
 
@@ -54,7 +48,6 @@ export class Store {
         }
       });
 
-      console.log(`[STORE] Finally ${mailboxes.length} mailboxes`);
       return mailboxes;
     } catch (error) {
       console.error("[STORE] Error listing mailboxes:", error);
@@ -146,9 +139,6 @@ export class Store {
 
       if (useUid) {
         // For UID-based queries, filter by UID range and get all matching
-        console.log(
-          `[STORE] UID query: searching ${uidField} between ${start}-${end}`
-        );
         must.push({
           range: {
             [uidField]: {
@@ -165,9 +155,6 @@ export class Store {
       }
 
       const response = await elasticsearchClient.search(query);
-      console.log(
-        `[STORE] Elasticsearch returned ${response.hits.hits.length} hits for ${box}`
-      );
 
       const mails = new Map<string, Partial<Mail>>();
 
@@ -255,8 +242,6 @@ export class Store {
       // Delete messages marked for deletion (in IMAP, this would be messages with \Deleted flag)
       // Since we don't have a \Deleted flag in our system, we'll skip this operation
       // In a real implementation, you might want to add a 'deleted' field to track this
-
-      console.log(`Expunge operation completed for ${box}`);
     } catch (error) {
       console.error("Error expunging messages:", error);
       throw error;

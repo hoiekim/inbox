@@ -3,24 +3,27 @@
  * These are pure functions that don't require session state
  */
 
-import { PartialRange, BodySection, FetchDataItem } from './types';
-import { MailType } from 'common';
-import { formatHeaders } from './util';
+import { PartialRange, BodySection, FetchDataItem } from "./types";
+import { MailType } from "common";
+import { formatHeaders } from "./util";
 
 /**
  * Apply partial fetch range to content
  */
-export const applyPartialFetch = (content: string, partial: PartialRange): string => {
+export const applyPartialFetch = (
+  content: string,
+  partial: PartialRange
+): string => {
   const contentBuffer = Buffer.from(content, "utf8");
-  
+
   // If start is beyond content length, return empty string
   if (partial.start >= contentBuffer.length) {
     return "";
   }
-  
+
   // Calculate end position, ensuring we don't go beyond content length
   const endPos = Math.min(partial.start + partial.length, contentBuffer.length);
-  
+
   return contentBuffer.subarray(partial.start, endPos).toString("utf8");
 };
 
@@ -29,18 +32,18 @@ export const applyPartialFetch = (content: string, partial: PartialRange): strin
  */
 export const getBodySectionKey = (section: BodySection): string => {
   switch (section.type) {
-    case 'FULL':
-      return 'BODY[]';
-    case 'TEXT':
-      return 'BODY[TEXT]';
-    case 'HEADER':
-      return 'BODY[HEADER]';
-    case 'MIME_PART':
+    case "FULL":
+      return "BODY[]";
+    case "TEXT":
+      return "BODY[TEXT]";
+    case "HEADER":
+      return "BODY[HEADER]";
+    case "MIME_PART":
       return `BODY[${section.partNumber}]`;
-    case 'HEADER_FIELDS':
-      return section.not ? 'BODY[HEADER.FIELDS.NOT]' : 'BODY[HEADER.FIELDS]';
+    case "HEADER_FIELDS":
+      return section.not ? "BODY[HEADER.FIELDS.NOT]" : "BODY[HEADER.FIELDS]";
     default:
-      return 'BODY[]';
+      return "BODY[]";
   }
 };
 
@@ -48,15 +51,16 @@ export const getBodySectionKey = (section: BodySection): string => {
  * Check if any fetch data item should mark message as read
  */
 export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
-  return dataItems.some(item => 
-    item.type === 'BODY' && !item.peek
-  );
+  return dataItems.some((item) => item.type === "BODY" && !item.peek);
 };
 
 /**
  * Build complete RFC822 message from mail data
  */
-export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
+export const buildFullMessage = (
+  mail: Partial<MailType>,
+  docId?: string
+): string => {
   const headers = formatHeaders(mail, docId);
   const hasText = mail.text && mail.text.trim().length > 0;
   const hasHtml = mail.html && mail.html.trim().length > 0;
@@ -77,7 +81,9 @@ export const buildFullMessage = (mail: Partial<MailType>, docId?: string): strin
   // For multipart messages, extract boundary from headers or use deterministic one
   const boundaryMatch = headers.match(/boundary="([^"]+)"/);
   if (!docId) {
-    console.warn(`[IMAP] Warning: docId is missing in buildFullMessage, falling back to messageId: ${mail.messageId}`);
+    console.warn(
+      `[IMAP] Warning: docId is missing in buildFullMessage, falling back to messageId: ${mail.messageId}`
+    );
   }
   const stableId = docId || mail.messageId || "default";
   const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
@@ -149,7 +155,10 @@ export const buildFullMessage = (mail: Partial<MailType>, docId?: string): strin
 /**
  * Get specific body part from multipart message
  */
-export const getBodyPart = (mail: Partial<MailType>, partNum: string): string | null => {
+export const getBodyPart = (
+  mail: Partial<MailType>,
+  partNum: string
+): string | null => {
   const parts = partNum.split(".");
   const mainPart = parseInt(parts[0], 10);
 
@@ -196,7 +205,11 @@ export const getBodyPart = (mail: Partial<MailType>, partNum: string): string | 
 
   // Subsequent parts are attachments
   const attachmentIndex = mainPart - partIndex;
-  if (mail.attachments && attachmentIndex >= 0 && attachmentIndex < mail.attachments.length) {
+  if (
+    mail.attachments &&
+    attachmentIndex >= 0 &&
+    attachmentIndex < mail.attachments.length
+  ) {
     return mail.attachments[attachmentIndex].content.data;
   }
 
