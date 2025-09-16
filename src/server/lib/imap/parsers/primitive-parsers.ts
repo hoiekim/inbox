@@ -36,6 +36,41 @@ export const parseAtom = (context: ParseContext): ParseResult<string> => {
 };
 
 /**
+ * Parse an IMAP flag (can start with backslash)
+ */
+export const parseFlag = (context: ParseContext): ParseResult<string> => {
+  const start = context.position;
+  
+  // Handle flags that start with backslash
+  if (peek(context) === '\\') {
+    context.position++;
+  }
+  
+  while (context.position < context.length) {
+    const char = context.input[context.position];
+    
+    // Stop at whitespace, parentheses, or other delimiters
+    if (char === ' ' || char === '(' || char === ')' || char === '{' || 
+        char === '"' || char === '\r' || char === '\n' ||
+        char === '*' || char === '%' || char.charCodeAt(0) < 32) {
+      break;
+    }
+    
+    context.position++;
+  }
+  
+  if (context.position === start) {
+    return { success: false, error: 'Expected flag', consumed: 0 };
+  }
+  
+  return {
+    success: true,
+    value: context.input.substring(start, context.position),
+    consumed: context.position - start
+  };
+};
+
+/**
  * Parse a string (quoted or literal)
  */
 export const parseString = (context: ParseContext): ParseResult<string> => {

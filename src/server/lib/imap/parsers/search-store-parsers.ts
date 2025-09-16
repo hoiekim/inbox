@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, ImapRequest, SearchRequest, StoreRequest, CopyRequest, StoreOperation } from '../types';
-import { parseSequenceSet, skipWhitespace, parseString, parseAtom, peek, consume } from './primitive-parsers';
+import { parseSequenceSet, skipWhitespace, parseString, parseAtom, parseFlag, peek, consume } from './primitive-parsers';
 
 /**
  * Runtime validation for StoreOperation
@@ -128,7 +128,7 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
         break;
       }
       
-      const flag = parseAtom(context);
+      const flag = parseFlag(context);
       if (!flag.success) {
         return { success: false, error: 'Invalid flag in STORE', consumed: 0 };
       }
@@ -139,7 +139,7 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
     }
   } else {
     // Single flag without parentheses
-    const flag = parseAtom(context);
+    const flag = parseFlag(context);
     if (!flag.success) {
       return { success: false, error: 'Invalid flag in STORE', consumed: 0 };
     }

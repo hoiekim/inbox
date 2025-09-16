@@ -104,6 +104,12 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
+    // Check fetch limit
+    const requestedCount = this.countSequenceSetMessages(fetchRequest.sequenceSet);
+    if (requestedCount > 10) {
+      return this.write(`${tag} NO [LIMIT] FETCH too much data requested\r\n`);
+    }
+
     try {
       const messages = await this.fetchMessages(fetchRequest, isUidCommand);
       await this.processFetchMessages(messages, fetchRequest, isUidCommand);
@@ -113,6 +119,20 @@ export class ImapSession {
       this.write(`${tag} NO FETCH failed\r\n`);
     }
   };
+
+  private countSequenceSetMessages(sequenceSet: SequenceSet): number {
+    let count = 0;
+    for (const range of sequenceSet.ranges) {
+      if (range.end === undefined) {
+        // Single message
+        count += 1;
+      } else {
+        // Range of messages
+        count += range.end - range.start + 1;
+      }
+    }
+    return count;
+  }
 
   private async fetchMessages(
     fetchRequest: FetchRequest,
