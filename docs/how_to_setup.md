@@ -32,6 +32,9 @@ For detailed instruction, please keep reading this document.
 
    PUSH_VAPID_PUBLIC_KEY    // (optional) API key issued by Push. Used to send push notifications.
    PUSH_VAPID_PRIVATE_KEY   // (optional) API key issued by Push. Used to send push notifications.
+
+   SSL_CERTIFICATE=         // (optional) SSL certificate file path. Used for TLS in IMAP server.
+   SSL_CERTIFICATE_KEY=     // (optional) SSL certificate key file path. Used for TLS in IMAP server.
    ```
 
 ## 2. Setup DNS Records

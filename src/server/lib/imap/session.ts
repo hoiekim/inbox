@@ -1,7 +1,10 @@
 import bcrypt from "bcrypt";
 import { Socket } from "net";
-import { Store } from "./store";
+import { TLSSocket } from "tls";
+import { readFileSync } from "fs";
+import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext } from "server";
+import { Store } from "./store";
 import {
   boxToAccount,
   formatAddressList,
@@ -15,7 +18,6 @@ import {
   buildFullMessage,
   getBodyPart
 } from "./session-utils";
-import { MailType, Throttler } from "common";
 import {
   FetchRequest,
   FetchDataItem,
@@ -29,6 +31,8 @@ import {
   StatusItem
 } from "./types";
 import { idleManager } from "./idle-manager";
+import { getCapabilities } from "./capabilities";
+import { ImapRequestHandler } from "./handler";
 
 type FetchResponsePart =
   | {
@@ -52,11 +56,15 @@ export class ImapSession {
   private idleTag: string | null = null;
   private sessionId: string;
 
-  constructor(private socket: Socket) {
+  constructor(private handler: ImapRequestHandler, public socket: Socket) {
     this.sessionId = `session_${Date.now()}_${Math.random()
       .toString(36)
       .substr(2, 9)}`;
   }
+
+  getCapabilities = () => {
+    return getCapabilities(this.handler.port);
+  };
 
   write = (data: string) => {
     if (this.socket.destroyed || !this.socket.writable) {
@@ -78,7 +86,7 @@ export class ImapSession {
   // New typed command handlers
   capability = (tag: string) => {
     this.write(
-      `* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN\r\n${tag} OK CAPABILITY completed\r\n`
+      `* CAPABILITY ${this.getCapabilities()}\r\n${tag} OK CAPABILITY completed\r\n`
     );
   };
 
@@ -105,7 +113,9 @@ export class ImapSession {
     }
 
     // Check fetch limit
-    const requestedCount = this.countSequenceSetMessages(fetchRequest.sequenceSet);
+    const requestedCount = this.countSequenceSetMessages(
+      fetchRequest.sequenceSet
+    );
     if (requestedCount > 10) {
       return this.write(`${tag} NO [LIMIT] FETCH too much data requested\r\n`);
     }
@@ -504,7 +514,7 @@ export class ImapSession {
       this.authenticated = true;
 
       this.write(
-        `${tag} OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN] AUTHENTICATE completed\r\n`
+        `${tag} OK [CAPABILITY ${this.getCapabilities()}] AUTHENTICATE completed\r\n`
       );
     } catch (error) {
       console.error("[IMAP] AUTHENTICATE error:", error);
@@ -786,7 +796,7 @@ export class ImapSession {
     this.authenticated = true;
 
     return this.write(
-      `${tag} OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN] LOGIN completed\r\n`
+      `${tag} OK [CAPABILITY ${this.getCapabilities()}] LOGIN completed\r\n`
     );
   };
 
@@ -988,5 +998,25 @@ export class ImapSession {
    */
   getSessionId = (): string => {
     return this.sessionId;
+  };
+
+  startTls = async (tag: string) => {
+    const { SSL_CERTIFICATE = "", SSL_CERTIFICATE_KEY = "" } = process.env;
+
+    const secureSocket = await new Promise<Socket>((resolve, reject) => {
+      const secureSocket = new TLSSocket(this.socket, {
+        isServer: true,
+        key: readFileSync(SSL_CERTIFICATE_KEY),
+        cert: readFileSync(SSL_CERTIFICATE)
+      });
+
+      secureSocket.once("secure", () => resolve(secureSocket));
+      secureSocket.once("error", reject);
+    });
+
+    this.socket = secureSocket;
+    this.handler.setSocket(secureSocket);
+
+    this.write(`${tag} OK Begin TLS negotiation now\r\n`);
   };
 }

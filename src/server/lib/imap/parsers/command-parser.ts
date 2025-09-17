@@ -186,6 +186,13 @@ const parseImapRequest = (
     case "IDLE":
       return parseIdle(context);
 
+    case "STARTTLS":
+      return {
+        success: true,
+        value: { type: "STARTTLS" },
+        consumed: context.position
+      };
+
     default:
       return {
         success: false,

@@ -1,6 +1,7 @@
 import "./config";
 import express, { json } from "express";
 import net from "net";
+import tls from "tls";
 import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
@@ -13,10 +14,11 @@ import {
   ElasticsearchSessionStore,
   cleanSubscriptions,
   elasticsearchIsAvailable,
-  imapListener
+  getImapListener
 } from "server";
 
 import apiRouter from "./routes";
+import { readFileSync } from "fs";
 
 const initializeElasticsearch = async () => {
   await elasticsearchIsAvailable();
@@ -75,14 +77,42 @@ const initializeMailin = () => {
   });
 };
 
-const initializeImap = () => {
-  return new Promise<void>((res) => {
+const initializeImap = async () => {
+  await new Promise<void>((res) => {
+    const port = 143;
+    const imapListener = getImapListener(port);
     const server = net.createServer(imapListener);
-    server.listen(143, () => {
-      console.log("IMAP server listening on port 143");
+    server.listen(port, () => {
+      console.log(`IMAP server listening on port ${port}`);
       res();
     });
   });
+
+  await new Promise<void>((res) => {
+    const port = 993;
+    const imapListener = getImapListener(port);
+
+    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+
+    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
+      console.warn("SSL certificate must be set to start IMAP over TLS.");
+      res();
+      return;
+    }
+
+    const tlsOptions = {
+      key: readFileSync(SSL_CERTIFICATE_KEY),
+      cert: readFileSync(SSL_CERTIFICATE)
+    };
+
+    const server = tls.createServer(tlsOptions, imapListener);
+    server.listen(port, () => {
+      console.log(`IMAP server listening on port ${port} over TLS`);
+      res();
+    });
+  });
+
+  return;
 };
 
 const start = async () => {
