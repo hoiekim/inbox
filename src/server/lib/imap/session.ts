@@ -604,15 +604,20 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
-    if (!searchRequest.charset) {
-      return this.write(`${tag} BAD \r\n`);
+    if (!searchRequest.criteria.length) {
+      return this.write(`${tag} BAD Search criteria is required\r\n`);
+    }
+
+    const hasUidCriteria = searchRequest.criteria.some((c) => c.type === "UID");
+
+    if (!isUidCommand && hasUidCriteria) {
+      return this.write(`${tag} NO Not supported\r\n`);
     }
 
     try {
       const result = await this.store.search(
         this.selectedMailbox,
-        [searchRequest.charset],
-        isUidCommand
+        searchRequest.criteria
       );
       const resultType = isUidCommand ? "UID SEARCH" : "SEARCH";
       this.write(`* ${resultType} ${result.join(" ")}\r\n`);

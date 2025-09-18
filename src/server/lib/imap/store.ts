@@ -250,8 +250,7 @@ export class Store {
 
   search = async (
     box: string,
-    criteria: string[],
-    useUid: boolean = false
+    criteria: { type: string; value?: string }[]
   ): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
@@ -270,11 +269,14 @@ export class Store {
         must.push({ term: { [searchFiled]: accountName } });
       }
 
+      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
+
       // Parse IMAP search criteria
       for (let i = 0; i < criteria.length; i++) {
-        const criterion = criteria[i].toUpperCase();
+        const criterion = criteria[i];
+        const type = criterion.type.toUpperCase();
 
-        switch (criterion) {
+        switch (type) {
           case "UNSEEN":
             must.push({ term: { "mail.read": false } });
             break;
@@ -317,10 +319,22 @@ export class Store {
               });
             }
             break;
+          case "UID":
+            if (criterion.value?.includes(",")) {
+              const uids = criterion.value
+                .split(",")
+                .map((n) => parseInt(n.trim(), 10))
+                .filter((n) => !isNaN(n));
+              const should = uids.map((uid) => ({
+                term: { [uidField]: uid }
+              }));
+              must.push({ bool: { should } });
+            }
+            break;
+          default:
+            throw new Error(`Unsupported search criterion: ${type}`);
         }
       }
-
-      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
 
       const response = await elasticsearchClient.search({
         index,
@@ -330,20 +344,15 @@ export class Store {
         _source: [uidField] // Only need UID field for search results
       });
 
-      if (useUid) {
-        // Return UIDs directly
-        return response.hits.hits
-          .map((hit) => {
-            const mailJson = hit._source?.mail as MailType;
-            return isDomainInbox
-              ? mailJson.uid?.domain || 0
-              : mailJson.uid?.account || 0;
-          })
-          .filter((uid) => uid > 0);
-      } else {
-        // Return sequence numbers (1-based indexing)
-        return response.hits.hits.map((_, index) => index + 1);
-      }
+      // Return UIDs directly
+      return response.hits.hits
+        .map((hit) => {
+          const mailJson = hit._source?.mail as MailType;
+          return isDomainInbox
+            ? mailJson.uid?.domain || 0
+            : mailJson.uid?.account || 0;
+        })
+        .filter((uid) => uid > 0);
     } catch (error) {
       console.error("Error searching messages:", error);
       return [];
