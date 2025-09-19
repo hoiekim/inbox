@@ -1,5 +1,6 @@
 import { SignedUser } from "common";
-import { Route, version } from "server";
+import { version } from "server";
+import { Route } from "../route";
 
 export interface LoginGetResponse {
   user?: SignedUser;

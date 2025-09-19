@@ -1,4 +1,5 @@
-import { AUTH_ERROR_MESSAGE, Route, getAttachment } from "server";
+import { AUTH_ERROR_MESSAGE, getAttachment } from "server";
+import { Route } from "../route";
 
 export const getAttachmentRoute = new Route<Buffer>(
   "GET",

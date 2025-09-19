@@ -36,6 +36,7 @@
     "html-to-text": "^8.1.0",
     "mailgun.js": "^12.0.3",
     "openai": "^3.2.1",
+    "smtp-server": "^3.14.0",
     "uuid": "^8.3.2",
     "web-push": "^3.6.3"
   },
@@ -58,6 +59,7 @@
     "@types/react-dom": "^18.0.11",
     "@types/react-query": "^1.2.9",
     "@types/react-router-dom": "^5.3.3",
+    "@types/smtp-server": "^3.5.12",
     "@types/uuid": "^8.3.4",
     "@types/web-push": "^3.3.2",
     "@types/webpack-node-externals": "^3.0.0",

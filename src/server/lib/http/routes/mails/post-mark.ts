@@ -1,11 +1,11 @@
 import {
-  Route,
   decrementBadgeCount,
   getMailBody,
   markRead,
   markSaved,
   AUTH_ERROR_MESSAGE
 } from "server";
+import { Route } from "../route";
 
 export type MarkMailPostResponse = undefined;
 

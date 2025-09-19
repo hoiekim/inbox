@@ -1,5 +1,6 @@
 import { PushSubscription } from "web-push";
-import { Route, storeSubscription, AUTH_ERROR_MESSAGE } from "server";
+import { storeSubscription, AUTH_ERROR_MESSAGE } from "server";
+import { Route } from "../route";
 
 export type SubscribePostResponse = string;
 

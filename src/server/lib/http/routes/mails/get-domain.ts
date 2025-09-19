@@ -1,4 +1,5 @@
-import { Route, getDomain } from "server";
+import { getDomain } from "server";
+import { Route } from "../route";
 
 export type DomainGetResponse = string;
 

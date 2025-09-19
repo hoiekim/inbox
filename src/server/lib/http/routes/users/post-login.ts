@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
-import { Route, getUser } from "server";
 import { MaskedUser, User } from "common";
+import { getUser } from "server";
+import { Route } from "../route";
 
 export type LoginPostResponse = MaskedUser;
 

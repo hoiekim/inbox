@@ -1,4 +1,5 @@
-import { Route, refreshSubscription } from "server";
+import { refreshSubscription } from "server";
+import { Route } from "../route";
 
 export type RefreshGetResponse = undefined;
 

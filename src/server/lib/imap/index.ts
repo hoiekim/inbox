@@ -1,6 +1,8 @@
-import { Socket } from "net";
+import { createServer, Socket } from "net";
+import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
+import { readFileSync } from "fs";
 
 export const getImapListener = (port: number) => {
   return (socket: Socket) => {
@@ -10,4 +12,42 @@ export const getImapListener = (port: number) => {
       `* OK [CAPABILITY ${getCapabilities(port)}] IMAP4rev1 Service Ready\r\n`
     );
   };
+};
+
+export const initializeImap = async () => {
+  await new Promise<void>((res) => {
+    const port = 143;
+    const imapListener = getImapListener(port);
+    const server = createServer(imapListener);
+    server.listen(port, () => {
+      console.log(`IMAP server listening on port ${port}`);
+      res();
+    });
+  });
+
+  await new Promise<void>((res) => {
+    const port = 993;
+    const imapListener = getImapListener(port);
+
+    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+
+    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
+      console.warn("IMAP: SSL certificate not found.");
+      res();
+      return;
+    }
+
+    const tlsOptions = {
+      key: readFileSync(SSL_CERTIFICATE_KEY),
+      cert: readFileSync(SSL_CERTIFICATE)
+    };
+
+    const server = createTLSServer(tlsOptions, imapListener);
+    server.listen(port, () => {
+      console.log(`IMAP server listening on port ${port} over TLS`);
+      res();
+    });
+  });
+
+  return;
 };

@@ -7,4 +7,3 @@ declare module "express-session" {
 }
 
 export * from "./lib";
-export * from "./routes";

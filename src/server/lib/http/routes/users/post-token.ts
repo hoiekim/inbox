@@ -1,6 +1,5 @@
 import { MailDataToSend } from "common";
 import {
-  Route,
   createAuthenticationMail,
   createToken,
   getSignedUser,
@@ -9,6 +8,7 @@ import {
   sendMail,
   startTimer
 } from "server";
+import { Route } from "../route";
 
 export type TokenPostResponse = undefined;
 

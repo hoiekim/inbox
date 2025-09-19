@@ -1,5 +1,7 @@
 import { Router } from "express";
 
+export * from "./route";
+
 import usersRouter from "./users";
 import mailsRouter from "./mails";
 import pushRouter from "./push";

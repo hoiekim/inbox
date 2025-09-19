@@ -1,4 +1,5 @@
-import { Route, getPushPublicKey } from "server";
+import { getPushPublicKey } from "server";
+import { Route } from "../route";
 
 export type PublicKeyGetResponse = string;
 

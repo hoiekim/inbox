@@ -1,5 +1,6 @@
 import { Account } from "common";
-import { Route, getAccounts, AUTH_ERROR_MESSAGE } from "server";
+import { getAccounts, AUTH_ERROR_MESSAGE } from "server";
+import { Route } from "../route";
 
 export interface AccountsGetResponse {
   received: Account[];

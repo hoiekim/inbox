@@ -1,5 +1,6 @@
 import { MailHeaderDataType } from "common";
-import { AUTH_ERROR_MESSAGE, Route, searchMail } from "server";
+import { AUTH_ERROR_MESSAGE, searchMail } from "server";
+import { Route } from "../route";
 
 export type SearchGetResponse = MailHeaderDataType[];
 

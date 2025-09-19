@@ -1,5 +1,6 @@
 import { MailBodyDataType } from "common";
-import { AUTH_ERROR_MESSAGE, Route, getMailBody } from "server";
+import { AUTH_ERROR_MESSAGE, getMailBody } from "server";
+import { Route } from "../route";
 
 export type BodyGetResponse = MailBodyDataType;
 

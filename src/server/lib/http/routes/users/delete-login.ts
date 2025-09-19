@@ -1,4 +1,4 @@
-import { Route } from "server";
+import { Route } from "../route";
 
 export type LoginDeleteResponse = undefined;
 

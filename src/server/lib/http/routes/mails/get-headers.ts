@@ -1,11 +1,11 @@
 import { MailHeaderDataType } from "common";
 import {
-  Route,
   getMailHeaders,
   addressToUsername,
   GetMailsOptions,
   AUTH_ERROR_MESSAGE
 } from "server";
+import { Route } from "../route";
 
 export type HeadersGetResponse = MailHeaderDataType[];
 

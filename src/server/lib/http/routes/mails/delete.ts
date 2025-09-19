@@ -1,4 +1,5 @@
-import { Route, getMailBody, deleteMail, AUTH_ERROR_MESSAGE } from "server";
+import { getMailBody, deleteMail, AUTH_ERROR_MESSAGE } from "server";
+import { Route } from "../route";
 
 export type MailDeleteResponse = undefined;
 
