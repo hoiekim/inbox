@@ -1,9 +1,4 @@
-import {
-  MailType,
-  MailAddressType,
-  MailAddressValueType,
-  AttachmentType
-} from "common";
+import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
 
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
@@ -271,30 +266,6 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
   return buildTextPart("plain", "");
 };
 
-export const escapeImapString = (str: string): string => {
-  if (!str) return '""';
-
-  // Check if string needs to be quoted
-  if (/[\s\(\)\{\}\%\*\"\\\x00-\x1f\x7f-\xff]/.test(str)) {
-    // Escape quotes and backslashes
-    const escaped = str.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `"${escaped}"`;
-  }
-
-  return str;
-};
-
-export const parseImapString = (str: string): string => {
-  if (!str) return "";
-
-  // Remove quotes if present
-  if (str.startsWith('"') && str.endsWith('"')) {
-    return str.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-  }
-
-  return str;
-};
-
 export const formatFlags = (mail: Partial<MailType>): string[] => {
   const flags: string[] = [];
 
@@ -304,35 +275,6 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
   // These would need to be added to the Mail model if needed
 
   return flags;
-};
-
-export const parseSequenceSet = (sequenceSet: string): number[] => {
-  const sequences: number[] = [];
-  const parts = sequenceSet.split(",");
-
-  for (const part of parts) {
-    if (part.includes(":")) {
-      const [startStr, endStr] = part.split(":");
-      const start = parseInt(startStr, 10);
-      const end =
-        endStr === "*" ? Number.MAX_SAFE_INTEGER : parseInt(endStr, 10);
-
-      if (!isNaN(start) && !isNaN(end)) {
-        for (let i = start; i <= end; i++) {
-          sequences.push(i);
-        }
-      }
-    } else if (part === "*") {
-      sequences.push(Number.MAX_SAFE_INTEGER);
-    } else {
-      const num = parseInt(part, 10);
-      if (!isNaN(num)) {
-        sequences.push(num);
-      }
-    }
-  }
-
-  return sequences.sort((a, b) => a - b);
 };
 
 export const accountToBox = (accountName: string): string => {

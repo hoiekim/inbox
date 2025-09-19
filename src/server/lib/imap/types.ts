@@ -101,7 +101,7 @@ export interface SequenceSet {
 
 export interface SequenceRange {
   start: number;
-  end?: number; // undefined means single message, * means last message
+  end?: number; // undefined means single message
 }
 
 // FETCH data items
@@ -299,27 +299,27 @@ export interface UnKeywordCriterion {
 
 export interface BeforeCriterion {
   type: "BEFORE";
-  date: string;
+  date: Date;
 }
 export interface OnCriterion {
   type: "ON";
-  date: string;
+  date: Date;
 }
 export interface SinceCriterion {
   type: "SINCE";
-  date: string;
+  date: Date;
 }
 export interface SentBeforeCriterion {
   type: "SENTBEFORE";
-  date: string;
+  date: Date;
 }
 export interface SentOnCriterion {
   type: "SENTON";
-  date: string;
+  date: Date;
 }
 export interface SentSinceCriterion {
   type: "SENTSINCE";
-  date: string;
+  date: Date;
 }
 
 export interface FromCriterion {

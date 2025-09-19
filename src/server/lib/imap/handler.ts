@@ -37,7 +37,7 @@ export class ImapRequestHandler {
 
           if (line.trim()) {
             console.log(
-              `[RAW] Received: "${line.trim()}"\n\tfor mailbox: ${
+              `[IMAP] Received: "${line.trim()}"\n\tfor mailbox: ${
                 session.selectedMailbox
               }`
             );

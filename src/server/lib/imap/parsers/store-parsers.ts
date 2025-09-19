@@ -20,6 +20,7 @@ import {
   peek,
   consume
 } from "./primitive-parsers";
+import { parseSearchCriteria } from "./search-parsers";
 
 /**
  * Runtime validation for StoreOperation
@@ -34,83 +35,6 @@ const isStoreOperation = (value: string): value is StoreOperation => {
     "-FLAGS.SILENT"
   ];
   return validOperations.includes(value as StoreOperation);
-};
-
-/**
- * Create a simple search criterion from string (temporary implementation)
- */
-const createSearchCriterion = (criterion: string) => {
-  // This should be expanded to handle all IMAP search criteria
-  const upper = criterion.toUpperCase();
-
-  switch (upper) {
-    case "ALL":
-      return { type: "ALL" as const };
-    case "ANSWERED":
-      return { type: "ANSWERED" as const };
-    case "DELETED":
-      return { type: "DELETED" as const };
-    case "FLAGGED":
-      return { type: "FLAGGED" as const };
-    case "NEW":
-      return { type: "NEW" as const };
-    case "OLD":
-      return { type: "OLD" as const };
-    case "RECENT":
-      return { type: "RECENT" as const };
-    case "SEEN":
-      return { type: "SEEN" as const };
-    case "UNANSWERED":
-      return { type: "UNANSWERED" as const };
-    case "UNDELETED":
-      return { type: "UNDELETED" as const };
-    case "UNFLAGGED":
-      return { type: "UNFLAGGED" as const };
-    case "UNSEEN":
-      return { type: "UNSEEN" as const };
-    default:
-      if (!Number.isNaN(+upper[0])) {
-        return { type: "UID" as const, value: criterion };
-      }
-      // For unknown criteria, create a generic text criterion
-      return { type: "TEXT" as const, value: criterion };
-  }
-};
-
-/**
- * Parse SEARCH command
- */
-export const parseSearch = (
-  context: ParseContext
-): ParseResult<ImapRequest> => {
-  const criteria: any[] = [];
-
-  while (context.position < context.length) {
-    skipWhitespace(context);
-
-    if (context.position >= context.length) break;
-
-    const criterion = parseAtom(context);
-    if (!criterion.success) {
-      const str = parseString(context);
-      if (str.success) {
-        criteria.push(createSearchCriterion(str.value!));
-      } else {
-        break;
-      }
-    } else {
-      criteria.push(createSearchCriterion(criterion.value!));
-    }
-  }
-
-  return {
-    success: true,
-    value: {
-      type: "SEARCH",
-      data: { criteria }
-    },
-    consumed: context.position
-  };
 };
 
 /**

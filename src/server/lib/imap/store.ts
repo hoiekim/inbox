@@ -14,6 +14,7 @@ import {
   QueryDslQueryContainer,
   SearchRequest as ElasticsearchSearchRequest
 } from "@elastic/elasticsearch/lib/api/types";
+import { SearchCriterion, UidCriterion } from "./types";
 
 // class that creates "store" object
 export class Store {
@@ -250,7 +251,7 @@ export class Store {
 
   search = async (
     box: string,
-    criteria: { type: string; value?: string }[]
+    criteria: SearchCriterion[]
   ): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
@@ -320,16 +321,18 @@ export class Store {
             }
             break;
           case "UID":
-            if (criterion.value?.includes(",")) {
-              const uids = criterion.value
-                .split(",")
-                .map((n) => parseInt(n.trim(), 10))
-                .filter((n) => !isNaN(n));
-              const should = uids.map((uid) => ({
-                term: { [uidField]: uid }
-              }));
+            const should: QueryDslQueryContainer[] = [];
+            (criterion as UidCriterion).sequenceSet.ranges.forEach((range) => {
+              if (range.end === undefined) {
+                should.push({ term: { [uidField]: range.start } });
+              } else if (range.end === Number.MAX_SAFE_INTEGER) {
+                should.push({ range: { [uidField]: { gte: range.start } } });
+              } else {
+                const { start: gte, end: lte } = range;
+                should.push({ range: { [uidField]: { gte, lte } } });
+              }
               must.push({ bool: { should } });
-            }
+            });
             break;
           default:
             throw new Error(`Unsupported search criterion: ${type}`);

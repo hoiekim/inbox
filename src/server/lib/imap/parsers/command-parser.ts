@@ -16,7 +16,8 @@ import {
   parseSubscribe,
   parseUnsubscribe
 } from "./mailbox-parsers";
-import { parseSearch, parseStore, parseCopy } from "./search-store-parsers";
+import { parseStore, parseCopy } from "./store-parsers";
+import { parseSearch } from "./search-parsers";
 import { parseAppend } from "./append-parser";
 
 // Simple ID parser

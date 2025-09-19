@@ -43,7 +43,7 @@ describe("IMAP parsers", () => {
     expect(fetchRequest.data.sequenceSet.ranges[0].end).toBe(15);
   });
 
-  it("should parse UID SEARCH command with multiple criteria", () => {
+  it("should parse UID SEARCH command with comma separated UIDs", () => {
     const SEARCH_COMMAND = "3.1 UID SEARCH 1,577,5084,9591";
     const result = parseCommand(SEARCH_COMMAND);
     expect(result.success).toBe(true);
@@ -59,10 +59,39 @@ describe("IMAP parsers", () => {
     }
     const searchRequest = searchCommand.request;
     const criterion = searchRequest.data.criteria[0];
-    expect(criterion.type).toBe("TEXT");
-    if (criterion.type !== "TEXT") {
-      throw new Error("Expected TEXT criterion type");
+    expect(criterion.type).toBe("UID");
+    if (criterion.type !== "UID") {
+      throw new Error("Expected UID criterion type");
     }
-    expect(criterion.value).toBe("1,577,5084,9591");
+    expect(criterion.sequenceSet).toEqual({
+      ranges: [{ start: 1 }, { start: 577 }, { start: 5084 }, { start: 9591 }],
+      type: "sequence"
+    });
+  });
+
+  it("should parse UID SEARCH command with UID range and additional UID label", () => {
+    const SEARCH_COMMAND = "4.1 UID SEARCH UID 5091:*";
+    const result = parseCommand(SEARCH_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("4.1");
+    expect(result.value?.request.type).toBe("UID");
+    if (result.value?.request.type !== "UID") {
+      throw new Error("Expected UID request type");
+    }
+    const searchCommand = result.value?.request.data;
+    expect(searchCommand.request.type).toBe("SEARCH");
+    if (searchCommand.request.type !== "SEARCH") {
+      throw new Error("Expected SEARCH request type");
+    }
+    const searchRequest = searchCommand.request;
+    const criterion = searchRequest.data.criteria[0];
+    expect(criterion.type).toBe("UID");
+    if (criterion.type !== "UID") {
+      throw new Error("Expected UID criterion type");
+    }
+    expect(criterion.sequenceSet).toEqual({
+      ranges: [{ start: 5091, end: Number.MAX_SAFE_INTEGER }],
+      type: "sequence"
+    });
   });
 });
