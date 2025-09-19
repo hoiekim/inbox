@@ -619,8 +619,7 @@ export class ImapSession {
         this.selectedMailbox,
         searchRequest.criteria
       );
-      const resultType = isUidCommand ? "UID SEARCH" : "SEARCH";
-      this.write(`* ${resultType} ${result.join(" ")}\r\n`);
+      this.write(`* SEARCH ${result.join(" ")}\r\n`);
       this.write(`${tag} OK SEARCH completed\r\n`);
     } catch (error) {
       console.error("Search failed:", error);
