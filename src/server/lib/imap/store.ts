@@ -14,6 +14,7 @@ import {
   QueryDslQueryContainer,
   SearchRequest as ElasticsearchSearchRequest
 } from "@elastic/elasticsearch/lib/api/types";
+import { errors } from "@elastic/elasticsearch";
 import { SearchCriterion, UidCriterion } from "./types";
 
 // class that creates "store" object
@@ -166,9 +167,42 @@ export class Store {
 
       return mails;
     } catch (error) {
-      console.error("Error getting messages:", error);
-      return new Map();
+      if (error instanceof errors.ResponseError) {
+        if (
+          error.statusCode === 429 &&
+          error.body?.error?.type === "circuit_breaking_exception"
+        ) {
+          if (end - start > 100) {
+            throw new Error("Too many messages requested, please limit to 100");
+          } else {
+            return this.getMessagesRecursively(box, start, end, fields, useUid);
+          }
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
     }
+  };
+
+  private getMessagesRecursively = async (
+    box: string,
+    start: number,
+    end: number,
+    fields: string[],
+    useUid: boolean
+  ): Promise<Map<string, Partial<Mail>>> => {
+    const allMails = new Map<string, Partial<Mail>>();
+
+    for (let i = start; i < end; i += 1) {
+      const batchMails = await this.getMessages(box, i, i + 1, fields, useUid);
+      batchMails.forEach((value, key) => {
+        allMails.set(key, value);
+      });
+    }
+
+    return allMails;
   };
 
   setFlags = async (

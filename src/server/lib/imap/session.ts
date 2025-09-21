@@ -117,7 +117,7 @@ export class ImapSession {
     const requestedCount = this.countSequenceSetMessages(
       fetchRequest.sequenceSet
     );
-    if (requestedCount > 10) {
+    if (requestedCount > 50) {
       return this.write(`${tag} NO [LIMIT] FETCH too much data requested\r\n`);
     }
 
