@@ -10,7 +10,8 @@ import {
   formatAddressList,
   formatBodyStructure,
   formatFlags,
-  formatHeaders
+  formatHeaders,
+  formatInternalDate
 } from "./util";
 import {
   applyPartialFetch,
@@ -173,6 +174,7 @@ export class ImapSession {
 
     for (const [id, mail] of Array.from(messages.entries())) {
       const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+      // TODO: seqNum for non-UID fetch shouldn't just increment
       const seqNum = isUidFetch ? uid : ++i;
 
       try {
@@ -181,7 +183,6 @@ export class ImapSession {
           fetchRequest.dataItems,
           id,
           uid,
-          seqNum,
           isUidFetch
         );
         this.writeFetchResponse(seqNum, response);
@@ -201,7 +202,6 @@ export class ImapSession {
     dataItems: FetchDataItem[],
     docId: string,
     uid: number,
-    seqNum: number,
     isUidFetch: boolean
   ): Promise<FetchResponsePart[]> {
     const parts: FetchResponsePart[] = [];
@@ -213,10 +213,10 @@ export class ImapSession {
 
     // Process each data item
     for (const item of dataItems) {
+      // Skip duplicate UID
+      if (item.type === "UID" && isUidFetch) continue;
       const part = await this.buildFetchResponsePart(mail, item, docId);
-      if (part) {
-        parts.push(part);
-      }
+      if (part) parts.push(part);
     }
 
     return parts;
@@ -239,7 +239,7 @@ export class ImapSession {
 
       case "INTERNALDATE":
         const date = mail.date ? new Date(mail.date) : new Date();
-        const internalDate = date.toUTCString().replace(/GMT$/, "+0000");
+        const internalDate = formatInternalDate(date);
         return { type: "simple", content: `INTERNALDATE "${internalDate}"` };
 
       case "RFC822.SIZE":
@@ -274,11 +274,14 @@ export class ImapSession {
       return null;
     }
 
+    const sectionKey = getBodySectionKey(bodyFetch.section);
+    let header = sectionKey;
     let finalContent = content;
     let length = Buffer.byteLength(finalContent, "utf8");
 
     // Apply partial fetch if specified
     if (bodyFetch.partial) {
+      header += `<${bodyFetch.partial.start}>`;
       finalContent = applyPartialFetch(content, bodyFetch.partial);
       if (finalContent === "" || bodyFetch.partial.start >= length) {
         const sectionKey = getBodySectionKey(bodyFetch.section);
@@ -286,12 +289,6 @@ export class ImapSession {
       }
       length = Buffer.byteLength(finalContent, "utf8");
       finalContent += "\r\n";
-    }
-
-    const sectionKey = getBodySectionKey(bodyFetch.section);
-    let header = sectionKey;
-    if (bodyFetch.partial) {
-      header += `<${bodyFetch.partial.start}>`;
     }
 
     return { type: "literal", content: finalContent, header, length };

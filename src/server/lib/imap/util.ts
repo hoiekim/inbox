@@ -286,3 +286,35 @@ export const boxToAccount = (username: string, box: string): string => {
   const domain = getUserDomain(username);
   return `${cleanBoxname}@${domain}`;
 };
+
+export const formatInternalDate = (d: Date): string => {
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+  ];
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  const day = pad(d.getDate());
+  const month = months[d.getMonth()];
+  const year = d.getFullYear();
+  const time = [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map(pad)
+    .join(":");
+
+  const offset = -d.getTimezoneOffset(); // minutes east of UTC
+  const sign = offset >= 0 ? "+" : "-";
+  const tz =
+    sign + pad(Math.floor(Math.abs(offset) / 60)) + pad(Math.abs(offset) % 60);
+
+  return `${day}-${month}-${year} ${time} ${tz}`;
+};
