@@ -105,7 +105,7 @@ export const buildFullMessage = (
     body += `Content-Type: text/html; charset=utf-8\r\n`;
     body += `Content-Transfer-Encoding: 8bit\r\n\r\n`;
     body += `${mail.html}\r\n`;
-    body += `--${boundary}--\r\n`;
+    body += `--${boundary}--`;
   } else if (hasAttachments) {
     // multipart/mixed
     const updatedHeaders = headers.replace(
@@ -146,7 +146,7 @@ export const buildFullMessage = (
       body += `${att.content.data}\r\n`;
     });
 
-    body += `--${boundary}--\r\n`;
+    body += `--${boundary}--`;
   }
 
   return body;

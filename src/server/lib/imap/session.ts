@@ -269,26 +269,36 @@ export class ImapSession {
     bodyFetch: BodyFetch,
     docId: string
   ): Promise<FetchResponsePart | null> {
-    const content = this.getBodyContent(mail, bodyFetch.section, docId);
+    const { section, partial } = bodyFetch;
+
+    const content = this.getBodyContent(mail, section, docId);
     if (content === null) {
       return null;
     }
 
-    const sectionKey = getBodySectionKey(bodyFetch.section);
+    const sectionKey = getBodySectionKey(section);
     let header = sectionKey;
     let finalContent = content;
     let length = Buffer.byteLength(finalContent, "utf8");
 
+    if (finalContent === "" || (partial && partial.start >= length)) {
+      const sectionKey = getBodySectionKey(section);
+      return { type: "simple", content: `${sectionKey} NIL` };
+    }
+
     // Apply partial fetch if specified
-    if (bodyFetch.partial) {
-      header += `<${bodyFetch.partial.start}>`;
-      finalContent = applyPartialFetch(content, bodyFetch.partial);
-      if (finalContent === "" || bodyFetch.partial.start >= length) {
-        const sectionKey = getBodySectionKey(bodyFetch.section);
-        return { type: "simple", content: `${sectionKey} NIL` };
+    if (partial) {
+      const { start, length: partialLength } = partial;
+      header += `<${start}>`;
+      const end = start + partialLength;
+      if (0 < start || end < length) {
+        finalContent = applyPartialFetch(content, partial);
+        length = Buffer.byteLength(finalContent, "utf8");
       }
-      length = Buffer.byteLength(finalContent, "utf8");
       finalContent += "\r\n";
+    } else if (section.type !== "HEADER") {
+      finalContent += "\r\n";
+      length = Buffer.byteLength(finalContent, "utf8");
     }
 
     return { type: "literal", content: finalContent, header, length };
@@ -383,6 +393,7 @@ export class ImapSession {
         fields.add("bcc");
         fields.add("date");
         fields.add("messageId");
+        fields.add("attachments");
         break;
 
       case "TEXT":
@@ -450,7 +461,7 @@ export class ImapSession {
         return mail.text || "";
 
       case "HEADER":
-        return formatHeaders(mail, docId);
+        return formatHeaders(mail, docId) + "\r\n";
 
       case "MIME_PART":
         return getBodyPart(mail, section.partNumber);
