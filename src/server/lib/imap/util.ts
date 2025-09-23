@@ -121,39 +121,26 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
    * For multipart: ((part1)(part2)...(partN) subtype (param-list) [disposition] [language] [location])
    */
 
-  const buildSinglePart = (
-    type: string,
-    subtype: string,
-    content: string,
-    params: Record<string, string> = {},
-    encoding: string = "8bit",
-    disposition?: { type: string; params: Record<string, string> }
+  const buildTextPart = (
+    subtype: "plain" | "html",
+    content: string
   ): string => {
     const size = Buffer.byteLength(content, "utf-8");
-    const lines = type === "text" ? content.split(/\r?\n/).length : undefined;
+    const lines = content.split(/\r?\n/).length;
 
     // Build parameter list
-    const paramList =
-      Object.keys(params).length > 0
-        ? `(${Object.entries(params)
-            .map(([k, v]) => `"${k}" "${v}"`)
-            .join(" ")})`
-        : "NIL";
+    const paramList = `("charset" "utf-8")`;
 
     // Build disposition
-    const dispositionStr = disposition
-      ? `("${disposition.type}" (${Object.entries(disposition.params)
-          .map(([k, v]) => `"${k}" "${v}"`)
-          .join(" ")}))`
-      : "NIL";
+    const dispositionStr = "NIL";
 
     const parts = [
-      `"${type}"`,
+      `"text"`,
       `"${subtype}"`,
       paramList,
       "NIL", // body ID
       "NIL", // body description
-      `"${encoding}"`,
+      `"base64"`,
       size.toString()
     ];
 
@@ -167,13 +154,6 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     parts.push("NIL"); // location
 
     return `(${parts.join(" ")})`;
-  };
-
-  const buildTextPart = (
-    subtype: "plain" | "html",
-    content: string
-  ): string => {
-    return buildSinglePart("text", subtype, content, { charset: "utf-8" });
   };
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {

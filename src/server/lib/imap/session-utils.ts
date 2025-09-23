@@ -3,9 +3,14 @@
  * These are pure functions that don't require session state
  */
 
-import { PartialRange, BodySection, FetchDataItem } from "./types";
 import { MailType } from "common";
+import { PartialRange, BodySection, FetchDataItem } from "./types";
 import { formatHeaders } from "./util";
+import { getAttachment } from "server";
+
+const encodeText = (str: string) => {
+  return Buffer.from(str, "utf8").toString("base64");
+};
 
 /**
  * Apply partial fetch range to content
@@ -99,12 +104,12 @@ export const buildFullMessage = (
     body = `${updatedHeaders}\r\n\r\n`;
     body += `--${boundary}\r\n`;
     body += `Content-Type: text/plain; charset=utf-8\r\n`;
-    body += `Content-Transfer-Encoding: 8bit\r\n\r\n`;
-    body += `${mail.text}\r\n`;
+    body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+    body += `${encodeText(mail.text!)}\r\n`;
     body += `--${boundary}\r\n`;
     body += `Content-Type: text/html; charset=utf-8\r\n`;
-    body += `Content-Transfer-Encoding: 8bit\r\n\r\n`;
-    body += `${mail.html}\r\n`;
+    body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+    body += `${encodeText(mail.html!)}\r\n`;
     body += `--${boundary}--`;
   } else if (hasAttachments) {
     // multipart/mixed
@@ -121,29 +126,36 @@ export const buildFullMessage = (
       body += `--${boundary}\r\n`;
       body += `Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`;
       body += `--${altBoundary}\r\n`;
-      body += `Content-Type: text/plain; charset=utf-8\r\n\r\n`;
-      body += `${mail.text}\r\n`;
+      body += `Content-Type: text/plain; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+      body += `${encodeText(mail.text!)}\r\n`;
       body += `--${altBoundary}\r\n`;
-      body += `Content-Type: text/html; charset=utf-8\r\n\r\n`;
-      body += `${mail.html}\r\n`;
+      body += `Content-Type: text/html; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+      body += `${encodeText(mail.html!)}\r\n`;
       body += `--${altBoundary}--\r\n`;
     } else if (hasText) {
       body += `--${boundary}\r\n`;
-      body += `Content-Type: text/plain; charset=utf-8\r\n\r\n`;
-      body += `${mail.text}\r\n`;
+      body += `Content-Type: text/plain; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+      body += `${encodeText(mail.text!)}\r\n`;
     } else if (hasHtml) {
       body += `--${boundary}\r\n`;
-      body += `Content-Type: text/html; charset=utf-8\r\n\r\n`;
-      body += `${mail.html}\r\n`;
+      body += `Content-Type: text/html; charset=utf-8\r\n`;
+      body += `Content-Transfer-Encoding: base64\r\n\r\n`;
+      body += `${encodeText(mail.html!)}\r\n`;
     }
 
     // Add attachments
-    mail.attachments?.forEach((att) => {
+    mail.attachments!.forEach((att) => {
       body += `--${boundary}\r\n`;
       body += `Content-Type: ${att.contentType}\r\n`;
       body += `Content-Transfer-Encoding: base64\r\n`;
       body += `Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`;
-      body += `${att.content.data}\r\n`;
+      const attachmentData =
+        getAttachment(att.content.data) ||
+        Buffer.from("Attachement data not found");
+      body += `${attachmentData.toString("base64")}\r\n`;
     });
 
     body += `--${boundary}--`;
