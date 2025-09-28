@@ -5,12 +5,8 @@
 
 import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem } from "./types";
-import { formatHeaders } from "./util";
+import { formatHeaders, encodeText } from "./util";
 import { getAttachment } from "server";
-
-const encodeText = (str: string) => {
-  return Buffer.from(str, "utf8").toString("base64");
-};
 
 /**
  * Apply partial fetch range to content

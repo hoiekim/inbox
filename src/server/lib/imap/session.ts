@@ -7,6 +7,7 @@ import { getUser, markRead, getDomainUidNext, getAccountUidNext } from "server";
 import { Store } from "./store";
 import {
   boxToAccount,
+  encodeText,
   formatAddressList,
   formatBodyStructure,
   formatFlags,
@@ -150,16 +151,27 @@ export class ImapSession {
     fetchRequest: FetchRequest,
     isUidCommand: boolean
   ) {
-    const { start, end } = this.convertSequenceSet(fetchRequest.sequenceSet);
+    const ranges = this.convertSequenceSet(fetchRequest.sequenceSet);
     const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
 
-    return await this.store!.getMessages(
-      this.selectedMailbox!,
-      start,
-      end,
-      Array.from(requestedFields),
-      fetchRequest.sequenceSet.type === "uid" || isUidCommand
+    const result = new Map<string, Partial<MailType>>();
+
+    await Promise.all(
+      ranges.flatMap(async ({ start, end }) => {
+        const messages = await this.store!.getMessages(
+          this.selectedMailbox!,
+          start,
+          end,
+          Array.from(requestedFields),
+          fetchRequest.sequenceSet.type === "uid" || isUidCommand
+        );
+        messages.forEach((mail, id) => {
+          result.set(id, mail);
+        });
+      })
     );
+
+    return result;
   }
 
   private async processFetchMessages(
@@ -169,13 +181,11 @@ export class ImapSession {
   ) {
     const isDomainInbox = this.selectedMailbox === "INBOX";
     const isUidFetch = fetchRequest.sequenceSet.type === "uid" || isUidCommand;
-    const { start } = this.convertSequenceSet(fetchRequest.sequenceSet);
-    let i = start - 1;
 
     for (const [id, mail] of Array.from(messages.entries())) {
       const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
-      // TODO: seqNum for non-UID fetch shouldn't just increment
-      const seqNum = isUidFetch ? uid : ++i;
+      // TODO: seqNum should not be same as UID
+      const seqNum = uid;
 
       try {
         const response = await this.buildFetchResponse(
@@ -243,9 +253,15 @@ export class ImapSession {
         return { type: "simple", content: `INTERNALDATE "${internalDate}"` };
 
       case "RFC822.SIZE":
-        const textSize = mail.text ? mail.text.length : 0;
-        const htmlSize = mail.html ? mail.html.length : 0;
-        const size = textSize + htmlSize;
+        const encodedText = encodeText(mail.text || "");
+        const textSize = Buffer.byteLength(encodedText, "utf-8");
+        const encodedHtml = encodeText(mail.html || "");
+        const htmlSize = Buffer.byteLength(encodedHtml, "utf-8");
+        const attachmentSize = (mail.attachments ?? []).reduce(
+          (acc, { size }) => acc + Math.ceil(size / 3) * 4,
+          0
+        );
+        const size = textSize + htmlSize + attachmentSize;
         return { type: "simple", content: `RFC822.SIZE ${size}` };
 
       case "ENVELOPE":
@@ -295,6 +311,7 @@ export class ImapSession {
         finalContent = applyPartialFetch(content, partial);
         length = Buffer.byteLength(finalContent, "utf8");
       }
+      finalContent += "\r\n";
     } else if (section.type !== "HEADER") {
       finalContent += "\r\n";
       length = Buffer.byteLength(finalContent, "utf8");
@@ -324,13 +341,10 @@ export class ImapSession {
   private convertSequenceSet(sequenceSet: SequenceSet): {
     start: number;
     end: number;
-  } {
-    // For simplicity, take the first range - TODO: Handle multiple ranges properly
-    const firstRange = sequenceSet.ranges[0];
-    return {
-      start: firstRange.start,
-      end: firstRange.end || firstRange.start
-    };
+  }[] {
+    return sequenceSet.ranges.map(({ start, end = start }) => {
+      return { start, end };
+    });
   }
 
   private getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailType> {
@@ -354,9 +368,9 @@ export class ImapSession {
           break;
 
         case "BODYSTRUCTURE":
-          fields.add("attachments");
           fields.add("text");
           fields.add("html");
+          fields.add("attachments");
           break;
 
         case "BODY":
@@ -370,6 +384,7 @@ export class ImapSession {
         case "RFC822.SIZE":
           fields.add("text");
           fields.add("html");
+          fields.add("attachments");
           break;
       }
     }
@@ -646,29 +661,38 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
+    // TODO: handle non-UID commands properly
+    const useUid = true;
+
     try {
       const { sequenceSet, operation, flags, silent } = storeRequest;
-      const { start } = this.convertSequenceSet(sequenceSet);
+      const ranges = this.convertSequenceSet(sequenceSet);
 
-      // Use UID-based lookup if this is a UID command or sequence set is UID-based
-      const useUid = isUidCommand || sequenceSet.type === "uid";
-      const updated = await this.store.setFlags(
-        this.selectedMailbox,
-        start,
-        flags,
-        useUid
-      );
+      for (const { start, end } of ranges) {
+        const updated = await this.store!.setFlags(
+          this.selectedMailbox!,
+          start,
+          end,
+          flags,
+          useUid
+        );
 
-      if (!updated) {
-        this.write(`${tag} NO STORE failed\r\n`);
-      } else {
-        // Send untagged response unless silent
-        if (!silent && !operation.includes("SILENT")) {
-          const responseNum = useUid ? start : start; // In real implementation, convert UID to sequence number
-          this.write(`* ${responseNum} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+        if (!updated) {
+          this.write(`${tag} NO STORE failed\r\n`);
+          throw new Error(
+            `STORE failed for range ${start}-${end} in mailbox ${this.selectedMailbox}`
+          );
+        } else {
+          // Send untagged response unless silent
+          if (!silent && !operation.includes("SILENT")) {
+            for (let i = start; i <= end; i++) {
+              this.write(`* ${i} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+            }
+          }
         }
-        this.write(`${tag} OK STORE completed\r\n`);
       }
+
+      this.write(`${tag} OK STORE completed\r\n`);
     } catch (error) {
       console.error("Error storing flags:", error);
       this.write(`${tag} NO STORE failed\r\n`);

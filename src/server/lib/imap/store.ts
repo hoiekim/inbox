@@ -207,7 +207,8 @@ export class Store {
 
   setFlags = async (
     box: string,
-    identifier: number,
+    start: number,
+    end: number,
     flags: string[],
     useUid: boolean = false
   ): Promise<boolean> => {
@@ -231,7 +232,7 @@ export class Store {
       let query: ElasticsearchSearchRequest;
 
       if (useUid) {
-        must.push({ term: { [uidField]: identifier } });
+        must.push({ range: { uidField: { gte: start, lte: end } } });
         query = {
           index,
           size: 1,
@@ -241,8 +242,8 @@ export class Store {
       } else {
         query = {
           index,
-          from: identifier - 1,
-          size: 1,
+          from: start,
+          size: end - start + 1,
           query: { bool: { must } },
           sort: { [uidField]: "asc" },
           _source: false
@@ -255,13 +256,13 @@ export class Store {
         return false;
       }
 
-      const messageId = response.hits.hits[0]._id!;
+      const docId = response.hits.hits[0]._id!;
       const read = flags.includes("\\Seen");
       const saved = flags.includes("\\Flagged");
 
       await elasticsearchClient.update({
         index,
-        id: messageId,
+        id: docId,
         doc: { mail: { read, saved } }
       });
 

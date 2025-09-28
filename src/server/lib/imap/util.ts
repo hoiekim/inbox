@@ -1,6 +1,10 @@
 import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
 
+export const encodeText = (str: string) => {
+  return Buffer.from(str, "utf8").toString("base64");
+};
+
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
   if (!value || value.length === 0) return "NIL";
 
@@ -125,33 +129,20 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     subtype: "plain" | "html",
     content: string
   ): string => {
-    const size = Buffer.byteLength(content, "utf-8");
+    const encoded = encodeText(content);
+    const size = Buffer.byteLength(encoded, "utf-8");
     const lines = content.split(/\r?\n/).length;
 
-    // Build parameter list
-    const paramList = `("charset" "utf-8")`;
-
-    // Build disposition
-    const dispositionStr = "NIL";
-
     const parts = [
-      `"text"`,
-      `"${subtype}"`,
-      paramList,
-      "NIL", // body ID
-      "NIL", // body description
-      `"base64"`,
-      size.toString()
+      "TEXT",
+      subtype.toUpperCase(),
+      `("CHARSET" "UTF-8")`,
+      "NIL",
+      "NIL",
+      "BASE64",
+      size.toString(),
+      lines.toString()
     ];
-
-    if (lines !== undefined) {
-      parts.push(lines.toString());
-    }
-
-    parts.push("NIL"); // MD5
-    parts.push(dispositionStr);
-    parts.push("NIL"); // language
-    parts.push("NIL"); // location
 
     return `(${parts.join(" ")})`;
   };
@@ -161,19 +152,11 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
       attachment.contentType || "application/octet-stream"
     ).split("/");
     const filename = attachment.filename || "unnamed";
-    const size = attachment.size || 0;
+    // base64 length calculation without actually encoding
+    const size = Math.ceil(attachment.size / 3) * 4;
+    const params: Record<string, string> = { NAME: filename };
+    const disposition = { type: "ATTACHMENT", params: { FILENAME: filename } };
 
-    const params: Record<string, string> = {};
-    if (filename) {
-      params.name = filename;
-    }
-
-    const disposition = {
-      type: "attachment",
-      params: { filename }
-    };
-
-    // For non-text types, don't include line count
     const parts = [
       `"${type}"`,
       `"${subtype}"`,
@@ -184,7 +167,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
         : "NIL",
       "NIL", // body ID
       "NIL", // body description
-      '"base64"', // encoding
+      "BASE64", // encoding
       size.toString(),
       "NIL", // MD5
       `("${disposition.type}" (${Object.entries(disposition.params)
