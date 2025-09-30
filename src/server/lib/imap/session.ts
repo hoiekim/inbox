@@ -305,12 +305,12 @@ export class ImapSession {
     // Apply partial fetch if specified
     if (partial) {
       const { start, length: partialLength } = partial;
-      header += `<${start}.${partialLength}>`;
       const end = start + partialLength;
       if (0 < start || end < length) {
         finalContent = applyPartialFetch(content, partial);
         length = Buffer.byteLength(finalContent, "utf8");
       }
+      header += `<${start}.${Math.min(partialLength, length)}>`;
       finalContent += "\r\n";
     } else if (section.type !== "HEADER") {
       finalContent += "\r\n";
