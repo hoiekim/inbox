@@ -5,10 +5,6 @@ export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");
 };
 
-export const encodeText = (str: string) => {
-  return Buffer.from(str, "utf8").toString("base64");
-};
-
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
   if (!value || value.length === 0) return "NIL";
 

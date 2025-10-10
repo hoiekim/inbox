@@ -107,10 +107,11 @@ export const convertMail = async (
     subject = "",
     date = new Date().toISOString(),
     html = "",
+    text: incomingText,
     messageId = getRandomId()
   } = incoming;
 
-  const text = getText(html);
+  const text = incomingText ?? getText(html);
   const insight = await getInsight({ subject, from, to, text });
   const envelopeToAddress = envelopeTo[0]?.address || "";
   const [domainUid, accountUid] = await Promise.all([

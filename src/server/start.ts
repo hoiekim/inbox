@@ -2,7 +2,6 @@ import "./config";
 
 import {
   initializeIndex,
-  saveMailHandler,
   initializeAdminUser,
   cleanSubscriptions,
   elasticsearchIsAvailable,
@@ -17,22 +16,11 @@ const initializeElasticsearch = async () => {
   await initializeAdminUser();
 };
 
-const initializeMailin = () => {
-  const nodeMailin = require("@umpacken/node-mailin");
-  nodeMailin.on("message", saveMailHandler);
-  nodeMailin.on("error", console.error);
-  nodeMailin.start({
-    port: 25,
-    logLevel: "info"
-  });
-};
-
 const start = async () => {
   await initializeElasticsearch();
   await initializeHttp();
-  initializeMailin();
-  await initializeImap();
   await initializeSmtp();
+  await initializeImap();
   cleanSubscriptions();
 };
 
