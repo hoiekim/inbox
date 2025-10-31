@@ -8,7 +8,7 @@ export type DateString = string;
 
 export type UserId = string;
 export type Username = string;
-export type BadgeCount = number;
+export type BadgeCount = { count: number; latest?: Date };
 
 export type Constructor<T = any> = new (...args: any[]) => T;
 
@@ -22,8 +22,13 @@ export class Pagination {
   }
 }
 
-export type StoredPushSubscription = {
+export type ComputedPushSubscription = {
   username: string;
   push_subscription_id: string;
+  lastNotified: Date;
   updated: Date;
 } & PushSubscription;
+
+export type StoredPushSubscription = PushSubscription & {
+  lastNotified: DateString;
+};

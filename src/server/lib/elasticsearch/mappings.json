@@ -159,6 +159,7 @@
       "type": "object",
       "dynamic": "strict",
       "properties": {
+        "lastNotified": { "type": "date" },
         "endpoint": { "type": "keyword" },
         "keys": {
           "type": "object",

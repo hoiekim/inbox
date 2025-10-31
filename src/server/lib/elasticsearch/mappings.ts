@@ -1,11 +1,16 @@
-import { PushSubscription } from "web-push";
-import { DateString, MailType, SessionType, UserType } from "common";
+import {
+  DateString,
+  MailType,
+  SessionType,
+  StoredPushSubscription,
+  UserType
+} from "common";
 
 export interface Document {
   type: "mail" | "user" | "session" | "push_subscription";
   mail?: MailType;
   user?: UserType;
   session?: SessionType;
-  push_subscription?: PushSubscription;
+  push_subscription?: StoredPushSubscription;
   updated: DateString;
 }

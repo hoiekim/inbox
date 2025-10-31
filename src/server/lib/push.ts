@@ -1,5 +1,5 @@
 import webPush, { PushSubscription } from "web-push";
-import { Pagination, SignedUser, StoredPushSubscription } from "common";
+import { Pagination, SignedUser, ComputedPushSubscription } from "common";
 import {
   elasticsearchClient,
   index,
@@ -37,7 +37,10 @@ export const storeSubscription = async (
     document: {
       type: "push_subscription",
       user: { id: userId },
-      push_subscription,
+      push_subscription: {
+        ...push_subscription,
+        lastNotified: new Date().toISOString()
+      },
       updated: new Date().toISOString()
     }
   });
@@ -88,7 +91,7 @@ export const cleanSubscriptions = () => {
 
 export const getSubscriptions = async (
   users: SignedUser[]
-): Promise<StoredPushSubscription[]> => {
+): Promise<ComputedPushSubscription[]> => {
   const matchUserId = users.map((user) => {
     return { term: { "user.id": user.id } };
   });
@@ -122,12 +125,13 @@ export const getSubscriptions = async (
       if (!username) return;
       return {
         ...push_subscription,
+        lastNotified: new Date(push_subscription.lastNotified),
         push_subscription_id,
         username,
         updated: updated ? new Date(updated) : new Date()
       };
     })
-    .filter((e): e is StoredPushSubscription => !!e);
+    .filter((e): e is ComputedPushSubscription => !!e);
 };
 
 export const refreshSubscription = async (id: string) => {
@@ -156,14 +160,19 @@ export const notifyNewMails = async (usernames: string[]) => {
   idleManager.notifyNewMail(usernames);
 
   return Promise.all(
-    storedSubscriptions.map((subscription) => {
-      const { push_subscription_id, username } = subscription;
+    storedSubscriptions.map(async (subscription) => {
+      const { push_subscription_id, username, lastNotified } = subscription;
 
-      const badge_count = notifications.get(username) || 0;
-      const incrementedBadgeCount = badge_count + 1;
+      const notification = notifications.get(username);
+      if (!notification) return;
+      const badgeCount = notification.count || 0;
+      const badgeLatest = notification.latest;
+      const incrementedBadgeCount = badgeCount + 1;
+
+      if (badgeLatest && badgeLatest <= lastNotified) return;
 
       const message =
-        badge_count > 1
+        badgeCount > 1
           ? `You have ${incrementedBadgeCount} new mails`
           : "You have a new mail";
 
@@ -174,16 +183,41 @@ export const notifyNewMails = async (usernames: string[]) => {
         push_subscription_id
       };
 
-      return webPush
+      let isFailed = false;
+
+      await webPush
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch(async (error) => {
+          isFailed = true;
           if (error.statusCode === 410) {
             console.log("Subscription has expired. Removing from database...");
-            deleteSubscription(push_subscription_id).catch(console.error);
+            return deleteSubscription(push_subscription_id).catch(
+              console.error
+            );
           } else {
             console.error("Error sending push notification:", error);
           }
         });
+
+      if (isFailed) return;
+
+      await elasticsearchClient.updateByQuery({
+        index,
+        query: {
+          bool: {
+            filter: [
+              { term: { type: "push_subscription" } },
+              { term: { _id: push_subscription_id } }
+            ]
+          }
+        },
+        script: {
+          source: `ctx._source.push_subscription.lastNotified = params.timestamp`,
+          params: { timestamp: new Date().toISOString() }
+        }
+      });
+
+      return;
     })
   );
 };
@@ -198,10 +232,10 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
     storedSubscriptions.map((subscription) => {
       const { push_subscription_id, username } = subscription;
 
-      const badge_count = notifications.get(username);
-      if (badge_count === undefined) return;
+      const badgeCount = notifications.get(username)?.count;
+      if (badgeCount === undefined) return;
 
-      const decrementedBadgeCount = Math.max(badge_count - 1, 0);
+      const decrementedBadgeCount = Math.max(badgeCount - 1, 0);
 
       const notificationPayload = {
         badge_count: decrementedBadgeCount,

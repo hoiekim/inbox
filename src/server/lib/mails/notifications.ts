@@ -2,7 +2,7 @@ import {
   AggregationsStringTermsBucket,
   AggregationsTermsAggregateBase
 } from "@elastic/elasticsearch/lib/api/types";
-import { Notifications, SignedUser } from "common";
+import { DateString, Notifications, SignedUser } from "common";
 import {
   addressToUsername,
   elasticsearchClient,
@@ -16,6 +16,7 @@ interface AddressAggregation {
 
 type AddressAggregationBucket = AggregationsStringTermsBucket & {
   read: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
+  latest: { value: DateString };
 };
 
 export const getNotifications = async (
@@ -36,24 +37,31 @@ export const getNotifications = async (
     aggs: {
       address: {
         terms: { field: TO_ADDRESS_FIELD, size: 10000 },
-        aggs: { read: { terms: { field: "mail.read", size: 10000 } } }
+        aggs: {
+          read: { terms: { field: "mail.read", size: 10000 } },
+          latest: { max: { field: "mail.date" } }
+        }
       }
     }
   });
 
-  const notifications = new Notifications(users.map((u) => [u.username, 0]));
+  const notifications = new Notifications(
+    users.map((u) => [u.username, { count: 0 }])
+  );
 
   await response.then((r) => {
     const buckets = r.aggregations?.address.buckets;
     if (!Array.isArray(buckets)) return;
     buckets?.forEach((e) => {
-      const { buckets } = e.read;
-      if (!Array.isArray(buckets)) return;
-      const badgeCount = buckets.find((f) => !f.key)?.doc_count;
+      const { buckets: readBuckets } = e.read;
+      if (!Array.isArray(readBuckets)) return;
+      const badgeCount = readBuckets.find((f) => !f.key)?.doc_count;
       if (badgeCount === undefined) return;
+      const latest = new Date(e.latest.value);
       const username = addressToUsername(e.key);
-      const existing = notifications.get(username) || 0;
-      notifications.set(username, badgeCount + existing);
+      const existing = notifications.get(username) || { count: 0 };
+      const newCount = badgeCount + existing.count;
+      notifications.set(username, { count: newCount, latest });
     });
   });
 
