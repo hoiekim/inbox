@@ -31,9 +31,9 @@ const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   const { username, password } = auth;
   const user = await getUser({ username });
   const signedUser = user?.getSigned();
-  if (!password || !user || !signedUser) return cb(null);
+  if (!password || !user || !signedUser) return cb(null, { user: undefined });
   const pwMatches = await bcrypt.compare(password, user.password!);
-  if (!pwMatches) return cb(null);
+  if (!pwMatches) return cb(null, { user: undefined });
   cb(null, { user: username });
 };
 
