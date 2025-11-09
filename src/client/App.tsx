@@ -56,8 +56,6 @@ export interface ContextType {
   setSearchHistory: Dispatch<SetStateAction<ContextType["searchHistory"]>>;
   newMailsTotal: number;
   setNewMailsTotal: Dispatch<SetStateAction<ContextType["newMailsTotal"]>>;
-  lastUpdate: Date;
-  setLastUpdate: Dispatch<SetStateAction<ContextType["lastUpdate"]>>;
 }
 
 export const Context = createContext<ContextType>({} as ContextType);
@@ -115,7 +113,6 @@ const App = ({ user: session }: Props) => {
     ContextType["searchHistory"]
   >([]);
   const [newMailsTotal, setNewMailsTotal] = useState(0);
-  const [lastUpdate, setLastUpdate] = useState(lastNotifiedDate);
 
   const lastRefresh = useRef(Date.now());
 
@@ -152,18 +149,7 @@ const App = ({ user: session }: Props) => {
     const noti = new Notifier();
     noti.clearBadge();
     noti.setBadge(newMailsTotal);
-    if (newMailsTotal && lastNotifiedDate < lastUpdate) {
-      const title =
-        newMailsTotal > 1
-          ? `You have ${newMailsTotal} new mails`
-          : "You have a new mail";
-      noti.notify({
-        title,
-        icon: "/icons/logo192.png"
-      });
-      lastNotifiedDate = lastUpdate;
-    }
-  }, [newMailsTotal, lastUpdate]);
+  }, [newMailsTotal]);
 
   useEffect(() => {
     if (!userInfo) {
@@ -174,7 +160,6 @@ const App = ({ user: session }: Props) => {
       setReplyData({});
       setSearchHistory([]);
       setNewMailsTotal(0);
-      setLastUpdate(new Date(0));
     } else {
       new Notifier().subscribe();
     }
@@ -186,8 +171,7 @@ const App = ({ user: session }: Props) => {
     setIsAccountsOpen,
     setReplyData,
     setSearchHistory,
-    setNewMailsTotal,
-    setLastUpdate
+    setNewMailsTotal
   ]);
 
   // stores states to export with `Context`
@@ -209,9 +193,7 @@ const App = ({ user: session }: Props) => {
     searchHistory,
     setSearchHistory,
     newMailsTotal,
-    setNewMailsTotal,
-    lastUpdate,
-    setLastUpdate
+    setNewMailsTotal
   };
 
   return (
