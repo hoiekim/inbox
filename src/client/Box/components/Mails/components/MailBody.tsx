@@ -31,7 +31,7 @@ const MailBody = ({ mailId }: Props) => {
   };
   const query = useQuery<MailBodyData>(queryUrl, getMail);
 
-  const iframeElement = useRef(null);
+  const iframeElement = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     if (
@@ -48,8 +48,16 @@ const MailBody = ({ mailId }: Props) => {
     }
   }, [setIsWriterOpen, replyData, setReplyData, query]);
 
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
-    setTimeout(() => audjstMailContnetSize(iframeElement.current), 300);
+    // Initial setup with delay for iframe to load
+    timerRef.current = setTimeout(() => {
+      audjstMailContnetSize(iframeElement.current);
+    }, 300);
+
+    return () =>
+      timerRef.current ? clearTimeout(timerRef.current) : undefined;
   }, []);
 
   const audjstMailContnetSize = (iframeDom: HTMLIFrameElement | null) => {
@@ -72,6 +80,10 @@ const MailBody = ({ mailId }: Props) => {
     iframeDom.style.height = adjustedClientHeight + "px";
     iframeDom.style.paddingTop = "8px";
     iframeDom.style.paddingBottom = "24px";
+
+    timerRef.current = setTimeout(() => {
+      audjstMailContnetSize(iframeElement.current);
+    }, 300);
   };
 
   const loadingMessage = "Loading Mail Data...";
@@ -133,18 +145,31 @@ const MailBody = ({ mailId }: Props) => {
 </style>
 ${data.html}
 <script>
-  Array.from(document.querySelectorAll("a")).forEach((e) => {
-    const target = e.getAttribute("target")
-    if (!target || target[0] === "_") e.setAttribute("target", "_blank")
-    const text = e.innerText.replaceAll("\\n", " ");
-    e.innerText = text.length > 50 ? text.substring(0, 47) + "..." : text
-  })
-  Array.from(document.querySelectorAll("div.replace_with_details > blockquote, div.gmail_quote_container > blockquote")).forEach((blockquote) => {
-    console.log('Found blockquote:', blockquote);  
-    const details = document.createElement('details');
-    details.innerHTML = blockquote.innerHTML;
-    blockquote.parentNode.replaceChild(details, blockquote);
-  })
+  let init = false;
+  if (!init) {
+    init = true;
+    Array.from(document.querySelectorAll("a")).forEach((e) => {
+      const target = e.getAttribute("target");
+      if (!target || target[0] === "_") e.setAttribute("target", "_blank");
+      const text = e.innerText.replaceAll("\\n", " ");
+      e.innerText = text.length > 50 ? text.substring(0, 47) + "..." : text;
+    })
+    Array.from(document.querySelectorAll("div, p, blockquote")).reverse().forEach((e) => {
+      const text = Array.from(e.childNodes)
+        .filter(node => node.nodeType === Node.TEXT_NODE)
+        .map(node => node.textContent)
+        .join('');
+      const regex = /^On\\s+(?:[A-Z][a-z]+,?\\s+){2,3}\\d{1,2},\\s+\\d{4}\\s+at\\s+\\d{1,2}:\\d{2}(?:\\s?[AP]M)?,?\\s+.*?\\s+.*?\\s+wrote:/;
+      if (regex.test(text)) {
+        const blockquote = e.parentNode.querySelector('blockquote')
+        const details = document.createElement('details');
+        details.innerHTML = "<summary>" + e.innerText.replace("<", "&lt;").replace(">", "&gt;") + "</summary>" + "<hr/>" + blockquote.innerHTML;
+        details.style.marginTop = "16px";
+        blockquote.parentNode.replaceChild(details, blockquote);
+        e.parentNode.removeChild(e);
+      }
+    })
+  }
 </script>
 `;
 

@@ -38,7 +38,8 @@ export const storeSubscription = async (
       type: "push_subscription",
       user: { id: userId },
       push_subscription: {
-        ...push_subscription,
+        endpoint: push_subscription.endpoint,
+        keys: push_subscription.keys,
         lastNotified: new Date().toISOString()
       },
       updated: new Date().toISOString()
