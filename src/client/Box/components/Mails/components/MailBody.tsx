@@ -136,6 +136,14 @@ ${data.html}
   Array.from(document.querySelectorAll("a")).forEach((e) => {
     const target = e.getAttribute("target")
     if (!target || target[0] === "_") e.setAttribute("target", "_blank")
+    const text = e.innerText.replaceAll("\\n", " ");
+    e.innerText = text.length > 50 ? text.substring(0, 47) + "..." : text
+  })
+  Array.from(document.querySelectorAll("div.replace_with_details > blockquote, div.gmail_quote_container > blockquote")).forEach((blockquote) => {
+    console.log('Found blockquote:', blockquote);  
+    const details = document.createElement('details');
+    details.innerHTML = blockquote.innerHTML;
+    blockquote.parentNode.replaceChild(details, blockquote);
   })
 </script>
 `;

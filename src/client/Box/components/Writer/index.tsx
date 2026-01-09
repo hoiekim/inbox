@@ -53,6 +53,14 @@ const replyDataToOriginalMessage = (replyData: any) => {
   };
 };
 
+const getReplyContainerHtml = (originalMessage: any) => {
+  const inner =
+    `<p>${originalMessage.prefix
+      .replace("<", "&lt;")
+      .replace(">", "&gt;")}</p>` + originalMessage.html;
+  return `<div class="replace_with_details">${inner}</div>`;
+};
+
 const Writer = () => {
   const { domainName, isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
     useContext(Context);
@@ -215,10 +223,7 @@ const Writer = () => {
     const html =
       insertStyle(editor?.getHTML() || "") +
       "\n\n\n" +
-      `<p>${originalMessage.prefix
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")}</p>` +
-      originalMessage.html;
+      getReplyContainerHtml(originalMessage);
 
     const mailData: SendMailPostBody = {
       senderFullName: name,
