@@ -17,7 +17,7 @@ import {
   Context,
   useLocalStorage,
   getDateForMailHeader,
-  insertStyle
+  processHtmlToSendMail
 } from "client";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
@@ -221,7 +221,7 @@ const Writer = () => {
     const formData = new FormData();
 
     const html =
-      insertStyle(editor?.getHTML() || "") +
+      processHtmlToSendMail(editor?.getHTML() || "") +
       "\n\n\n" +
       getReplyContainerHtml(originalMessage);
 

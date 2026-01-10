@@ -23,7 +23,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "strict": true,
-    "target": "es5"
+    "target": "es2023"
   },
   "exclude": ["*.test.ts", "*.test.tsx", "**/*.test.ts", "**/*.test.tsx"],
   "include": ["src"],
@@ -34,7 +34,7 @@
       "resolveJsonModule": true,
       "skipLibCheck": true,
       "strict": true,
-      "target": "es2016"
+      "target": "es2023"
     }
   }
 }

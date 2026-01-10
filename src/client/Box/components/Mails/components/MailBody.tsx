@@ -9,83 +9,8 @@ import {
 import { useQuery } from "react-query";
 import { AttachmentType, MailBodyData } from "common";
 import { BodyGetResponse } from "server";
-import { Context, ContextType, call } from "client";
+import { Context, ContextType, call, processHtmlForViewer } from "client";
 import FileIcon from "client/Box/components/FileIcon";
-
-const createIframeSrc = (html: string) => {
-  return `
-<style>
-  body {
-      margin: 0;
-      overflow: hidden;
-      width: 100%;
-      height: 100%
-  }
-  * {
-      font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-      "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
-      "Helvetica Neue", sans-serif;
-      color: rgb(70,70,70);
-  }
-</style>
-${html}
-<script>
-  let init = false;
-  if (!init) {
-    init = true;
-    Array.from(document.querySelectorAll("a")).forEach((e) => {
-      const target = e.getAttribute("target");
-      if (!target || target[0] === "_") e.setAttribute("target", "_blank");
-      const text = e.innerText.replaceAll("\\n", " ");
-      e.innerText = text.length > 50 ? text.substring(0, 47) + "..." : text;
-    })
-    
-    const replaceBlockquoteWithDetails = (text, blockquote) => {
-      const details = document.createElement('details');
-      details.innerHTML = "<summary>" + text.replace("<", "&lt;").replace(">", "&gt;") + "</summary>" + "<hr/>" + blockquote.innerHTML;
-      details.style.marginTop = "16px";
-      blockquote.parentNode.replaceChild(details, blockquote);
-      return details;
-    }
-
-    Array.from(document.querySelectorAll("div, p, blockquote")).reverse().forEach((e) => {
-      const children = Array.from(e.childNodes);
-      const firstTextNodeIndex = children.findIndex(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
-      const lastTextNodeIndex = children.findLastIndex(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
-
-      const text = children
-        .slice(firstTextNodeIndex, lastTextNodeIndex + 1)
-        .map(node => node.textContent)
-        .join(" ")
-        .trim();
-
-      const regex = /^On.*wrote:/;
-      if (regex.test(text)) {
-        if (e.nodeName === "BLOCKQUOTE") {
-          replaceBlockquoteWithDetails(text, e);
-        } else {
-          let sibling = e.nextElementSibling;
-          while (sibling) {
-            if (sibling.matches('blockquote')) break;
-            sibling = sibling.nextElementSibling;
-          }
-          if (sibling && sibling.nodeName === "BLOCKQUOTE") {
-            replaceBlockquoteWithDetails(text, sibling);
-            e.parentNode.removeChild(e);
-          } else {
-            const blockquote = e.querySelector('blockquote');
-            replaceBlockquoteWithDetails(text, blockquote);
-          }
-        }
-        for (let i = firstTextNodeIndex; i <= lastTextNodeIndex; i++) {
-          if (children[i]) e.removeChild(children[i]);
-        }
-      }
-    })
-  }
-</script>
-`;
-};
 
 interface Props {
   mailId: string;
@@ -233,7 +158,7 @@ const MailBody = ({ mailId }: Props) => {
         )}
         <iframe
           title={mailId}
-          srcDoc={createIframeSrc(data.html)}
+          srcDoc={processHtmlForViewer(data.html)}
           onLoad={onLoadIframe}
           ref={iframeElement}
         />

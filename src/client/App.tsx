@@ -60,8 +60,6 @@ export interface ContextType {
 
 export const Context = createContext<ContextType>({} as ContextType);
 
-let lastNotifiedDate = new Date(0);
-
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
