@@ -82,6 +82,8 @@
     }
 
     .text {
+      margin-left: 0;
+      margin-right: 8px;
       margin-top: 0.4rem;
 
       .loading_message {
@@ -96,6 +98,13 @@
         height: 0;
         border: none;
         overflow-x: hidden;
+        border-left: 8px solid;
+        @media (prefers-color-scheme: dark) {
+          border-color: adjust-color($color-dark, $lightness: 10%);
+        }
+        @media (prefers-color-scheme: light) {
+          border-color: adjust-color($color-light, $lightness: 10%);
+        }
       }
     }
 

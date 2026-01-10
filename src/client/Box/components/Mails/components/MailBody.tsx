@@ -3,7 +3,8 @@ import {
   useContext,
   useEffect,
   useRef,
-  ReactEventHandler
+  ReactEventHandler,
+  useCallback
 } from "react";
 import { useQuery } from "react-query";
 import { AttachmentType, MailBodyData } from "common";
@@ -125,6 +126,34 @@ const MailBody = ({ mailId }: Props) => {
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
+  const audjstMailContnetSize = useCallback(
+    (iframeDom: HTMLIFrameElement | null) => {
+      if (!iframeDom || !iframeDom.contentWindow) return;
+      const content = iframeDom.contentWindow.document.body;
+      if (!content) return;
+
+      // Reset iframe height to auto to get accurate content measurements
+      iframeDom.style.height = "auto";
+
+      const contentHeight = content.scrollHeight;
+      const contentWidth = content.scrollWidth;
+      const adjustedContentWidth = iframeDom.offsetWidth - 24;
+      const scale = adjustedContentWidth / contentWidth;
+      const adjustedContentHeight = scale * contentHeight;
+      const adjustedClientHeight = adjustedContentHeight + 32;
+
+      content.style.transform = `scale(${scale})`;
+      content.style.position = "absolute";
+      content.style.top = (adjustedContentHeight * (1 - scale)) / -2 + "px";
+      content.style.left = (adjustedContentWidth * (1 - scale)) / -2 + "px";
+
+      iframeDom.style.height = adjustedClientHeight + "px";
+      iframeDom.style.paddingTop = "8px";
+      iframeDom.style.paddingBottom = "24px";
+    },
+    []
+  );
+
   useEffect(() => {
     // Initial setup with delay for iframe to load
     timerRef.current = setTimeout(() => {
@@ -133,36 +162,7 @@ const MailBody = ({ mailId }: Props) => {
 
     return () =>
       timerRef.current ? clearTimeout(timerRef.current) : undefined;
-  }, []);
-
-  const audjstMailContnetSize = (iframeDom: HTMLIFrameElement | null) => {
-    if (!iframeDom || !iframeDom.contentWindow) return;
-    const content = iframeDom.contentWindow.document.body;
-    if (!content) return;
-
-    // Reset iframe height to auto to get accurate content measurements
-    iframeDom.style.height = "auto";
-
-    const contentHeight = content.scrollHeight;
-    const contentWidth = content.scrollWidth;
-    const adjustedContentWidth = iframeDom.offsetWidth - 16;
-    const scale = adjustedContentWidth / contentWidth;
-    const adjustedContentHeight = scale * contentHeight;
-    const adjustedClientHeight = adjustedContentHeight + 32;
-
-    content.style.transform = `scale(${scale})`;
-    content.style.position = "absolute";
-    content.style.top = (adjustedContentHeight * (1 - scale)) / -2 + "px";
-    content.style.left = (adjustedContentWidth * (1 - scale)) / -2 + "px";
-
-    iframeDom.style.height = adjustedClientHeight + "px";
-    iframeDom.style.paddingTop = "8px";
-    iframeDom.style.paddingBottom = "24px";
-
-    timerRef.current = setTimeout(() => {
-      audjstMailContnetSize(iframeElement.current);
-    }, 300);
-  };
+  }, [audjstMailContnetSize]);
 
   const loadingMessage = "Loading Mail Data...";
 
@@ -208,7 +208,17 @@ const MailBody = ({ mailId }: Props) => {
 
     const onLoadIframe: ReactEventHandler<HTMLIFrameElement> = (e) => {
       setIsLoadingIframe(false);
-      audjstMailContnetSize(e.target as HTMLIFrameElement);
+
+      const iframeDom = e.target as HTMLIFrameElement;
+      audjstMailContnetSize(iframeDom);
+
+      if (!iframeDom || !iframeDom.contentWindow) return;
+      const content = iframeDom.contentWindow.document.body;
+      if (!content) return;
+
+      content.addEventListener("click", () => {
+        setTimeout(() => audjstMailContnetSize(iframeDom), 50);
+      });
     };
 
     return (
