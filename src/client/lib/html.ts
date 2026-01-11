@@ -75,7 +75,9 @@ export const processHtmlForViewer = (html: string) => {
       const firstTextNodeIndex = children.findIndex(
         (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
       );
+      // @ts-ignore
       const lastTextNodeIndex = children.findLastIndex(
+        // @ts-ignore
         (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
       );
 

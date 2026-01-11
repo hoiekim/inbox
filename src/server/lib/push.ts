@@ -4,7 +4,6 @@ import {
   elasticsearchClient,
   index,
   getNotifications,
-  getUsers,
   getActiveUsers
 } from "server";
 
@@ -58,7 +57,8 @@ export const deleteSubscription = (push_subscription_id: string) => {
           must: [
             { term: { _id: push_subscription_id } },
             { term: { type: "push_subscription" } }
-          ]
+          ],
+          should: undefined
         }
       }
     })
@@ -86,7 +86,7 @@ export const cleanSubscriptions = () => {
 
     const deleted = result?.deleted || 0;
     console.log(`Deleted ${deleted} old subscriptions`);
-    cleanSubscriptions;
+    cleanSubscriptions();
   }, ONE_DAY);
 };
 

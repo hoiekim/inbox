@@ -42,7 +42,7 @@ const backfillUID = async (sent = false) => {
     for (const hit of hits) {
       await elasticsearchClient.update({
         index,
-        id: hit._id,
+        id: hit._id!,
         doc: { mail: { uid: { domain: uidCounter } } }
       });
       uidCounter++;
@@ -94,7 +94,7 @@ const backfillAccountUID = async (sent = false) => {
       for (const hit of hits) {
         await elasticsearchClient.update({
           index,
-          id: hit._id,
+          id: hit._id!,
           doc: { mail: { uid: { account: uidCounter } } }
         });
         uidCounter++;
