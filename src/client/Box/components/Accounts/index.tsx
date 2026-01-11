@@ -352,7 +352,7 @@ const Accounts = ({
                 </div>
               </div>
             )}
-            <div>
+            <div className="sort_text">
               {showSortOptions ? (
                 <></>
               ) : (
@@ -376,7 +376,7 @@ const Accounts = ({
             </div>
           </div>
           <div className="tags_container">
-            {selectedCategory === Category.Search ? (
+            {!showSortOptions && selectedCategory === Category.Search ? (
               <div className="search_container">
                 <div className="fieldName">
                   <span>Search This:</span>
@@ -393,7 +393,7 @@ const Accounts = ({
                 />
               </div>
             ) : null}
-            {accountComponents?.length
+            {!showSortOptions && accountComponents?.length
               ? accountComponents
               : "This category is empty"}
           </div>

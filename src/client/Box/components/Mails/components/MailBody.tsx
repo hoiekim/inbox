@@ -93,11 +93,19 @@ const MailBody = ({ mailId }: Props) => {
   const loadingMessage = "Loading Mail Data...";
 
   if (query.isLoading) {
-    return <div className="text">{loadingMessage}</div>;
+    return (
+      <div className="text">
+        <div className="loading_message">{loadingMessage}</div>
+      </div>
+    );
   }
 
   if (query.error) {
-    return <div className="text">Mail Data Request Failed</div>;
+    return (
+      <div className="text">
+        <div className="loading_message">Mail Data Request Failed</div>
+      </div>
+    );
   }
 
   const data = query.data;
