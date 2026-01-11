@@ -73,7 +73,7 @@ const MailBody = ({ mailId }: Props) => {
 
       const contentHeight = content.scrollHeight;
       const contentWidth = content.scrollWidth;
-      const adjustedContentWidth = iframeDom.offsetWidth - 24;
+      const adjustedContentWidth = iframeDom.offsetWidth - 16;
       const scale = adjustedContentWidth / contentWidth;
       const adjustedContentHeight = scale * contentHeight;
       const adjustedClientHeight = adjustedContentHeight + 32;
@@ -206,6 +206,7 @@ const MailBody = ({ mailId }: Props) => {
         });
 
       audjstMailContnetSize(iframeDom);
+      setTimeout(() => audjstMailContnetSize(iframeDom), 50);
     };
 
     return (
