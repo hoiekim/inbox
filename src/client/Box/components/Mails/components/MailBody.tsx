@@ -16,6 +16,19 @@ interface Props {
   mailId: string;
 }
 
+const replaceBlockquoteWithDetails = (text: string, blockquote: Element) => {
+  const details = window.document.createElement("details");
+  details.innerHTML =
+    "<summary>" +
+    text.replace("<", "&lt;").replace(">", "&gt;") +
+    "</summary>" +
+    "<hr/>" +
+    blockquote.innerHTML;
+  details.style.marginTop = "16px";
+  blockquote.parentNode?.replaceChild(details, blockquote);
+  return details;
+};
+
 const MailBody = ({ mailId }: Props) => {
   const { setIsWriterOpen, replyData, setReplyData } = useContext(
     Context
@@ -49,8 +62,6 @@ const MailBody = ({ mailId }: Props) => {
     }
   }, [setIsWriterOpen, replyData, setReplyData, query]);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
   const audjstMailContnetSize = useCallback(
     (iframeDom: HTMLIFrameElement | null) => {
       if (!iframeDom || !iframeDom.contentWindow) return;
@@ -78,16 +89,6 @@ const MailBody = ({ mailId }: Props) => {
     },
     []
   );
-
-  useEffect(() => {
-    // Initial setup with delay for iframe to load
-    timerRef.current = setTimeout(() => {
-      audjstMailContnetSize(iframeElement.current);
-    }, 300);
-
-    return () =>
-      timerRef.current ? clearTimeout(timerRef.current) : undefined;
-  }, [audjstMailContnetSize]);
 
   const loadingMessage = "Loading Mail Data...";
 
@@ -135,7 +136,6 @@ const MailBody = ({ mailId }: Props) => {
       setIsLoadingIframe(false);
 
       const iframeDom = e.target as HTMLIFrameElement;
-      audjstMailContnetSize(iframeDom);
 
       if (!iframeDom || !iframeDom.contentWindow) return;
       const content = iframeDom.contentWindow.document.body;
@@ -144,6 +144,60 @@ const MailBody = ({ mailId }: Props) => {
       content.addEventListener("click", () => {
         setTimeout(() => audjstMailContnetSize(iframeDom), 50);
       });
+
+      Array.from(content.querySelectorAll("a")).forEach((e) => {
+        const target = e.getAttribute("target");
+        if (!target || target[0] === "_") e.setAttribute("target", "_blank");
+        const text = e.innerText.replaceAll("\\n", " ");
+        e.innerText = text.length > 50 ? text.substring(0, 47) + "..." : text;
+      });
+
+      Array.from(content.querySelectorAll("div, p, blockquote"))
+        .reverse()
+        .forEach((e) => {
+          const children = Array.from(e.childNodes);
+          const firstTextNodeIndex = children.findIndex(
+            (node) =>
+              node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+          );
+          // @ts-ignore
+          const lastTextNodeIndex = children.findLastIndex(
+            // @ts-ignore
+            (node) =>
+              node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+          );
+
+          const text = children
+            .slice(firstTextNodeIndex, lastTextNodeIndex + 1)
+            .map((node) => node.textContent)
+            .join(" ")
+            .trim();
+
+          const regex = /^On.*wrote:/;
+          if (regex.test(text)) {
+            if (e.nodeName === "BLOCKQUOTE") {
+              replaceBlockquoteWithDetails(text, e);
+            } else {
+              let sibling = e.nextElementSibling;
+              while (sibling) {
+                if (sibling.matches("blockquote")) break;
+                sibling = sibling.nextElementSibling;
+              }
+              if (sibling && sibling.nodeName === "BLOCKQUOTE") {
+                replaceBlockquoteWithDetails(text, sibling);
+                e.parentNode?.removeChild(e);
+              } else {
+                const blockquote = e.querySelector("blockquote");
+                if (blockquote) replaceBlockquoteWithDetails(text, blockquote);
+              }
+            }
+            for (let i = firstTextNodeIndex; i <= lastTextNodeIndex; i++) {
+              if (children[i]) e.removeChild(children[i]);
+            }
+          }
+        });
+
+      audjstMailContnetSize(iframeDom);
     };
 
     return (
