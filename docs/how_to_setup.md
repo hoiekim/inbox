@@ -68,13 +68,14 @@ If you want to use this app only for receiving mails, skip this step.
 
 2. Development mode
 
-   Set following values in `.env.local` file to tell inbox what Elasticsearch host to use in development. You can install and run it in your local machine by downloading it from their [official website](https://elastic.co). In this case your Elasticsearch hostname is usually `http://localhost:9200`.
+   Set following values in `.env.local` file to configure PostgreSQL for development. You can install and run PostgreSQL locally or use the docker-compose setup.
 
    ```
-   ELASTIC_HOST=            // Address starts with http or https that directs to Elasticsearch host
-   ELASTIC_USERNAME=        // Elasticsearch username (if required by Elasticsearch host)
-   ELASTIC_PASSWORD=        // Elasticsearch password (if required by Elasticsearch host)
-   ELASTIC_INDEX=           // Elasticsearch index name (optional)
+   POSTGRES_HOST=localhost  // PostgreSQL host address
+   POSTGRES_PORT=5432       // PostgreSQL port
+   POSTGRES_USER=postgres   // PostgreSQL username
+   POSTGRES_PASSWORD=inbox  // PostgreSQL password
+   POSTGRES_DATABASE=inbox  // PostgreSQL database name
    ```
 
    Then run app using this command

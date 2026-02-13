@@ -41,7 +41,7 @@ const isString = (v: unknown): v is string => typeof v === "string";
 
 export function buildCreateTable(
   tableName: string,
-  schema: Schema<Record<string, unknown>>,
+  schema: Schema,
   constraints: Constraints = []
 ): string {
   const columnDefs = Object.entries(schema).map(

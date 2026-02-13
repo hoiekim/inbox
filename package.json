@@ -26,7 +26,6 @@
   "license": "ISC",
   "dependencies": {
     "@aws-sdk/client-ses": "^3.856.0",
-    "@elastic/elasticsearch": "^8.8.1",
     "@types/pg": "^8.16.0",
     "bcrypt": "^5.0.1",
     "dotenv": "^8.2.0",

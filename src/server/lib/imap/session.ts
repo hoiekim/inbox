@@ -773,7 +773,7 @@ export class ImapSession {
       mail.uid.domain = domainUid || 1;
       mail.uid.account = accountUid || 1;
 
-      // Store the message in Elasticsearch
+      // Store the message in PostgreSQL
       const result = await this.store.storeMail(mail);
 
       let uid: number;

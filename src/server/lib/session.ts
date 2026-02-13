@@ -6,6 +6,3 @@ export {
   deleteSession,
   purgeSessions,
 } from "./postgres/repositories/sessions";
-
-// Alias for backwards compatibility
-export { PostgresSessionStore as ElasticsearchSessionStore } from "./postgres/repositories/sessions";

@@ -24,8 +24,7 @@ export class RuntimeCookie
 }
 
 /**
- * Redefines some properties as they should be stringified before storing because
- * Elasticsearch doesn't support multiple types mappings.
+ * Redefines some properties as they should be stringified before storing in the database.
  */
 export type CookieType = Omit<RuntimeCookieType, "secure" | "sameSite"> & {
   secure?: string;
@@ -64,7 +63,7 @@ export class RuntimeSession
 }
 
 /**
- * Redefines 'cookie' property to make it compatible with Elasticsearch mappings.
+ * Redefines 'cookie' property to make it compatible with database storage.
  */
 export type SessionType = Omit<_Session, "cookie"> & {
   cookie: CookieType;

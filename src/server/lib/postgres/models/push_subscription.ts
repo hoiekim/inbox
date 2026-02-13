@@ -8,13 +8,7 @@ import {
   UPDATED,
   PUSH_SUBSCRIPTIONS,
 } from "./common";
-import {
-  Schema,
-  AssertTypeFn,
-  createAssertType,
-  Model,
-  createTable,
-} from "./base";
+import { Schema, Model, createTable } from "./base";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -30,14 +24,26 @@ export interface PushSubscriptionJSON {
   last_notified: string | null;
 }
 
-export class PushSubscriptionModel extends Model<PushSubscriptionJSON> {
-  push_subscription_id!: string;
-  user_id!: string;
-  endpoint!: string;
-  keys_p256dh!: string;
-  keys_auth!: string;
-  last_notified!: string | null;
-  updated!: string;
+const pushSubscriptionSchema = {
+  [PUSH_SUBSCRIPTION_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+  [USER_ID]: "UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE",
+  [ENDPOINT]: "TEXT NOT NULL",
+  [KEYS_P256DH]: "TEXT NOT NULL",
+  [KEYS_AUTH]: "TEXT NOT NULL",
+  [LAST_NOTIFIED]: "TIMESTAMPTZ",
+  [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
+};
+
+type PushSubscriptionSchema = typeof pushSubscriptionSchema;
+
+export class PushSubscriptionModel extends Model<PushSubscriptionJSON, PushSubscriptionSchema> {
+  declare push_subscription_id: string;
+  declare user_id: string;
+  declare endpoint: string;
+  declare keys_p256dh: string;
+  declare keys_auth: string;
+  declare last_notified: string | null;
+  declare updated: string;
 
   static typeChecker = {
     push_subscription_id: isString,
@@ -49,18 +55,8 @@ export class PushSubscriptionModel extends Model<PushSubscriptionJSON> {
     updated: isNullableString,
   };
 
-  static assertType: AssertTypeFn<Record<string, unknown>> = createAssertType(
-    "PushSubscriptionModel",
-    PushSubscriptionModel.typeChecker
-  );
-
   constructor(data: unknown) {
-    super();
-    PushSubscriptionModel.assertType(data);
-    const r = data as Record<string, unknown>;
-    Object.keys(PushSubscriptionModel.typeChecker).forEach((k) => {
-      (this as Record<string, unknown>)[k] = r[k];
-    });
+    super(data, PushSubscriptionModel.typeChecker);
   }
 
   toJSON(): PushSubscriptionJSON {
@@ -78,15 +74,7 @@ export class PushSubscriptionModel extends Model<PushSubscriptionJSON> {
 export const pushSubscriptionsTable = createTable({
   name: PUSH_SUBSCRIPTIONS,
   primaryKey: PUSH_SUBSCRIPTION_ID,
-  schema: {
-    [PUSH_SUBSCRIPTION_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-    [USER_ID]: "UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE",
-    [ENDPOINT]: "TEXT NOT NULL",
-    [KEYS_P256DH]: "TEXT NOT NULL",
-    [KEYS_AUTH]: "TEXT NOT NULL",
-    [LAST_NOTIFIED]: "TIMESTAMPTZ",
-    [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
-  } as Schema<Record<string, unknown>>,
+  schema: pushSubscriptionSchema,
   ModelClass: PushSubscriptionModel,
   supportsSoftDelete: false,
   indexes: [{ column: USER_ID }],

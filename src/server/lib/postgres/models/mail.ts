@@ -30,13 +30,7 @@ import {
   UPDATED,
   MAILS,
 } from "./common";
-import {
-  Schema,
-  AssertTypeFn,
-  createAssertType,
-  Model,
-  createTable,
-} from "./base";
+import { Schema, Model, createTable } from "./base";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -78,36 +72,70 @@ export interface MailJSON {
   uid_account: number;
 }
 
-export class MailModel extends Model<MailJSON> {
-  mail_id!: string;
-  user_id!: string;
-  message_id!: string;
-  subject!: string;
-  date!: string;
-  html!: string;
-  text!: string;
-  from_address!: object | null;
-  from_text!: string | null;
-  to_address!: object | null;
-  to_text!: string | null;
-  cc_address!: object | null;
-  cc_text!: string | null;
-  bcc_address!: object | null;
-  bcc_text!: string | null;
-  reply_to_address!: object | null;
-  reply_to_text!: string | null;
-  envelope_from!: object | null;
-  envelope_to!: object | null;
-  attachments!: object | null;
-  read!: boolean;
-  saved!: boolean;
-  sent!: boolean;
-  deleted!: boolean;
-  draft!: boolean;
-  insight!: object | null;
-  uid_domain!: number;
-  uid_account!: number;
-  updated!: string;
+const mailSchema = {
+  [MAIL_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
+  [USER_ID]: "UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE",
+  [MESSAGE_ID]: "VARCHAR(512) NOT NULL",
+  [SUBJECT]: "TEXT NOT NULL DEFAULT ''",
+  [DATE]: "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
+  [HTML]: "TEXT NOT NULL DEFAULT ''",
+  [TEXT]: "TEXT NOT NULL DEFAULT ''",
+  [FROM_ADDRESS]: "JSONB",
+  [FROM_TEXT]: "TEXT",
+  [TO_ADDRESS]: "JSONB",
+  [TO_TEXT]: "TEXT",
+  [CC_ADDRESS]: "JSONB",
+  [CC_TEXT]: "TEXT",
+  [BCC_ADDRESS]: "JSONB",
+  [BCC_TEXT]: "TEXT",
+  [REPLY_TO_ADDRESS]: "JSONB",
+  [REPLY_TO_TEXT]: "TEXT",
+  [ENVELOPE_FROM]: "JSONB",
+  [ENVELOPE_TO]: "JSONB",
+  [ATTACHMENTS]: "JSONB",
+  [READ]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [SAVED]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [SENT]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [DELETED]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [DRAFT]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [INSIGHT]: "JSONB",
+  [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
+  [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
+  [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
+};
+
+type MailSchema = typeof mailSchema;
+
+export class MailModel extends Model<MailJSON, MailSchema> {
+  declare mail_id: string;
+  declare user_id: string;
+  declare message_id: string;
+  declare subject: string;
+  declare date: string;
+  declare html: string;
+  declare text: string;
+  declare from_address: object | null;
+  declare from_text: string | null;
+  declare to_address: object | null;
+  declare to_text: string | null;
+  declare cc_address: object | null;
+  declare cc_text: string | null;
+  declare bcc_address: object | null;
+  declare bcc_text: string | null;
+  declare reply_to_address: object | null;
+  declare reply_to_text: string | null;
+  declare envelope_from: object | null;
+  declare envelope_to: object | null;
+  declare attachments: object | null;
+  declare read: boolean;
+  declare saved: boolean;
+  declare sent: boolean;
+  declare deleted: boolean;
+  declare draft: boolean;
+  declare insight: object | null;
+  declare uid_domain: number;
+  declare uid_account: number;
+  declare updated: string;
 
   static typeChecker = {
     mail_id: isString,
@@ -141,18 +169,8 @@ export class MailModel extends Model<MailJSON> {
     updated: isNullableString,
   };
 
-  static assertType: AssertTypeFn<Record<string, unknown>> = createAssertType(
-    "MailModel",
-    MailModel.typeChecker
-  );
-
   constructor(data: unknown) {
-    super();
-    MailModel.assertType(data);
-    const r = data as Record<string, unknown>;
-    Object.keys(MailModel.typeChecker).forEach((k) => {
-      (this as Record<string, unknown>)[k] = r[k];
-    });
+    super(data, MailModel.typeChecker);
   }
 
   toJSON(): MailJSON {
@@ -192,37 +210,7 @@ export class MailModel extends Model<MailJSON> {
 export const mailsTable = createTable({
   name: MAILS,
   primaryKey: MAIL_ID,
-  schema: {
-    [MAIL_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
-    [USER_ID]: "UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE",
-    [MESSAGE_ID]: "VARCHAR(512) NOT NULL",
-    [SUBJECT]: "TEXT NOT NULL DEFAULT ''",
-    [DATE]: "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP",
-    [HTML]: "TEXT NOT NULL DEFAULT ''",
-    [TEXT]: "TEXT NOT NULL DEFAULT ''",
-    [FROM_ADDRESS]: "JSONB",
-    [FROM_TEXT]: "TEXT",
-    [TO_ADDRESS]: "JSONB",
-    [TO_TEXT]: "TEXT",
-    [CC_ADDRESS]: "JSONB",
-    [CC_TEXT]: "TEXT",
-    [BCC_ADDRESS]: "JSONB",
-    [BCC_TEXT]: "TEXT",
-    [REPLY_TO_ADDRESS]: "JSONB",
-    [REPLY_TO_TEXT]: "TEXT",
-    [ENVELOPE_FROM]: "JSONB",
-    [ENVELOPE_TO]: "JSONB",
-    [ATTACHMENTS]: "JSONB",
-    [READ]: "BOOLEAN NOT NULL DEFAULT FALSE",
-    [SAVED]: "BOOLEAN NOT NULL DEFAULT FALSE",
-    [SENT]: "BOOLEAN NOT NULL DEFAULT FALSE",
-    [DELETED]: "BOOLEAN NOT NULL DEFAULT FALSE",
-    [DRAFT]: "BOOLEAN NOT NULL DEFAULT FALSE",
-    [INSIGHT]: "JSONB",
-    [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
-    [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
-    [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
-  } as Schema<Record<string, unknown>>,
+  schema: mailSchema,
   ModelClass: MailModel,
   supportsSoftDelete: false,
   indexes: [

@@ -4,10 +4,6 @@ export {
   postgresIsAvailable,
   initializePostgres,
   initializeAdminUser,
-} from "./postgres";
-
-// Re-export types and tables from postgres models
-export {
   usersTable,
   mailsTable,
   sessionsTable,
@@ -76,7 +72,7 @@ export { version } from "./postgres/initialize";
 export * from "./users";
 
 // Session store
-export { PostgresSessionStore, ElasticsearchSessionStore } from "./session";
+export { PostgresSessionStore } from "./session";
 
 // HTTP server
 export * from "./http";
