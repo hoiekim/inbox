@@ -1,32 +1,19 @@
-import { elasticsearchClient } from "server";
 import { MailBodyData } from "common";
+import { getMailById } from "../postgres/repositories/mails";
 
 export const getMailBody = async (
   userId: string,
   mailId: string
 ): Promise<MailBodyData | undefined> => {
-  type SearchReturn = Omit<MailBodyData, "id">;
+  const mailModel = await getMailById(userId, mailId);
 
-  const mailBodyKeys: (keyof SearchReturn)[] = [
-    "html",
-    "attachments",
-    "messageId",
-    "insight"
-  ];
+  if (!mailModel) return undefined;
 
-  const response = await elasticsearchClient.search({
-    _source: mailBodyKeys.map((k) => `mail.${k}`),
-    query: {
-      bool: {
-        must: [{ term: { "user.id": userId } }, { term: { _id: mailId } }]
-      }
-    }
+  return new MailBodyData({
+    id: mailModel.mail_id,
+    html: mailModel.html,
+    attachments: mailModel.attachments as any,
+    messageId: mailModel.message_id,
+    insight: mailModel.insight as any,
   });
-
-  const hit = response.hits.hits[0];
-  if (!hit) return;
-
-  const { _id, _source } = hit;
-  const mail = _source?.mail;
-  return mail && new MailBodyData({ id: _id, ...mail });
 };

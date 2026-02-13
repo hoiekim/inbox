@@ -1,20 +1,14 @@
 import { Mail, SignedUser, MailType } from "common";
 import {
-  elasticsearchClient,
-  index,
-  getAccounts,
-  FROM_ADDRESS_FIELD,
-  TO_ADDRESS_FIELD,
-  saveMail
-} from "server";
+  getAccountStats,
+  countMessages,
+  getMailsByRange,
+  setMailFlags,
+  searchMailsByUid,
+  saveMail as pgSaveMail,
+  SaveMailInput,
+} from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
-import {
-  AggregationsStringTermsBucket,
-  AggregationsTermsAggregateBase,
-  QueryDslQueryContainer,
-  SearchRequest as ElasticsearchSearchRequest
-} from "@elastic/elasticsearch/lib/api/types";
-import { errors } from "@elastic/elasticsearch";
 import { SearchCriterion, UidCriterion } from "./types";
 
 // class that creates "store" object
@@ -30,22 +24,25 @@ export class Store {
 
   listMailboxes = async (): Promise<string[]> => {
     try {
-      const accounts = await getAccounts(this.user);
+      const [receivedStats, sentStats] = await Promise.all([
+        getAccountStats(this.user.id, false),
+        getAccountStats(this.user.id, true),
+      ]);
 
       const mailboxes = ["INBOX"];
 
       // Add received mail accounts as mailboxes
-      accounts.received.forEach((account) => {
-        if (account.key && account.key !== "INBOX") {
-          const boxName = accountToBox(account.key);
+      receivedStats.forEach((stat) => {
+        if (stat.address && stat.address !== "INBOX") {
+          const boxName = accountToBox(stat.address);
           mailboxes.push(`INBOX/${boxName}`);
         }
       });
 
       // Add sent mail accounts as mailboxes with "Sent Messages/" prefix
-      accounts.sent.forEach((account) => {
-        if (account.key) {
-          const boxName = accountToBox(account.key);
+      sentStats.forEach((stat) => {
+        if (stat.address) {
+          const boxName = accountToBox(stat.address);
           mailboxes.push(`Sent Messages/${boxName}`);
         }
       });
@@ -63,44 +60,11 @@ export class Store {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
-      const accountName = boxToAccount(this.user.username, box);
-      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
 
-      type AddressAggregationBucket = AggregationsStringTermsBucket & {
-        read?: AggregationsTermsAggregateBase<AggregationsStringTermsBucket>;
-      };
-
-      const must: QueryDslQueryContainer[] = [
-        { term: { type: "mail" } },
-        { term: { "user.id": this.user.id } },
-        { term: { "mail.sent": isSent } }
-      ];
-
-      // For INBOX, don't filter by account - get all messages
-      if (!isDomainInbox) {
-        must.push({ term: { [searchFiled]: accountName } });
-      }
-
-      const response =
-        await elasticsearchClient.search<AddressAggregationBucket>({
-          index,
-          size: 0,
-          query: { bool: { must } },
-          aggs: { read: { terms: { field: "mail.read", size: 10000 } } }
-        });
-
-      let total = response.hits.total ?? 0;
-      if (typeof total === "object") total = total.value;
-
-      let unread = 0;
-      const readBuckets = response.aggregations?.read?.buckets;
-
-      if (Array.isArray(readBuckets)) {
-        const unread_doc_count = readBuckets.find((b) => !b.key)?.doc_count;
-        if (unread_doc_count) unread = unread_doc_count;
-      }
-
-      return { total, unread };
+      return await countMessages(this.user.id, accountName, isSent);
     } catch (error) {
       console.error("Error counting messages:", error);
       return null;
@@ -117,93 +81,94 @@ export class Store {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
-      const accountName = boxToAccount(this.user.username, box);
-      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
 
-      const must: QueryDslQueryContainer[] = [
-        { term: { type: "mail" } },
-        { term: { "user.id": this.user.id } },
-        { term: { "mail.sent": isSent } }
-      ];
-
-      if (!isDomainInbox) {
-        must.push({ term: { [searchFiled]: accountName } });
-      }
-
-      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
-
-      let query: ElasticsearchSearchRequest = {
-        index,
-        _source: [...fields, "messageId"].map((f) => `mail.${f}`),
-        query: { bool: { must } },
-        sort: { [uidField]: "asc" }
-      };
-
-      if (useUid) {
-        // For UID-based queries, filter by UID range and get all matching
-        must.push({
-          range: {
-            [uidField]: {
-              gte: start,
-              lte: end === Number.MAX_SAFE_INTEGER ? 999999999 : end
-            }
-          }
-        });
-        query.size = 10000; // Large size for UID queries
-      } else {
-        // For sequence-based queries, use from/size (current implementation is correct)
-        query.from = start - 1;
-        query.size = end - start + 1;
-      }
-
-      const response = await elasticsearchClient.search(query);
+      const mailModels = await getMailsByRange(
+        this.user.id,
+        accountName,
+        isSent,
+        start,
+        end,
+        useUid,
+        fields.map((f) => this.mapFieldName(f))
+      );
 
       const mails = new Map<string, Partial<Mail>>();
 
-      for (const hit of response.hits.hits) {
-        const mailJson = hit._source?.mail as MailType;
-        mails.set(hit._id!, mailJson);
+      for (const [id, model] of mailModels) {
+        const mail: Partial<Mail> = {
+          messageId: model.message_id,
+          subject: model.subject,
+          date: model.date,
+          html: model.html,
+          text: model.text,
+          read: model.read,
+          saved: model.saved,
+          sent: model.sent,
+          deleted: model.deleted,
+          draft: model.draft,
+          uid: {
+            domain: model.uid_domain,
+            account: model.uid_account,
+          },
+        };
+
+        if (model.from_address) {
+          mail.from = {
+            value: model.from_address as any,
+            text: model.from_text || "",
+          };
+        }
+        if (model.to_address) {
+          mail.to = {
+            value: model.to_address as any,
+            text: model.to_text || "",
+          };
+        }
+        if (model.cc_address) {
+          mail.cc = {
+            value: model.cc_address as any,
+            text: model.cc_text || "",
+          };
+        }
+        if (model.bcc_address) {
+          mail.bcc = {
+            value: model.bcc_address as any,
+            text: model.bcc_text || "",
+          };
+        }
+        if (model.envelope_from) {
+          mail.envelopeFrom = model.envelope_from as any;
+        }
+        if (model.envelope_to) {
+          mail.envelopeTo = model.envelope_to as any;
+        }
+        if (model.attachments) {
+          mail.attachments = model.attachments as any;
+        }
+        if (model.insight) {
+          mail.insight = model.insight as any;
+        }
+
+        mails.set(id, mail);
       }
 
       return mails;
     } catch (error) {
-      if (error instanceof errors.ResponseError) {
-        if (
-          error.statusCode === 429 &&
-          error.body?.error?.type === "circuit_breaking_exception"
-        ) {
-          if (end - start > 100) {
-            throw new Error("Too many messages requested, please limit to 100");
-          } else {
-            return this.getMessagesRecursively(box, start, end, fields, useUid);
-          }
-        } else {
-          throw error;
-        }
-      } else {
-        throw error;
-      }
+      console.error("Error getting messages:", error);
+      return new Map();
     }
   };
 
-  private getMessagesRecursively = async (
-    box: string,
-    start: number,
-    end: number,
-    fields: string[],
-    useUid: boolean
-  ): Promise<Map<string, Partial<Mail>>> => {
-    const allMails = new Map<string, Partial<Mail>>();
-
-    for (let i = start; i < end; i += 1) {
-      const batchMails = await this.getMessages(box, i, i + 1, fields, useUid);
-      batchMails.forEach((value, key) => {
-        allMails.set(key, value);
-      });
-    }
-
-    return allMails;
-  };
+  private mapFieldName(field: string): string {
+    const fieldMap: Record<string, string> = {
+      messageId: "message_id",
+      uid: "uid_domain, uid_account",
+    };
+    return fieldMap[field] || field;
+  }
 
   setFlags = async (
     box: string,
@@ -215,58 +180,19 @@ export class Store {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
-      const accountName = boxToAccount(this.user.username, box);
-      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
-      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
 
-      const must: QueryDslQueryContainer[] = [
-        { term: { type: "mail" } },
-        { term: { "user.id": this.user.id } },
-        { term: { "mail.sent": isSent } }
-      ];
-
-      if (!isDomainInbox) {
-        must.push({ term: { [searchFiled]: accountName } });
-      }
-
-      let query: ElasticsearchSearchRequest;
-
-      if (useUid) {
-        must.push({ range: { uidField: { gte: start, lte: end } } });
-        query = {
-          index,
-          size: 1,
-          query: { bool: { must } },
-          _source: false
-        };
-      } else {
-        query = {
-          index,
-          from: start,
-          size: end - start + 1,
-          query: { bool: { must } },
-          sort: { [uidField]: "asc" },
-          _source: false
-        };
-      }
-
-      const response = await elasticsearchClient.search(query);
-
-      if (response.hits.hits.length === 0) {
-        return false;
-      }
-
-      const docId = response.hits.hits[0]._id!;
-      const read = flags.includes("\\Seen");
-      const saved = flags.includes("\\Flagged");
-
-      await elasticsearchClient.update({
-        index,
-        id: docId,
-        doc: { mail: { read, saved } }
-      });
-
-      return true;
+      return await setMailFlags(
+        this.user.id,
+        accountName,
+        isSent,
+        start,
+        end,
+        flags,
+        useUid
+      );
     } catch (error) {
       console.error("Error setting flags:", error);
       return false;
@@ -291,106 +217,59 @@ export class Store {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
-      const accountName = boxToAccount(this.user.username, box);
-      const searchFiled = isSent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
 
-      // Build search query based on criteria
-      const must: QueryDslQueryContainer[] = [
-        { term: { type: "mail" } },
-        { term: { "user.id": this.user.id } },
-        { term: { "mail.sent": isSent } }
-      ];
+      // Convert criteria to a simpler format
+      const simplifiedCriteria: { type: string; value?: unknown }[] = [];
 
-      if (!isDomainInbox) {
-        must.push({ term: { [searchFiled]: accountName } });
-      }
-
-      const uidField = isDomainInbox ? "mail.uid.domain" : "mail.uid.account";
-
-      // Parse IMAP search criteria
       for (let i = 0; i < criteria.length; i++) {
         const criterion = criteria[i];
         const type = criterion.type.toUpperCase();
 
         switch (type) {
           case "UNSEEN":
-            must.push({ term: { "mail.read": false } });
-            break;
           case "SEEN":
-            must.push({ term: { "mail.read": true } });
-            break;
           case "FLAGGED":
-            must.push({ term: { "mail.saved": true } });
-            break;
           case "UNFLAGGED":
-            must.push({ term: { "mail.saved": false } });
+            simplifiedCriteria.push({ type });
             break;
           case "SUBJECT":
-            if (i + 1 < criteria.length) {
-              const subject = criteria[++i];
-              must.push({
-                wildcard: {
-                  "mail.subject": `*${subject}*`
-                }
-              });
-            }
-            break;
           case "FROM":
-            if (i + 1 < criteria.length) {
-              const from = criteria[++i];
-              must.push({
-                wildcard: {
-                  "mail.from.text": `*${from}*`
-                }
-              });
-            }
-            break;
           case "TO":
             if (i + 1 < criteria.length) {
-              const to = criteria[++i];
-              must.push({
-                wildcard: {
-                  "mail.to.text": `*${to}*`
-                }
-              });
+              simplifiedCriteria.push({ type, value: criteria[++i] });
             }
             break;
           case "UID":
-            const should: QueryDslQueryContainer[] = [];
-            (criterion as UidCriterion).sequenceSet.ranges.forEach((range) => {
+            // Handle UID ranges
+            const uidCriterion = criterion as UidCriterion;
+            for (const range of uidCriterion.sequenceSet.ranges) {
               if (range.end === undefined) {
-                should.push({ term: { [uidField]: range.start } });
-              } else if (range.end === Number.MAX_SAFE_INTEGER) {
-                should.push({ range: { [uidField]: { gte: range.start } } });
+                simplifiedCriteria.push({
+                  type: "UID_EXACT",
+                  value: range.start,
+                });
               } else {
-                const { start: gte, end: lte } = range;
-                should.push({ range: { [uidField]: { gte, lte } } });
+                simplifiedCriteria.push({
+                  type: "UID_RANGE",
+                  value: { start: range.start, end: range.end },
+                });
               }
-              must.push({ bool: { should } });
-            });
+            }
             break;
           default:
-            throw new Error(`Unsupported search criterion: ${type}`);
+            console.warn(`Unsupported search criterion: ${type}`);
         }
       }
 
-      const response = await elasticsearchClient.search({
-        index,
-        size: 10000, // Reasonable limit
-        query: { bool: { must } },
-        sort: { [uidField]: "asc" },
-        _source: [uidField] // Only need UID field for search results
-      });
-
-      // Return UIDs directly
-      return response.hits.hits
-        .map((hit) => {
-          const mailJson = hit._source?.mail as MailType;
-          return isDomainInbox
-            ? mailJson.uid?.domain || 0
-            : mailJson.uid?.account || 0;
-        })
-        .filter((uid) => uid > 0);
+      return await searchMailsByUid(
+        this.user.id,
+        accountName,
+        isSent,
+        simplifiedCriteria
+      );
     } catch (error) {
       console.error("Error searching messages:", error);
       return [];
@@ -398,12 +277,42 @@ export class Store {
   };
 
   /**
-   * Store a new mail message using the existing saveMail function
+   * Store a new mail message
    */
   storeMail = async (mail: Mail): Promise<boolean> => {
     try {
-      const result = await saveMail(this.user.id, mail);
-      return !!result; // Convert to boolean
+      const input: SaveMailInput = {
+        user_id: this.user.id,
+        message_id: mail.messageId,
+        subject: mail.subject,
+        date: mail.date,
+        html: mail.html,
+        text: mail.text,
+        from_address: mail.from?.value,
+        from_text: mail.from?.text,
+        to_address: mail.to?.value,
+        to_text: mail.to?.text,
+        cc_address: mail.cc?.value,
+        cc_text: mail.cc?.text,
+        bcc_address: mail.bcc?.value,
+        bcc_text: mail.bcc?.text,
+        reply_to_address: mail.replyTo?.value,
+        reply_to_text: mail.replyTo?.text,
+        envelope_from: mail.envelopeFrom,
+        envelope_to: mail.envelopeTo,
+        attachments: mail.attachments,
+        read: mail.read,
+        saved: mail.saved,
+        sent: mail.sent,
+        deleted: mail.deleted,
+        draft: mail.draft,
+        insight: mail.insight,
+        uid_domain: mail.uid?.domain,
+        uid_account: mail.uid?.account,
+      };
+
+      const result = await pgSaveMail(input);
+      return !!result;
     } catch (error) {
       console.error("Error storing mail:", error);
       return false;

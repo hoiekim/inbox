@@ -1,23 +1,17 @@
 import "./config";
 
 import {
-  initializeIndex,
+  initializePostgres,
   initializeAdminUser,
   cleanSubscriptions,
-  elasticsearchIsAvailable,
   initializeImap,
   initializeSmtp,
-  initializeHttp
+  initializeHttp,
 } from "server";
 
-const initializeElasticsearch = async () => {
-  await elasticsearchIsAvailable();
-  await initializeIndex();
-  await initializeAdminUser();
-};
-
 const start = async () => {
-  await initializeElasticsearch();
+  await initializePostgres();
+  await initializeAdminUser();
   await initializeHttp();
   await initializeSmtp();
   await initializeImap();

@@ -1,11 +1,15 @@
 import webPush, { PushSubscription } from "web-push";
-import { Pagination, SignedUser, ComputedPushSubscription } from "common";
+import { SignedUser, ComputedPushSubscription } from "common";
 import {
-  elasticsearchClient,
-  index,
-  getNotifications,
-  getActiveUsers
-} from "server";
+  storeSubscription as pgStoreSubscription,
+  deleteSubscription as pgDeleteSubscription,
+  cleanSubscriptions as pgCleanSubscriptions,
+  getSubscriptions as pgGetSubscriptions,
+  refreshSubscription as pgRefreshSubscription,
+  updateLastNotified,
+} from "./postgres/repositories/push_subscriptions";
+import { getUnreadNotifications } from "./postgres/repositories/mails";
+import { getActiveUsers } from "./users";
 
 // Import IDLE manager for real-time IMAP notifications
 import { idleManager } from "./imap/idle-manager";
@@ -16,7 +20,7 @@ const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
 
 const vapidKeys = {
   publicKey: PUSH_VAPID_PUBLIC_KEY || "",
-  privateKey: PUSH_VAPID_PRIVATE_KEY || ""
+  privateKey: PUSH_VAPID_PRIVATE_KEY || "",
 };
 
 webPush.setVapidDetails(
@@ -31,38 +35,11 @@ export const storeSubscription = async (
   userId: string,
   push_subscription: PushSubscription
 ) => {
-  const response = await elasticsearchClient.index({
-    index,
-    document: {
-      type: "push_subscription",
-      user: { id: userId },
-      push_subscription: {
-        endpoint: push_subscription.endpoint,
-        keys: push_subscription.keys,
-        lastNotified: new Date().toISOString()
-      },
-      updated: new Date().toISOString()
-    }
-  });
-
-  return response;
+  return pgStoreSubscription(userId, push_subscription);
 };
 
 export const deleteSubscription = (push_subscription_id: string) => {
-  return elasticsearchClient
-    .deleteByQuery({
-      index,
-      query: {
-        bool: {
-          must: [
-            { term: { _id: push_subscription_id } },
-            { term: { type: "push_subscription" } }
-          ],
-          should: undefined
-        }
-      }
-    })
-    .catch(console.error);
+  return pgDeleteSubscription(push_subscription_id).catch(console.error);
 };
 
 const ONE_DAY = 1000 * 60 * 60 * 24;
@@ -70,21 +47,7 @@ const ONE_DAY = 1000 * 60 * 60 * 24;
 export const cleanSubscriptions = () => {
   setTimeout(async () => {
     console.info("Cleaning old push subscriptions.");
-    const result = await elasticsearchClient
-      .deleteByQuery({
-        index,
-        query: {
-          bool: {
-            must: [
-              { range: { updated: { lt: "now-7d" } } },
-              { term: { type: "push_subscription" } }
-            ]
-          }
-        }
-      })
-      .catch(console.error);
-
-    const deleted = result?.deleted || 0;
+    const deleted = await pgCleanSubscriptions();
     console.log(`Deleted ${deleted} old subscriptions`);
     cleanSubscriptions();
   }, ONE_DAY);
@@ -93,60 +56,31 @@ export const cleanSubscriptions = () => {
 export const getSubscriptions = async (
   users: SignedUser[]
 ): Promise<ComputedPushSubscription[]> => {
-  const matchUserId = users.map((user) => {
-    return { term: { "user.id": user.id } };
-  });
-
-  const { from, size } = new Pagination();
-
-  const response = await elasticsearchClient.search({
-    index,
-    from,
-    size,
-    query: {
-      bool: {
-        filter: [
-          { term: { type: "push_subscription" } },
-          { bool: { should: matchUserId } }
-        ]
-      }
-    }
-  });
-
-  return response.hits.hits
-    .map((e) => {
-      const source = e._source;
-      const push_subscription_id = e._id;
-      if (!source) return;
-      const { push_subscription, updated } = source;
-      if (!push_subscription) return;
-      const user_id = source.user?.id;
-      if (!user_id) return;
-      const username = users.find((u) => u.id === user_id)?.username;
-      if (!username) return;
-      return {
-        ...push_subscription,
-        lastNotified: new Date(push_subscription.lastNotified),
-        push_subscription_id,
-        username,
-        updated: updated ? new Date(updated) : new Date()
-      };
-    })
-    .filter((e): e is ComputedPushSubscription => !!e);
+  return pgGetSubscriptions(users);
 };
 
 export const refreshSubscription = async (id: string) => {
-  const updated = new Date().toISOString();
-  const response = await elasticsearchClient.updateByQuery({
-    index,
-    query: {
-      bool: {
-        filter: [{ term: { type: "push_subscription" } }, { term: { _id: id } }]
-      }
-    },
-    script: { source: `ctx._source['updated'] = '${updated}'` }
-  });
-  return response;
+  return pgRefreshSubscription(id);
+};
+
+export const getNotifications = async (
+  users: SignedUser[]
+): Promise<Map<string, { count: number; latest?: Date }>> => {
+  const userIds = users.map((u) => u.id);
+  const rawNotifications = await getUnreadNotifications(userIds);
+
+  // Convert to username-keyed map
+  const notifications = new Map<string, { count: number; latest?: Date }>();
+  for (const user of users) {
+    const data = rawNotifications.get(user.id);
+    if (data) {
+      notifications.set(user.username, data);
+    } else {
+      notifications.set(user.username, { count: 0 });
+    }
+  }
+
+  return notifications;
 };
 
 export const notifyNewMails = async (usernames: string[]) => {
@@ -154,7 +88,7 @@ export const notifyNewMails = async (usernames: string[]) => {
   const users = await getActiveUsers(partialUsers);
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
-    getSubscriptions(users)
+    getSubscriptions(users),
   ]);
 
   // Notify IDLE IMAP sessions immediately
@@ -181,7 +115,7 @@ export const notifyNewMails = async (usernames: string[]) => {
         title: message,
         icon: "/icons/logo192.png",
         badge_count: incrementedBadgeCount,
-        push_subscription_id
+        push_subscription_id,
       };
 
       let isFailed = false;
@@ -192,9 +126,7 @@ export const notifyNewMails = async (usernames: string[]) => {
           isFailed = true;
           if (error.statusCode === 410) {
             console.log("Subscription has expired. Removing from database...");
-            return deleteSubscription(push_subscription_id).catch(
-              console.error
-            );
+            return deleteSubscription(push_subscription_id);
           } else {
             console.error("Error sending push notification:", error);
           }
@@ -202,21 +134,7 @@ export const notifyNewMails = async (usernames: string[]) => {
 
       if (isFailed) return;
 
-      await elasticsearchClient.updateByQuery({
-        index,
-        query: {
-          bool: {
-            filter: [
-              { term: { type: "push_subscription" } },
-              { term: { _id: push_subscription_id } }
-            ]
-          }
-        },
-        script: {
-          source: `ctx._source.push_subscription.lastNotified = params.timestamp`,
-          params: { timestamp: new Date().toISOString() }
-        }
-      });
+      await updateLastNotified(push_subscription_id);
 
       return;
     })
@@ -226,7 +144,7 @@ export const notifyNewMails = async (usernames: string[]) => {
 export const decrementBadgeCount = async (users: SignedUser[]) => {
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
-    getSubscriptions(users)
+    getSubscriptions(users),
   ]);
 
   return Promise.all(
@@ -240,7 +158,7 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
 
       const notificationPayload = {
         badge_count: decrementedBadgeCount,
-        push_subscription_id
+        push_subscription_id,
       };
 
       return webPush
@@ -248,7 +166,7 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
         .catch((error) => {
           if (error.statusCode === 410) {
             console.log("Subscription has expired. Removing from database...");
-            deleteSubscription(push_subscription_id).catch(console.error);
+            deleteSubscription(push_subscription_id);
           } else {
             console.error("Error sending push notification:", error);
           }

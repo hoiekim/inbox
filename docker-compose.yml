@@ -10,23 +10,31 @@ services:
       - "3004:3004"
       - "25:25"
     links:
-      - elastic
+      - postgres
     depends_on:
-      - elastic
+      - postgres
     restart: always
     volumes:
       - attachments:/app/attachments
-
-  elastic:
-    image: docker.elastic.co/elasticsearch/elasticsearch:7.16.2
     environment:
-      - discovery.type=single-node
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=inbox
+      - POSTGRES_DATABASE=inbox
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=inbox
+      - POSTGRES_DB=inbox
     restart: always
     volumes:
-      - data:/usr/share/elasticsearch/data
+      - pgdata:/var/lib/postgresql/data
 
 volumes:
-  data:
+  pgdata:
     driver: local
   attachments:
     driver: local

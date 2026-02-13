@@ -1,11 +1,8 @@
-import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
+import { MailHeaderData, MaskedUser, Pagination, SignedUser } from "common";
 import {
-  elasticsearchClient,
-  index,
-  FROM_ADDRESS_FIELD,
-  TO_ADDRESS_FIELD
-} from "server";
-import { MailHeaderData, MaskedUser, Pagination } from "common";
+  getMailHeaders as pgGetMailHeaders,
+  GetMailHeadersOptions,
+} from "../postgres/repositories/mails";
 
 export interface GetMailsOptions {
   sent: boolean;
@@ -15,51 +12,45 @@ export interface GetMailsOptions {
 }
 
 export const getMailHeaders = async (
-  user: MaskedUser,
+  user: MaskedUser | SignedUser,
   address: string,
   options: GetMailsOptions
 ): Promise<MailHeaderData[]> => {
-  const searchFiled = options.sent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
+  const userId = "id" in user ? user.id : (user as any).user_id;
+  if (!userId) return [];
 
   const { from, size } = options.pagination || new Pagination();
 
-  type SearchReturn = Omit<MailHeaderData, "id">;
-
-  const mailHeaderKeys: (keyof SearchReturn)[] = [
-    "read",
-    "saved",
-    "date",
-    "subject",
-    "from",
-    "to",
-    "cc",
-    "bcc",
-    "insight"
-  ];
-
-  const must: QueryDslQueryContainer[] = [
-    { term: { type: "mail" } },
-    { term: { "user.id": user.id } },
-    { term: { [searchFiled]: address } },
-    { term: { "mail.sent": options.sent } }
-  ];
-
-  if (options.new) must.push({ term: { "mail.read": false } });
-  else if (options.saved) must.push({ term: { "mail.saved": true } });
-
-  const response = await elasticsearchClient.search({
-    index,
-    _source: mailHeaderKeys.map((k) => `mail.${k}`),
+  const pgOptions: GetMailHeadersOptions = {
+    sent: options.sent,
+    new: options.new,
+    saved: options.saved,
     from,
     size,
-    query: { bool: { must } },
-    sort: { "mail.date": "desc" }
-  });
+  };
 
-  return response.hits.hits
-    .map(({ _id, _source }): MailHeaderData | undefined => {
-      const mail = _source?.mail;
-      return mail && new MailHeaderData({ id: _id, ...mail });
-    })
-    .filter((m): m is MailHeaderData => !!m);
+  const mailModels = await pgGetMailHeaders(userId, address, pgOptions);
+
+  return mailModels.map((m) => {
+    return new MailHeaderData({
+      id: m.mail_id,
+      subject: m.subject,
+      date: m.date,
+      from: m.from_address
+        ? { value: m.from_address as any, text: m.from_text || "" }
+        : undefined,
+      to: m.to_address
+        ? { value: m.to_address as any, text: m.to_text || "" }
+        : undefined,
+      cc: m.cc_address
+        ? { value: m.cc_address as any, text: m.cc_text || "" }
+        : undefined,
+      bcc: m.bcc_address
+        ? { value: m.bcc_address as any, text: m.bcc_text || "" }
+        : undefined,
+      read: m.read,
+      saved: m.saved,
+      insight: m.insight as any,
+    });
+  });
 };

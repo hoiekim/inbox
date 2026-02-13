@@ -1,100 +1,44 @@
 import { MailHeaderData, SignedUser, Pagination, MaskedUser } from "common";
 import {
-  elasticsearchClient,
-  FROM_ADDRESS_FIELD,
-  index,
-  TO_ADDRESS_FIELD
-} from "server";
+  searchMails,
+  getDomainUidNext as pgGetDomainUidNext,
+  getAccountUidNext as pgGetAccountUidNext,
+} from "../postgres/repositories/mails";
 
 export const searchMail = async (
   user: SignedUser,
   value: string,
   field?: string
 ): Promise<MailHeaderData[]> => {
+  // Clean search value
   value = value.replace(/</g, "").replace(/>/g, "");
-
   const pattern = /([\!\*\+\-\=\<\>\&\|\(\)\[\]\{\}\^\~\?\:\\/"])/g;
   value = value.replace(pattern, "\\$1");
 
-  value = value
-    .split(" ")
-    .map((e) => "*" + e + "*")
-    .join(" ");
+  const mailModels = await searchMails(user.id, value, field);
 
-  const highlight: any = { fields: {} };
-  const fields = field ? [field] : ["mail.subject", "mail.text"];
-  fields.forEach((e, i) => {
-    highlight.fields[e] = {};
-    fields[i] += "^" + (fields.length - i);
+  return mailModels.map((m) => {
+    return new MailHeaderData({
+      id: m.mail_id,
+      subject: m.subject,
+      date: m.date,
+      from: m.from_address
+        ? { value: m.from_address as any, text: m.from_text || "" }
+        : undefined,
+      to: m.to_address
+        ? { value: m.to_address as any, text: m.to_text || "" }
+        : undefined,
+      read: m.read,
+    });
   });
-
-  const { from, size } = new Pagination();
-
-  type SearchReturn = Omit<MailHeaderData, "id" | "highlight">;
-
-  const searchResultKeys: (keyof SearchReturn)[] = [
-    "subject",
-    "date",
-    "from",
-    "to",
-    "read"
-  ];
-
-  const response = await elasticsearchClient.search<{ mail: SearchReturn }>({
-    index,
-    from,
-    size,
-    _source: searchResultKeys.map((k) => `mail.${k}`),
-    query: {
-      bool: {
-        must: [
-          { term: { type: "mail" } },
-          { term: { "user.id": user.id } },
-          { query_string: { fields, query: value } }
-        ]
-      }
-    },
-    highlight
-  });
-
-  return response.hits.hits
-    .map((e): MailHeaderData | undefined => {
-      const { _id, _source } = e;
-      const mail = _source?.mail;
-      if (!mail) return;
-      const { read, date, from, to, subject } = mail;
-      return new MailHeaderData({
-        id: _id,
-        subject,
-        date,
-        from,
-        to,
-        read,
-        highlight: e.highlight
-      });
-    })
-    .filter((m): m is MailHeaderData => !!m);
 };
 
 export const getDomainUidNext = async (
-  user: MaskedUser,
+  userId: string,
   sent: boolean = false
 ): Promise<number | null> => {
   try {
-    const response = await elasticsearchClient.count({
-      index,
-      query: {
-        bool: {
-          must: [
-            { term: { type: "mail" } },
-            { term: { "user.id": user.id } },
-            { term: { "mail.sent": sent } }
-          ]
-        }
-      }
-    });
-
-    return response.count + 1;
+    return await pgGetDomainUidNext(userId, sent);
   } catch (error) {
     console.error("Error getting next UID:", error);
     return 1;
@@ -102,28 +46,12 @@ export const getDomainUidNext = async (
 };
 
 export const getAccountUidNext = async (
-  user: MaskedUser,
+  userId: string,
   account: string,
   sent: boolean = false
 ): Promise<number | null> => {
   try {
-    const addressField = sent ? FROM_ADDRESS_FIELD : TO_ADDRESS_FIELD;
-
-    const response = await elasticsearchClient.count({
-      index,
-      query: {
-        bool: {
-          must: [
-            { term: { type: "mail" } },
-            { term: { "user.id": user.id } },
-            { term: { [addressField]: account } },
-            { term: { "mail.sent": sent } }
-          ]
-        }
-      }
-    });
-
-    return response.count + 1;
+    return await pgGetAccountUidNext(userId, account, sent);
   } catch (error) {
     console.error("Error getting next UID:", error);
     return 1;
