@@ -18,6 +18,10 @@ import bcrypt from "bcrypt";
 // ES Client
 const esClient = new Client({
   node: "http://192.168.0.32:9200",
+  auth: {
+    username: "elastic",
+    password: "elastic",
+  },
 });
 
 // PG Client
@@ -164,35 +168,42 @@ async function clearTables() {
   console.log("Tables cleared.");
 }
 
-// Fetch all documents of a type from ES
+// Fetch all documents of a type from ES using scroll API
 async function fetchESDocuments(docType: string): Promise<ESHit[]> {
   console.log(`Fetching ${docType} documents from ES...`);
 
   const allHits: ESHit[] = [];
-  let searchAfter: unknown[] | undefined;
   const batchSize = 1000;
 
-  while (true) {
-    const query: Record<string, unknown> = {
-      index: ES_INDEX,
-      size: batchSize,
-      query: { term: { type: docType } },
-      sort: [{ _id: "asc" }],
-    };
+  // Initial search with scroll
+  let response = await esClient.search<ESDocument>({
+    index: ES_INDEX,
+    size: batchSize,
+    scroll: "2m",
+    query: { term: { type: docType } },
+  });
 
-    if (searchAfter) {
-      query.search_after = searchAfter;
-    }
+  let hits = response.hits.hits as unknown as ESHit[];
+  allHits.push(...hits);
+  console.log(`  Fetched ${allHits.length} ${docType} documents so far...`);
 
-    const response = await esClient.search<ESDocument>(query);
-    const hits = response.hits.hits as unknown as ESHit[];
+  // Continue scrolling
+  while (hits.length > 0 && response._scroll_id) {
+    response = await esClient.scroll({
+      scroll_id: response._scroll_id,
+      scroll: "2m",
+    });
 
+    hits = response.hits.hits as unknown as ESHit[];
     if (hits.length === 0) break;
 
     allHits.push(...hits);
-    searchAfter = [hits[hits.length - 1]._id];
-
     console.log(`  Fetched ${allHits.length} ${docType} documents so far...`);
+  }
+
+  // Clear scroll context
+  if (response._scroll_id) {
+    await esClient.clearScroll({ scroll_id: response._scroll_id }).catch(() => {});
   }
 
   console.log(`  Total ${docType} documents: ${allHits.length}`);
