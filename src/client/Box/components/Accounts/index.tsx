@@ -186,7 +186,7 @@ const Accounts = ({
       return (
         <div key={i}>
           <div className={classes.join(" ")} onClick={onClickAccount}>
-            <span>{accountName.split("@")[0]}</span>
+            <span>{accountName?.split("@")[0] || "Unknown"}</span>
             {unreadNo && selectedCategory !== Category.SavedMails ? (
               <div className="numberBall">{unreadNo}</div>
             ) : null}
