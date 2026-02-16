@@ -168,6 +168,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     uid_domain: isNumber,
     uid_account: isNumber,
     updated: isNullableString,
+    search_vector: isNullableString,
   };
 
   constructor(data: unknown) {

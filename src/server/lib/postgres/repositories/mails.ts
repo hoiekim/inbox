@@ -302,7 +302,6 @@ export const getAccountStats = async (
 > => {
   try {
     const addressField = sent ? "from_address" : "to_address";
-    // Address fields are always arrays (normalized during ingestion)
     const sql = `
       WITH expanded_mails AS (
         SELECT 
