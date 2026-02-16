@@ -1,5 +1,6 @@
 import { Account, SignedUser } from "common";
 import { getAccountStats } from "../postgres/repositories/mails";
+import { getUserDomain } from "./util";
 
 export interface AccountsGetResponse {
   received: Account[];
@@ -9,9 +10,11 @@ export interface AccountsGetResponse {
 export const getAccounts = async (
   user: SignedUser
 ): Promise<AccountsGetResponse> => {
+  const userDomain = getUserDomain(user.username);
+
   const [receivedStats, sentStats] = await Promise.all([
-    getAccountStats(user.id, false),
-    getAccountStats(user.id, true),
+    getAccountStats(user.id, false, userDomain),
+    getAccountStats(user.id, true, userDomain),
   ]);
 
   const received = receivedStats.map((stat) => {
