@@ -332,6 +332,16 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
     const replyTo = mail.replyTo as Record<string, unknown> | undefined;
     const uid = (mail.uid || {}) as Record<string, unknown>;
 
+    // Helper to normalize address values to always be arrays
+    const normalizeAddressValue = (value: unknown): string | null => {
+      if (!value) return null;
+      // If already an array, use as-is
+      if (Array.isArray(value)) return JSON.stringify(value);
+      // If single object, wrap in array
+      if (typeof value === "object") return JSON.stringify([value]);
+      return null;
+    };
+
     try {
       await pgPool.query(sql, [
         crypto.randomUUID(),
@@ -341,18 +351,18 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         mail.date || new Date().toISOString(),
         mail.html || "",
         mail.text || "",
-        fromAddr?.value ? JSON.stringify(fromAddr.value) : null,
+        normalizeAddressValue(fromAddr?.value),
         fromAddr?.text || null,
-        toAddr?.value ? JSON.stringify(toAddr.value) : null,
+        normalizeAddressValue(toAddr?.value),
         toAddr?.text || null,
-        ccAddr?.value ? JSON.stringify(ccAddr.value) : null,
+        normalizeAddressValue(ccAddr?.value),
         ccAddr?.text || null,
-        bccAddr?.value ? JSON.stringify(bccAddr.value) : null,
+        normalizeAddressValue(bccAddr?.value),
         bccAddr?.text || null,
-        replyTo?.value ? JSON.stringify(replyTo.value) : null,
+        normalizeAddressValue(replyTo?.value),
         replyTo?.text || null,
-        mail.envelopeFrom ? JSON.stringify(mail.envelopeFrom) : null,
-        mail.envelopeTo ? JSON.stringify(mail.envelopeTo) : null,
+        normalizeAddressValue(mail.envelopeFrom),
+        normalizeAddressValue(mail.envelopeTo),
         mail.attachments ? JSON.stringify(mail.attachments) : null,
         mail.read ?? false,
         mail.saved ?? false,

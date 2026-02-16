@@ -302,26 +302,15 @@ export const getAccountStats = async (
 > => {
   try {
     const addressField = sent ? "from_address" : "to_address";
-    // Handle both array and object formats for address fields using UNION
+    // Address fields are always arrays (normalized during ingestion)
     const sql = `
       WITH expanded_mails AS (
-        -- Handle array format
         SELECT 
           mail_id, read, saved, date,
           jsonb_array_elements(${addressField})->>'address' as address
         FROM mails 
         WHERE user_id = $1 AND sent = $2 
-          AND ${addressField} IS NOT NULL 
-          AND jsonb_typeof(${addressField}) = 'array'
-        UNION ALL
-        -- Handle object format
-        SELECT 
-          mail_id, read, saved, date,
-          ${addressField}->>'address' as address
-        FROM mails 
-        WHERE user_id = $1 AND sent = $2 
-          AND ${addressField} IS NOT NULL 
-          AND jsonb_typeof(${addressField}) = 'object'
+          AND ${addressField} IS NOT NULL
       )
       SELECT 
         address,
