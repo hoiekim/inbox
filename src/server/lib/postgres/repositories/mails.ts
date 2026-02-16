@@ -290,7 +290,8 @@ export const getAccountUidNext = async (
 
 export const getAccountStats = async (
   user_id: string,
-  sent: boolean
+  sent: boolean,
+  domainFilter?: string
 ): Promise<
   {
     address: string;
@@ -301,15 +302,32 @@ export const getAccountStats = async (
   }[]
 > => {
   try {
-    const addressField = sent ? "from_address" : "to_address";
+    // For sent mails, only look at from_address
+    // For received mails, look at to_address, cc_address, and bcc_address
+    const addressExpansion = sent
+      ? `jsonb_array_elements(from_address)->>'address' as address`
+      : `jsonb_array_elements(
+          COALESCE(to_address, '[]'::jsonb) || 
+          COALESCE(cc_address, '[]'::jsonb) || 
+          COALESCE(bcc_address, '[]'::jsonb)
+        )->>'address' as address`;
+
+    const addressNotNull = sent
+      ? `from_address IS NOT NULL`
+      : `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL)`;
+
+    const domainCondition = domainFilter
+      ? `AND address ILIKE '%@' || $3`
+      : "";
+
     const sql = `
       WITH expanded_mails AS (
         SELECT 
           mail_id, read, saved, date,
-          jsonb_array_elements(${addressField})->>'address' as address
+          ${addressExpansion}
         FROM mails 
         WHERE user_id = $1 AND sent = $2 
-          AND ${addressField} IS NOT NULL
+          AND ${addressNotNull}
       )
       SELECT 
         address,
@@ -319,10 +337,14 @@ export const getAccountStats = async (
         MAX(date) as latest
       FROM expanded_mails
       WHERE address IS NOT NULL
+      ${domainCondition}
       GROUP BY address
       ORDER BY latest DESC
     `;
-    const result = await pool.query(sql, [user_id, sent]);
+    const values: ParamValue[] = domainFilter
+      ? [user_id, sent, domainFilter]
+      : [user_id, sent];
+    const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => ({
       address: row.address as string,
       count: parseInt(row.count as string, 10),
