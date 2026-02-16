@@ -1,6 +1,7 @@
 import { MailHeaderData, SignedUser, Pagination, MaskedUser } from "common";
 import {
   searchMails,
+  SearchMailModel,
   getDomainUidNext as pgGetDomainUidNext,
   getAccountUidNext as pgGetAccountUidNext,
 } from "../postgres/repositories/mails";
@@ -10,14 +11,13 @@ export const searchMail = async (
   value: string,
   field?: string
 ): Promise<MailHeaderData[]> => {
-  // Clean search value
-  value = value.replace(/</g, "").replace(/>/g, "");
-  const pattern = /([\!\*\+\-\=\<\>\&\|\(\)\[\]\{\}\^\~\?\:\\/"])/g;
-  value = value.replace(pattern, "\\$1");
+  // Clean search value - less aggressive since we use plainto_tsquery
+  value = value.trim();
+  if (!value) return [];
 
   const mailModels = await searchMails(user.id, value, field);
 
-  return mailModels.map((m) => {
+  return mailModels.map((m: SearchMailModel) => {
     return new MailHeaderData({
       id: m.mail_id,
       subject: m.subject,
@@ -29,6 +29,7 @@ export const searchMail = async (
         ? { value: m.to_address as any, text: m.to_text || "" }
         : undefined,
       read: m.read,
+      highlight: m.highlight,
     });
   });
 };

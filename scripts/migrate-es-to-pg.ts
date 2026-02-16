@@ -9,7 +9,8 @@
  * Usage: npx ts-node scripts/migrate-es-to-pg.ts
  */
 
-import "dotenv/config";
+import dotenv from "dotenv";
+dotenv.config({ path: ".env.local" });
 import { Client } from "@elastic/elasticsearch";
 import { Pool, types } from "pg";
 import crypto from "crypto";
@@ -117,6 +118,7 @@ async function createTables() {
       reply_to_text TEXT,
       envelope_from JSONB,
       envelope_to JSONB,
+      search_vector TSVECTOR,
       attachments JSONB,
       read BOOLEAN NOT NULL DEFAULT FALSE,
       saved BOOLEAN NOT NULL DEFAULT FALSE,
@@ -153,19 +155,41 @@ async function createTables() {
   await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_saved ON mails(saved)`);
   await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_uid_domain ON mails(uid_domain)`);
   await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_uid_account ON mails(uid_account)`);
+  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_search ON mails USING GIN(search_vector)`);
   await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)`);
 
-  console.log("Tables and indexes created.");
+  // Create trigger for auto-updating search_vector
+  await pgPool.query(`
+    CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
+    BEGIN
+      NEW.search_vector := to_tsvector('english', 
+        coalesce(NEW.subject, '') || ' ' || 
+        coalesce(NEW.text, '') || ' ' || 
+        coalesce(NEW.from_text, '') || ' ' || 
+        coalesce(NEW.to_text, '')
+      );
+      RETURN NEW;
+    END
+    $$ LANGUAGE plpgsql;
+  `);
+  await pgPool.query(`DROP TRIGGER IF EXISTS mails_search_update ON mails`);
+  await pgPool.query(`
+    CREATE TRIGGER mails_search_update 
+      BEFORE INSERT OR UPDATE ON mails 
+      FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
+  `);
+
+  console.log("Tables, indexes, and triggers created.");
 }
 
-// Helper to clear tables (for idempotency)
-async function clearTables() {
-  console.log("Clearing existing data for idempotent migration...");
-  await pgPool.query("DELETE FROM push_subscriptions");
-  await pgPool.query("DELETE FROM mails");
-  await pgPool.query("DELETE FROM sessions");
-  await pgPool.query("DELETE FROM users");
-  console.log("Tables cleared.");
+// Helper to drop tables (for schema changes)
+async function dropTables() {
+  console.log("Dropping existing tables for fresh schema...");
+  await pgPool.query("DROP TABLE IF EXISTS push_subscriptions CASCADE");
+  await pgPool.query("DROP TABLE IF EXISTS mails CASCADE");
+  await pgPool.query("DROP TABLE IF EXISTS sessions CASCADE");
+  await pgPool.query("DROP TABLE IF EXISTS users CASCADE");
+  console.log("Tables dropped.");
 }
 
 // Fetch all documents of a type from ES using scroll API
@@ -175,26 +199,28 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
   const allHits: ESHit[] = [];
   const batchSize = 1000;
 
-  // Initial search with scroll
-  let response = await esClient.search<ESDocument>({
+  // Initial search with scroll (v7 API uses body wrapper)
+  let response = await esClient.search({
     index: ES_INDEX,
     size: batchSize,
     scroll: "2m",
-    query: { term: { type: docType } },
+    body: { query: { term: { type: docType } } },
   });
 
-  let hits = response.hits.hits as unknown as ESHit[];
+  let scrollId = response.body._scroll_id;
+  let hits = response.body.hits.hits as unknown as ESHit[];
   allHits.push(...hits);
   console.log(`  Fetched ${allHits.length} ${docType} documents so far...`);
 
   // Continue scrolling
-  while (hits.length > 0 && response._scroll_id) {
+  while (hits.length > 0 && scrollId) {
     response = await esClient.scroll({
-      scroll_id: response._scroll_id,
+      scroll_id: scrollId,
       scroll: "2m",
     });
 
-    hits = response.hits.hits as unknown as ESHit[];
+    scrollId = response.body._scroll_id;
+    hits = response.body.hits.hits as unknown as ESHit[];
     if (hits.length === 0) break;
 
     allHits.push(...hits);
@@ -202,8 +228,8 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
   }
 
   // Clear scroll context
-  if (response._scroll_id) {
-    await esClient.clearScroll({ scroll_id: response._scroll_id }).catch(() => {});
+  if (scrollId) {
+    await esClient.clearScroll({ scroll_id: scrollId }).catch(() => {});
   }
 
   console.log(`  Total ${docType} documents: ${allHits.length}`);
@@ -351,7 +377,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         reply_to_address, reply_to_text,
         envelope_from, envelope_to, attachments,
         read, saved, sent, deleted, draft, insight,
-        uid_domain, uid_account, updated
+        uid_domain, uid_account, updated, search_vector
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11,
@@ -359,7 +385,8 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         $16, $17,
         $18, $19, $20,
         $21, $22, $23, $24, $25, $26,
-        $27, $28, $29
+        $27, $28, $29,
+        to_tsvector('english', coalesce($4, '') || ' ' || coalesce($7, '') || ' ' || coalesce($9, '') || ' ' || coalesce($11, ''))
       )
     `;
 
@@ -470,17 +497,17 @@ async function migrate() {
   try {
     // Test ES connection
     const esInfo = await esClient.info();
-    console.log(`ES cluster: ${esInfo.cluster_name}`);
+    console.log(`ES cluster: ${esInfo.body.cluster_name}`);
 
     // Test PG connection
     const pgRes = await pgPool.query("SELECT NOW()");
     console.log(`PG connected at: ${pgRes.rows[0].now}`);
 
-    // Create tables
-    await createTables();
+    // Drop existing tables for fresh schema
+    await dropTables();
 
-    // Clear for idempotency
-    await clearTables();
+    // Create tables with new schema
+    await createTables();
 
     // Migrate in order (users first due to foreign keys)
     const userIdMap = await migrateUsers();

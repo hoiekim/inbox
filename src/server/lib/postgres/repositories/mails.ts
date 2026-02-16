@@ -197,35 +197,49 @@ export const getMailHeaders = async (
   }
 };
 
+export interface SearchMailModel extends MailModel {
+  highlight?: {
+    subject?: string[];
+    text?: string[];
+  };
+  rank?: number;
+}
+
 export const searchMails = async (
   user_id: string,
   searchTerm: string,
   field?: string
-): Promise<MailModel[]> => {
+): Promise<SearchMailModel[]> => {
   try {
-    const searchFields = field
-      ? [field]
-      : ["subject", "text", "from_text", "to_text"];
-    const conditions = searchFields
-      .map((f, i) => `${f} ILIKE $${i + 2}`)
-      .join(" OR ");
-    const searchPattern = `%${searchTerm}%`;
-
+    // Use PostgreSQL full-text search with ranking and highlights
     const sql = `
-      SELECT * FROM mails 
+      SELECT 
+        *,
+        ts_rank(search_vector, plainto_tsquery('english', $2)) as rank,
+        ts_headline('english', subject, plainto_tsquery('english', $2), 
+          'StartSel=<em>, StopSel=</em>, MaxWords=50, MinWords=10') as subject_highlight,
+        ts_headline('english', text, plainto_tsquery('english', $2), 
+          'StartSel=<em>, StopSel=</em>, MaxWords=50, MinWords=10') as text_highlight
+      FROM mails 
       WHERE user_id = $1 
-        AND (${conditions})
-      ORDER BY date DESC
-      LIMIT 10000
+        AND search_vector @@ plainto_tsquery('english', $2)
+      ORDER BY rank DESC, date DESC
+      LIMIT 1000
     `;
 
-    const values: ParamValue[] = [
-      user_id,
-      ...searchFields.map(() => searchPattern),
-    ];
-
-    const result = await pool.query(sql, values);
-    return result.rows.map((row: unknown) => new MailModel(row));
+    const result = await pool.query(sql, [user_id, searchTerm]);
+    return result.rows.map((row: any) => {
+      const model = new MailModel(row) as SearchMailModel;
+      model.rank = row.rank;
+      model.highlight = {};
+      if (row.subject_highlight && row.subject_highlight.includes("<em>")) {
+        model.highlight.subject = [row.subject_highlight];
+      }
+      if (row.text_highlight && row.text_highlight.includes("<em>")) {
+        model.highlight.text = [row.text_highlight];
+      }
+      return model;
+    });
   } catch (error) {
     console.error("Failed to search mails:", error);
     return [];
