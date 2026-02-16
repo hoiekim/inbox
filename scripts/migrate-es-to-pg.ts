@@ -135,6 +135,12 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
     }
   );
 
+  // Debug: check response structure
+  if (!response.hits) {
+    console.error(`  ERROR: No 'hits' in response for ${docType}:`, JSON.stringify(response).slice(0, 500));
+    return [];
+  }
+
   let scrollId = response._scroll_id;
   let hits = response.hits.hits;
   allHits.push(...hits);
@@ -146,6 +152,12 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
       scroll: "2m",
       scroll_id: scrollId,
     });
+
+    // Debug: check response structure
+    if (!response.hits) {
+      console.error(`  ERROR: No 'hits' in scroll response for ${docType}:`, JSON.stringify(response).slice(0, 500));
+      break;
+    }
 
     scrollId = response._scroll_id;
     hits = response.hits.hits;

@@ -27,7 +27,9 @@ export const initializeHttp = async () => {
 
   app.use("/api", apiRouter);
 
-  const clientPath = path.resolve(__dirname, "../../build/client");
+  // In production: client files are at build/client relative to the project root
+  // In dev: Vite serves the client, so this only matters for production
+  const clientPath = path.resolve(process.cwd(), "build", "client");
   app.use(express.static(clientPath));
 
   app.get("*", (req, res) => {

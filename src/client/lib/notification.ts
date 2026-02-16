@@ -1,7 +1,7 @@
 import { PushSubscription } from "web-push";
-import { PublicKeyGetResponse, RefreshGetResponse } from "server";
-import { call, getLocalStorageItem, setLocalStorageItem } from "client";
-import { SubscribePostBody, SubscribePostResponse } from "server";
+import { PublicKeyGetResponse, RefreshGetResponse, SubscribePostBody, SubscribePostResponse } from "server";
+import { call } from "./call";
+import { getLocalStorageItem, setLocalStorageItem } from "./cache";
 
 export class Notifier {
   constructor() {

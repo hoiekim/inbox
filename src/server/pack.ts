@@ -1,38 +1,46 @@
-import webpack, { Configuration } from "webpack";
-import nodeExternals from "webpack-node-externals";
 import path from "path";
 import fs from "fs";
 
-const root = path.resolve(__dirname, "..");
+const root = path.resolve(import.meta.dir, "..");
 
-const config: Configuration = {
-  entry: path.resolve(__dirname, "start.js"),
-  output: {
-    path: path.resolve(root, ".."),
-    filename: "bundle.js"
-  },
-  target: "node",
-  externals: [nodeExternals()],
-  externalsPresets: { node: true },
-  resolve: {
-    modules: [root]
-  }
-};
-
-webpack(config, (err, stats) => {
-  if (err || stats?.hasErrors()) {
-    console.error(err);
-    console.error(stats?.toJson());
-    throw new Error("Webpack failed to compile server.");
-  }
-  console.info("Webpack succeeded to compile server.");
-  fs.rmSync(path.resolve(root, "..", "server"), {
-    recursive: true,
-    force: true
+async function bundle() {
+  const result = await Bun.build({
+    entrypoints: [path.resolve(import.meta.dir, "start.ts")],
+    outdir: path.resolve(root, "..", "build", "server"),
+    target: "bun",
+    external: [
+      "bcrypt",
+      "pg",
+      "@aws-sdk/client-ses",
+      "mailgun.js",
+      "mailparser",
+      "smtp-server",
+      "web-push",
+      "openai",
+    ],
+    minify: false,
   });
-  fs.mkdirSync(path.resolve(root, "..", "server"));
-  fs.renameSync(
-    path.resolve(root, "..", "bundle.js"),
-    path.resolve(root, "..", "server", "bundle.js")
-  );
-});
+
+  if (!result.success) {
+    console.error("Build failed:");
+    for (const log of result.logs) {
+      console.error(log);
+    }
+    process.exit(1);
+  }
+
+  // Rename output to bundle.js
+  const outputPath = path.resolve(root, "..", "build", "server");
+  const files = fs.readdirSync(outputPath);
+  const jsFile = files.find((f) => f.endsWith(".js") && f !== "bundle.js");
+  if (jsFile) {
+    fs.renameSync(
+      path.resolve(outputPath, jsFile),
+      path.resolve(outputPath, "bundle.js")
+    );
+  }
+
+  console.info("Bun build succeeded to compile server.");
+}
+
+bundle();
