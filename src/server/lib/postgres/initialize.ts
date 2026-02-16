@@ -62,6 +62,36 @@ export const initializePostgres = async (): Promise<void> => {
         await pool.query(createIndexSql);
       }
     }
+
+    // Create GIN index for full-text search on mails
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_mails_search 
+      ON mails USING GIN(search_vector)
+    `);
+
+    // Create trigger function for auto-updating search_vector
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
+      BEGIN
+        NEW.search_vector := to_tsvector('english', 
+          coalesce(NEW.subject, '') || ' ' || 
+          coalesce(NEW.text, '') || ' ' || 
+          coalesce(NEW.from_text, '') || ' ' || 
+          coalesce(NEW.to_text, '')
+        );
+        RETURN NEW;
+      END
+      $$ LANGUAGE plpgsql;
+    `);
+
+    // Create trigger (drop first to handle updates)
+    await pool.query(`DROP TRIGGER IF EXISTS mails_search_update ON mails`);
+    await pool.query(`
+      CREATE TRIGGER mails_search_update 
+        BEFORE INSERT OR UPDATE ON mails 
+        FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
+    `);
+
     console.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
     console.error("Failed to create tables:", error);

@@ -304,6 +304,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
       continue;
     }
 
+    // Note: search_vector is auto-populated by trigger
     const sql = `
       INSERT INTO mails (
         mail_id, user_id, message_id, subject, date, html, text,
@@ -312,7 +313,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         reply_to_address, reply_to_text,
         envelope_from, envelope_to, attachments,
         read, saved, sent, deleted, draft, insight,
-        uid_domain, uid_account, updated, search_vector
+        uid_domain, uid_account, updated
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11,
@@ -320,8 +321,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         $16, $17,
         $18, $19, $20,
         $21, $22, $23, $24, $25, $26,
-        $27, $28, $29,
-        to_tsvector('english', coalesce($4, '') || ' ' || coalesce($7, '') || ' ' || coalesce($9, '') || ' ' || coalesce($11, ''))
+        $27, $28, $29
       )
     `;
 

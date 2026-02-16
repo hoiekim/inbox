@@ -102,6 +102,7 @@ const mailSchema = {
   [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
   [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
+  search_vector: "TSVECTOR",
 };
 
 type MailSchema = typeof mailSchema;
