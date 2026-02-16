@@ -2,28 +2,34 @@
  * Migration script: Elasticsearch → PostgreSQL
  *
  * This script:
- * 1. Connects to Elasticsearch at 192.168.0.32:9200
+ * 1. Connects to Elasticsearch via HTTP (no elasticsearch library)
  * 2. Reads all data from index inbox-2
- * 3. Transforms and inserts into local PostgreSQL
+ * 3. Transforms and inserts into PostgreSQL
+ *
+ * Prerequisites:
+ * - PostgreSQL must be initialized by inbox server first (run the server once)
+ * - Tables must already exist
  *
  * Usage: npx ts-node scripts/migrate-es-to-pg.ts
+ *
+ * Environment Variables:
+ *   ES_HOST - Elasticsearch host (default: http://192.168.0.32:9200)
+ *   ES_USERNAME - Elasticsearch username (default: elastic)
+ *   ES_PASSWORD - Elasticsearch password (default: elastic)
  */
 
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
-import { Client } from "@elastic/elasticsearch";
 import { Pool, types } from "pg";
 import crypto from "crypto";
-import bcrypt from "bcrypt";
+import * as http from "http";
+import * as https from "https";
 
-// ES Client
-const esClient = new Client({
-  node: "http://192.168.0.32:9200",
-  auth: {
-    username: "elastic",
-    password: "elastic",
-  },
-});
+// ES Config
+const ES_HOST = process.env.ES_HOST || "http://192.168.0.32:9200";
+const ES_USERNAME = process.env.ES_USERNAME || "elastic";
+const ES_PASSWORD = process.env.ES_PASSWORD || "elastic";
+const ES_INDEX = "inbox-2";
 
 // PG Client
 const pgPool = new Pool({
@@ -41,8 +47,6 @@ const pgPool = new Pool({
   },
 });
 
-const ES_INDEX = "inbox-2";
-
 interface ESDocument {
   type: "mail" | "user" | "session" | "push_subscription";
   mail?: Record<string, unknown>;
@@ -57,139 +61,61 @@ interface ESHit {
   _source: ESDocument;
 }
 
+interface ESSearchResponse {
+  hits: {
+    total: { value: number } | number;
+    hits: ESHit[];
+  };
+  _scroll_id?: string;
+}
+
 interface UserIdMap {
   [esId: string]: string; // ES ID -> PG UUID
 }
 
-// Helper to create tables
-async function createTables() {
-  console.log("Creating tables...");
+// HTTP fetch helper for Elasticsearch
+async function fetchFromES(
+  endpoint: string,
+  method = "GET",
+  body?: object
+): Promise<any> {
+  const url = new URL(endpoint, ES_HOST);
+  const isHttps = url.protocol === "https:";
+  const httpModule = isHttps ? https : http;
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      username VARCHAR(255) UNIQUE NOT NULL,
-      password VARCHAR(255),
-      email VARCHAR(255),
-      expiry TIMESTAMPTZ,
-      token VARCHAR(255),
-      updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-      is_deleted BOOLEAN DEFAULT FALSE
-    )
-  `);
+  const options: http.RequestOptions = {
+    hostname: url.hostname,
+    port: url.port || (isHttps ? 443 : 9200),
+    path: url.pathname + url.search,
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization:
+        "Basic " +
+        Buffer.from(`${ES_USERNAME}:${ES_PASSWORD}`).toString("base64"),
+    },
+  };
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id VARCHAR(255) PRIMARY KEY,
-      session_user_id UUID NOT NULL,
-      session_username VARCHAR(255) NOT NULL,
-      session_email VARCHAR(255) NOT NULL,
-      cookie_original_max_age BIGINT,
-      cookie_max_age BIGINT,
-      cookie_signed BOOLEAN,
-      cookie_expires TIMESTAMPTZ,
-      cookie_http_only BOOLEAN,
-      cookie_path TEXT,
-      cookie_domain TEXT,
-      cookie_secure VARCHAR(10),
-      cookie_same_site VARCHAR(20),
-      updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  return new Promise((resolve, reject) => {
+    const req = httpModule.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error(`Failed to parse response: ${data}`));
+        }
+      });
+    });
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS mails (
-      mail_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-      message_id VARCHAR(512) NOT NULL,
-      subject TEXT NOT NULL DEFAULT '',
-      date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      html TEXT NOT NULL DEFAULT '',
-      text TEXT NOT NULL DEFAULT '',
-      from_address JSONB,
-      from_text TEXT,
-      to_address JSONB,
-      to_text TEXT,
-      cc_address JSONB,
-      cc_text TEXT,
-      bcc_address JSONB,
-      bcc_text TEXT,
-      reply_to_address JSONB,
-      reply_to_text TEXT,
-      envelope_from JSONB,
-      envelope_to JSONB,
-      search_vector TSVECTOR,
-      attachments JSONB,
-      read BOOLEAN NOT NULL DEFAULT FALSE,
-      saved BOOLEAN NOT NULL DEFAULT FALSE,
-      sent BOOLEAN NOT NULL DEFAULT FALSE,
-      deleted BOOLEAN NOT NULL DEFAULT FALSE,
-      draft BOOLEAN NOT NULL DEFAULT FALSE,
-      insight JSONB,
-      uid_domain INTEGER NOT NULL DEFAULT 0,
-      uid_account INTEGER NOT NULL DEFAULT 0,
-      updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    req.on("error", reject);
 
-  await pgPool.query(`
-    CREATE TABLE IF NOT EXISTS push_subscriptions (
-      push_subscription_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-      endpoint TEXT NOT NULL,
-      keys_p256dh TEXT NOT NULL,
-      keys_auth TEXT NOT NULL,
-      last_notified TIMESTAMPTZ,
-      updated TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  // Create indexes
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(session_user_id)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(cookie_expires)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_user ON mails(user_id)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_date ON mails(date)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_sent ON mails(sent)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_read ON mails(read)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_saved ON mails(saved)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_uid_domain ON mails(uid_domain)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_uid_account ON mails(uid_account)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_mails_search ON mails USING GIN(search_vector)`);
-  await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)`);
-
-  // Create trigger for auto-updating search_vector
-  await pgPool.query(`
-    CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
-    BEGIN
-      NEW.search_vector := to_tsvector('english', 
-        coalesce(NEW.subject, '') || ' ' || 
-        coalesce(NEW.text, '') || ' ' || 
-        coalesce(NEW.from_text, '') || ' ' || 
-        coalesce(NEW.to_text, '')
-      );
-      RETURN NEW;
-    END
-    $$ LANGUAGE plpgsql;
-  `);
-  await pgPool.query(`DROP TRIGGER IF EXISTS mails_search_update ON mails`);
-  await pgPool.query(`
-    CREATE TRIGGER mails_search_update 
-      BEFORE INSERT OR UPDATE ON mails 
-      FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
-  `);
-
-  console.log("Tables, indexes, and triggers created.");
-}
-
-// Helper to drop tables (for schema changes)
-async function dropTables() {
-  console.log("Dropping existing tables for fresh schema...");
-  await pgPool.query("DROP TABLE IF EXISTS push_subscriptions CASCADE");
-  await pgPool.query("DROP TABLE IF EXISTS mails CASCADE");
-  await pgPool.query("DROP TABLE IF EXISTS sessions CASCADE");
-  await pgPool.query("DROP TABLE IF EXISTS users CASCADE");
-  console.log("Tables dropped.");
+    if (body) {
+      req.write(JSON.stringify(body));
+    }
+    req.end();
+  });
 }
 
 // Fetch all documents of a type from ES using scroll API
@@ -199,28 +125,30 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
   const allHits: ESHit[] = [];
   const batchSize = 1000;
 
-  // Initial search with scroll (v7 API uses body wrapper)
-  let response = await esClient.search({
-    index: ES_INDEX,
-    size: batchSize,
-    scroll: "2m",
-    body: { query: { term: { type: docType } } },
-  });
+  // Initial search with scroll
+  let response: ESSearchResponse = await fetchFromES(
+    `/${ES_INDEX}/_search?scroll=2m`,
+    "POST",
+    {
+      size: batchSize,
+      query: { term: { type: docType } },
+    }
+  );
 
-  let scrollId = response.body._scroll_id;
-  let hits = response.body.hits.hits as unknown as ESHit[];
+  let scrollId = response._scroll_id;
+  let hits = response.hits.hits;
   allHits.push(...hits);
   console.log(`  Fetched ${allHits.length} ${docType} documents so far...`);
 
   // Continue scrolling
   while (hits.length > 0 && scrollId) {
-    response = await esClient.scroll({
-      scroll_id: scrollId,
+    response = await fetchFromES("/_search/scroll", "POST", {
       scroll: "2m",
+      scroll_id: scrollId,
     });
 
-    scrollId = response.body._scroll_id;
-    hits = response.body.hits.hits as unknown as ESHit[];
+    scrollId = response._scroll_id;
+    hits = response.hits.hits;
     if (hits.length === 0) break;
 
     allHits.push(...hits);
@@ -229,7 +157,9 @@ async function fetchESDocuments(docType: string): Promise<ESHit[]> {
 
   // Clear scroll context
   if (scrollId) {
-    await esClient.clearScroll({ scroll_id: scrollId }).catch(() => {});
+    await fetchFromES("/_search/scroll", "DELETE", {
+      scroll_id: scrollId,
+    }).catch(() => {});
   }
 
   console.log(`  Total ${docType} documents: ${allHits.length}`);
@@ -334,15 +264,21 @@ async function migrateSessions(userIdMap: UserIdMap): Promise<void> {
       cookie.httpOnly ?? null,
       cookie.path ?? null,
       cookie.domain ?? null,
-      typeof cookie.secure === "string" ? cookie.secure : JSON.stringify(cookie.secure),
-      typeof cookie.sameSite === "string" ? cookie.sameSite : JSON.stringify(cookie.sameSite),
+      typeof cookie.secure === "string"
+        ? cookie.secure
+        : JSON.stringify(cookie.secure),
+      typeof cookie.sameSite === "string"
+        ? cookie.sameSite
+        : JSON.stringify(cookie.sameSite),
       hit._source.updated || new Date().toISOString(),
     ]);
 
     migrated++;
   }
 
-  console.log(`  Migrated ${migrated} sessions (skipped ${skipped} without valid user).`);
+  console.log(
+    `  Migrated ${migrated} sessions (skipped ${skipped} without valid user).`
+  );
 }
 
 // Migrate mails
@@ -354,7 +290,6 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
   let migrated = 0;
   let skipped = 0;
 
-  // Also need to get user ID from the document structure
   for (const hit of mailHits) {
     const mail = hit._source.mail || {};
     const docUser = (hit._source as unknown as Record<string, unknown>).user as
@@ -484,30 +419,50 @@ async function migratePushSubscriptions(userIdMap: UserIdMap): Promise<void> {
     migrated++;
   }
 
-  console.log(`  Migrated ${migrated} push subscriptions (skipped ${skipped}).`);
+  console.log(
+    `  Migrated ${migrated} push subscriptions (skipped ${skipped}).`
+  );
 }
 
 // Main migration function
 async function migrate() {
   console.log("=".repeat(60));
   console.log("Elasticsearch → PostgreSQL Migration");
-  console.log("Source: 192.168.0.32:9200, index: inbox-2");
+  console.log(`Source: ${ES_HOST}, index: ${ES_INDEX}`);
   console.log("=".repeat(60));
+  console.log();
+  console.log("NOTE: This script assumes PostgreSQL is already initialized.");
+  console.log("Run the inbox server at least once to create tables first.");
+  console.log();
 
   try {
     // Test ES connection
-    const esInfo = await esClient.info();
-    console.log(`ES cluster: ${esInfo.body.cluster_name}`);
+    const esInfo = await fetchFromES("/");
+    console.log(`ES cluster: ${esInfo.cluster_name || "connected"}`);
 
-    // Test PG connection
+    // Test PG connection and verify tables exist
     const pgRes = await pgPool.query("SELECT NOW()");
     console.log(`PG connected at: ${pgRes.rows[0].now}`);
 
-    // Drop existing tables for fresh schema
-    await dropTables();
+    // Check if tables exist
+    const tableCheck = await pgPool.query(`
+      SELECT table_name FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name IN ('users', 'sessions', 'mails', 'push_subscriptions')
+    `);
 
-    // Create tables with new schema
-    await createTables();
+    if (tableCheck.rows.length < 4) {
+      console.error(
+        "\nERROR: Not all required tables exist. Please run the inbox server first to initialize the database."
+      );
+      console.error(
+        "Required tables: users, sessions, mails, push_subscriptions"
+      );
+      console.error(`Found tables: ${tableCheck.rows.map((r) => r.table_name).join(", ") || "none"}`);
+      process.exit(1);
+    }
+
+    console.log("All required tables found. Starting migration...\n");
 
     // Migrate in order (users first due to foreign keys)
     const userIdMap = await migrateUsers();

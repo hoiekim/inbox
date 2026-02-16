@@ -1,25 +1,5 @@
 // PostgreSQL database layer
-export {
-  pool,
-  postgresIsAvailable,
-  initializePostgres,
-  initializeAdminUser,
-  usersTable,
-  mailsTable,
-  sessionsTable,
-  pushSubscriptionsTable,
-  UserModel,
-  MailModel,
-  SessionModel,
-  PushSubscriptionModel,
-  USER_ID,
-  MAIL_ID,
-  SESSION_ID,
-  PUSH_SUBSCRIPTION_ID,
-  TOKEN,
-  EXPIRY,
-  EMAIL,
-} from "./postgres";
+export * from "./postgres";
 
 // AI features
 export * from "./ai";
