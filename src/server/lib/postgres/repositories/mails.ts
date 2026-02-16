@@ -302,16 +302,36 @@ export const getAccountStats = async (
 > => {
   try {
     const addressField = sent ? "from_address" : "to_address";
+    // Handle both array and object formats for address fields using UNION
     const sql = `
+      WITH expanded_mails AS (
+        -- Handle array format
+        SELECT 
+          mail_id, read, saved, date,
+          jsonb_array_elements(${addressField})->>'address' as address
+        FROM mails 
+        WHERE user_id = $1 AND sent = $2 
+          AND ${addressField} IS NOT NULL 
+          AND jsonb_typeof(${addressField}) = 'array'
+        UNION ALL
+        -- Handle object format
+        SELECT 
+          mail_id, read, saved, date,
+          ${addressField}->>'address' as address
+        FROM mails 
+        WHERE user_id = $1 AND sent = $2 
+          AND ${addressField} IS NOT NULL 
+          AND jsonb_typeof(${addressField}) = 'object'
+      )
       SELECT 
-        jsonb_array_elements(${addressField})->>'address' as address,
+        address,
         COUNT(*) as count,
         SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
         SUM(CASE WHEN saved = TRUE THEN 1 ELSE 0 END) as saved_count,
         MAX(date) as latest
-      FROM mails 
-      WHERE user_id = $1 AND sent = $2 AND ${addressField} IS NOT NULL
-      GROUP BY jsonb_array_elements(${addressField})->>'address'
+      FROM expanded_mails
+      WHERE address IS NOT NULL
+      GROUP BY address
       ORDER BY latest DESC
     `;
     const result = await pool.query(sql, [user_id, sent]);
