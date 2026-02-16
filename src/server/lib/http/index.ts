@@ -3,7 +3,7 @@ import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
 
-import { getDomain, ElasticsearchSessionStore } from "server";
+import { getDomain, PostgresSessionStore } from "server";
 import apiRouter from "./routes";
 
 export const initializeHttp = async () => {
@@ -21,7 +21,7 @@ export const initializeHttp = async () => {
         secure: false,
         maxAge: 1000 * 60 * 60 * 24 * 7
       },
-      store: new ElasticsearchSessionStore()
+      store: new PostgresSessionStore()
     })
   );
 

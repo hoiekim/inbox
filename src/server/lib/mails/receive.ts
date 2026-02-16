@@ -11,23 +11,23 @@ import {
   Mail,
   Attachment,
   MailUid,
-  MaskedUser
+  MaskedUser,
 } from "common";
 
 import {
-  elasticsearchClient,
-  index,
-  getUser,
-  getText,
-  getDomain,
+  saveMail as pgSaveMail,
+  SaveMailInput,
+  getDomainUidNext as pgGetDomainUidNext,
+  getAccountUidNext as pgGetAccountUidNext,
+} from "../postgres/repositories/mails";
+import { getUser, getText, getDomain } from "server";
+import {
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
   getAttachmentId,
-  notifyNewMails,
-  getInsight,
-  getDomainUidNext,
-  getAccountUidNext
-} from "server";
+} from "./util";
+import { notifyNewMails } from "../push";
+import { getInsight } from "../ai";
 
 export const saveMailHandler = async (_: any, data: IncomingMail) => {
   console.info("Received an email at", new Date());
@@ -63,27 +63,55 @@ const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
 
   const mail = await convertMail(user, incoming);
 
-  return saveMail(user?.id, mail);
+  return saveMail(mail, user?.id);
 };
 
-export const saveMail = async (userId: string | undefined, mail: Mail) => {
-  return elasticsearchClient
-    .index({
-      index,
-      document: {
-        type: "mail",
-        user: { id: userId },
-        mail,
-        updated: new Date().toISOString()
-      }
-    })
-    .catch((r) => {
-      console.error(r);
-      const errorFilePath = `./error/${Date.now()}`;
-      const errorContent = JSON.stringify({ ...mail, error: r });
-      if (!fs.existsSync("./error")) fs.mkdirSync("./error");
-      fs.writeFileSync(errorFilePath, errorContent);
-    });
+export const saveMail = async (
+  mail: Mail,
+  userId?: string
+): Promise<{ _id: string } | undefined> => {
+  if (!userId) return;
+
+  const input: SaveMailInput = {
+    user_id: userId,
+    message_id: mail.messageId,
+    subject: mail.subject,
+    date: mail.date,
+    html: mail.html,
+    text: mail.text,
+    from_address: mail.from?.value,
+    from_text: mail.from?.text,
+    to_address: mail.to?.value,
+    to_text: mail.to?.text,
+    cc_address: mail.cc?.value,
+    cc_text: mail.cc?.text,
+    bcc_address: mail.bcc?.value,
+    bcc_text: mail.bcc?.text,
+    reply_to_address: mail.replyTo?.value,
+    reply_to_text: mail.replyTo?.text,
+    envelope_from: mail.envelopeFrom,
+    envelope_to: mail.envelopeTo,
+    attachments: mail.attachments,
+    read: mail.read,
+    saved: mail.saved,
+    sent: mail.sent,
+    deleted: mail.deleted,
+    draft: mail.draft,
+    insight: mail.insight,
+    uid_domain: mail.uid?.domain,
+    uid_account: mail.uid?.account,
+  };
+
+  try {
+    return await pgSaveMail(input);
+  } catch (error) {
+    console.error("Error saving mail:", error);
+    const errorFilePath = `./error/${Date.now()}`;
+    const errorContent = JSON.stringify({ ...mail, error });
+    if (!fs.existsSync("./error")) fs.mkdirSync("./error");
+    fs.writeFileSync(errorFilePath, errorContent);
+    return undefined;
+  }
 };
 
 export const convertMail = async (
@@ -108,15 +136,20 @@ export const convertMail = async (
     date = new Date().toISOString(),
     html = "",
     text: incomingText,
-    messageId = getRandomId()
+    messageId = getRandomId(),
   } = incoming;
 
   const text = incomingText ?? getText(html);
   const insight = await getInsight({ subject, from, to, text });
   const envelopeToAddress = envelopeTo[0]?.address || "";
+
+  if (!user.id) {
+    throw new Error("User ID is required to save mail");
+  }
+
   const [domainUid, accountUid] = await Promise.all([
-    getDomainUidNext(user),
-    getAccountUidNext(user, envelopeToAddress)
+    pgGetDomainUidNext(user.id!),
+    pgGetAccountUidNext(user.id!, envelopeToAddress),
   ]);
 
   const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
@@ -139,7 +172,7 @@ export const convertMail = async (
     read: false,
     saved: false,
     sent: false,
-    uid
+    uid,
   });
 };
 
@@ -191,7 +224,7 @@ const convertAttachment = async ({
   content,
   filename,
   contentType,
-  size
+  size,
 }: IncomingAttachment) => {
   const isDataExist = typeof content === "object" && "data" in content;
   const data = isDataExist ? content.data : content;
@@ -200,7 +233,7 @@ const convertAttachment = async ({
     filename,
     contentType,
     content: { data: id },
-    size
+    size,
   });
 };
 

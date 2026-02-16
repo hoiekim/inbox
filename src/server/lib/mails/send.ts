@@ -34,7 +34,7 @@ export const sendMail = async (
     if (!isToMyself(mailToSend.to)) {
       const messageId = response.id || randomUUID();
       const sentMail = await getSentMail(user, mailToSend, messageId, files);
-      await saveMail(userId, sentMail);
+      await saveMail(sentMail, userId);
     }
 
     return response;
@@ -59,8 +59,8 @@ const getSentMail = async (
   const attachments = (await getAttachmentsToSave(files)) || [];
 
   const [domainUid, accountUid] = await Promise.all([
-    getDomainUidNext(user, true),
-    getAccountUidNext(user, fromEmail, true)
+    getDomainUidNext(user.id, true),
+    getAccountUidNext(user.id, fromEmail, true)
   ]);
 
   const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });

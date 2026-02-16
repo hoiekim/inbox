@@ -18,8 +18,12 @@ export const postSubscribeRoute = new Route<SubscribePostResponse>(
     const { id: userId } = user;
     const body: SubscribePostBody = req.body;
     const { subscription } = body;
-    const { _id: id } = await storeSubscription(userId, subscription);
+    const result = await storeSubscription(userId, subscription);
 
-    return { status: "success", body: id };
+    if (!result) {
+      return { status: "failed", message: "Failed to store subscription" };
+    }
+
+    return { status: "success", body: result._id };
   }
 );

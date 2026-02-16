@@ -3,7 +3,6 @@
  */
 
 import { MailType } from "common";
-import { QueryDslQueryContainer } from "@elastic/elasticsearch/lib/api/types";
 
 // IMAP-specific request interfaces
 export interface SearchRequest {
@@ -78,13 +77,6 @@ export type UntaggedResponseData =
   | { type: "FLAGS"; flags: string[] }
   | { type: "BYE"; message: string }
   | { type: "CAPABILITY"; capabilities: string[] };
-
-// Elasticsearch query building helpers
-export interface ElasticsearchQueryBuilder {
-  must: QueryDslQueryContainer[];
-  should?: QueryDslQueryContainer[];
-  must_not?: QueryDslQueryContainer[];
-}
 
 // Basic IMAP command structure
 export interface ImapCommand {

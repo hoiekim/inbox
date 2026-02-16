@@ -768,12 +768,12 @@ export class ImapSession {
       // Get next UID and set envelope addresses
       const user = this.store.getUser();
       const account = boxToAccount(user.username, appendRequest.mailbox);
-      const domainUid = await getDomainUidNext(user);
-      const accountUid = await getAccountUidNext(user, account);
+      const domainUid = await getDomainUidNext(user.id);
+      const accountUid = await getAccountUidNext(user.id, account);
       mail.uid.domain = domainUid || 1;
       mail.uid.account = accountUid || 1;
 
-      // Store the message in Elasticsearch
+      // Store the message in PostgreSQL
       const result = await this.store.storeMail(mail);
 
       let uid: number;
