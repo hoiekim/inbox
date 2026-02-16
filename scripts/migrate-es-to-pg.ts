@@ -13,7 +13,7 @@
  * Usage: npx ts-node scripts/migrate-es-to-pg.ts
  *
  * Environment Variables:
- *   ES_HOST - Elasticsearch host (default: http://192.168.0.32:9200)
+ *   ES_HOST - Elasticsearch host (default: http://localhost:9200)
  *   ES_USERNAME - Elasticsearch username (default: elastic)
  *   ES_PASSWORD - Elasticsearch password (default: elastic)
  */
@@ -26,18 +26,18 @@ import * as http from "http";
 import * as https from "https";
 
 // ES Config
-const ES_HOST = process.env.ES_HOST || "http://192.168.0.32:9200";
-const ES_USERNAME = process.env.ES_USERNAME || "elastic";
-const ES_PASSWORD = process.env.ES_PASSWORD || "elastic";
-const ES_INDEX = "inbox-2";
+const ES_HOST = process.env.ELASTIC_HOST || "http://localhost:9200";
+const ES_USERNAME = process.env.ELASTIC_USERNAME || "";
+const ES_PASSWORD = process.env.ELASTIC_PASSWORD || "";
+const ES_INDEX = process.env.ELASTIC_INDEX || "inbox-2";
 
 // PG Client
 const pgPool = new Pool({
   host: process.env.POSTGRES_HOST || "localhost",
   port: parseInt(process.env.POSTGRES_PORT || "5432", 10),
-  user: process.env.POSTGRES_USER || "postgres",
+  user: process.env.POSTGRES_USER || "",
   password: process.env.POSTGRES_PASSWORD,
-  database: process.env.POSTGRES_DATABASE || "inbox",
+  database: process.env.POSTGRES_DATABASE || "",
   types: {
     getTypeParser(id, format) {
       if (id === types.builtins.NUMERIC) return parseFloat;
