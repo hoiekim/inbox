@@ -5,3 +5,4 @@ export * from "./cache";
 export * from "./html";
 export * from "./call";
 export * from "./user";
+export * from "./queryClient";
