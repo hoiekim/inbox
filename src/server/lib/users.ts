@@ -1,13 +1,7 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { User, SignedUser, callWithDelay } from "common";
-import {
-  searchUser as pgSearchUser,
-  writeUser,
-  updateUser,
-  getUserById,
-  getUserByEmail,
-} from "./postgres/repositories/users";
+import { User, SignedUser } from "common";
+import { searchUser as pgSearchUser } from "./postgres/repositories/users";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 
 const { APP_HOSTNAME } = process.env;
@@ -25,7 +19,7 @@ export const getUser = async (
   const pgUser = await pgSearchUser({
     user_id: user.id,
     username: user.username,
-    email: user.email,
+    email: user.email
   });
 
   if (!pgUser) return undefined;
@@ -34,7 +28,7 @@ export const getUser = async (
     id: pgUser.user_id,
     username: pgUser.username,
     email: pgUser.email ?? undefined,
-    password: pgUser.password,
+    password: pgUser.password
   });
 };
 
@@ -100,7 +94,7 @@ export const createToken = async (
     username: `user_${userId.slice(0, 8)}`,
     email,
     token,
-    expiry,
+    expiry
   });
 
   return { id: userId, token };
@@ -174,7 +168,7 @@ export const setUserInfo = async (
     password: await encryptPassword(password),
     username,
     token: null,
-    expiry: null,
+    expiry: null
   });
 
   return new User({ id, email, username }).getSigned() as SignedUser;
@@ -212,6 +206,6 @@ export const createAuthenticationMail = (
   <br/>  
   * Ignore this email if you have not requested it.
 </p>
-`,
+`
   };
 };

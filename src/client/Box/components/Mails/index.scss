@@ -1,5 +1,6 @@
 @use "sass:math";
-@import "../../../variables.scss";
+@use "sass:color";
+@use "../../../variables" as *;
 
 .getting_started {
   width: 100%;
@@ -23,7 +24,7 @@
       color: $color-point;
     }
     @media (prefers-color-scheme: light) {
-      color: adjust-color($color-point, $lightness: -10%);
+      color: color.adjust($color-point, $lightness: -10%);
     }
   }
 
@@ -132,9 +133,10 @@
       border-radius: 3px;
 
       @media (prefers-color-scheme: dark) {
-        background-color: adjust-color($color-dark, $lightness: 2%);
-        box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -5%) inset,
-          -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
+        background-color: color.adjust($color-dark, $lightness: 2%);
+        box-shadow:
+          1px 1px 2px color.adjust($color-dark, $lightness: -5%) inset,
+          -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
       }
 
       @media (prefers-color-scheme: light) {
@@ -219,7 +221,7 @@
 
       @media (prefers-color-scheme: dark) {
         div {
-          color: adjust-color($color-light, $lightness: -10%);
+          color: color.adjust($color-light, $lightness: -10%);
 
           em {
             color: $color-point;
@@ -229,10 +231,10 @@
       }
       @media (prefers-color-scheme: light) {
         div {
-          color: adjust-color($color-dark, $lightness: 10%);
+          color: color.adjust($color-dark, $lightness: 10%);
 
           em {
-            color: adjust-color($color-point, $lightness: -10%);
+            color: color.adjust($color-point, $lightness: -10%);
             background-color: rgba(0, 0, 0, 0.05);
           }
         }

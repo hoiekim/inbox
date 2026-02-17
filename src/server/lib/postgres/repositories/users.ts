@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { MaskedUser, User, usersTable, USER_ID, EMAIL } from "../models";
 
 export type IndexUserInput = Omit<User, "user_id"> & { user_id?: string };
@@ -54,7 +54,8 @@ export const updateUser = async (user: PartialUser): Promise<boolean> => {
 
   const updates: Record<string, unknown> = {};
   if (username !== undefined) updates.username = username;
-  if (password !== undefined) updates.password = await bcrypt.hash(password, 10);
+  if (password !== undefined)
+    updates.password = await bcrypt.hash(password, 10);
   if (email !== undefined) updates.email = email;
 
   if (Object.keys(updates).length === 0) return false;
@@ -68,7 +69,9 @@ export const updateUser = async (user: PartialUser): Promise<boolean> => {
   }
 };
 
-export const getUserById = async (user_id: string): Promise<User | undefined> => {
+export const getUserById = async (
+  user_id: string
+): Promise<User | undefined> => {
   try {
     const model = await usersTable.queryOne({ [USER_ID]: user_id });
     return model?.toUser();
@@ -87,7 +90,9 @@ export const deleteUser = async (user_id: string): Promise<boolean> => {
   }
 };
 
-export const getUserByEmail = async (email: string): Promise<User | undefined> => {
+export const getUserByEmail = async (
+  email: string
+): Promise<User | undefined> => {
   try {
     const model = await usersTable.queryOne({ [EMAIL]: email });
     return model?.toUser();

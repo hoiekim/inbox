@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { Socket } from "net";
 import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
@@ -59,7 +59,10 @@ export class ImapSession {
   private idleTag: string | null = null;
   private sessionId: string;
 
-  constructor(private handler: ImapRequestHandler, public socket: Socket) {
+  constructor(
+    private handler: ImapRequestHandler,
+    public socket: Socket
+  ) {
     this.sessionId = `session_${Date.now()}_${Math.random()
       .toString(36)
       .substr(2, 9)}`;

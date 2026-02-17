@@ -1,5 +1,6 @@
 import { LoginGetResponse } from "server";
-import { call, getLocalStorageItem, setLocalStorageItem } from "client";
+import { call } from "./call";
+import { getLocalStorageItem, setLocalStorageItem } from "./cache";
 
 export const callUser = () =>
   call.get<LoginGetResponse>("/api/users/login").then((r) => {

@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { MaskedUser, User } from "common";
 import { getUser } from "server";
 import { Route } from "../route";

@@ -46,41 +46,7 @@ const override = (target: any, source: any, exclude: string[] = []) => {
   return target;
 };
 
-/**
- * A base class for all models. Models are instantiable with optional properties to
- * "prefill" the instance and have `clone` method that deep-copies the instance.
- *
- * In order to have a model prefillable, use `Model.prefillable` decorator. In
- * order to add `clone` method, extend `Model` class with the child class as a type
- * parameter.
- *
- * @example
- * //@Model.prefillable
- * class ExtendedModel extends Model<ExtendedModel> {
- *   prop = 123;
- * }
- * const a = new ExtendedModel({ prop: 456 })
- * const b = a.clone();
- */
 export class Model<T = unknown> {
-  /**
-   * Class decorator that makes a class instantiable with optional properties to
-   * "prefill" the instance.
-   */
-  static prefillable = <C extends Constructor>(constFunc: C) => {
-    //@ts-ignore
-    class ExtendedClass extends constFunc {
-      constructor(init?: Partial<InstanceType<C>>) {
-        super(init);
-        if (init) assign(this, init);
-      }
-    }
-
-    return override(ExtendedClass, constFunc, ["prototype"]) as C & {
-      new (init?: Partial<InstanceType<C>>): InstanceType<C>;
-    };
-  };
-
   /**
    * Mixes `Model` into a given class and returns the mixed class. All methods in
    * `Model` will be overriden to the target class except for the constructor.

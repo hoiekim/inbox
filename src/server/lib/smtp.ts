@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
 import {
   SMTPServer,
@@ -86,6 +86,7 @@ const onDataOutgoing = async (
     const user = username && (await getUser({ username }));
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
+      console.warn("SMTP: Unauthenticated user attempted to send email.");
       return cb(new Error("User not authenticated"));
     }
 
