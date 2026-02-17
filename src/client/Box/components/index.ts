@@ -1,6 +1,7 @@
 import { lazy } from "react";
 
-import { Category, queryClient } from "client";
+import { Category } from "../../App";
+import { queryClient } from "../../lib/queryClient";
 import { AccountsCache } from "./Accounts";
 import { MailsCache } from "./Mails";
 

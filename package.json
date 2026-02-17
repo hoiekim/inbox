@@ -2,36 +2,30 @@
   "name": "inbox",
   "version": "1.0.0",
   "description": "",
-  "private": false,
-  "proxy": "http://localhost:3004",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "start": "npm run build && npm run start-server",
-    "start-server": "node ./build/server/bundle.js",
-    "build": "npm run build-server && npm run build-client",
-    "build-client": "react-scripts build",
-    "build-server": "npm run ts-compile-server && npm run webpack-server",
-    "webpack-server": "node ./build/server/server/pack.js",
-    "ts-compile-server": "tsc -p ./tsconfig.server.json",
-    "dev": "concurrently --names 'FRONT,BACK' --prefix-colors 'blue,yellow' \"npm run dev-client\" \"npm run dev-server\"",
-    "dev-client": "react-scripts start",
-    "dev-server": "nodemon ./src/server/start.ts",
-    "migrate": "npx ts-node scripts/migrate-es-to-pg.ts",
-    "test": "npm run test-server",
-    "test-client": "react-scripts test",
-    "test-server": "jest",
-    "eject": "react-scripts eject"
+    "start": "bun run build && bun run start-server",
+    "start-server": "bun ./build/server/bundle.js",
+    "build": "bun run build-server && bun run build-client",
+    "build-client": "bun vite build",
+    "build-server": "bun ./src/server/pack.ts",
+    "dev": "bun run dev-client & bun run dev-server",
+    "dev-client": "bun vite",
+    "dev-server": "bun --watch ./src/server/start.ts",
+    "migrate": "bun scripts/migrate-es-to-pg.ts",
+    "test": "bun test",
+    "preview": "bun vite preview"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-ses": "^3.856.0",
-    "@types/pg": "^8.16.0",
     "bcrypt": "^5.0.1",
-    "dotenv": "^8.2.0",
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "express-fileupload": "^1.2.0",
-    "express-session": "^1.17.1",
+    "express-session": "^1.17.3",
     "form-data": "^4.0.4",
     "html-to-text": "^8.1.0",
     "mailgun.js": "^12.0.3",
@@ -50,55 +44,28 @@
     "@tiptap/react": "^2.0.2",
     "@tiptap/starter-kit": "^2.0.2",
     "@types/bcrypt": "^5.0.0",
+    "@types/bun": "^1.1.0",
     "@types/express": "^4.17.13",
     "@types/express-fileupload": "^1.2.2",
     "@types/express-session": "^1.17.4",
     "@types/html-to-text": "^8.0.1",
-    "@types/jest": "^27.4.0",
     "@types/mailparser": "^3.4.6",
-    "@types/marked": "^4.0.2",
     "@types/node": "^17.0.45",
+    "@types/pg": "^8.16.0",
     "@types/react": "^18.0.33",
     "@types/react-dom": "^18.0.11",
-    "@types/react-query": "^1.2.9",
     "@types/react-router-dom": "^5.3.3",
     "@types/smtp-server": "^3.5.12",
     "@types/uuid": "^8.3.4",
     "@types/web-push": "^3.3.2",
-    "@types/webpack-node-externals": "^3.0.0",
-    "concurrently": "^6.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
     "marked": "^4.0.12",
-    "nodemon": "^2.0.20",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-query": "^3.39.3",
     "react-router-dom": "^5.3.4",
-    "react-scripts": "^5.0.1",
-    "sass": "^1.34.0",
-    "ts-jest": "^29.4.2",
-    "ts-node": "^10.9.2",
-    "typescript": "^4.9.5",
-    "webpack-node-externals": "^3.0.0"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ],
-    "rules": {
-      "@typescript-eslint/no-useless-constructor": "off"
-    }
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
+    "sass": "^1.97.3",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0"
   }
 }

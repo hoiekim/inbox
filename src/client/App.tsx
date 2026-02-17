@@ -7,22 +7,13 @@ import {
   Dispatch,
   SetStateAction
 } from "react";
-import { QueryClient, QueryClientProvider } from "react-query";
+import { QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
 import { Account, SignedUser } from "common";
 import { DomainGetResponse } from "server";
 
-import {
-  Header,
-  SignIn,
-  Box,
-  SignUp,
-  useLocalStorage,
-  Notifier,
-  call,
-  callUser
-} from "client";
+import { Header, SignIn, Box, SignUp, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
 
 export enum Category {
   NewMails = "New Mails",
@@ -59,20 +50,6 @@ export interface ContextType {
 }
 
 export const Context = createContext<ContextType>({} as ContextType);
-
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      cacheTime: Infinity,
-      refetchInterval: 1000 * 60 * 10,
-      refetchIntervalInBackground: true,
-      refetchOnMount: false,
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      retry: false
-    }
-  }
-});
 
 export interface UserInfoType {
   username: string;

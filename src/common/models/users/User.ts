@@ -10,14 +10,13 @@ export interface UserType {
   expiry?: DateString;
 }
 
-@Model.prefillable
 export class User extends Model<User> implements UserType {
-  id?: string;
-  email?: string;
-  username?: string;
-  password?: string;
-  token?: string;
-  expiry?: DateString;
+  declare id?: string;
+  declare email?: string;
+  declare username?: string;
+  declare password?: string;
+  declare token?: string;
+  declare expiry?: DateString;
 
   mask = () => {
     const { id, email, username, token, expiry } = this;
@@ -33,13 +32,12 @@ export class User extends Model<User> implements UserType {
 
 export type MaskedUserType = Omit<UserType, "password">;
 
-@Model.prefillable
 export class MaskedUser extends Model<MaskedUser> implements MaskedUserType {
-  id?: string;
-  email?: string;
-  username?: string;
-  token?: string;
-  expiry?: string;
+  declare id?: string;
+  declare email?: string;
+  declare username?: string;
+  declare token?: string;
+  declare expiry?: string;
 }
 
 export type SignedUserType = WithRequired<
@@ -47,11 +45,17 @@ export type SignedUserType = WithRequired<
   "id" | "email" | "username"
 >;
 
-@Model.prefillable
 export class SignedUser extends Model<SignedUser> implements SignedUserType {
-  id = getRandomId();
-  email = "unknown";
-  username = "unknown";
-  token?: string;
-  expiry?: string;
+  declare id: string;
+  declare email: string;
+  declare username: string;
+  declare token?: string;
+  declare expiry?: string;
+
+  constructor(init?: Partial<SignedUser>) {
+    super(init);
+    if (!init?.id) this.id = getRandomId();
+    if (!init?.email) this.email = "unknown";
+    if (!init?.username) this.username = "unknown";
+  }
 }

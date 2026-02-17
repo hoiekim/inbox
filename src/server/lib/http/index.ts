@@ -27,7 +27,7 @@ export const initializeHttp = async () => {
 
   app.use("/api", apiRouter);
 
-  const clientPath = path.resolve(__dirname, "../../build/client");
+  const clientPath = path.resolve(import.meta.dir, "../client");
   app.use(express.static(clientPath));
 
   app.get("*", (req, res) => {

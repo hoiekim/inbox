@@ -7,20 +7,24 @@ import { Model } from "../Model";
  */
 export type RuntimeCookieType = Omit<_Cookie, "expires"> & { _expires?: Date };
 
-@Model.prefillable
 export class RuntimeCookie
   extends Model<RuntimeCookie>
   implements RuntimeCookieType
 {
-  secure?: boolean | "auto";
-  sameSite?: boolean | "lax" | "strict" | "none";
-  originalMaxAge: number | null = null;
-  maxAge?: number;
-  signed?: boolean;
-  httpOnly?: boolean;
-  path?: string;
-  domain?: string;
-  _expires?: Date;
+  declare secure?: boolean | "auto";
+  declare sameSite?: boolean | "lax" | "strict" | "none";
+  declare originalMaxAge: number | null;
+  declare maxAge?: number;
+  declare signed?: boolean;
+  declare httpOnly?: boolean;
+  declare path?: string;
+  declare domain?: string;
+  declare _expires?: Date;
+
+  constructor(data?: Partial<RuntimeCookie>) {
+    super(data);
+    if (!data?.originalMaxAge) this.originalMaxAge = null;
+  }
 }
 
 /**
@@ -31,17 +35,21 @@ export type CookieType = Omit<RuntimeCookieType, "secure" | "sameSite"> & {
   sameSite?: string;
 };
 
-@Model.prefillable
 export class Cookie extends Model<Cookie> implements CookieType {
-  secure?: string;
-  sameSite?: string;
-  originalMaxAge: number | null = null;
-  maxAge?: number;
-  signed?: boolean;
-  httpOnly?: boolean;
-  path?: string;
-  domain?: string;
-  _expires?: Date;
+  declare secure?: string;
+  declare sameSite?: string;
+  declare originalMaxAge: number | null;
+  declare maxAge?: number;
+  declare signed?: boolean;
+  declare httpOnly?: boolean;
+  declare path?: string;
+  declare domain?: string;
+  declare _expires?: Date;
+
+  constructor(data?: Partial<Cookie>) {
+    super(data);
+    if (!data?.originalMaxAge) this.originalMaxAge = null;
+  }
 }
 
 /**
@@ -53,13 +61,18 @@ export type RuntimeSessionType = Omit<_Session, "cookie"> & {
   cookie: RuntimeCookieType;
 };
 
-@Model.prefillable
 export class RuntimeSession
   extends Model<RuntimeSession>
   implements RuntimeSessionType
 {
-  user = new SignedUser();
-  cookie = new RuntimeCookie();
+  declare user: SignedUser;
+  declare cookie: RuntimeCookie;
+
+  constructor(data?: Partial<RuntimeSession>) {
+    super(data);
+    this.user = new SignedUser(data?.user);
+    this.cookie = new RuntimeCookie(data?.cookie);
+  }
 }
 
 /**
@@ -70,8 +83,13 @@ export type SessionType = Omit<_Session, "cookie"> & {
   user: SignedUserType;
 };
 
-@Model.prefillable
 export class Session extends Model<Session> implements SessionType {
-  user = new SignedUser();
-  cookie = new Cookie();
+  declare user: SignedUser;
+  declare cookie: Cookie;
+
+  constructor(data?: Partial<Session>) {
+    super(data);
+    this.user = new SignedUser(data?.user);
+    this.cookie = new Cookie(data?.cookie);
+  }
 }
