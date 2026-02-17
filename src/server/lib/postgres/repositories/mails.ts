@@ -157,18 +157,19 @@ export const getMailHeaders = async (
   options: GetMailHeadersOptions
 ): Promise<MailModel[]> => {
   try {
-    const addressField = options.sent ? FROM_ADDRESS : TO_ADDRESS;
+    const addressJson = JSON.stringify([{ address }]);
+    // For sent mails, check from_address only
+    // For received mails, check to_address, cc_address, and bcc_address
+    const addressCondition = options.sent
+      ? `${FROM_ADDRESS} @> $3::jsonb`
+      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
     let sql = `
       SELECT * FROM mails 
       WHERE user_id = $1 
         AND sent = $2
-        AND ${addressField} @> $3::jsonb
+        AND ${addressCondition}
     `;
-    const values: ParamValue[] = [
-      user_id,
-      options.sent,
-      JSON.stringify([{ address }]),
-    ];
+    const values: ParamValue[] = [user_id, options.sent, addressJson];
     let paramIdx = 4;
 
     if (options.new) {
@@ -269,18 +270,19 @@ export const getAccountUidNext = async (
   sent: boolean = false
 ): Promise<number> => {
   try {
-    const addressField = sent ? FROM_ADDRESS : TO_ADDRESS;
+    const addressJson = JSON.stringify([{ address: account }]);
+    // For sent mails, check from_address only
+    // For received mails, check to_address, cc_address, and bcc_address
+    const addressCondition = sent
+      ? `${FROM_ADDRESS} @> $2::jsonb`
+      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
     const sql = `
       SELECT COUNT(*) as count FROM mails 
       WHERE user_id = $1 
-        AND ${addressField} @> $2::jsonb
+        AND ${addressCondition}
         AND sent = $3
     `;
-    const result = await pool.query(sql, [
-      user_id,
-      JSON.stringify([{ address: account }]),
-      sent,
-    ]);
+    const result = await pool.query(sql, [user_id, addressJson, sent]);
     return parseInt(result.rows[0]?.count || "0", 10) + 1;
   } catch (error) {
     console.error("Error getting account UID next:", error);
@@ -378,15 +380,20 @@ export const countMessages = async (
       `;
       values = [user_id, sent];
     } else {
-      const addressField = sent ? FROM_ADDRESS : TO_ADDRESS;
+      const addressJson = JSON.stringify([{ address: account }]);
+      // For sent mails, check from_address only
+      // For received mails, check to_address, cc_address, and bcc_address
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
         SELECT 
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
         FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressField} @> $3::jsonb
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
       `;
-      values = [user_id, sent, JSON.stringify([{ address: account }])];
+      values = [user_id, sent, addressJson];
     }
 
     const result = await pool.query(sql, values);
@@ -410,7 +417,6 @@ export const getMailsByRange = async (
   fields: string[] = ["*"]
 ): Promise<Map<string, MailModel>> => {
   try {
-    const addressField = sent ? FROM_ADDRESS : TO_ADDRESS;
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     let sql: string;
@@ -438,34 +444,28 @@ export const getMailsByRange = async (
       }
     } else {
       // Account-specific query
+      const addressJson = JSON.stringify([{ address: account }]);
+      // For sent mails, check from_address only
+      // For received mails, check to_address, cc_address, and bcc_address
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${addressField} @> $3::jsonb
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
             AND ${uidField} >= $4 AND ${uidField} <= $5
           ORDER BY ${uidField} ASC
         `;
-        values = [
-          user_id,
-          sent,
-          JSON.stringify([{ address: account }]),
-          start,
-          Math.min(end, 999999999),
-        ];
+        values = [user_id, sent, addressJson, start, Math.min(end, 999999999)];
       } else {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${addressField} @> $3::jsonb
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
           ORDER BY ${uidField} ASC
           OFFSET $4 LIMIT $5
         `;
-        values = [
-          user_id,
-          sent,
-          JSON.stringify([{ address: account }]),
-          start - 1,
-          end - start + 1,
-        ];
+        values = [user_id, sent, addressJson, start - 1, end - start + 1];
       }
     }
 
@@ -491,7 +491,6 @@ export const setMailFlags = async (
   useUid: boolean
 ): Promise<boolean> => {
   try {
-    const addressField = sent ? FROM_ADDRESS : TO_ADDRESS;
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     const read = flags.includes("\\Seen");
@@ -524,43 +523,34 @@ export const setMailFlags = async (
         values = [read, saved, user_id, sent, start];
       }
     } else {
+      const addressJson = JSON.stringify([{ address: account }]);
+      // For sent mails, check from_address only
+      // For received mails, check to_address, cc_address, and bcc_address
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $5::jsonb`
+        : `(${TO_ADDRESS} @> $5::jsonb OR cc_address @> $5::jsonb OR bcc_address @> $5::jsonb)`;
       if (useUid) {
         sql = `
           UPDATE mails 
           SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $3 AND sent = $4 AND ${addressField} @> $5::jsonb
+          WHERE user_id = $3 AND sent = $4 AND ${addressCondition}
             AND ${uidField} >= $6 AND ${uidField} <= $7
           RETURNING mail_id
         `;
-        values = [
-          read,
-          saved,
-          user_id,
-          sent,
-          JSON.stringify([{ address: account }]),
-          start,
-          end,
-        ];
+        values = [read, saved, user_id, sent, addressJson, start, end];
       } else {
         sql = `
           UPDATE mails 
           SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $3 AND sent = $4 AND ${addressField} @> $5::jsonb
+            WHERE user_id = $3 AND sent = $4 AND ${addressCondition}
             ORDER BY ${uidField} ASC
             OFFSET $6 LIMIT 1
           )
           RETURNING mail_id
         `;
-        values = [
-          read,
-          saved,
-          user_id,
-          sent,
-          JSON.stringify([{ address: account }]),
-          start,
-        ];
+        values = [read, saved, user_id, sent, addressJson, start];
       }
     }
 
@@ -579,7 +569,6 @@ export const searchMailsByUid = async (
   criteria: { type: string; value?: unknown }[]
 ): Promise<number[]> => {
   try {
-    const addressField = sent ? FROM_ADDRESS : TO_ADDRESS;
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     const conditions: string[] = ["user_id = $1", "sent = $2"];
@@ -587,8 +576,14 @@ export const searchMailsByUid = async (
     let paramIdx = 3;
 
     if (account !== null) {
-      conditions.push(`${addressField} @> $${paramIdx}::jsonb`);
-      values.push(JSON.stringify([{ address: account }]));
+      const addressJson = JSON.stringify([{ address: account }]);
+      // For sent mails, check from_address only
+      // For received mails, check to_address, cc_address, and bcc_address
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $${paramIdx}::jsonb`
+        : `(${TO_ADDRESS} @> $${paramIdx}::jsonb OR cc_address @> $${paramIdx}::jsonb OR bcc_address @> $${paramIdx}::jsonb)`;
+      conditions.push(addressCondition);
+      values.push(addressJson);
       paramIdx++;
     }
 
