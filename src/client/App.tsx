@@ -13,17 +13,7 @@ import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 import { Account, SignedUser } from "common";
 import { DomainGetResponse } from "server";
 
-import { Header } from "./Header";
-import { SignIn } from "./SignIn";
-import { Box } from "./Box";
-import { SignUp } from "./SignUp";
-import { useLocalStorage } from "./lib/hooks";
-import { Notifier } from "./lib/notification";
-import { call } from "./lib/call";
-import { callUser } from "./lib/user";
-import { queryClient } from "./lib/queryClient";
-
-export { queryClient };
+import { Header, SignIn, Box, SignUp, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
 
 export enum Category {
   NewMails = "New Mails",

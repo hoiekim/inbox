@@ -1,26 +1,27 @@
-@import "../../../variables.scss";
+@use "sass:color";
+@use "../../../variables" as *;
 
 @media (prefers-color-scheme: light) {
   .tab-holder {
     .categories {
-      background-color: adjust-color($color-light, $lightness: -10%);
+      background-color: color.adjust($color-light, $lightness: -10%);
 
       div.clicked {
-        background-color: adjust-color($color-light, $lightness: -5%);
+        background-color: color.adjust($color-light, $lightness: -5%);
       }
     }
 
     .accounts {
-      background-color: adjust-color($color-light, $lightness: -5%);
+      background-color: color.adjust($color-light, $lightness: -5%);
 
       .sort_icon {
         > div > svg {
-          color: adjust-color($color-dark, $alpha: -0.75);
+          color: color.adjust($color-dark, $alpha: -0.75);
         }
       }
 
       .sort_box {
-        background-color: adjust-color($color-light, $lightness: 5%);
+        background-color: color.adjust($color-light, $lightness: 5%);
       }
     }
   }
@@ -29,32 +30,32 @@
 @media (prefers-color-scheme: dark) {
   .tab-holder {
     .categories {
-      background-color: adjust-color($color-dark, $lightness: -6%);
+      background-color: color.adjust($color-dark, $lightness: -6%);
 
       div.clicked {
-        background-color: adjust-color($color-dark, $lightness: -2%);
+        background-color: color.adjust($color-dark, $lightness: -2%);
       }
     }
 
     .accounts {
-      background-color: adjust-color($color-dark, $lightness: -2%);
+      background-color: color.adjust($color-dark, $lightness: -2%);
 
       .sort_icon {
         > div > svg {
-          color: adjust-color($color-light, $alpha: -0.75);
+          color: color.adjust($color-light, $alpha: -0.75);
         }
       }
 
       .sort_box {
-        background-color: adjust-color($color-dark, $lightness: 2%);
+        background-color: color.adjust($color-dark, $lightness: 2%);
       }
 
       .sort_select {
-        background-color: adjust-color($color-dark, $lightness: 0%);
+        background-color: color.adjust($color-dark, $lightness: 0%);
       }
 
       .sort_option:hover {
-        background-color: adjust-color($color-dark, $lightness: 3%);
+        background-color: color.adjust($color-dark, $lightness: 3%);
       }
     }
   }

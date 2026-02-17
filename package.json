@@ -8,20 +8,19 @@
     "start": "bun run build && bun run start-server",
     "start-server": "bun ./build/server/bundle.js",
     "build": "bun run build-server && bun run build-client",
-    "build-client": "vite build",
+    "build-client": "bun vite build",
     "build-server": "bun ./src/server/pack.ts",
     "dev": "bun run dev-client & bun run dev-server",
-    "dev-client": "vite",
+    "dev-client": "bun vite",
     "dev-server": "bun --watch ./src/server/start.ts",
     "migrate": "bun scripts/migrate-es-to-pg.ts",
     "test": "bun test",
-    "preview": "vite preview"
+    "preview": "bun vite preview"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@aws-sdk/client-ses": "^3.856.0",
     "bcrypt": "^5.0.1",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
@@ -65,7 +64,7 @@
     "react-dom": "^18.2.0",
     "react-query": "^3.39.3",
     "react-router-dom": "^5.3.4",
-    "sass": "^1.34.0",
+    "sass": "^1.97.3",
     "typescript": "^5.3.0",
     "vite": "^5.0.0"
   }

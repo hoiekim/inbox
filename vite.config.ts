@@ -11,6 +11,13 @@ export default defineConfig({
       common: path.resolve(__dirname, "./src/common"),
     },
   },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        api: "modern-compiler",
+      },
+    },
+  },
   root: ".",
   publicDir: "public",
   build: {

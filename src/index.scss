@@ -1,4 +1,5 @@
-@import "./client/variables.scss";
+@use "sass:color";
+@use "./client/variables" as *;
 
 body {
   overflow: hidden;
@@ -8,9 +9,19 @@ body {
   margin: 0;
   width: 100vw;
   height: 100vh;
-  font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
-    "Helvetica Neue", sans-serif;
+  font-family:
+    "Open Sans",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "Roboto",
+    "Oxygen",
+    "Ubuntu",
+    "Cantarell",
+    "Fira Sans",
+    "Droid Sans",
+    "Helvetica Neue",
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
@@ -28,8 +39,8 @@ a {
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
-    monospace;
+  font-family:
+    source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
   background-color: rgba(100, 100, 100, 0.3);
   padding: 0 5px;
 }
@@ -96,15 +107,15 @@ code {
   .login_card,
   .writer-buttons {
     & > button {
-      background-color: adjust-color($color-accent, $lightness: 17%);
+      background-color: color.adjust($color-accent, $lightness: 17%);
       color: $color-light;
 
       &:hover {
-        background-color: adjust-color($color-accent, $lightness: 24%);
+        background-color: color.adjust($color-accent, $lightness: 24%);
       }
 
       &:active {
-        background-color: adjust-color($color-accent, $lightness: 22%);
+        background-color: color.adjust($color-accent, $lightness: 22%);
       }
     }
   }
@@ -112,12 +123,12 @@ code {
   .mailcard,
   .writer,
   .login_card {
-    background-color: adjust-color($color-light, $lightness: 3%);
-    border-left: 3px solid adjust-color($color-light, $lightness: 8%);
+    background-color: color.adjust($color-light, $lightness: 3%);
+    border-left: 3px solid color.adjust($color-light, $lightness: 8%);
   }
 
   .mailcard:hover {
-    background-color: adjust-color($color-light, $lightness: 4%);
+    background-color: color.adjust($color-light, $lightness: 4%);
   }
 
   .inputBox-flex,
@@ -125,50 +136,52 @@ code {
   .login_card {
     input {
       color: $color-dark;
-      background-color: adjust-color($color-light, $lightness: 10%);
-      box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
-        -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
+      background-color: color.adjust($color-light, $lightness: 10%);
+      box-shadow:
+        2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
+        -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
     }
   }
 
   .writer-content {
-    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
-      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
+    box-shadow:
+      2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
+      -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
 
     &,
     * {
       color: $color-dark;
-      background-color: adjust-color($color-light, $lightness: 10%);
+      background-color: color.adjust($color-light, $lightness: 10%);
     }
   }
 
   .attachment {
-    background-color: adjust-color($color-light, $lightness: 8%);
+    background-color: color.adjust($color-light, $lightness: 8%);
 
     &:hover {
-      background-color: adjust-color($color-light, $lightness: 10%);
+      background-color: color.adjust($color-light, $lightness: 10%);
     }
   }
 
   .tag {
-    background-color: adjust-color($color-light, $lightness: 8%);
+    background-color: color.adjust($color-light, $lightness: 8%);
     color: $color-dark;
 
     &:not(.skeleton):not(.clicked):hover {
-      background-color: adjust-color($color-light, $lightness: 14%);
+      background-color: color.adjust($color-light, $lightness: 14%);
     }
 
     &:not(.skeleton):not(.clicked):active {
-      background-color: adjust-color($color-light, $lightness: 12%);
+      background-color: color.adjust($color-light, $lightness: 12%);
     }
 
     &.clicked {
-      background-color: adjust-color($color-light, $lightness: -10%);
+      background-color: color.adjust($color-light, $lightness: -10%);
     }
   }
 
   .curtain.on {
-    background-color: adjust-color($color-light, $alpha: -0.4);
+    background-color: color.adjust($color-light, $alpha: -0.4);
   }
 }
 
@@ -216,13 +229,13 @@ code {
   .writer-buttons {
     & > button {
       color: $color-light;
-      background-color: adjust-color($color-accent, $lightness: 7%);
+      background-color: color.adjust($color-accent, $lightness: 7%);
 
       &:hover {
-        background-color: adjust-color($color-accent, $lightness: 14%);
+        background-color: color.adjust($color-accent, $lightness: 14%);
       }
       &:active {
-        background-color: adjust-color($color-accent, $lightness: 12%);
+        background-color: color.adjust($color-accent, $lightness: 12%);
       }
     }
   }
@@ -230,15 +243,15 @@ code {
   .mailcard,
   .writer,
   .login_card {
-    background-color: adjust-color($color-dark, $lightness: 3%);
-    border-left: 3px solid adjust-color($color-dark, $lightness: 10%);
+    background-color: color.adjust($color-dark, $lightness: 3%);
+    border-left: 3px solid color.adjust($color-dark, $lightness: 10%);
   }
 
   .mailcard:not(.skeleton):hover {
-    background-color: adjust-color($color-dark, $lightness: 4%);
+    background-color: color.adjust($color-dark, $lightness: 4%);
 
     .insight {
-      background-color: adjust-color($color-dark, $lightness: 3%);
+      background-color: color.adjust($color-dark, $lightness: 3%);
     }
   }
 
@@ -247,57 +260,60 @@ code {
   .login_card {
     input {
       color: $color-light;
-      background-color: adjust-color($color-dark, $lightness: -3%);
-      box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
-        -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
+      background-color: color.adjust($color-dark, $lightness: -3%);
+      box-shadow:
+        1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
+        -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
     }
   }
 
   .writer-content {
-    box-shadow: 1px 1px 2px adjust-color($color-dark, $lightness: -10%) inset,
-      -0.5px -0.5px 2px adjust-color($color-dark, $lightness: 10%) inset;
+    box-shadow:
+      1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
+      -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
 
     &,
     * {
       color: $color-light;
-      background-color: adjust-color($color-dark, $lightness: -3%);
+      background-color: color.adjust($color-dark, $lightness: -3%);
     }
   }
 
   .attachment {
-    background-color: adjust-color($color-dark, $lightness: 10%);
+    background-color: color.adjust($color-dark, $lightness: 10%);
 
     &:hover {
-      background-color: adjust-color($color-dark, $lightness: 13%);
+      background-color: color.adjust($color-dark, $lightness: 13%);
     }
   }
 
   .tag {
-    background-color: adjust-color($color-dark, $lightness: 7%);
+    background-color: color.adjust($color-dark, $lightness: 7%);
     color: $color-light;
 
     &:not(.skeleton):not(.clicked):hover {
-      background-color: adjust-color($color-dark, $lightness: 14%);
+      background-color: color.adjust($color-dark, $lightness: 14%);
     }
 
     &:not(.skeleton):not(.clicked):active {
-      background-color: adjust-color($color-dark, $lightness: 10%);
+      background-color: color.adjust($color-dark, $lightness: 10%);
     }
 
     &.clicked {
-      background-color: adjust-color($color-dark, $lightness: -4%);
+      background-color: color.adjust($color-dark, $lightness: -4%);
     }
   }
 
   .curtain.on {
-    background-color: adjust-color($color-dark, $alpha: -0.4);
+    background-color: color.adjust($color-dark, $alpha: -0.4);
   }
 }
 
 .writer-content {
   &.open {
-    box-shadow: 2px 2px 2px adjust-color($color-light, $lightness: -5%) inset,
-      -1px -1px 2px adjust-color($color-light, $lightness: 20%) inset;
+    box-shadow:
+      2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
+      -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
 
     &,
     * {
@@ -307,13 +323,13 @@ code {
     .original_message {
       &,
       * {
-        background-color: adjust-color($color-light, $lightness: 12%);
+        background-color: color.adjust($color-light, $lightness: 12%);
       }
 
       &:hover {
         &,
         * {
-          background-color: adjust-color($color-light, $lightness: 10%);
+          background-color: color.adjust($color-light, $lightness: 10%);
         }
       }
     }

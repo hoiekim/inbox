@@ -7,13 +7,12 @@ export interface MailAddressValueType {
   name?: string;
 }
 
-@Model.prefillable
 export class MailAddressValue
   extends Model<MailAddressValue>
   implements MailAddressValueType
 {
-  address?: string;
-  name?: string;
+  declare address?: string;
+  declare name?: string;
 }
 
 export interface MailAddressType {
@@ -21,10 +20,15 @@ export interface MailAddressType {
   text: string;
 }
 
-@Model.prefillable
 export class MailAddress extends Model<MailAddress> implements MailAddressType {
-  value: MailAddressValue[] = [];
-  text = "";
+  declare value: MailAddressValue[];
+  declare text: string;
+
+  constructor(data?: Partial<MailAddress>) {
+    super(data);
+    if (!data?.value) this.value = [];
+    if (!data?.text) this.text = "";
+  }
 }
 
 export interface AttachmentType {
@@ -34,12 +38,19 @@ export interface AttachmentType {
   size: number;
 }
 
-@Model.prefillable
 export class Attachment extends Model<Attachment> implements AttachmentType {
-  content: { data: string } = { data: "" };
-  contentType: string = "text/plain";
-  filename: string = "unnamed_file";
-  size: number = 0;
+  declare content: { data: string };
+  declare contentType: string;
+  declare filename: string;
+  declare size: number;
+
+  constructor(data?: Partial<Attachment>) {
+    super(data);
+    if (!data?.content) this.content = { data: "" };
+    if (!data?.contentType) this.contentType = "text/plain";
+    if (!data?.filename) this.filename = "unnamed_file";
+    if (!data?.size) this.size = 0;
+  }
 }
 
 export interface MailUidType {
@@ -47,10 +58,15 @@ export interface MailUidType {
   account: number;
 }
 
-@Model.prefillable
 export class MailUid extends Model<MailUid> implements MailUidType {
-  domain = 0;
-  account = 0;
+  declare domain: number;
+  declare account: number;
+
+  constructor(data?: Partial<MailUid>) {
+    super(data);
+    if (!data?.domain) this.domain = 0;
+    if (!data?.account) this.account = 0;
+  }
 }
 
 export interface MailType {
@@ -76,26 +92,42 @@ export interface MailType {
   uid: MailUidType;
 }
 
-@Model.prefillable
 export class Mail extends Model<Mail> implements MailType {
-  attachments?: AttachmentType[];
-  from?: MailAddressType;
-  to?: MailAddressType;
-  cc?: MailAddressType;
-  bcc?: MailAddressType;
-  replyTo?: MailAddressType;
-  envelopeFrom?: MailAddressValueType[];
-  envelopeTo: MailAddressValueType[] = [];
-  date: DateString = new Date().toISOString();
-  html: string = "";
-  text: string = "";
-  subject: string = "";
-  messageId: string = getRandomId();
-  read: boolean = false;
-  saved: boolean = false;
-  sent: boolean = false;
-  deleted: boolean = false;
-  draft: boolean = false;
-  insight?: Insight;
-  uid: MailUidType = new MailUid();
+  declare attachments?: AttachmentType[];
+  declare from?: MailAddressType;
+  declare to?: MailAddressType;
+  declare cc?: MailAddressType;
+  declare bcc?: MailAddressType;
+  declare replyTo?: MailAddressType;
+  declare envelopeFrom?: MailAddressValueType[];
+  declare envelopeTo: MailAddressValueType[];
+  declare date: DateString;
+  declare html: string;
+  declare text: string;
+  declare subject: string;
+  declare messageId: string;
+  declare read: boolean;
+  declare saved: boolean;
+  declare sent: boolean;
+  declare deleted: boolean;
+  declare draft: boolean;
+  declare insight?: Insight;
+  declare uid: MailUidType;
+
+  constructor(data?: Partial<Mail>) {
+    super(data);
+    if (!data?.envelopeTo) this.envelopeTo = [];
+    if (!data?.attachments) this.attachments = [];
+    if (!data?.date) this.date = new Date().toISOString();
+    if (!data?.html) this.html = "";
+    if (!data?.text) this.text = "";
+    if (!data?.subject) this.subject = "";
+    if (!data?.messageId) this.messageId = getRandomId();
+    if (!data?.read) this.read = false;
+    if (!data?.saved) this.saved = false;
+    if (!data?.sent) this.sent = false;
+    if (!data?.deleted) this.deleted = false;
+    if (!data?.draft) this.draft = false;
+    if (!data?.uid) this.uid = new MailUid();
+  }
 }

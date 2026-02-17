@@ -20,25 +20,33 @@ export interface MailHeaderDataType {
   };
 }
 
-@Model.prefillable
 export class MailHeaderData
   extends Model<MailHeaderData>
   implements MailHeaderDataType
 {
-  id: string = getRandomId();
-  subject: string = "No Subject";
-  date: DateString = new Date().toISOString();
-  read: boolean = false;
-  saved: boolean = false;
-  from?: MailAddressType;
-  to?: MailAddressType;
-  cc?: MailAddressType;
-  bcc?: MailAddressType;
-  insight?: Insight;
-  highlight?: {
+  declare id: string;
+  declare subject: string;
+  declare date: DateString;
+  declare read: boolean;
+  declare saved: boolean;
+  declare from?: MailAddressType;
+  declare to?: MailAddressType;
+  declare cc?: MailAddressType;
+  declare bcc?: MailAddressType;
+  declare insight?: Insight;
+  declare highlight?: {
     subject?: string[];
     text?: string[];
   };
+
+  constructor(data?: Partial<MailHeaderData>) {
+    super(data);
+    if (!data?.id) this.id = getRandomId();
+    if (!data?.subject) this.subject = "";
+    if (!data?.date) this.date = new Date().toISOString();
+    if (!data?.read) this.read = false;
+    if (!data?.saved) this.saved = false;
+  }
 }
 
 export interface MailBodyDataType {
@@ -49,16 +57,22 @@ export interface MailBodyDataType {
   insight?: Insight;
 }
 
-@Model.prefillable
 export class MailBodyData
   extends Model<MailBodyData>
   implements MailBodyDataType
 {
-  id: string = getRandomId();
-  html: string = "";
-  attachments?: AttachmentType[];
-  messageId: string = getRandomId();
-  insight?: Insight;
+  declare id: string;
+  declare html: string;
+  declare attachments?: AttachmentType[];
+  declare messageId: string;
+  declare insight?: Insight;
+
+  constructor(data?: Partial<MailBodyData>) {
+    super(data);
+    if (!data?.id) this.id = getRandomId();
+    if (!data?.html) this.html = "";
+    if (!data?.messageId) this.messageId = getRandomId();
+  }
 }
 
 export interface MailDataToSendType {
@@ -72,17 +86,25 @@ export interface MailDataToSendType {
   inReplyTo?: string;
 }
 
-@Model.prefillable
 export class MailDataToSend
   extends Model<MailDataToSend>
   implements MailDataToSendType
 {
-  sender: string = "unknown";
-  senderFullName: string = "unknown";
-  to: string = "";
-  cc?: string;
-  bcc?: string;
-  subject: string = "No Subject";
-  html: string = "";
-  inReplyTo?: string;
+  declare sender: string;
+  declare senderFullName: string;
+  declare to: string;
+  declare cc?: string;
+  declare bcc?: string;
+  declare subject: string;
+  declare html: string;
+  declare inReplyTo?: string;
+
+  constructor(data?: Partial<MailDataToSend>) {
+    super(data);
+    if (!data?.sender) this.sender = "Unknown";
+    if (!data?.senderFullName) this.senderFullName = "Unknown";
+    if (!data?.to) this.to = "";
+    if (!data?.subject) this.subject = "No Subject";
+    if (!data?.html) this.html = "";
+  }
 }
