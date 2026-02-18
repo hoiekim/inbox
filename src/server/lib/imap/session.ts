@@ -368,6 +368,8 @@ export class ImapSession {
         case "FLAGS":
           fields.add("read");
           fields.add("saved");
+          fields.add("deleted");
+          fields.add("draft");
           break;
 
         case "BODYSTRUCTURE":
@@ -897,13 +899,15 @@ export class ImapSession {
       const { total, unread } = countResult;
 
       this.write(`* ${total} EXISTS\r\n`);
+      this.write(`* 0 RECENT\r\n`);
       this.write(
         `* OK [UNSEEN ${unread}] Message ${unread} is first unseen\r\n`
       );
+      // TODO: Implement per-mailbox UIDVALIDITY tracking
       this.write(`* OK [UIDVALIDITY 1] UIDs valid\r\n`);
       this.write(`* OK [UIDNEXT ${total + 1}] Predicted next UID\r\n`);
-      this.write(`* FLAGS (\\Flagged \\Seen)\r\n`);
-      this.write(`* OK [PERMANENTFLAGS (\\Flagged \\Seen)] Limited\r\n`);
+      this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft)\r\n`);
+      this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\*)] Flags permitted\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
     } catch (error) {
       console.error("[IMAP] Error selecting mailbox:", error);
@@ -921,7 +925,15 @@ export class ImapSession {
     }
 
     try {
-      await this.store.expunge(this.selectedMailbox);
+      const expungedUids = await this.store.expunge(this.selectedMailbox);
+      
+      // Send EXPUNGE responses for each deleted message
+      // Note: In a full implementation, we'd need to track sequence numbers
+      // For now, we use UIDs as sequence numbers (matches our current behavior)
+      for (const uid of expungedUids) {
+        this.write(`* ${uid} EXPUNGE\r\n`);
+      }
+      
       this.write(`${tag} OK EXPUNGE completed\r\n`);
     } catch (error) {
       console.error("Expunge failed:", error);

@@ -234,8 +234,9 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
 
   if (mail.read) flags.push("\\Seen");
   if (mail.saved) flags.push("\\Flagged");
-  // Note: MailType doesn't have answered, draft, or deleted properties
-  // These would need to be added to the Mail model if needed
+  if (mail.deleted) flags.push("\\Deleted");
+  if (mail.draft) flags.push("\\Draft");
+  // Note: \Answered flag would need to be added to the Mail model if needed
 
   return flags;
 };
