@@ -530,7 +530,7 @@ export const setMailFlags = async (
       // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $7::jsonb`
-        : `(${TO_ADDRESS} @> $7::jsonb OR cc_address @> $7::jsonb || bcc_address @> $7::jsonb)`;
+        : `(${TO_ADDRESS} @> $7::jsonb OR cc_address @> $7::jsonb OR bcc_address @> $7::jsonb)`;
       if (useUid) {
         sql = `
           UPDATE mails 
