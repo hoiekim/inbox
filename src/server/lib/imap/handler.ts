@@ -192,7 +192,7 @@ export class ImapRequestHandler {
           break;
 
         case "APPEND":
-          this.session.write(`${tag} NO APPEND not supported\r\n`);
+          await this.session.appendMessage(tag, request.data);
           break;
 
         case "IDLE":
@@ -217,10 +217,6 @@ export class ImapRequestHandler {
 
         case "COPY":
           await this.session.copyMessageTyped(tag, request.data, false);
-          break;
-
-        case "APPEND":
-          await this.session.appendMessage(tag, request.data);
           break;
 
         case "UID":

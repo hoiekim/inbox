@@ -495,6 +495,8 @@ export const setMailFlags = async (
 
     const read = flags.includes("\\Seen");
     const saved = flags.includes("\\Flagged");
+    const deleted = flags.includes("\\Deleted");
+    const draft = flags.includes("\\Draft");
 
     let sql: string;
     let values: ParamValue[];
@@ -503,54 +505,54 @@ export const setMailFlags = async (
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $3 AND sent = $4 AND ${uidField} >= $5 AND ${uidField} <= $6
+          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $5 AND sent = $6 AND ${uidField} >= $7 AND ${uidField} <= $8
           RETURNING mail_id
         `;
-        values = [read, saved, user_id, sent, start, end];
+        values = [read, saved, deleted, draft, user_id, sent, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
+          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $3 AND sent = $4
+            WHERE user_id = $5 AND sent = $6
             ORDER BY ${uidField} ASC
-            OFFSET $5 LIMIT 1
+            OFFSET $7 LIMIT 1
           )
           RETURNING mail_id
         `;
-        values = [read, saved, user_id, sent, start];
+        values = [read, saved, deleted, draft, user_id, sent, start];
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
       // For sent mails, check from_address only
       // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $5::jsonb`
-        : `(${TO_ADDRESS} @> $5::jsonb OR cc_address @> $5::jsonb OR bcc_address @> $5::jsonb)`;
+        ? `${FROM_ADDRESS} @> $7::jsonb`
+        : `(${TO_ADDRESS} @> $7::jsonb OR cc_address @> $7::jsonb || bcc_address @> $7::jsonb)`;
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $3 AND sent = $4 AND ${addressCondition}
-            AND ${uidField} >= $6 AND ${uidField} <= $7
+          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $5 AND sent = $6 AND ${addressCondition}
+            AND ${uidField} >= $8 AND ${uidField} <= $9
           RETURNING mail_id
         `;
-        values = [read, saved, user_id, sent, addressJson, start, end];
+        values = [read, saved, deleted, draft, user_id, sent, addressJson, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, updated = CURRENT_TIMESTAMP
+          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $3 AND sent = $4 AND ${addressCondition}
+            WHERE user_id = $5 AND sent = $6 AND ${addressCondition}
             ORDER BY ${uidField} ASC
-            OFFSET $6 LIMIT 1
+            OFFSET $8 LIMIT 1
           )
           RETURNING mail_id
         `;
-        values = [read, saved, user_id, sent, addressJson, start];
+        values = [read, saved, deleted, draft, user_id, sent, addressJson, start];
       }
     }
 
@@ -669,5 +671,50 @@ export const getUnreadNotifications = async (
   } catch (error) {
     console.error("Failed to get unread notifications:", error);
     return new Map();
+  }
+};
+
+/**
+ * Permanently delete messages marked with \Deleted flag (EXPUNGE operation)
+ * Returns the UIDs of deleted messages for EXPUNGE responses
+ */
+export const expungeDeletedMails = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean
+): Promise<number[]> => {
+  try {
+    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
+
+    let sql: string;
+    let values: ParamValue[];
+
+    if (account === null) {
+      // Domain-wide expunge
+      sql = `
+        DELETE FROM mails 
+        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE
+        RETURNING ${uidField} as uid
+      `;
+      values = [user_id, sent];
+    } else {
+      // Account-specific expunge
+      const addressJson = JSON.stringify([{ address: account }]);
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      sql = `
+        DELETE FROM mails 
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE
+        RETURNING ${uidField} as uid
+      `;
+      values = [user_id, sent, addressJson];
+    }
+
+    const result = await pool.query(sql, values);
+    return result.rows.map((row: Record<string, unknown>) => row.uid as number);
+  } catch (error) {
+    console.error("Failed to expunge deleted mails:", error);
+    return [];
   }
 };

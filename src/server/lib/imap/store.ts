@@ -6,6 +6,7 @@ import {
   setMailFlags,
   searchMailsByUid,
   saveMail as pgSaveMail,
+  expungeDeletedMails,
   SaveMailInput,
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
@@ -199,11 +200,19 @@ export class Store {
     }
   };
 
-  expunge = async (box: string): Promise<void> => {
+  /**
+   * Permanently delete messages marked with \Deleted flag
+   * Returns the UIDs of deleted messages
+   */
+  expunge = async (box: string): Promise<number[]> => {
     try {
-      // Delete messages marked for deletion (in IMAP, this would be messages with \Deleted flag)
-      // Since we don't have a \Deleted flag in our system, we'll skip this operation
-      // In a real implementation, you might want to add a 'deleted' field to track this
+      const isDomainInbox = box === "INBOX";
+      const isSent = box.startsWith("Sent Messages/");
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
+
+      return await expungeDeletedMails(this.user.id, accountName, isSent);
     } catch (error) {
       console.error("Error expunging messages:", error);
       throw error;
