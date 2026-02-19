@@ -1054,8 +1054,10 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
-    // Clear the selected mailbox
+    // Clear the selected mailbox and sequence mapping
     this.selectedMailbox = null;
+    this.seqToUid = [];
+    this.uidToSeq.clear();
     this.write(`${tag} OK CLOSE completed\r\n`);
   };
 
@@ -1067,6 +1069,8 @@ export class ImapSession {
 
     this.store = null;
     this.selectedMailbox = null;
+    this.seqToUid = [];
+    this.uidToSeq.clear();
     this.authenticated = false;
     this.write("* BYE IMAP4rev1 Server logging out\r\n");
     this.write(`${tag} OK LOGOUT completed\r\n`);
