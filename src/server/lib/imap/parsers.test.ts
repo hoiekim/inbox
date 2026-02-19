@@ -2,6 +2,7 @@ import { parseCommand } from "./parsers";
 
 describe("IMAP parsers", () => {
   const STORE_COMMAND = "1.1 UID STORE 1 +FLAGS.SILENT (\\Seen)";
+  const STORE_ANSWERED = "1.2 UID STORE 1 +FLAGS (\\Answered)";
 
   it(`should parse "${STORE_COMMAND}"`, () => {
     const result = parseCommand(STORE_COMMAND);
@@ -25,6 +26,29 @@ describe("IMAP parsers", () => {
     expect(storeRequest.data.operation).toBe("+FLAGS.SILENT");
     expect(storeRequest.data.flags).toEqual(["\\Seen"]);
     expect(storeRequest.data.silent).toBe(true);
+  });
+
+  it(`should parse "${STORE_ANSWERED}"`, () => {
+    const result = parseCommand(STORE_ANSWERED);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("1.2");
+    expect(result.value?.request.type).toBe("UID");
+
+    if (result.value?.request.type !== "UID") {
+      throw new Error("Expected UID request type");
+    }
+
+    const uidRequest = result.value.request;
+    expect(uidRequest.data.command).toBe("STORE");
+
+    if (uidRequest.data.request.type !== "STORE") {
+      throw new Error("Expected STORE request type");
+    }
+
+    const storeRequest = uidRequest.data.request;
+    expect(storeRequest.data.operation).toBe("+FLAGS");
+    expect(storeRequest.data.flags).toEqual(["\\Answered"]);
+    expect(storeRequest.data.silent).toBe(false);
   });
 
   it("should parse FETCH command with range", () => {
