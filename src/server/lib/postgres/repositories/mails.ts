@@ -675,6 +675,51 @@ export const getUnreadNotifications = async (
 };
 
 /**
+ * Get all UIDs in a mailbox, ordered by UID ascending.
+ * Used to build sequence number → UID mapping for IMAP sessions.
+ */
+export const getAllUids = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean
+): Promise<number[]> => {
+  try {
+    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
+
+    let sql: string;
+    let values: ParamValue[];
+
+    if (account === null) {
+      // Domain-wide query
+      sql = `
+        SELECT ${uidField} as uid FROM mails 
+        WHERE user_id = $1 AND sent = $2
+        ORDER BY ${uidField} ASC
+      `;
+      values = [user_id, sent];
+    } else {
+      // Account-specific query
+      const addressJson = JSON.stringify([{ address: account }]);
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      sql = `
+        SELECT ${uidField} as uid FROM mails 
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+        ORDER BY ${uidField} ASC
+      `;
+      values = [user_id, sent, addressJson];
+    }
+
+    const result = await pool.query(sql, values);
+    return result.rows.map((row: Record<string, unknown>) => row.uid as number);
+  } catch (error) {
+    console.error("Failed to get all UIDs:", error);
+    return [];
+  }
+};
+
+/**
  * Permanently delete messages marked with \Deleted flag (EXPUNGE operation)
  * Returns the UIDs of deleted messages for EXPUNGE responses
  */

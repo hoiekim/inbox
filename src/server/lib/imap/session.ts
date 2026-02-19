@@ -58,6 +58,12 @@ export class ImapSession {
   private isIdling: boolean = false;
   private idleTag: string | null = null;
   private sessionId: string;
+  
+  // Sequence number mapping: index 0 = seq 1, index 1 = seq 2, etc.
+  // Value is the UID for that sequence number
+  private seqToUid: number[] = [];
+  // Reverse mapping: UID -> sequence number
+  private uidToSeq: Map<number, number> = new Map();
 
   constructor(
     private handler: ImapRequestHandler,
@@ -71,6 +77,39 @@ export class ImapSession {
   getCapabilities = () => {
     return getCapabilities(this.handler.port);
   };
+
+  /**
+   * Build sequence number → UID mapping for the selected mailbox.
+   * Per RFC 3501, sequence numbers must be contiguous 1..N.
+   */
+  private async buildSequenceMapping(): Promise<void> {
+    if (!this.store || !this.selectedMailbox) {
+      this.seqToUid = [];
+      this.uidToSeq.clear();
+      return;
+    }
+
+    const uids = await this.store.getAllUids(this.selectedMailbox);
+    this.seqToUid = uids;
+    this.uidToSeq.clear();
+    for (let i = 0; i < uids.length; i++) {
+      this.uidToSeq.set(uids[i], i + 1); // seq numbers are 1-indexed
+    }
+  }
+
+  /**
+   * Convert a sequence number to UID.
+   */
+  private seqToUidNumber(seq: number): number | undefined {
+    return this.seqToUid[seq - 1]; // seq is 1-indexed, array is 0-indexed
+  }
+
+  /**
+   * Convert a UID to sequence number.
+   */
+  private uidToSeqNumber(uid: number): number | undefined {
+    return this.uidToSeq.get(uid);
+  }
 
   write = (data: string) => {
     if (this.socket.destroyed || !this.socket.writable) {
@@ -156,17 +195,35 @@ export class ImapSession {
   ) {
     const ranges = this.convertSequenceSet(fetchRequest.sequenceSet);
     const requestedFields = this.getRequestedFields(fetchRequest.dataItems);
+    const isUidFetch = fetchRequest.sequenceSet.type === "uid" || isUidCommand;
 
     const result = new Map<string, Partial<MailType>>();
 
     await Promise.all(
       ranges.flatMap(async ({ start, end }) => {
+        // Convert sequence numbers to UIDs if needed
+        let uidStart = start;
+        let uidEnd = end;
+        
+        if (!isUidFetch) {
+          // Convert sequence range to UID range
+          const startUid = this.seqToUidNumber(start);
+          const endUid = this.seqToUidNumber(end);
+          if (startUid === undefined || endUid === undefined) {
+            console.warn(`[IMAP] Invalid sequence range ${start}-${end}`);
+            return;
+          }
+          uidStart = startUid;
+          uidEnd = endUid;
+        }
+        
+        // Always fetch by UID from the store for consistency
         const messages = await this.store!.getMessages(
           this.selectedMailbox!,
-          start,
-          end,
+          uidStart,
+          uidEnd,
           Array.from(requestedFields),
-          fetchRequest.sequenceSet.type === "uid" || isUidCommand
+          true // Always use UID for database queries
         );
         messages.forEach((mail, id) => {
           result.set(id, mail);
@@ -187,8 +244,13 @@ export class ImapSession {
 
     for (const [id, mail] of Array.from(messages.entries())) {
       const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
-      // TODO: seqNum should not be same as UID
-      const seqNum = uid;
+      // Use proper sequence number from mapping (RFC 3501 compliance)
+      const seqNum = this.uidToSeqNumber(uid);
+      
+      if (seqNum === undefined) {
+        console.warn(`[IMAP] No sequence number found for UID ${uid}`);
+        continue;
+      }
 
       try {
         const response = await this.buildFetchResponse(
@@ -666,20 +728,36 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
-    // TODO: handle non-UID commands properly
-    const useUid = true;
+    // Determine if we're working with UIDs or sequence numbers
+    const isUidStore = storeRequest.sequenceSet.type === "uid" || isUidCommand;
 
     try {
       const { sequenceSet, operation, flags, silent } = storeRequest;
       const ranges = this.convertSequenceSet(sequenceSet);
 
       for (const { start, end } of ranges) {
+        // Convert sequence numbers to UIDs if needed
+        let uidStart = start;
+        let uidEnd = end;
+        
+        if (!isUidStore) {
+          // Convert sequence numbers to UIDs for the store operation
+          const startUid = this.seqToUidNumber(start);
+          const endUid = this.seqToUidNumber(end);
+          if (startUid === undefined || endUid === undefined) {
+            console.warn(`[IMAP] Invalid sequence range ${start}-${end}`);
+            continue;
+          }
+          uidStart = startUid;
+          uidEnd = endUid;
+        }
+        
         const updated = await this.store!.setFlags(
           this.selectedMailbox!,
-          start,
-          end,
+          uidStart,
+          uidEnd,
           flags,
-          useUid
+          true // Always use UID for database operations
         );
 
         if (!updated) {
@@ -689,9 +767,13 @@ export class ImapSession {
           );
         } else {
           // Send untagged response unless silent
+          // Response always uses sequence numbers per RFC 3501
           if (!silent && !operation.includes("SILENT")) {
-            for (let i = start; i <= end; i++) {
-              this.write(`* ${i} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+            for (let uid = uidStart; uid <= uidEnd; uid++) {
+              const seq = this.uidToSeqNumber(uid);
+              if (seq !== undefined) {
+                this.write(`* ${seq} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+              }
             }
           }
         }
@@ -889,10 +971,16 @@ export class ImapSession {
 
     try {
       this.selectedMailbox = cleanName;
+      
+      // Build sequence number mapping for this mailbox
+      await this.buildSequenceMapping();
+      
       const countResult = await this.store.countMessages(cleanName);
 
       if (countResult === null) {
         this.selectedMailbox = null;
+        this.seqToUid = [];
+        this.uidToSeq.clear();
         return this.write(`${tag} NO Mailbox does not exist\r\n`);
       }
 
@@ -906,8 +994,8 @@ export class ImapSession {
       // TODO: Implement per-mailbox UIDVALIDITY tracking
       this.write(`* OK [UIDVALIDITY 1] UIDs valid\r\n`);
       this.write(`* OK [UIDNEXT ${total + 1}] Predicted next UID\r\n`);
-      this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft)\r\n`);
-      this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\*)] Flags permitted\r\n`);
+      this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
+      this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
     } catch (error) {
       console.error("[IMAP] Error selecting mailbox:", error);
@@ -927,12 +1015,28 @@ export class ImapSession {
     try {
       const expungedUids = await this.store.expunge(this.selectedMailbox);
       
-      // Send EXPUNGE responses for each deleted message
-      // Note: In a full implementation, we'd need to track sequence numbers
-      // For now, we use UIDs as sequence numbers (matches our current behavior)
+      // Convert UIDs to sequence numbers BEFORE modifying the mapping.
+      // Per RFC 3501, EXPUNGE responses must use the sequence number
+      // the message had BEFORE any previous EXPUNGE in this response.
+      // We process in reverse order so sequence numbers remain valid.
+      const seqNumbers: number[] = [];
       for (const uid of expungedUids) {
-        this.write(`* ${uid} EXPUNGE\r\n`);
+        const seq = this.uidToSeqNumber(uid);
+        if (seq !== undefined) {
+          seqNumbers.push(seq);
+        }
       }
+      
+      // Sort descending - we must report higher seq numbers first
+      // because each EXPUNGE shifts subsequent sequence numbers down
+      seqNumbers.sort((a, b) => b - a);
+      
+      for (const seq of seqNumbers) {
+        this.write(`* ${seq} EXPUNGE\r\n`);
+      }
+      
+      // Rebuild the sequence mapping after expunge
+      await this.buildSequenceMapping();
       
       this.write(`${tag} OK EXPUNGE completed\r\n`);
     } catch (error) {
