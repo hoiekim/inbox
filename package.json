@@ -15,6 +15,7 @@
     "dev-server": "bun --watch ./src/server/start.ts",
     "migrate": "bun scripts/migrate-es-to-pg.ts",
     "test": "bun test",
+    "test:coverage": "bun test --coverage",
     "preview": "bun vite preview"
   },
   "keywords": [],
