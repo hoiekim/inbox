@@ -24,6 +24,7 @@ import {
   SENT,
   DELETED,
   DRAFT,
+  ANSWERED,
   INSIGHT,
   UID_DOMAIN,
   UID_ACCOUNT,
@@ -67,6 +68,7 @@ export interface MailJSON {
   sent: boolean;
   deleted: boolean;
   draft: boolean;
+  answered: boolean;
   insight: object | null;
   uid_domain: number;
   uid_account: number;
@@ -98,6 +100,7 @@ const mailSchema = {
   [SENT]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [DELETED]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [DRAFT]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [ANSWERED]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [INSIGHT]: "JSONB",
   [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
   [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
@@ -133,6 +136,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   declare sent: boolean;
   declare deleted: boolean;
   declare draft: boolean;
+  declare answered: boolean;
   declare insight: object | null;
   declare uid_domain: number;
   declare uid_account: number;
@@ -164,6 +168,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     sent: isBoolean,
     deleted: isBoolean,
     draft: isBoolean,
+    answered: isBoolean,
     insight: isNullableObject,
     uid_domain: isNumber,
     uid_account: isNumber,
@@ -202,6 +207,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       sent: this.sent,
       deleted: this.deleted,
       draft: this.draft,
+      answered: this.answered,
       insight: this.insight,
       uid_domain: this.uid_domain,
       uid_account: this.uid_account,
