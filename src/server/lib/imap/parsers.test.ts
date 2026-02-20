@@ -1,4 +1,4 @@
-import { parseCommand } from "../../src/server/lib/imap/parsers";
+import { parseCommand } from "./parsers";
 
 describe("IMAP parsers", () => {
   const STORE_COMMAND = "1.1 UID STORE 1 +FLAGS.SILENT (\\Seen)";
