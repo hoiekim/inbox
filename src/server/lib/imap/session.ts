@@ -703,10 +703,23 @@ export class ImapSession {
     }
 
     try {
-      const result = await this.store.search(
+      // Store.search returns UIDs
+      const uids = await this.store.search(
         this.selectedMailbox,
         searchRequest.criteria
       );
+      
+      // For UID SEARCH: return UIDs directly
+      // For SEARCH: convert UIDs to sequence numbers (RFC 3501)
+      let result: number[];
+      if (isUidCommand) {
+        result = uids;
+      } else {
+        result = uids
+          .map((uid) => this.uidToSeqNumber(uid))
+          .filter((seq): seq is number => seq !== undefined);
+      }
+      
       this.write(`* SEARCH ${result.join(" ")}\r\n`);
       this.write(`${tag} OK SEARCH completed\r\n`);
     } catch (error) {
