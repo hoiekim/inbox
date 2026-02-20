@@ -217,7 +217,7 @@ export class ImapSession {
     const result = new Map<string, Partial<MailType>>();
 
     await Promise.all(
-      ranges.flatMap(async ({ start, end }) => {
+      ranges.map(async ({ start, end }) => {
         // Convert sequence numbers to UIDs if needed
         let uidStart = start;
         let uidEnd = end;
