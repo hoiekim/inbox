@@ -9,6 +9,7 @@ import {
   expungeDeletedMails,
   getAllUids as pgGetAllUids,
   SaveMailInput,
+  UpdatedMailFlags,
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
@@ -197,7 +198,7 @@ export class Store {
     end: number,
     flags: string[],
     useUid: boolean = false
-  ): Promise<boolean> => {
+  ): Promise<UpdatedMailFlags[]> => {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
@@ -216,7 +217,7 @@ export class Store {
       );
     } catch (error) {
       console.error("Error setting flags:", error);
-      return false;
+      return [];
     }
   };
 

@@ -481,6 +481,15 @@ export const getMailsByRange = async (
   }
 };
 
+export interface UpdatedMailFlags {
+  uid: number;
+  read: boolean;
+  saved: boolean;
+  deleted: boolean;
+  draft: boolean;
+  answered: boolean;
+}
+
 export const setMailFlags = async (
   user_id: string,
   account: string | null,
@@ -489,7 +498,7 @@ export const setMailFlags = async (
   end: number,
   flags: string[],
   useUid: boolean
-): Promise<boolean> => {
+): Promise<UpdatedMailFlags[]> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
@@ -497,6 +506,7 @@ export const setMailFlags = async (
     const saved = flags.includes("\\Flagged");
     const deleted = flags.includes("\\Deleted");
     const draft = flags.includes("\\Draft");
+    const answered = flags.includes("\\Answered");
 
     let sql: string;
     let values: ParamValue[];
@@ -505,62 +515,69 @@ export const setMailFlags = async (
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $5 AND sent = $6 AND ${uidField} >= $7 AND ${uidField} <= $8
-          RETURNING mail_id
+          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $6 AND sent = $7 AND ${uidField} >= $8 AND ${uidField} <= $9
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, user_id, sent, start, end];
+        values = [read, saved, deleted, draft, answered, user_id, sent, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
+          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $5 AND sent = $6
+            WHERE user_id = $6 AND sent = $7
             ORDER BY ${uidField} ASC
-            OFFSET $7 LIMIT 1
+            OFFSET $8 LIMIT 1
           )
-          RETURNING mail_id
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, user_id, sent, start];
+        values = [read, saved, deleted, draft, answered, user_id, sent, start];
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
       // For sent mails, check from_address only
       // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $7::jsonb`
-        : `(${TO_ADDRESS} @> $7::jsonb OR cc_address @> $7::jsonb OR bcc_address @> $7::jsonb)`;
+        ? `${FROM_ADDRESS} @> $8::jsonb`
+        : `(${TO_ADDRESS} @> $8::jsonb OR cc_address @> $8::jsonb OR bcc_address @> $8::jsonb)`;
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $5 AND sent = $6 AND ${addressCondition}
-            AND ${uidField} >= $8 AND ${uidField} <= $9
-          RETURNING mail_id
+          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $6 AND sent = $7 AND ${addressCondition}
+            AND ${uidField} >= $9 AND ${uidField} <= $10
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, user_id, sent, addressJson, start, end];
+        values = [read, saved, deleted, draft, answered, user_id, sent, addressJson, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, updated = CURRENT_TIMESTAMP
+          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $5 AND sent = $6 AND ${addressCondition}
+            WHERE user_id = $6 AND sent = $7 AND ${addressCondition}
             ORDER BY ${uidField} ASC
-            OFFSET $8 LIMIT 1
+            OFFSET $9 LIMIT 1
           )
-          RETURNING mail_id
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, user_id, sent, addressJson, start];
+        values = [read, saved, deleted, draft, answered, user_id, sent, addressJson, start];
       }
     }
 
     const result = await pool.query(sql, values);
-    return (result.rowCount ?? 0) > 0;
+    return result.rows.map((row: Record<string, unknown>) => ({
+      uid: row.uid as number,
+      read: row.read as boolean,
+      saved: row.saved as boolean,
+      deleted: row.deleted as boolean,
+      draft: row.draft as boolean,
+      answered: row.answered as boolean,
+    }));
   } catch (error) {
     console.error("Failed to set mail flags:", error);
-    return false;
+    return [];
   }
 };
 

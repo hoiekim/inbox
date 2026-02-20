@@ -782,7 +782,7 @@ export class ImapSession {
           uidEnd = endUid;
         }
         
-        const updated = await this.store!.setFlags(
+        const updatedMails = await this.store!.setFlags(
           this.selectedMailbox!,
           uidStart,
           uidEnd,
@@ -790,7 +790,7 @@ export class ImapSession {
           true // Always use UID for database operations
         );
 
-        if (!updated) {
+        if (updatedMails.length === 0) {
           this.write(`${tag} NO STORE failed\r\n`);
           throw new Error(
             `STORE failed for range ${start}-${end} in mailbox ${this.selectedMailbox}`
@@ -798,11 +798,20 @@ export class ImapSession {
         } else {
           // Send untagged response unless silent
           // Response always uses sequence numbers per RFC 3501
+          // Per RFC 3501 Section 6.4.6: Response should show all current flags
           if (!silent && !operation.includes("SILENT")) {
-            for (let uid = uidStart; uid <= uidEnd; uid++) {
-              const seq = this.uidToSeqNumber(uid);
+            for (const mail of updatedMails) {
+              const seq = this.uidToSeqNumber(mail.uid);
               if (seq !== undefined) {
-                this.write(`* ${seq} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+                // Build flags array from actual database state
+                const currentFlags: string[] = [];
+                if (mail.read) currentFlags.push("\\Seen");
+                if (mail.saved) currentFlags.push("\\Flagged");
+                if (mail.deleted) currentFlags.push("\\Deleted");
+                if (mail.draft) currentFlags.push("\\Draft");
+                if (mail.answered) currentFlags.push("\\Answered");
+                
+                this.write(`* ${seq} FETCH (FLAGS (${currentFlags.join(" ")}))\r\n`);
               }
             }
           }
