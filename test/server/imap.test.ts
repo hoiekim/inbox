@@ -94,4 +94,37 @@ describe("IMAP parsers", () => {
       type: "sequence"
     });
   });
+
+  it("should parse FETCH command with wildcard (*)", () => {
+    const FETCH_COMMAND = "5.1 FETCH 1:* (FLAGS)";
+    const result = parseCommand(FETCH_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("5.1");
+    expect(result.value?.request.type).toBe("FETCH");
+
+    if (result.value?.request.type !== "FETCH") {
+      throw new Error("Expected FETCH request type");
+    }
+
+    const fetchRequest = result.value.request;
+    expect(fetchRequest.data.sequenceSet.ranges[0].start).toBe(1);
+    // '*' is represented as Number.MAX_SAFE_INTEGER
+    expect(fetchRequest.data.sequenceSet.ranges[0].end).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("should parse STORE command with wildcard range", () => {
+    const STORE_COMMAND = "6.1 STORE 1:* +FLAGS (\\Seen)";
+    const result = parseCommand(STORE_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("6.1");
+    expect(result.value?.request.type).toBe("STORE");
+
+    if (result.value?.request.type !== "STORE") {
+      throw new Error("Expected STORE request type");
+    }
+
+    const storeRequest = result.value.request;
+    expect(storeRequest.data.sequenceSet.ranges[0].start).toBe(1);
+    expect(storeRequest.data.sequenceSet.ranges[0].end).toBe(Number.MAX_SAFE_INTEGER);
+  });
 });

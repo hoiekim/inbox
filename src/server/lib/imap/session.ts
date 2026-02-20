@@ -99,16 +99,33 @@ export class ImapSession {
 
   /**
    * Convert a sequence number to UID.
+   * Handles '*' (represented as MAX_SAFE_INTEGER) by returning the highest UID.
    */
   private seqToUidNumber(seq: number): number | undefined {
+    // Handle '*' which means "highest sequence number"
+    if (seq === Number.MAX_SAFE_INTEGER) {
+      return this.seqToUid[this.seqToUid.length - 1];
+    }
     return this.seqToUid[seq - 1]; // seq is 1-indexed, array is 0-indexed
   }
 
   /**
    * Convert a UID to sequence number.
+   * Handles '*' (represented as MAX_SAFE_INTEGER) by returning the highest sequence number.
    */
   private uidToSeqNumber(uid: number): number | undefined {
+    // Handle '*' which means "highest UID" -> return highest seq
+    if (uid === Number.MAX_SAFE_INTEGER) {
+      return this.seqToUid.length;
+    }
     return this.uidToSeq.get(uid);
+  }
+
+  /**
+   * Get the total number of messages (highest sequence number).
+   */
+  private getMessageCount(): number {
+    return this.seqToUid.length;
   }
 
   write = (data: string) => {
