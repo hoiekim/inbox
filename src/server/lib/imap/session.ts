@@ -881,6 +881,10 @@ export class ImapSession {
       else uid = mail.uid.account;
 
       if (result) {
+        // If appending to the currently selected mailbox, update sequence mapping
+        if (this.selectedMailbox === appendRequest.mailbox) {
+          await this.buildSequenceMapping();
+        }
         // Return success with the new UID
         this.write(
           `${tag} OK [APPENDUID ${Date.now()} ${uid}] APPEND completed\r\n`
