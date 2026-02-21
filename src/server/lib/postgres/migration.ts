@@ -125,6 +125,14 @@ function typesCompatible(schemaType: string, dbType: string): boolean {
   if ((schemaType === "INTEGER" || schemaType === "INT4" || schemaType === "SERIAL") &&
       (dbType === "INTEGER" || dbType === "INT4")) return true;
 
+  // NUMERIC/DECIMAL variations
+  if ((schemaType === "NUMERIC" || schemaType === "DECIMAL") &&
+      (dbType === "NUMERIC" || dbType === "DECIMAL")) return true;
+
+  // FLOAT variations (REAL, DOUBLE PRECISION, FLOAT)
+  if ((schemaType === "FLOAT" || schemaType === "REAL" || schemaType === "DOUBLE PRECISION" || schemaType === "FLOAT8") &&
+      (dbType === "FLOAT" || dbType === "REAL" || dbType === "DOUBLE PRECISION" || dbType === "FLOAT8")) return true;
+
   return false;
 }
 
