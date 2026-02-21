@@ -7,7 +7,9 @@ import {
   searchMailsByUid,
   saveMail as pgSaveMail,
   expungeDeletedMails,
+  getAllUids as pgGetAllUids,
   SaveMailInput,
+  UpdatedMailFlags,
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
@@ -69,6 +71,25 @@ export class Store {
     } catch (error) {
       console.error("Error counting messages:", error);
       return null;
+    }
+  };
+
+  /**
+   * Get all UIDs in a mailbox, ordered by UID ascending.
+   * Used for building sequence number mapping.
+   */
+  getAllUids = async (box: string): Promise<number[]> => {
+    try {
+      const isDomainInbox = box === "INBOX";
+      const isSent = box.startsWith("Sent Messages/");
+      const accountName = isDomainInbox
+        ? null
+        : boxToAccount(this.user.username, box);
+
+      return await pgGetAllUids(this.user.id, accountName, isSent);
+    } catch (error) {
+      console.error("Error getting all UIDs:", error);
+      return [];
     }
   };
 
@@ -177,7 +198,7 @@ export class Store {
     end: number,
     flags: string[],
     useUid: boolean = false
-  ): Promise<boolean> => {
+  ): Promise<UpdatedMailFlags[]> => {
     try {
       const isDomainInbox = box === "INBOX";
       const isSent = box.startsWith("Sent Messages/");
@@ -196,7 +217,7 @@ export class Store {
       );
     } catch (error) {
       console.error("Error setting flags:", error);
-      return false;
+      return [];
     }
   };
 
