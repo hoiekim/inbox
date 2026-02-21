@@ -5,13 +5,29 @@
  */
 
 import { PoolClient } from "pg";
+import { builtinsTypes } from "pg-types";
 import { pool } from "./client";
 import { Schema } from "./models/base";
+
+/**
+ * Normalized PostgreSQL type names used for comparison.
+ * Based on builtinsTypes from pg-types, plus common SQL aliases.
+ * We normalize to these canonical forms for consistent comparison.
+ */
+type NormalizedPgType =
+  | builtinsTypes
+  | "INTEGER"    // Alias for INT4
+  | "BIGINT"     // Alias for INT8
+  | "SMALLINT"   // Alias for INT2
+  | "BOOLEAN"    // Alias for BOOL (SQL standard name)
+  | "FLOAT"      // Normalized from REAL/DOUBLE PRECISION
+  | "CHAR"       // Alias for BPCHAR
+  | `${string}[]`; // Array types
 
 // Mapping from TypeScript schema definitions to PostgreSQL types
 interface ColumnInfo {
   name: string;
-  pgType: string;
+  pgType: NormalizedPgType;
   nullable: boolean;
   hasDefault: boolean;
   defaultValue: string | null;
@@ -37,12 +53,12 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
   const defaultMatch = definition.match(/DEFAULT\s+(.+?)(?:\s+(?:NOT\s+NULL|NULL|PRIMARY|REFERENCES|CHECK|UNIQUE)|$)/i);
   const defaultValue = defaultMatch ? defaultMatch[1].trim() : null;
 
-  // Normalize the type
-  let pgType = parts[0];
+  // Normalize the type to NormalizedPgType
+  let pgType: NormalizedPgType = parts[0] as NormalizedPgType;
   
-  // Handle common type variations
+  // Handle common type variations - normalize to canonical forms
   if (pgType.startsWith("VARCHAR")) pgType = "VARCHAR";
-  if (pgType.startsWith("CHAR")) pgType = "CHAR";
+  if (pgType.startsWith("CHAR") && pgType !== "CHAR") pgType = "CHAR";
   if (pgType === "TIMESTAMPTZ" || pgType === "TIMESTAMP") pgType = "TIMESTAMP";
   if (pgType === "INTEGER" || pgType === "INT") pgType = "INTEGER";
   if (pgType === "BIGINT") pgType = "BIGINT";
@@ -65,14 +81,14 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
 /**
  * Map PostgreSQL data_type and udt_name to normalized type for comparison.
  */
-function normalizeDbType(dataType: string, udtName: string): string {
+function normalizeDbType(dataType: string, udtName: string): NormalizedPgType {
   const type = dataType.toUpperCase();
   const udt = udtName.toUpperCase();
 
   // Handle user-defined types (like JSONB)
   if (type === "USER-DEFINED") {
     if (udt === "TSVECTOR") return "TSVECTOR";
-    return udt;
+    return udt as NormalizedPgType;
   }
 
   // Normalize timestamp types
@@ -103,14 +119,14 @@ function normalizeDbType(dataType: string, udtName: string): string {
   // Array types
   if (type === "ARRAY") return `${normalizeDbType(udtName.replace(/^_/, ""), udtName)}[]`;
 
-  return type;
+  return type as NormalizedPgType;
 }
 
 /**
  * Check if two types are compatible.
  * Returns true if they're the same or one is a compatible variation.
  */
-function typesCompatible(schemaType: string, dbType: string): boolean {
+function typesCompatible(schemaType: NormalizedPgType, dbType: NormalizedPgType): boolean {
   // Direct match
   if (schemaType === dbType) return true;
   
