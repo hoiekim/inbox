@@ -40,9 +40,13 @@ jobs:
       - name: Run tests with coverage
         run: bun test --coverage --coverage-reporter=lcov
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        # Using v3 instead of v4 - v4 removed tokenless uploads for fork PRs
+        # which causes 429 rate limit errors. v3 still supports tokenless.
+        uses: codecov/codecov-action@v3
         with:
           files: ./coverage/lcov.info
+          # Token recommended for reliable uploads - tokenless can hit rate limits
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
           verbose: true
 
