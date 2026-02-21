@@ -1,6 +1,7 @@
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
+import { runMigrations } from "./migration";
 import {
   Table,
   usersTable,
@@ -49,6 +50,7 @@ export const initializePostgres = async (): Promise<void> => {
   await postgresIsAvailable();
 
   try {
+    // Create tables if they don't exist
     for (const table of tables) {
       const createTableSql = buildCreateTable(
         table.name,
@@ -62,6 +64,11 @@ export const initializePostgres = async (): Promise<void> => {
         await pool.query(createIndexSql);
       }
     }
+
+    // Run automatic schema migrations for existing tables
+    await runMigrations(
+      tables.map((t) => ({ name: t.name, schema: t.schema }))
+    );
 
     // Create GIN index for full-text search on mails
     await pool.query(`
