@@ -4,6 +4,7 @@
  * and automatically adds missing columns on startup.
  */
 
+import { PoolClient } from "pg";
 import { pool } from "./client";
 import { Schema } from "./models/base";
 
@@ -139,8 +140,12 @@ function typesCompatible(schemaType: string, dbType: string): boolean {
 /**
  * Query existing columns for a table from PostgreSQL information_schema.
  */
-async function getExistingColumns(tableName: string): Promise<Map<string, DbColumn>> {
-  const result = await pool.query<DbColumn>(`
+async function getExistingColumns(
+  tableName: string,
+  client?: PoolClient
+): Promise<Map<string, DbColumn>> {
+  const queryFn = client || pool;
+  const result = await queryFn.query<DbColumn>(`
     SELECT column_name, data_type, udt_name, is_nullable, column_default
     FROM information_schema.columns
     WHERE table_name = $1 AND table_schema = 'public'
@@ -167,7 +172,11 @@ function buildAddColumnSql(tableName: string, columnName: string, definition: st
   const hasDefault = /DEFAULT\s+/i.test(definition);
   
   if (hasNotNull && !hasDefault) {
-    // Infer a sensible default based on type
+    // When adding a NOT NULL column to an existing table with data, PostgreSQL
+    // requires a default value. We infer a sensible default based on the column type.
+    // NOTE: This means existing rows will get these default values, which may not
+    // be semantically correct for all use cases (e.g., status=0 might not be valid).
+    // If precise control is needed, add explicit DEFAULT in the schema definition.
     const type = definition.split(/\s+/)[0].toUpperCase();
     let defaultValue = "''"; // Default to empty string
     
@@ -175,7 +184,8 @@ function buildAddColumnSql(tableName: string, columnName: string, definition: st
     else if (type === "INTEGER" || type === "BIGINT" || type === "SMALLINT") defaultValue = "0";
     else if (type === "UUID") defaultValue = "gen_random_uuid()";
     else if (type.includes("TIMESTAMP")) defaultValue = "CURRENT_TIMESTAMP";
-    else if (type === "JSONB" || type === "JSON") defaultValue = "'{}'::jsonb";
+    else if (type === "JSONB") defaultValue = "'{}'::jsonb";
+    else if (type === "JSON") defaultValue = "'{}'::json";
     else if (type === "TEXT" || type.startsWith("VARCHAR")) defaultValue = "''";
     
     cleanDef = cleanDef.replace(/NOT\s+NULL/i, `DEFAULT ${defaultValue} NOT NULL`);
@@ -193,8 +203,10 @@ export interface MigrationResult {
 
 /**
  * Migrate a single table to match its schema definition.
+ * Internal version that accepts a client for transaction support.
  */
-export async function migrateTable(
+async function migrateTableWithClient(
+  client: PoolClient,
   tableName: string,
   schema: Schema
 ): Promise<MigrationResult> {
@@ -206,7 +218,7 @@ export async function migrateTable(
   };
 
   // Get existing columns from database
-  const existingColumns = await getExistingColumns(tableName);
+  const existingColumns = await getExistingColumns(tableName, client);
   
   // If table doesn't exist yet, nothing to migrate (CREATE TABLE will handle it)
   if (existingColumns.size === 0) {
@@ -221,7 +233,7 @@ export async function migrateTable(
       // Column is missing - add it
       try {
         const sql = buildAddColumnSql(tableName, columnName, definition);
-        await pool.query(sql);
+        await client.query(sql);
         result.added.push(columnName);
         console.info(`[Migration] Added column ${tableName}.${columnName}`);
       } catch (error) {
@@ -255,49 +267,80 @@ export async function migrateTable(
 }
 
 /**
- * Run migrations for all provided tables.
+ * Migrate a single table to match its schema definition.
+ * Public API - uses pool directly (no transaction).
+ */
+export async function migrateTable(
+  tableName: string,
+  schema: Schema
+): Promise<MigrationResult> {
+  const client = await pool.connect();
+  try {
+    return await migrateTableWithClient(client, tableName, schema);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Run migrations for all provided tables within a transaction.
  * Returns true if successful, throws on fatal errors.
+ * Uses a transaction to ensure atomicity - either all migrations succeed or none do.
  */
 export async function runMigrations(
   tables: Array<{ name: string; schema: Schema }>
 ): Promise<void> {
   console.info("[Migration] Starting schema migration check...");
   
-  const allResults: MigrationResult[] = [];
-  const fatalErrors: string[] = [];
-
-  for (const table of tables) {
-    const result = await migrateTable(table.name, table.schema);
-    allResults.push(result);
+  // Use a dedicated client for the transaction
+  const client = await pool.connect();
+  
+  try {
+    await client.query("BEGIN");
     
-    // Type mismatches are fatal
-    if (result.errors.length > 0) {
-      fatalErrors.push(...result.errors.map(e => `${table.name}: ${e}`));
-    }
-  }
+    const allResults: MigrationResult[] = [];
+    const fatalErrors: string[] = [];
 
-  // Log summary
-  const totalAdded = allResults.reduce((sum, r) => sum + r.added.length, 0);
-  const totalWarnings = allResults.reduce((sum, r) => sum + r.warnings.length, 0);
-
-  if (totalAdded > 0) {
-    console.info(`[Migration] Added ${totalAdded} column(s) across ${allResults.filter(r => r.added.length > 0).length} table(s)`);
-  }
-
-  if (totalWarnings > 0) {
-    for (const result of allResults) {
-      for (const warning of result.warnings) {
-        console.warn(`[Migration] Warning: ${result.table}.${warning}`);
+    for (const table of tables) {
+      const result = await migrateTableWithClient(client, table.name, table.schema);
+      allResults.push(result);
+      
+      // Type mismatches are fatal
+      if (result.errors.length > 0) {
+        fatalErrors.push(...result.errors.map(e => `${table.name}: ${e}`));
       }
     }
-  }
 
-  // Fatal errors stop startup
-  if (fatalErrors.length > 0) {
-    const errorMsg = `Schema migration failed:\n${fatalErrors.join("\n")}`;
-    console.error(`[Migration] ${errorMsg}`);
-    throw new Error(errorMsg);
-  }
+    // Log summary
+    const totalAdded = allResults.reduce((sum, r) => sum + r.added.length, 0);
+    const totalWarnings = allResults.reduce((sum, r) => sum + r.warnings.length, 0);
 
-  console.info("[Migration] Schema migration check complete.");
+    if (totalAdded > 0) {
+      console.info(`[Migration] Added ${totalAdded} column(s) across ${allResults.filter(r => r.added.length > 0).length} table(s)`);
+    }
+
+    if (totalWarnings > 0) {
+      for (const result of allResults) {
+        for (const warning of result.warnings) {
+          console.warn(`[Migration] ${result.table}: ${warning}`);
+        }
+      }
+    }
+
+    // Fatal errors stop startup
+    if (fatalErrors.length > 0) {
+      const errorMsg = `Schema migration failed:\n${fatalErrors.join("\n")}`;
+      console.error(`[Migration] ${errorMsg}`);
+      await client.query("ROLLBACK");
+      throw new Error(errorMsg);
+    }
+
+    await client.query("COMMIT");
+    console.info("[Migration] Schema migration check complete.");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
