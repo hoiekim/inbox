@@ -6,7 +6,6 @@ COPY package.json bun.lockb* ./
 COPY tsconfig.json tsconfig.node.json ./
 COPY vite.config.ts ./
 COPY src src
-COPY test test
 COPY public public
 COPY index.html ./
 
