@@ -872,10 +872,12 @@ export class ImapSession {
         ? messageIdMatch[1].trim().replace(/[<>]/g, "")
         : mail.messageId;
 
-      // Set flags
-      mail.draft = true; // APPEND messages are typically drafts
-      mail.read = false;
+      // Set flags from APPEND command (default to draft if no flags specified)
+      mail.draft = appendRequest.flags?.includes("\\Draft") ?? true;
+      mail.read = appendRequest.flags?.includes("\\Seen") || false;
       mail.saved = appendRequest.flags?.includes("\\Flagged") || false;
+      mail.deleted = appendRequest.flags?.includes("\\Deleted") || false;
+      mail.answered = appendRequest.flags?.includes("\\Answered") || false;
 
       // Parse addresses (basic parsing)
       if (fromMatch) {

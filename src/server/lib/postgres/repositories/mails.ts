@@ -43,6 +43,7 @@ export interface SaveMailInput {
   sent?: boolean;
   deleted?: boolean;
   draft?: boolean;
+  answered?: boolean;
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
@@ -83,6 +84,7 @@ export const saveMail = async (
       sent: input.sent ?? false,
       deleted: input.deleted ?? false,
       draft: input.draft ?? false,
+      answered: input.answered ?? false,
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
