@@ -88,6 +88,7 @@ export interface MailType {
   sent: boolean;
   deleted: boolean;
   draft: boolean;
+  answered: boolean;
   insight?: Insight;
   uid: MailUidType;
 }
@@ -111,6 +112,7 @@ export class Mail extends Model<Mail> implements MailType {
   declare sent: boolean;
   declare deleted: boolean;
   declare draft: boolean;
+  declare answered: boolean;
   declare insight?: Insight;
   declare uid: MailUidType;
 
@@ -128,6 +130,7 @@ export class Mail extends Model<Mail> implements MailType {
     if (!data?.sent) this.sent = false;
     if (!data?.deleted) this.deleted = false;
     if (!data?.draft) this.draft = false;
+    if (!data?.answered) this.answered = false;
     if (!data?.uid) this.uid = new MailUid();
   }
 }

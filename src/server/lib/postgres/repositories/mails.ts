@@ -43,6 +43,7 @@ export interface SaveMailInput {
   sent?: boolean;
   deleted?: boolean;
   draft?: boolean;
+  answered?: boolean;
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
@@ -83,6 +84,7 @@ export const saveMail = async (
       sent: input.sent ?? false,
       deleted: input.deleted ?? false,
       draft: input.draft ?? false,
+      answered: input.answered ?? false,
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
@@ -517,8 +519,7 @@ export const setMailFlags = async (
           UPDATE mails 
           SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
           WHERE user_id = $6 AND sent = $7 AND ${uidField} >= $8 AND ${uidField} <= $9
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered        `;
         values = [read, saved, deleted, draft, answered, user_id, sent, start, end];
       } else {
         sql = `
@@ -547,8 +548,7 @@ export const setMailFlags = async (
           SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
           WHERE user_id = $6 AND sent = $7 AND ${addressCondition}
             AND ${uidField} >= $9 AND ${uidField} <= $10
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
+          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered        `;
         values = [read, saved, deleted, draft, answered, user_id, sent, addressJson, start, end];
       } else {
         sql = `

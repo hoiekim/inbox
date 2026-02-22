@@ -131,6 +131,7 @@ export class Store {
           sent: model.sent,
           deleted: model.deleted,
           draft: model.draft,
+          answered: model.answered,
           uid: {
             domain: model.uid_domain,
             account: model.uid_account,
@@ -336,6 +337,7 @@ export class Store {
         sent: mail.sent,
         deleted: mail.deleted,
         draft: mail.draft,
+        answered: mail.answered,
         insight: mail.insight,
         uid_domain: mail.uid?.domain,
         uid_account: mail.uid?.account,
