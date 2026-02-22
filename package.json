@@ -55,6 +55,7 @@
     "@types/express-session": "^1.17.4",
     "@types/html-to-text": "^8.0.1",
     "@types/mailparser": "^3.4.6",
+    "@types/marked": "4",
     "@types/node": "^17.0.45",
     "@types/pg": "^8.16.0",
     "@types/react": "^18.0.33",
