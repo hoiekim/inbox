@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { MaskedUser, User, usersTable, USER_ID, EMAIL } from "../models";
+import { MaskedUser, User, usersTable, USER_ID, EMAIL, IMAP_UID_VALIDITY } from "../models";
 
 export type IndexUserInput = Omit<User, "user_id"> & { user_id?: string };
 export type PartialUser = { user_id: string } & Partial<User>;
@@ -99,5 +99,39 @@ export const getUserByEmail = async (
   } catch (error) {
     console.error("Failed to get user by email:", error);
     return undefined;
+  }
+};
+
+/**
+ * Get the IMAP UIDVALIDITY for a user.
+ * Per RFC 3501, UIDVALIDITY is a value that, combined with UIDs, uniquely
+ * identifies messages. If it changes, clients must discard cached message state.
+ * 
+ * On first IMAP access, initializes UIDVALIDITY to current Unix timestamp.
+ * This ensures uniqueness and that the value only increases over time.
+ */
+export const getImapUidValidity = async (user_id: string): Promise<number> => {
+  try {
+    const model = await usersTable.queryOne({ [USER_ID]: user_id });
+    if (!model) {
+      throw new Error(`User not found: ${user_id}`);
+    }
+
+    // If already set, return the stored value
+    if (model.imap_uid_validity !== null) {
+      return model.imap_uid_validity;
+    }
+
+    // Initialize to current Unix timestamp (seconds since epoch)
+    // This ensures uniqueness and monotonically increasing values
+    const uidValidity = Math.floor(Date.now() / 1000);
+    
+    await usersTable.update(user_id, { [IMAP_UID_VALIDITY]: uidValidity });
+    
+    return uidValidity;
+  } catch (error) {
+    console.error("Failed to get IMAP UIDVALIDITY:", error);
+    // Return a fallback value - timestamp ensures uniqueness
+    return Math.floor(Date.now() / 1000);
   }
 };

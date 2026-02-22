@@ -3,7 +3,7 @@ import { Socket } from "net";
 import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
 import { MailType, Throttler } from "common";
-import { getUser, markRead, getDomainUidNext, getAccountUidNext } from "server";
+import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
 import { Store } from "./store";
 import {
   boxToAccount,
@@ -661,6 +661,12 @@ export class ImapSession {
 
       const { total, unread } = countResult;
 
+      // Get UIDVALIDITY if requested
+      let uidValidity: number | null = null;
+      if (items.includes("UIDVALIDITY")) {
+        uidValidity = await getImapUidValidity(this.store.getUser().id);
+      }
+
       // Build STATUS response
       let statusItems: string[] = [];
 
@@ -673,7 +679,7 @@ export class ImapSession {
             statusItems.push("UIDNEXT", (total + 1).toString());
             break;
           case "UIDVALIDITY":
-            statusItems.push("UIDVALIDITY", "1");
+            statusItems.push("UIDVALIDITY", uidValidity!.toString());
             break;
           case "UNSEEN":
             statusItems.push("UNSEEN", unread.toString());
@@ -1031,13 +1037,15 @@ export class ImapSession {
 
       const { total, unread } = countResult;
 
+      // Get UIDVALIDITY for this user (initialized on first IMAP access)
+      const uidValidity = await getImapUidValidity(this.store.getUser().id);
+
       this.write(`* ${total} EXISTS\r\n`);
       this.write(`* 0 RECENT\r\n`);
       this.write(
         `* OK [UNSEEN ${unread}] Message ${unread} is first unseen\r\n`
       );
-      // TODO: Implement per-mailbox UIDVALIDITY tracking
-      this.write(`* OK [UIDVALIDITY 1] UIDs valid\r\n`);
+      this.write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
       this.write(`* OK [UIDNEXT ${total + 1}] Predicted next UID\r\n`);
       this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
       this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`);
