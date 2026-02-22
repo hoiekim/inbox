@@ -10,6 +10,7 @@ COPY public public
 COPY index.html ./
 
 RUN bun install
+RUN bun run typecheck
 RUN bun test
 RUN bun run build
 
