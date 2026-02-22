@@ -1,9 +1,9 @@
 import FormData from "form-data";
 import Mailgun from "mailgun.js";
-import {
+import type {
   MailgunMessageData,
   CustomFile
-} from "mailgun.js/Types/Messages/Messages";
+} from "mailgun.js/definitions";
 import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";

@@ -18,6 +18,7 @@
     "test:coverage": "bun test --coverage --coverage-reporter=lcov",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
+    "typecheck": "bun run --bun tsc --noEmit",
     "preview": "bun vite preview"
   },
   "keywords": [],
