@@ -8,6 +8,7 @@ import {
   UPDATED,
   IS_DELETED,
   USERS,
+  IMAP_UID_VALIDITY,
 } from "./common";
 import { Schema, Model, createTable } from "./base";
 
@@ -17,6 +18,8 @@ const isNullableString = (v: unknown): v is string | null =>
   v === null || typeof v === "string";
 const isNullableBoolean = (v: unknown): v is boolean | null =>
   v === null || typeof v === "boolean";
+const isNullableNumber = (v: unknown): v is number | null =>
+  v === null || typeof v === "number";
 
 export interface MaskedUser {
   user_id: string;
@@ -35,6 +38,7 @@ const userSchema = {
   [TOKEN]: "VARCHAR(255)",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
   [IS_DELETED]: "BOOLEAN DEFAULT FALSE",
+  [IMAP_UID_VALIDITY]: "BIGINT",
 };
 
 type UserSchema = typeof userSchema;
@@ -48,6 +52,7 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
   declare token: string | null;
   declare updated: string;
   declare is_deleted: boolean;
+  declare imap_uid_validity: number | null;
 
   static typeChecker = {
     user_id: isString,
@@ -58,6 +63,7 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
     token: isNullableString,
     updated: isNullableString,
     is_deleted: isNullableBoolean,
+    imap_uid_validity: isNullableNumber,
   };
 
   constructor(data: unknown) {

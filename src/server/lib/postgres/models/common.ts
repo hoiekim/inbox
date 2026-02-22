@@ -15,6 +15,7 @@ export const PASSWORD = "password";
 export const EMAIL = "email";
 export const TOKEN = "token";
 export const EXPIRY = "expiry";
+export const IMAP_UID_VALIDITY = "imap_uid_validity";
 
 // Mails columns
 export const MAIL_ID = "mail_id";
