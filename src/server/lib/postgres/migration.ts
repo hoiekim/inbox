@@ -54,16 +54,18 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
   const defaultValue = defaultMatch ? defaultMatch[1].trim() : null;
 
   // Normalize the type to NormalizedPgType
-  let pgType: NormalizedPgType = parts[0] as NormalizedPgType;
+  // Use rawType for intermediate comparisons to avoid TS strict type checking issues
+  const rawType = parts[0];
+  let pgType: NormalizedPgType = rawType as NormalizedPgType;
   
   // Handle common type variations - normalize to canonical forms
-  if (pgType.startsWith("VARCHAR")) pgType = "VARCHAR";
-  if (pgType.startsWith("CHAR") && pgType !== "CHAR") pgType = "CHAR";
-  if (pgType === "TIMESTAMPTZ" || pgType === "TIMESTAMP") pgType = "TIMESTAMP";
-  if (pgType === "INTEGER" || pgType === "INT") pgType = "INTEGER";
-  if (pgType === "BIGINT") pgType = "BIGINT";
-  if (pgType === "SERIAL") pgType = "INTEGER"; // SERIAL is INTEGER with sequence
-  if (pgType === "BIGSERIAL") pgType = "BIGINT";
+  if (rawType.startsWith("VARCHAR")) pgType = "VARCHAR";
+  if (rawType.startsWith("CHAR") && rawType !== "CHAR") pgType = "CHAR";
+  if (rawType === "TIMESTAMPTZ" || rawType === "TIMESTAMP") pgType = "TIMESTAMP";
+  if (rawType === "INTEGER" || rawType === "INT") pgType = "INTEGER";
+  if (rawType === "BIGINT") pgType = "BIGINT";
+  if (rawType === "SERIAL") pgType = "INTEGER"; // SERIAL is INTEGER with sequence
+  if (rawType === "BIGSERIAL") pgType = "BIGINT";
 
   // Check nullable
   const notNull = /NOT\s+NULL/i.test(definition);
@@ -138,17 +140,20 @@ function typesCompatible(schemaType: NormalizedPgType, dbType: NormalizedPgType)
   if ((schemaType === "JSON" || schemaType === "JSONB") && 
       (dbType === "JSON" || dbType === "JSONB")) return true;
 
-  // INTEGER variations
-  if ((schemaType === "INTEGER" || schemaType === "INT4" || schemaType === "SERIAL") &&
-      (dbType === "INTEGER" || dbType === "INT4")) return true;
+  // INTEGER variations - use string comparisons for types that may not be in NormalizedPgType
+  const s = schemaType as string;
+  const d = dbType as string;
+  
+  if ((s === "INTEGER" || s === "INT4" || s === "SERIAL") &&
+      (d === "INTEGER" || d === "INT4")) return true;
 
   // NUMERIC/DECIMAL variations
-  if ((schemaType === "NUMERIC" || schemaType === "DECIMAL") &&
-      (dbType === "NUMERIC" || dbType === "DECIMAL")) return true;
+  if ((s === "NUMERIC" || s === "DECIMAL") &&
+      (d === "NUMERIC" || d === "DECIMAL")) return true;
 
   // FLOAT variations (REAL, DOUBLE PRECISION, FLOAT)
-  if ((schemaType === "FLOAT" || schemaType === "REAL" || schemaType === "DOUBLE PRECISION" || schemaType === "FLOAT8") &&
-      (dbType === "FLOAT" || dbType === "REAL" || dbType === "DOUBLE PRECISION" || dbType === "FLOAT8")) return true;
+  if ((s === "FLOAT" || s === "REAL" || s === "DOUBLE PRECISION" || s === "FLOAT8") &&
+      (d === "FLOAT" || d === "REAL" || d === "DOUBLE PRECISION" || d === "FLOAT8")) return true;
 
   return false;
 }

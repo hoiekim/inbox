@@ -1,9 +1,5 @@
 import FormData from "form-data";
 import Mailgun from "mailgun.js";
-import {
-  MailgunMessageData,
-  CustomFile
-} from "mailgun.js/Types/Messages/Messages";
 import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
@@ -11,8 +7,16 @@ import { UploadedFile } from "express-fileupload";
 
 const { EMAIL_DOMAIN = "mydomain", MAILGUN_KEY = "mailgun_key" } = process.env;
 
-const getAttachments = (files?: UploadedFileDynamicArray): CustomFile[] => {
-  const parseFile = (file: UploadedFile): CustomFile => ({
+// File attachment type matching mailgun.js expectations
+interface MailgunAttachment {
+  data: Buffer | string;
+  filename?: string;
+  contentType?: string;
+  knownLength?: number;
+}
+
+const getAttachments = (files?: UploadedFileDynamicArray): MailgunAttachment[] => {
+  const parseFile = (file: UploadedFile): MailgunAttachment => ({
     data: file.data,
     filename: file.name,
     contentType: file.mimetype,
@@ -42,7 +46,7 @@ export const sendMailgunMail = async (
     key: MAILGUN_KEY
   });
 
-  const mailgunMessage: MailgunMessageData = {
+  const mailgunMessage = {
     from,
     to,
     cc,
@@ -54,7 +58,8 @@ export const sendMailgunMail = async (
     "h:In-Reply-To": inReplyTo
   };
 
-  const data = await mg.messages.create(EMAIL_DOMAIN, mailgunMessage);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = await mg.messages.create(EMAIL_DOMAIN, mailgunMessage as any);
 
   return data;
 };
