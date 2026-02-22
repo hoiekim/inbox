@@ -16,7 +16,7 @@
     "migrate": "bun scripts/migrate-es-to-pg.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage --coverage-reporter=lcov",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun run --bun tsc --noEmit",
     "preview": "bun vite preview"
   },
   "keywords": [],
