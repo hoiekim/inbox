@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, AppendRequest } from '../types';
-import { parseAtom, parseString, parseNumber, skipWhitespace } from './primitive-parsers';
+import { parseAtom, parseString, skipWhitespace } from './primitive-parsers';
 
 /**
  * Parse APPEND command

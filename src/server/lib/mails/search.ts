@@ -1,4 +1,4 @@
-import { MailHeaderData, SignedUser, Pagination, MaskedUser } from "common";
+import { MailHeaderData, SignedUser } from "common";
 import {
   searchMails,
   SearchMailModel,

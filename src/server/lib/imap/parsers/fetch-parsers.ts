@@ -2,8 +2,8 @@
  * FETCH command parsing
  */
 
-import { ParseContext, ParseResult, ImapRequest, FetchRequest, FetchDataItem, BodyFetch, BodySection, PartialRange } from '../types';
-import { parseSequenceSet, skipWhitespace, peek, consume, parseAtom, parseNumber } from './primitive-parsers';
+import { ParseContext, ParseResult, ImapRequest, FetchDataItem, BodyFetch, BodySection, PartialRange } from '../types';
+import { parseSequenceSet, skipWhitespace, peek, parseAtom } from './primitive-parsers';
 
 /**
  * Parse FETCH command
@@ -128,7 +128,7 @@ export const parseFetchDataItem = (context: ParseContext): ParseResult<FetchData
 /**
  * Parse BODY fetch expressions
  */
-export const parseBodyFetch = (bodyExpr: string, context: ParseContext): ParseResult<BodyFetch> => {
+export const parseBodyFetch = (bodyExpr: string, _context: ParseContext): ParseResult<BodyFetch> => {
   // Handle BODY (without section)
   if (bodyExpr === 'BODY') {
     return { 

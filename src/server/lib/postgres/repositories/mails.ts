@@ -3,15 +3,11 @@ import { pool } from "../client";
 import { ParamValue } from "../database";
 import {
   MailModel,
-  MailJSON,
   mailsTable,
   MAIL_ID,
   USER_ID,
-  MESSAGE_ID,
-  SENT,
   READ,
   SAVED,
-  DATE,
   UID_DOMAIN,
   UID_ACCOUNT,
   TO_ADDRESS,
@@ -211,7 +207,7 @@ export interface SearchMailModel extends MailModel {
 export const searchMails = async (
   user_id: string,
   searchTerm: string,
-  field?: string
+  _field?: string
 ): Promise<SearchMailModel[]> => {
   try {
     // Use PostgreSQL full-text search with ranking and highlights
