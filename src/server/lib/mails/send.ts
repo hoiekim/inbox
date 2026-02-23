@@ -19,6 +19,13 @@ import {
 import { sendMailgunMail } from "./mailgun";
 import { validateMailData, MailValidationError } from "./validation";
 
+export class MailSendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MailSendingError";
+  }
+}
+
 export type UploadedFileDynamicArray = UploadedFile | UploadedFile[];
 
 export const sendMail = async (
@@ -46,8 +53,22 @@ export const sendMail = async (
 
     return response;
   } catch (error: any) {
-    console.error("Email sending request failed");
-    throw error;
+    console.error("Email sending request failed", error);
+
+    // Provide user-friendly error messages for common Mailgun errors
+    let message = "Failed to send email. Please try again.";
+
+    if (error?.status === 401 || error?.status === 403) {
+      message = "Email service not configured correctly";
+    } else if (error?.status === 400) {
+      message = error?.message || "Invalid email request";
+    } else if (error?.status === 429) {
+      message = "Too many requests. Please try again later.";
+    } else if (error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+      message = "Unable to reach email service. Please try again later.";
+    }
+
+    throw new MailSendingError(message);
   }
 };
 
