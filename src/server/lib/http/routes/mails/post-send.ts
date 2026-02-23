@@ -1,5 +1,5 @@
 import { MailDataToSend, MailDataToSendType } from "common";
-import { sendMail, AUTH_ERROR_MESSAGE } from "server";
+import { sendMail, AUTH_ERROR_MESSAGE, MailValidationError } from "server";
 import { Route } from "../route";
 
 export type SendMailPostResponse = undefined;
@@ -16,8 +16,14 @@ export const postSendMailRoute = new Route<SendMailPostResponse>(
     const body: SendMailPostBody = req.body;
     const attachments = req.files?.attachments;
 
-    await sendMail(user, new MailDataToSend({ ...body }), attachments);
-
-    return { status: "success" };
+    try {
+      await sendMail(user, new MailDataToSend({ ...body }), attachments);
+      return { status: "success" };
+    } catch (error) {
+      if (error instanceof MailValidationError) {
+        return { status: "failed", message: error.message };
+      }
+      throw error;
+    }
   }
 );

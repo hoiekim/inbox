@@ -17,6 +17,7 @@ import {
   getAccountUidNext
 } from "server";
 import { sendMailgunMail } from "./mailgun";
+import { validateMailData, MailValidationError } from "./validation";
 
 export type UploadedFileDynamicArray = UploadedFile | UploadedFile[];
 
@@ -25,6 +26,12 @@ export const sendMail = async (
   mailToSend: MailDataToSend,
   files?: UploadedFileDynamicArray
 ) => {
+  // Validate mail data before sending
+  const validation = validateMailData(mailToSend);
+  if (!validation.valid) {
+    throw new MailValidationError(validation.error!);
+  }
+
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
