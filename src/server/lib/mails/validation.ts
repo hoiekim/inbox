@@ -32,6 +32,21 @@ const validateEmailList = (
 export const validateMailData = (
   data: MailDataToSendType | MailDataToSend
 ): ValidationResult => {
+  // Validate sender (required, local part of email)
+  if (!data.sender || typeof data.sender !== "string") {
+    return { valid: false, error: "Sender is required" };
+  }
+
+  // Local part validation: alphanumeric, dots, hyphens, underscores
+  if (!/^[a-zA-Z0-9._-]+$/.test(data.sender)) {
+    return { valid: false, error: "Invalid sender format" };
+  }
+
+  // Validate senderFullName for header injection (no CRLF)
+  if (data.senderFullName && /[\r\n]/.test(data.senderFullName)) {
+    return { valid: false, error: "Invalid sender name" };
+  }
+
   // Validate recipient (required)
   if (!data.to || typeof data.to !== "string") {
     return { valid: false, error: "Recipient email address is required" };
