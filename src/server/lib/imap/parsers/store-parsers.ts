@@ -6,9 +6,6 @@ import {
   ParseContext,
   ParseResult,
   ImapRequest,
-  SearchRequest,
-  StoreRequest,
-  CopyRequest,
   StoreOperation
 } from "../types";
 import {
@@ -17,10 +14,8 @@ import {
   parseString,
   parseAtom,
   parseFlag,
-  peek,
-  consume
+  peek
 } from "./primitive-parsers";
-import { parseSearchCriteria } from "./search-parsers";
 
 /**
  * Runtime validation for StoreOperation

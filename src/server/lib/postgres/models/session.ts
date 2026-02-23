@@ -15,7 +15,7 @@ import {
   UPDATED,
   SESSIONS,
 } from "./common";
-import { Schema, Model, createTable } from "./base";
+import { Model, createTable } from "./base";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";

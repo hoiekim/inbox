@@ -1,8 +1,7 @@
 import crypto from "crypto";
-import webPush, { PushSubscription } from "web-push";
+import { PushSubscription } from "web-push";
 import { pool } from "../client";
 import {
-  PushSubscriptionModel,
   pushSubscriptionsTable,
   PUSH_SUBSCRIPTION_ID,
   USER_ID,

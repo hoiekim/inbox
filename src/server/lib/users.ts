@@ -133,7 +133,8 @@ export const encryptPassword = (password: string) => {
 export const setUserInfo = async (
   userInfo: Partial<User>
 ): Promise<SignedUser> => {
-  let { email, password, token, username } = userInfo;
+  const { email, password, token } = userInfo;
+  let { username } = userInfo;
   if (!email || !username || !password) {
     throw new Error(
       `Setting userInfo failed because input is invalid: ${userInfo}`

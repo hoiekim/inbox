@@ -1,6 +1,5 @@
-import { DateString, SignedUser } from "common";
+import { SignedUser } from "common";
 import { getUnreadNotifications } from "../postgres/repositories/mails";
-import { addressToUsername } from "./receive";
 
 export type Notifications = Map<string, { count: number; latest?: Date }>;
 

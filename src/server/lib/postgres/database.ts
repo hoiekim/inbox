@@ -36,8 +36,8 @@ export interface UpsertOptions {
 const isNull = (v: unknown): v is null => v === null;
 const isUndefined = (v: unknown): v is undefined => v === undefined;
 const isDate = (v: unknown): v is Date => v instanceof Date;
-const isNumber = (v: unknown): v is number => typeof v === "number";
-const isString = (v: unknown): v is string => typeof v === "string";
+const _isNumber = (v: unknown): v is number => typeof v === "number";
+const _isString = (v: unknown): v is string => typeof v === "string";
 
 export function buildCreateTable(
   tableName: string,

@@ -1,5 +1,5 @@
 /* eslint-disable no-case-declarations */
-import { Mail, SignedUser, MailType } from "common";
+import { Mail, SignedUser } from "common";
 import {
   getAccountStats,
   countMessages,

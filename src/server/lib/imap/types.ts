@@ -2,7 +2,7 @@
  * TypeScript interfaces for IMAP protocol requests and responses
  */
 
-import { MailType } from "common";
+// IMAP type definitions
 
 // IMAP-specific request interfaces
 export interface SearchRequest {

@@ -628,23 +628,23 @@ export class ImapSession {
     }
   };
 
-  createMailbox = async (tag: string, mailbox: string) => {
+  createMailbox = async (tag: string, _mailbox: string) => {
     this.write(`${tag} NO CREATE not supported\r\n`);
   };
 
-  deleteMailbox = async (tag: string, mailbox: string) => {
+  deleteMailbox = async (tag: string, _mailbox: string) => {
     this.write(`${tag} NO DELETE not supported\r\n`);
   };
 
-  renameMailbox = async (tag: string, oldName: string, newName: string) => {
+  renameMailbox = async (tag: string, _oldName: string, _newName: string) => {
     this.write(`${tag} NO RENAME not supported\r\n`);
   };
 
-  subscribeMailbox = async (tag: string, mailbox: string) => {
+  subscribeMailbox = async (tag: string, _mailbox: string) => {
     this.write(`${tag} OK SUBSCRIBE completed\r\n`);
   };
 
-  unsubscribeMailbox = async (tag: string, mailbox: string) => {
+  unsubscribeMailbox = async (tag: string, _mailbox: string) => {
     this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
   };
 
@@ -669,7 +669,7 @@ export class ImapSession {
       }
 
       // Build STATUS response
-      let statusItems: string[] = [];
+      const statusItems: string[] = [];
 
       items.forEach((item) => {
         switch (item) {
@@ -834,8 +834,8 @@ export class ImapSession {
 
   copyMessageTyped = async (
     tag: string,
-    copyRequest: CopyRequest,
-    isUidCommand: boolean = false
+    _copyRequest: CopyRequest,
+    _isUidCommand: boolean = false
   ) => {
     // Reject all COPY operations - we don't want clients moving messages around
     this.write(`${tag} NO [CANNOT] COPY not permitted\r\n`);
