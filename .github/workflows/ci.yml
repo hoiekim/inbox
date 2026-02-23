@@ -22,6 +22,8 @@ jobs:
         run: bun install
       - name: Type check
         run: bun run typecheck
+      - name: Lint
+        run: bun run lint
       - name: Run tests with coverage
         run: bun run test:coverage
 
