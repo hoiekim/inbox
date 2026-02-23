@@ -18,18 +18,24 @@ const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
 const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
 
-const vapidKeys = {
-  publicKey: PUSH_VAPID_PUBLIC_KEY || "",
-  privateKey: PUSH_VAPID_PRIVATE_KEY || "",
-};
+const vapidConfigured = !!(PUSH_VAPID_PUBLIC_KEY && PUSH_VAPID_PRIVATE_KEY);
 
-webPush.setVapidDetails(
-  `mailto:admin@${domainName}`,
-  vapidKeys.publicKey,
-  vapidKeys.privateKey
-);
+if (vapidConfigured) {
+  webPush.setVapidDetails(
+    `mailto:admin@${domainName}`,
+    PUSH_VAPID_PUBLIC_KEY,
+    PUSH_VAPID_PRIVATE_KEY
+  );
+} else {
+  console.warn(
+    "VAPID keys not configured - push notifications disabled. " +
+      "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable."
+  );
+}
 
 export const getPushPublicKey = () => PUSH_VAPID_PUBLIC_KEY;
+
+export const isPushEnabled = () => vapidConfigured;
 
 export const storeSubscription = async (
   userId: string,
@@ -84,15 +90,18 @@ export const getNotifications = async (
 };
 
 export const notifyNewMails = async (usernames: string[]) => {
+  // Notify IDLE IMAP sessions immediately (works without VAPID)
+  idleManager.notifyNewMail(usernames);
+
+  // Skip web push if VAPID not configured
+  if (!vapidConfigured) return;
+
   const partialUsers = usernames.map((username) => ({ username }));
   const users = await getActiveUsers(partialUsers);
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
     getSubscriptions(users),
   ]);
-
-  // Notify IDLE IMAP sessions immediately
-  idleManager.notifyNewMail(usernames);
 
   return Promise.all(
     storedSubscriptions.map(async (subscription) => {
@@ -142,6 +151,9 @@ export const notifyNewMails = async (usernames: string[]) => {
 };
 
 export const decrementBadgeCount = async (users: SignedUser[]) => {
+  // Skip web push if VAPID not configured
+  if (!vapidConfigured) return;
+
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
     getSubscriptions(users),
