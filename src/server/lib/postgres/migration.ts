@@ -56,6 +56,8 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
   // Normalize the type to NormalizedPgType
   // Use rawType for input string comparisons, then assign to normalized pgType
   const rawType = parts[0];
+  // Check for multi-word types like "DOUBLE PRECISION"
+  const twoWordType = parts.length > 1 ? `${parts[0]} ${parts[1]}` : "";
   let pgType: NormalizedPgType;
   
   // Handle common type variations - normalize to canonical forms
@@ -73,10 +75,10 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
     pgType = "INTEGER"; // SERIAL is INTEGER with sequence
   } else if (rawType === "BIGSERIAL") {
     pgType = "BIGINT";
-  } else if (rawType === "DECIMAL") {
+  } else if (rawType === "DECIMAL" || rawType === "NUMERIC") {
     pgType = "NUMERIC"; // DECIMAL is alias for NUMERIC
-  } else if (rawType === "REAL" || rawType === "DOUBLE PRECISION") {
-    pgType = "FLOAT"; // REAL and DOUBLE PRECISION normalize to FLOAT
+  } else if (rawType === "REAL" || rawType === "FLOAT" || rawType === "FLOAT4" || rawType === "FLOAT8" || twoWordType === "DOUBLE PRECISION") {
+    pgType = "FLOAT"; // Float variations all normalize to FLOAT
   } else {
     pgType = rawType as NormalizedPgType;
   }
