@@ -44,6 +44,7 @@ export {
   sendMail,
   validateMailData,
   MailValidationError,
+  MailSendingError,
 } from "./mails";
 export type { AccountsGetResponse, GetMailsOptions, ValidationResult } from "./mails";
 
