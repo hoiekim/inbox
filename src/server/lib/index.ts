@@ -42,8 +42,10 @@ export {
   getAttachmentFilePath,
   getAttachment,
   sendMail,
+  validateMailData,
+  MailValidationError,
 } from "./mails";
-export type { AccountsGetResponse, GetMailsOptions } from "./mails";
+export type { AccountsGetResponse, GetMailsOptions, ValidationResult } from "./mails";
 
 // Version
 export { version } from "./postgres/initialize";
