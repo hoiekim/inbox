@@ -156,5 +156,34 @@ export const initializeSmtp = async () => {
     });
   });
 
+  // Port 587 - STARTTLS (RFC 6409 mail submission standard)
+  await new Promise<void>((res) => {
+    const port = 587;
+    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+
+    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
+      console.warn(
+        "SMTP: SSL certificate not found, skipping port 587 (STARTTLS)."
+      );
+      res();
+      return;
+    }
+
+    const server = new SMTPServer({
+      secure: false, // Start plain, upgrade via STARTTLS
+      authOptional: false,
+      key: readFileSync(SSL_CERTIFICATE_KEY),
+      cert: readFileSync(SSL_CERTIFICATE),
+      onAuth,
+      onData: onDataOutgoing
+    });
+    registerListeners(server, port, () => {
+      console.log(
+        `SMTP server listening on port ${port} with STARTTLS (submission)`
+      );
+      res();
+    });
+  });
+
   return;
 };
