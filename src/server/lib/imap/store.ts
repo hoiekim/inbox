@@ -1,3 +1,4 @@
+/* eslint-disable no-case-declarations */
 import { Mail, SignedUser, MailType } from "common";
 import {
   getAccountStats,

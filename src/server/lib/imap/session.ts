@@ -1,3 +1,4 @@
+/* eslint-disable no-case-declarations */
 import bcrypt from "bcryptjs";
 import { Socket } from "net";
 import { TLSSocket } from "tls";
