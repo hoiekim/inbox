@@ -2,7 +2,9 @@ import { MailDataToSend, MailDataToSendType } from "common";
 import { sendMail, AUTH_ERROR_MESSAGE, MailValidationError, MailSendingError } from "server";
 import { Route } from "../route";
 
-export type SendMailPostResponse = undefined;
+export type SendMailPostResponse =
+  | { status: "success" }
+  | { status: "failed"; message: string };
 
 export type SendMailPostBody = MailDataToSendType;
 
