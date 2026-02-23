@@ -103,7 +103,12 @@ export const createToken = async (
 export const isValidEmail = (email: string) => {
   const values = email.split("@");
   if (values.length !== 2) return false;
-  return !values.find((v) => !/^[a-z0-9.-]+$/.test(v));
+  const [local, domain] = values;
+  // Local part: allow letters, digits, dots, underscores, hyphens, plus (case insensitive)
+  const localValid = /^[a-zA-Z0-9._%+-]+$/.test(local);
+  // Domain: allow letters, digits, dots, hyphens (case insensitive), must have at least one dot
+  const domainValid = /^[a-zA-Z0-9.-]+$/.test(domain) && domain.includes(".");
+  return localValid && domainValid;
 };
 
 export const startTimer = (userId: string) => {
