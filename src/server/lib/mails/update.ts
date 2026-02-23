@@ -4,11 +4,9 @@ import {
   deleteMail as pgDeleteMail,
 } from "../postgres/repositories/mails";
 
-/**
- * Mail update operations.
- * Note: Authentication and authorization are handled at the HTTP route layer
- * (see routes/mails/post-mark.ts and routes/mails/delete.ts).
- */
+// TODO: These functions accept only mail_id without user_id, so they rely on
+// the caller (HTTP routes) to verify ownership first. Consider adding user_id
+// parameter and ownership check here for defense in depth.
 
 export const markRead = async (id: string) => {
   return markMailRead(id);
