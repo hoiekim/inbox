@@ -73,6 +73,10 @@ export function parseColumnDefinition(definition: string): ColumnInfo | null {
     pgType = "INTEGER"; // SERIAL is INTEGER with sequence
   } else if (rawType === "BIGSERIAL") {
     pgType = "BIGINT";
+  } else if (rawType === "DECIMAL") {
+    pgType = "NUMERIC"; // DECIMAL is alias for NUMERIC
+  } else if (rawType === "REAL" || rawType === "DOUBLE PRECISION") {
+    pgType = "FLOAT"; // REAL and DOUBLE PRECISION normalize to FLOAT
   } else {
     pgType = rawType as NormalizedPgType;
   }
