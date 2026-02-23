@@ -20,7 +20,7 @@ export const deleteMailRoute = new Route<MailDeleteResponse>(
       };
     }
 
-    await deleteMail(mailId);
+    await deleteMail(user.id, mailId);
     return { status: "success" };
   }
 );

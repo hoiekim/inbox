@@ -282,7 +282,7 @@ export class ImapSession {
 
         // Mark as read if not using PEEK
         if (checkShouldMarkAsRead(fetchRequest.dataItems)) {
-          await markRead(id);
+          await markRead(this.store!.getUser().id, id);
         }
       } catch (error) {
         console.error(`[IMAP] Error processing message ${seqNum}:`, error);
