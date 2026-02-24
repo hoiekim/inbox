@@ -79,7 +79,7 @@ export const createToken = async (
   token: string;
   username?: string;
 }> => {
-  const token = Math.floor(Math.random() * 1_000_000_000).toString(36);
+  const token = crypto.randomBytes(32).toString("hex");
   const expiry = new Date(Date.now() + TOKEN_DURATION).toISOString();
 
   const existing = await getUser({ email });
