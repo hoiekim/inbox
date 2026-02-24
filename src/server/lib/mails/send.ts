@@ -91,15 +91,16 @@ const deliverLocally = async (
     }
 
     const recipient = await getUser({ username });
-    if (!recipient) {
+    const recipientId = recipient?.id;
+    if (!recipientId) {
       console.warn(`Local recipient not found: ${recipientEmail} (username: ${username})`);
       continue;
     }
 
     // Create mail for recipient's inbox
     const messageId = randomUUID();
-    const incomingMail = await getIncomingMail(sender, mailToSend, messageId, recipientEmail, files);
-    await saveMail(incomingMail, recipient.id);
+    const incomingMail = await getIncomingMail(sender, mailToSend, messageId, { id: recipientId }, recipientEmail, files);
+    await saveMail(incomingMail, recipientId);
     deliveredTo.push(username);
     console.info(`Delivered locally to ${recipientEmail}`);
   }
@@ -114,6 +115,7 @@ const getIncomingMail = async (
   sender: SignedUser,
   mailToSend: MailDataToSend,
   messageId: string,
+  recipient: { id: string },
   recipientEmail: string,
   files?: UploadedFileDynamicArray
 ): Promise<Mail> => {
@@ -125,14 +127,6 @@ const getIncomingMail = async (
   const userDomain = getUserDomain(username);
   const fromEmail = `${senderAlias}@${userDomain}`;
   const attachments = (await getAttachmentsToSave(files)) || [];
-
-  // Get recipient user for UID generation
-  const recipientUsername = recipientEmail.split("@")[0];
-  const recipient = await getUser({ username: recipientUsername });
-
-  if (!recipient?.id) {
-    throw new Error(`Recipient user not found: ${recipientUsername}`);
-  }
 
   const [domainUid, accountUid] = await Promise.all([
     getDomainUidNext(recipient.id, true),
