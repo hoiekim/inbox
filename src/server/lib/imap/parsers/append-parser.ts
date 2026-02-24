@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, AppendRequest } from '../types';
-import { parseAtom, parseString, skipWhitespace } from './primitive-parsers';
+import { parseFlag, parseString, skipWhitespace } from './primitive-parsers';
 
 /**
  * Parse APPEND command
@@ -29,7 +29,7 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
           context.position++;
           continue;
         }
-        const flag = parseAtom(context);
+        const flag = parseFlag(context);
         if (flag.success) {
           flagsStr.push(flag.value!);
         } else {
@@ -66,7 +66,11 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
       return { success: false, error: 'Invalid literal format', consumed: 0 };
     }
 
-    const sizeStr = context.input.substring(literalStart, literalEnd);
+    let sizeStr = context.input.substring(literalStart, literalEnd);
+    // Handle non-synchronizing literals (RFC 7888 LITERAL+): {size+}
+    if (sizeStr.endsWith('+')) {
+      sizeStr = sizeStr.slice(0, -1);
+    }
     const size = parseInt(sizeStr, 10);
     if (isNaN(size)) {
       return { success: false, error: 'Invalid literal size', consumed: 0 };
