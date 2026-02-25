@@ -291,13 +291,12 @@ const Accounts = ({
       }, 500);
     };
 
-    const onKeyDownSearch: KeyboardEventHandler<HTMLInputElement> = (
-      e: any
-    ) => {
+    const onKeyDownSearch: KeyboardEventHandler<HTMLInputElement> = (e) => {
       if (e.key === "Enter") {
+        const target = e.target as HTMLInputElement;
         setSearchHistory([
           new Account({
-            key: e.target.value,
+            key: target.value,
             doc_count: 0,
             unread_doc_count: 0,
             saved_doc_count: 0,
@@ -305,7 +304,7 @@ const Accounts = ({
           }),
           ...searchHistory
         ]);
-        setSelectedAccount(e.target.value);
+        setSelectedAccount(target.value);
         if (viewSize.width <= 750) setIsAccountsOpen(false);
       }
     };

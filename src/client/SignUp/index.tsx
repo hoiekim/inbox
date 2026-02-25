@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect, ChangeEvent, KeyboardEvent } from "react";
 import { useMutation } from "react-query";
 import { useParams, useLocation, Link } from "react-router-dom";
 
@@ -11,10 +11,21 @@ import { Context, call } from "client";
 
 import "./index.scss";
 
+interface SignUpBody {
+  email: string;
+  token?: string | null;
+  username?: string;
+  password?: string;
+}
+
+interface SetInfoResponse extends SetInfoPostResponse {
+  username?: string;
+}
+
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
 
-  const { email } = useParams() as any;
+  const { email } = useParams<{ email?: string }>();
   const query = new URLSearchParams(useLocation().search);
   const token = query.get("t");
   const username = query.get("u");
@@ -24,26 +35,26 @@ const SignUp = () => {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
 
-  const onChangeEmail = (e: any) => {
+  const onChangeEmail = (e: ChangeEvent<HTMLInputElement>) => {
     setEmailInput(e.target.value);
   };
 
-  const onChangeUsername = (e: any) => {
+  const onChangeUsername = (e: ChangeEvent<HTMLInputElement>) => {
     setUsernameInput(e.target.value);
   };
 
-  const onChangePassword = (e: any) => {
+  const onChangePassword = (e: ChangeEvent<HTMLInputElement>) => {
     setPasswordInput(e.target.value);
   };
 
-  const onChangePasswordConfirm = (e: any) => {
+  const onChangePasswordConfirm = (e: ChangeEvent<HTMLInputElement>) => {
     setPasswordConfirmInput(e.target.value);
   };
 
   type DynamicResponse = SetInfoPostResponse | TokenPostResponse;
   type PromiseDynamicApiResponse = Promise<ApiResponse<DynamicResponse>>;
 
-  const mutation = useMutation((body: any): PromiseDynamicApiResponse => {
+  const mutation = useMutation((body: SignUpBody): PromiseDynamicApiResponse => {
     if (email) {
       return call.post<SetInfoPostResponse>("/api/users/set-info", body);
     } else return call.post<TokenPostResponse>("/api/users/token", body);
@@ -72,9 +83,10 @@ const SignUp = () => {
   }
 
   useEffect(() => {
-    if ((mutation.data as any)?.username && setUserInfo) {
+    const data = mutation.data as SetInfoResponse | undefined;
+    if (data?.username && setUserInfo) {
       setTimeout(() => {
-        const user = new SignedUser(mutation.data as unknown as SignedUserType);
+        const user = new SignedUser(data as unknown as SignedUserType);
         setUserInfo(user);
       }, 500);
     }
@@ -90,7 +102,7 @@ const SignUp = () => {
     if (email) window.name = "inbox-confirm";
   };
 
-  const onKeyDownInput = (e: any) => {
+  const onKeyDownInput = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") onClickSignUp();
   };
 

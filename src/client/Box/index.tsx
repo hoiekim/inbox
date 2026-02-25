@@ -41,9 +41,28 @@ const Box = () => {
   const isAccountsClosing = !isWriterOpen && swipeAmount < 0;
   const isAccountsOpening = !isWriterOpen && swipeAmount > 0;
 
-  const mainPaneStyle: any = { height: viewSize.height - 55, left: 0 };
-  const sidePaneStyle: any = { height: viewSize.height - 55, left: -50 };
-  const writerStyle: any = { height: viewSize.height - 55, right: -50 };
+  interface MainPaneStyle {
+    height: number;
+    left: number;
+    width?: number;
+    padding?: string;
+    transition?: string;
+  }
+  interface SidePaneStyle {
+    height: number;
+    left: number;
+    width?: number;
+    transition?: string;
+  }
+  interface WriterStyle {
+    height: number;
+    right: number;
+    width?: number;
+    transition?: string;
+  }
+  const mainPaneStyle: MainPaneStyle = { height: viewSize.height - 55, left: 0 };
+  const sidePaneStyle: SidePaneStyle = { height: viewSize.height - 55, left: -50 };
+  const writerStyle: WriterStyle = { height: viewSize.height - 55, right: -50 };
 
   let swipeOpenAccounts: boolean;
   let swipeCloseAccounts: boolean;

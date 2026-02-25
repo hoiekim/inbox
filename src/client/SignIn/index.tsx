@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect } from "react";
+import { useState, useContext, useEffect, ChangeEvent, KeyboardEvent } from "react";
 import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
 import { SignedUser, SignedUserType } from "common";
@@ -7,20 +7,26 @@ import { Notifier, call, Context } from "client";
 import LoginIcon from "./components/LoginIcon";
 import "./index.scss";
 
+interface LoginBody {
+  password: string;
+  email?: string;
+  username?: string;
+}
+
 const Home = () => {
   const { setUserInfo } = useContext(Context);
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
 
-  const onChangeUsername = (e: any) => {
+  const onChangeUsername = (e: ChangeEvent<HTMLInputElement>) => {
     setUsernameInput(e.target.value);
   };
 
-  const onChangePassword = (e: any) => {
+  const onChangePassword = (e: ChangeEvent<HTMLInputElement>) => {
     setPasswordInput(e.target.value);
   };
 
-  const mutation = useMutation((body) => {
+  const mutation = useMutation((body: LoginBody) => {
     return call.post<LoginPostResponse>("/api/users/login", body);
   });
 
@@ -42,14 +48,14 @@ const Home = () => {
   }, [mutation.data, setUserInfo]);
 
   const onClickLogin = async () => {
-    const body: any = { password: passwordInput };
+    const body: LoginBody = { password: passwordInput };
     if (usernameInput.includes("@")) body.email = usernameInput;
     else body.username = usernameInput;
     await new Notifier().requestPermission();
     mutation.mutate(body);
   };
 
-  const onKeyDownInput = (e: any) => {
+  const onKeyDownInput = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") onClickLogin();
   };
 
