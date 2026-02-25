@@ -44,9 +44,12 @@ const splitRecipients = (
 
   const categorize = (addresses: string | undefined) => {
     if (!addresses) return;
+    const domainLower = domain.toLowerCase();
     addressParser(addresses).forEach(({ email }) => {
       const emailDomain = email.split("@")[1]?.toLowerCase();
-      if (emailDomain && emailDomain.endsWith(domain.toLowerCase())) {
+      // Match exact domain or subdomains (e.g., user@hoie.kim or user@sub.hoie.kim)
+      const isLocal = emailDomain === domainLower || emailDomain?.endsWith(`.${domainLower}`);
+      if (isLocal) {
         local.push(email);
       } else {
         external.push(email);
@@ -231,8 +234,22 @@ export const sendMail = async (
 
     return response;
   } catch (error: any) {
-    console.error("Email sending failed:", error.message);
-    throw error;
+    console.error("Email sending failed:", error);
+
+    // Provide user-friendly error messages for common Mailgun errors
+    let message = "Failed to send email. Please try again.";
+
+    if (error?.status === 401 || error?.status === 403) {
+      message = "Email service not configured correctly";
+    } else if (error?.status === 400) {
+      message = error?.message || "Invalid email request";
+    } else if (error?.status === 429) {
+      message = "Too many requests. Please try again later.";
+    } else if (error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+      message = "Unable to reach email service. Please try again later.";
+    }
+
+    throw new MailSendingError(message);
   }
 };
 
