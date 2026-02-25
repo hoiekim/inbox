@@ -211,7 +211,10 @@ export const sendMail = async (
 
       // Only send if there are actual external recipients
       if (externalMailData.to || externalMailData.cc || externalMailData.bcc) {
-        response = await sendMailgunMail(username, externalMailData, files);
+        const mailgunResponse = await sendMailgunMail(username, externalMailData, files);
+        if (mailgunResponse) {
+          response = mailgunResponse;
+        }
         console.info("External email sending succeeded via Mailgun");
       }
     }

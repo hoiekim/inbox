@@ -16,11 +16,11 @@ const registerListeners = (
   callback: () => void
 ) => {
   server.on("error", (err) => {
-    console.error("SMTP Server Error:", err);
+    console.error(`SMTP Server(${port}) Error: ${err}`);
   });
 
   server.on("close", () => {
-    console.log("SMTP Server closed");
+    console.log(`SMTP Server(${port}) closed`);
   });
 
   server.listen(port, callback);
@@ -35,6 +35,29 @@ const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   const pwMatches = await bcrypt.compare(password, user.password!);
   if (!pwMatches) return cb(null, { user: undefined });
   cb(null, { user: username });
+};
+
+const onData = (
+  stream: SMTPServerDataStream,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+) => {
+  const { EMAIL_DOMAIN } = process.env;
+  if (!EMAIL_DOMAIN) {
+    console.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
+    return cb(new Error("Email service not configured"));
+  }
+
+  const isIncomingEmail = session.envelope.rcptTo.some((addr) => {
+    return addr.address.endsWith(`@${EMAIL_DOMAIN}`);
+  });
+
+  const from = session.envelope.mailFrom;
+  const isOutgoingEmail =
+    typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
+
+  if (isOutgoingEmail) onDataOutgoing(stream, session, cb);
+  else if (isIncomingEmail) onDataIncoming(stream, session, cb);
 };
 
 const onDataIncoming = (
@@ -114,76 +137,46 @@ const onDataOutgoing = async (
 };
 
 export const initializeSmtp = async () => {
+  const options: SMTPServerOptions = { authOptional: true, onAuth, onData };
+
+  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+  const isSslAvailable = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
+
+  if (isSslAvailable) {
+    options.key = readFileSync(SSL_CERTIFICATE_KEY);
+    options.cert = readFileSync(SSL_CERTIFICATE);
+  } else {
+    console.warn("SMTP: SSL certificate not found.");
+  }
+
   await new Promise<void>((res) => {
     const port = 25;
-    const server = new SMTPServer({
-      secure: false,
-      authOptional: true,
-      onAuth,
-      onData: onDataIncoming
-    });
+    const server = new SMTPServer({ ...options, secure: false });
     registerListeners(server, port, () => {
-      console.log(`SMTP server listening on port ${port} (incoming)`);
+      console.log(`SMTP server listening on port ${port}`);
       res();
     });
   });
 
-  await new Promise<void>((res) => {
-    const port = 465;
-    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-
-    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
-      console.warn("SMTP: SSL certificate not found.");
-      res();
-      return;
-    }
-
-    const tlsOptions = {
-      key: readFileSync(SSL_CERTIFICATE_KEY),
-      cert: readFileSync(SSL_CERTIFICATE)
-    };
-
-    const server = new SMTPServer({
-      secure: true,
-      authOptional: false,
-      ...tlsOptions,
-      onAuth,
-      onData: onDataOutgoing
+  if (isSslAvailable) {
+    await new Promise<void>((res) => {
+      const port = 465;
+      const server = new SMTPServer({ ...options, secure: true });
+      registerListeners(server, port, () => {
+        console.log(`SMTP server listening on port ${port}`);
+        res();
+      });
     });
-    registerListeners(server, port, () => {
-      console.log(`SMTP server listening on port ${port} over TLS (outgoing)`);
-      res();
-    });
-  });
 
-  // Port 587 - STARTTLS (RFC 6409 mail submission standard)
-  await new Promise<void>((res) => {
-    const port = 587;
-    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-
-    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
-      console.warn(
-        "SMTP: SSL certificate not found, skipping port 587 (STARTTLS)."
-      );
-      res();
-      return;
-    }
-
-    const server = new SMTPServer({
-      secure: false, // Start plain, upgrade via STARTTLS
-      authOptional: false,
-      key: readFileSync(SSL_CERTIFICATE_KEY),
-      cert: readFileSync(SSL_CERTIFICATE),
-      onAuth,
-      onData: onDataOutgoing
+    await new Promise<void>((res) => {
+      const port = 587;
+      const server = new SMTPServer({ ...options, secure: false });
+      registerListeners(server, port, () => {
+        console.log(`SMTP server listening on port ${port}`);
+        res();
+      });
     });
-    registerListeners(server, port, () => {
-      console.log(
-        `SMTP server listening on port ${port} with STARTTLS (submission)`
-      );
-      res();
-    });
-  });
+  }
 
   return;
 };
