@@ -32,8 +32,9 @@ export type UploadedFileDynamicArray = UploadedFile | UploadedFile[];
 
 /**
  * Split recipients into local (on host domain) and external addresses.
+ * @exported for testing
  */
-const splitRecipients = (
+export const splitRecipients = (
   to: string,
   cc?: string,
   bcc?: string
