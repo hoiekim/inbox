@@ -43,6 +43,9 @@ export interface SaveMailInput {
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
+  spam_score?: number;
+  spam_reasons?: string[] | null;
+  is_spam?: boolean;
 }
 
 export const saveMail = async (
@@ -84,6 +87,9 @@ export const saveMail = async (
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
+      spam_score: input.spam_score ?? 0,
+      spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
+      is_spam: input.is_spam ?? false,
     };
 
     const result = await mailsTable.insert(data as Record<string, ParamValue>, [

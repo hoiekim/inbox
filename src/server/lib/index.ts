@@ -46,7 +46,10 @@ export {
   MailValidationError,
   MailSendingError,
 } from "./mails";
-export type { AccountsGetResponse, GetMailsOptions, ValidationResult } from "./mails";
+export type { AccountsGetResponse, GetMailsOptions, ValidationResult, SaveMailHandlerOptions } from "./mails";
+
+// Spam filter
+export * from "./spam";
 
 // Version
 export { version } from "./postgres/initialize";
