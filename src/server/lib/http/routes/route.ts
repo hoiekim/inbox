@@ -27,7 +27,7 @@ export type Stream<T = undefined> = (
   response: T extends Buffer ? Buffer : ApiResponse<T>
 ) => void;
 
-export type GetResponse<T = any> = (
+export type GetResponse<T = unknown> = (
   req: Request,
   res: Response,
   stream: Stream<T>
@@ -56,9 +56,10 @@ export class Route<T> {
         else if (result) res.json(result);
         else res.end();
         return;
-      } catch (error: any) {
+      } catch (error: unknown) {
         console.error(error);
-        res.status(500).json({ status: "error", info: error?.message });
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(500).json({ status: "error", info: message });
       }
     }
     next();

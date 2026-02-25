@@ -458,7 +458,7 @@ export interface ImapResponse {
   tag: string;
   status: "OK" | "NO" | "BAD";
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 export interface UntaggedResponse {

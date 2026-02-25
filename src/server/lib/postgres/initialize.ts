@@ -4,6 +4,7 @@ import { buildCreateTable, buildCreateIndex } from "./database";
 import { runMigrations } from "./migration";
 import {
   Table,
+  Schema,
   usersTable,
   sessionsTable,
   mailsTable,
@@ -13,7 +14,7 @@ import {
 export const version = "1";
 export const index = "inbox" + (version ? `-${version}` : "");
 
-const tables: Table<unknown, any>[] = [
+const tables: Table<unknown, Schema>[] = [
   usersTable,
   sessionsTable,
   mailsTable,

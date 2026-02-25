@@ -139,7 +139,7 @@ export class PostgresSessionStore extends Store {
    */
   get = async (
     session_id: string,
-    callback: (err: any, session?: RuntimeSessionType | null) => void
+    callback: (err: unknown, session?: RuntimeSessionType | null) => void
   ) => {
     try {
       const sessionModel = await searchSession(session_id);
@@ -188,7 +188,7 @@ export class PostgresSessionStore extends Store {
   set = async (
     session_id: string,
     session: RuntimeSessionType,
-    callback?: (err?: any) => void
+    callback?: (err?: unknown) => void
   ) => {
     if (!callback) return;
 
@@ -234,7 +234,7 @@ export class PostgresSessionStore extends Store {
    * @param callback
    * @returns
    */
-  destroy = async (session_id: string, callback?: (err?: any) => void) => {
+  destroy = async (session_id: string, callback?: (err?: unknown) => void) => {
     if (!callback) return;
     try {
       await deleteSession(session_id);
