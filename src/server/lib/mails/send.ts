@@ -334,15 +334,3 @@ export const addressParser = (str: string) => {
     .map((e) => ({ email: e }));
   return result;
 };
-
-const isToMyself = (to: string) => {
-  const toDomains = addressParser(to)?.map(({ email }) => {
-    const splitString = email.split("@")[1].split(".");
-    const length = splitString.length;
-    return splitString[length - 2] + "." + splitString[length - 1];
-  });
-
-  const domain = getDomain();
-
-  return !!toDomains?.find((e: string) => e === domain);
-};
