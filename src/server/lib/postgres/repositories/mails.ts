@@ -873,3 +873,41 @@ export const expungeDeletedMails = async (
     return [];
   }
 };
+
+/**
+ * Get all spam-flagged mails for a user.
+ * Returns mails where is_spam = true, sorted by date descending.
+ */
+export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
+  try {
+    const sql = `
+      SELECT * FROM mails 
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE
+      ORDER BY date DESC
+    `;
+    const result = await pool.query(sql, [user_id]);
+    return result.rows.map((row: Record<string, unknown>) => new MailModel(row));
+  } catch (error) {
+    console.error("Failed to get spam mails:", error);
+    return [];
+  }
+};
+
+/**
+ * Mark or unmark a mail as spam.
+ */
+export const markMailSpam = async (
+  mail_id: string,
+  is_spam: boolean
+): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2`,
+      [is_spam, mail_id]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error("Failed to mark mail as spam:", error);
+    return false;
+  }
+};
