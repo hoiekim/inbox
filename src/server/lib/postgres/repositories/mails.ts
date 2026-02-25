@@ -897,13 +897,14 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
  * Mark or unmark a mail as spam.
  */
 export const markMailSpam = async (
+  user_id: string,
   mail_id: string,
   is_spam: boolean
 ): Promise<boolean> => {
   try {
     const result = await pool.query(
-      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2`,
-      [is_spam, mail_id]
+      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2 AND user_id = $3`,
+      [is_spam, mail_id, user_id]
     );
     return (result.rowCount ?? 0) > 0;
   } catch (error) {

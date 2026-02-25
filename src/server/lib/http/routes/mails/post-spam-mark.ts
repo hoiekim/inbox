@@ -1,8 +1,4 @@
-import {
-  getMailBody,
-  markSpam,
-  AUTH_ERROR_MESSAGE
-} from "server";
+import { markSpam, AUTH_ERROR_MESSAGE } from "server";
 import { Route } from "../route";
 
 export type SpamMarkPostResponse = undefined;
@@ -14,8 +10,7 @@ export interface SpamMarkPostBody {
 
 /**
  * Mark or unmark an email as spam.
- * When marking as spam, also adds sender to blocklist consideration.
- * When unmarking, user may want to add sender to allowlist.
+ * Authorization is enforced at the repository layer via user_id in WHERE clause.
  */
 export const postSpamMarkRoute = new Route<SpamMarkPostResponse>(
   "POST",
@@ -31,16 +26,15 @@ export const postSpamMarkRoute = new Route<SpamMarkPostResponse>(
       return { status: "failed", message: "is_spam must be a boolean" };
     }
 
-    const mail = await getMailBody(user.id, mail_id);
+    const updated = await markSpam(user.id, mail_id, is_spam);
 
-    if (!mail) {
+    if (!updated) {
       return {
         status: "failed",
-        message: "Invalid request. You may not manipulate other users' email"
+        message: "Mail not found or you don't have permission"
       };
     }
 
-    await markSpam(mail_id, is_spam);
     return { status: "success" };
   }
 );
