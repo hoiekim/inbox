@@ -42,14 +42,9 @@ export const sendMail = async (
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
-
-    console.info("Email sending request succeeded");
-
-    if (!isToMyself(mailToSend.to)) {
-      const messageId = response.id || randomUUID();
-      const sentMail = await getSentMail(user, mailToSend, messageId, files);
-      await saveMail(sentMail, userId);
-    }
+    const messageId = response?.id || randomUUID();
+    const sentMail = await getSentMail(user, mailToSend, messageId, files);
+    await saveMail(sentMail, userId);
 
     return response;
   } catch (error: any) {
