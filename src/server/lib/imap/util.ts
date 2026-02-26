@@ -1,5 +1,6 @@
 import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
+import { logger } from "../logger";
 
 export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");
@@ -75,9 +76,10 @@ export const formatHeaders = (
 
   // Use stable boundary based on docId - docId should always exist
   if (!docId) {
-    console.warn(
-      `[IMAP] Warning: docId is missing, falling back to messageId: ${mail.messageId}`
-    );
+    logger.warn("docId is missing, falling back to messageId", {
+      component: "imap",
+      messageId: mail.messageId
+    });
   }
   const stableId = docId || mail.messageId || "default";
 

@@ -10,6 +10,7 @@ import {
 } from "./postgres/repositories/push_subscriptions";
 import { getUnreadNotifications } from "./postgres/repositories/mails";
 import { getActiveUsers } from "./users";
+import { logger } from "./logger";
 
 // Import IDLE manager for real-time IMAP notifications
 import { idleManager } from "./imap/idle-manager";
@@ -27,10 +28,10 @@ if (vapidConfigured) {
     PUSH_VAPID_PRIVATE_KEY
   );
 } else {
-  console.warn(
-    "VAPID keys not configured - push notifications disabled. " +
-      "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable."
-  );
+  logger.warn("VAPID keys not configured - push notifications disabled", {
+    component: "push",
+    hint: "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable"
+  });
 }
 
 export const getPushPublicKey = () => PUSH_VAPID_PUBLIC_KEY;
@@ -45,16 +46,18 @@ export const storeSubscription = async (
 };
 
 export const deleteSubscription = (push_subscription_id: string) => {
-  return pgDeleteSubscription(push_subscription_id).catch(console.error);
+  return pgDeleteSubscription(push_subscription_id).catch((error) => {
+    logger.error("Error deleting push subscription", { component: "push", push_subscription_id }, error);
+  });
 };
 
 const ONE_DAY = 1000 * 60 * 60 * 24;
 
 export const cleanSubscriptions = () => {
   setTimeout(async () => {
-    console.info("Cleaning old push subscriptions.");
+    logger.info("Cleaning old push subscriptions", { component: "push" });
     const deleted = await pgCleanSubscriptions();
-    console.log(`Deleted ${deleted} old subscriptions`);
+    logger.info("Deleted old subscriptions", { component: "push", count: deleted });
     cleanSubscriptions();
   }, ONE_DAY);
 };
@@ -134,10 +137,10 @@ export const notifyNewMails = async (usernames: string[]) => {
         .catch(async (error) => {
           isFailed = true;
           if (error.statusCode === 410) {
-            console.log("Subscription has expired. Removing from database...");
+            logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
             return deleteSubscription(push_subscription_id);
           } else {
-            console.error("Error sending push notification:", error);
+            logger.error("Error sending push notification", { component: "push" }, error);
           }
         });
 
@@ -177,10 +180,10 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch((error) => {
           if (error.statusCode === 410) {
-            console.log("Subscription has expired. Removing from database...");
+            logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
             deleteSubscription(push_subscription_id);
           } else {
-            console.error("Error sending push notification:", error);
+            logger.error("Error sending push notification", { component: "push" }, error);
           }
         });
     })

@@ -6,6 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
+import { logger } from "../logger";
 
 export class ImapRequestHandler {
   private session: ImapSession | null = null;
@@ -36,11 +37,11 @@ export class ImapRequestHandler {
           buffer = buffer.substring(lineEnd + 2);
 
           if (line.trim()) {
-            console.log(
-              `[IMAP] Received: "${line.trim()}"\n\tfor mailbox: ${
-                session.selectedMailbox
-              }`
-            );
+            logger.debug("IMAP command received", {
+              component: "imap",
+              command: line.trim(),
+              mailbox: session.selectedMailbox
+            });
 
             // Check throttling before processing
             if (session.isThrottled()) {
@@ -59,18 +60,18 @@ export class ImapRequestHandler {
                 await this.handleRequest(tag, request);
               } else {
                 // If parsing failed, send error response only if socket is writable
-                console.log(
-                  `[PARSER] Parse failed for "${line.trim()}": ${
-                    parseResult.error
-                  }`
-                );
+                logger.debug("Parse failed", {
+                  component: "imap.parser",
+                  input: line.trim(),
+                  error: parseResult.error
+                });
                 const parts = line.trim().split(" ");
                 const tag = parts[0] || "BAD";
                 const errorMsg = parseResult.error || "Invalid command syntax";
                 session.write(`${tag} BAD ${errorMsg}\r\n`);
               }
             } catch (error) {
-              console.error("Error processing command:", error);
+              logger.error("Error processing command", { component: "imap" }, error);
               // Only send error response if socket is still writable
               const parts = line.trim().split(" ");
               const tag = parts[0] || "BAD";
@@ -79,7 +80,7 @@ export class ImapRequestHandler {
           }
         }
       } catch (error) {
-        console.error("Error processing data:", error);
+        logger.error("Error processing data", { component: "imap" }, error);
         if (!socket.destroyed) {
           socket.destroy();
         }
@@ -87,12 +88,12 @@ export class ImapRequestHandler {
     });
 
     socket.on("close", () => {
-      console.log("IMAP connection closed");
+      logger.debug("IMAP connection closed", { component: "imap" });
     });
 
     socket.on("error", (error) => {
-      if (!error.message.includes("ECONNRESET")) {
-        console.error("IMAP socket error:", error);
+      if (!(error as Error).message?.includes("ECONNRESET")) {
+        logger.error("IMAP socket error", { component: "imap" }, error);
       }
       if (!socket.destroyed) {
         socket.destroy();
@@ -102,7 +103,7 @@ export class ImapRequestHandler {
     // Set socket timeout to prevent hanging connections
     socket.setTimeout(300000); // 5 minutes
     socket.on("timeout", () => {
-      console.log("IMAP socket timeout");
+      logger.info("IMAP socket timeout", { component: "imap" });
       session.write("* BYE Timeout\r\n");
       if (!socket.destroyed) {
         socket.destroy();
@@ -115,7 +116,7 @@ export class ImapRequestHandler {
    */
   async handleRequest(tag: string, request: ImapRequest): Promise<void> {
     if (!this.session) {
-      console.error("Invalid session: Use setSocket to start a session.");
+      logger.error("Invalid session: Use setSocket to start a session", { component: "imap" });
       return;
     }
 
@@ -248,7 +249,7 @@ export class ImapRequestHandler {
           break;
       }
     } catch (error) {
-      console.error("Error handling IMAP request:", error);
+      logger.error("Error handling IMAP request", { component: "imap", tag, type: request.type }, error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
     }
   }
@@ -261,7 +262,7 @@ export class ImapRequestHandler {
     data: { command: string; request: ImapRequest }
   ): Promise<void> {
     if (!this.session) {
-      console.error("Invalid session: Use setSocket to start a session.");
+      logger.error("Invalid session: Use setSocket to start a session", { component: "imap" });
       return;
     }
 
@@ -291,7 +292,7 @@ export class ImapRequestHandler {
           break;
       }
     } catch (error) {
-      console.error("Error handling UID command:", error);
+      logger.error("Error handling UID command", { component: "imap", tag, command }, error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
     }
   }
