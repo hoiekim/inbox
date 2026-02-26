@@ -114,8 +114,8 @@ const MailBody = ({ mailId }: Props) => {
     const attachments: JSX.Element[] | undefined = data.attachments?.map(
       (attachment: AttachmentType, i: number) => {
         const onClickAttachment = () => {
-          fetch(`/api/mails/attachment/${attachment.content.data}`)
-            .then((r) => r.arrayBuffer())
+          call
+            .binary(`/api/mails/attachment/${attachment.content.data}`)
             .then((buffer) => {
               const link = document.createElement("a");
               const blob = new Blob([buffer], { type: attachment.contentType });

@@ -17,7 +17,8 @@ import {
   Context,
   useLocalStorage,
   getDateForMailHeader,
-  processHtmlToSendMail
+  processHtmlToSendMail,
+  call
 } from "client";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
@@ -153,12 +154,8 @@ const Writer = () => {
     setEditorContent
   ]);
 
-  const sendMail = (data: BodyInit) => {
-    return fetch("/api/mails/send", {
-      method: "POST",
-      headers: {},
-      body: data
-    }).then((r) => r.json() as unknown as ApiResponse<SendMailPostResponse>);
+  const sendMail = (data: FormData) => {
+    return call.postFormData<SendMailPostResponse>("/api/mails/send", data);
   };
 
   const onSuccessSendMail = (data: ApiResponse<SendMailPostResponse>) => {

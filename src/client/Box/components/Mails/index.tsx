@@ -38,10 +38,7 @@ import "./index.scss";
 const GettingStarted = () => {
   const queryUrl = "/text/getting_started.md";
 
-  const fetchMessage = () =>
-    fetch(queryUrl)
-      .then((r) => r.text())
-      .then((r) => marked(r));
+  const fetchMessage = () => call.text(queryUrl).then((r) => marked(r));
 
   const query = useQuery<string>(queryUrl, fetchMessage);
 
