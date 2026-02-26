@@ -29,9 +29,9 @@ const tokenLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// Apply rate limiters to specific paths
-usersRouter.use("/login", loginLimiter);
-usersRouter.use("/token", tokenLimiter);
+// Apply rate limiters using route paths (avoids hardcoded strings)
+usersRouter.use(postLoginRoute.path, loginLimiter);
+usersRouter.use(postTokenRoute.path, tokenLimiter);
 
 const routes = [
   getLoginRoute,
