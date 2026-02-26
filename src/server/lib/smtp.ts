@@ -170,7 +170,11 @@ export const initializeSmtp = async () => {
 
     await new Promise<void>((res) => {
       const port = 587;
-      const server = new SMTPServer({ ...options, secure: false });
+      const server = new SMTPServer({
+        ...options,
+        secure: false,
+        allowInsecureAuth: true
+      });
       registerListeners(server, port, () => {
         console.log(`SMTP server listening on port ${port}`);
         res();
