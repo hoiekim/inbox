@@ -45,6 +45,10 @@ export const sendMail = async (
     const messageId = response?.id || randomUUID();
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
     await saveMail(sentMail, userId);
+    if (isToMyself(mailToSend.to)) {
+      // If the email is sent to myself, also save a copy in the inbox
+      await saveMail(new Mail({ ...sentMail, sent: false }), userId);
+    }
 
     return response;
   } catch (error: any) {
