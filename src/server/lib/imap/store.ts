@@ -14,6 +14,7 @@ import {
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
+import { logger } from "../logger";
 
 // class that creates "store" object
 export class Store {
@@ -53,7 +54,7 @@ export class Store {
 
       return mailboxes;
     } catch (error) {
-      console.error("[STORE] Error listing mailboxes:", error);
+      logger.error("Error listing mailboxes", { component: "imap.store" }, error);
       return ["INBOX"];
     }
   };
@@ -70,7 +71,7 @@ export class Store {
 
       return await countMessages(this.user.id, accountName, isSent);
     } catch (error) {
-      console.error("Error counting messages:", error);
+      logger.error("Error counting messages", { component: "imap.store", box }, error);
       return null;
     }
   };
@@ -89,7 +90,7 @@ export class Store {
 
       return await pgGetAllUids(this.user.id, accountName, isSent);
     } catch (error) {
-      console.error("Error getting all UIDs:", error);
+      logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
       return [];
     }
   };
@@ -181,7 +182,7 @@ export class Store {
 
       return mails;
     } catch (error) {
-      console.error("Error getting messages:", error);
+      logger.error("Error getting messages", { component: "imap.store", box }, error);
       return new Map();
     }
   };
@@ -218,7 +219,7 @@ export class Store {
         useUid
       );
     } catch (error) {
-      console.error("Error setting flags:", error);
+      logger.error("Error setting flags", { component: "imap.store", box, flags }, error);
       return [];
     }
   };
@@ -237,7 +238,7 @@ export class Store {
 
       return await expungeDeletedMails(this.user.id, accountName, isSent);
     } catch (error) {
-      console.error("Error expunging messages:", error);
+      logger.error("Error expunging messages", { component: "imap.store", box }, error);
       throw error;
     }
   };
@@ -292,7 +293,7 @@ export class Store {
             }
             break;
           default:
-            console.warn(`Unsupported search criterion: ${type}`);
+            logger.warn("Unsupported search criterion", { component: "imap.store", type });
         }
       }
 
@@ -303,7 +304,7 @@ export class Store {
         simplifiedCriteria
       );
     } catch (error) {
-      console.error("Error searching messages:", error);
+      logger.error("Error searching messages", { component: "imap.store", box }, error);
       return [];
     }
   };
@@ -347,7 +348,7 @@ export class Store {
       const result = await pgSaveMail(input);
       return !!result;
     } catch (error) {
-      console.error("Error storing mail:", error);
+      logger.error("Error storing mail", { component: "imap.store" }, error);
       return false;
     }
   };

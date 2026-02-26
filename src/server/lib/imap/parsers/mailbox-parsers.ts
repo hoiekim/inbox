@@ -10,6 +10,7 @@ import {
   peek,
   consume
 } from "./primitive-parsers";
+import { logger } from "../../logger";
 
 /**
  * Parse LIST command
@@ -23,9 +24,10 @@ export const parseList = (
   // Parse reference name (can be quoted string or atom)
   const referenceName = parseString(context);
   if (!referenceName.success) {
-    console.log(
-      `[PARSER] Failed to parse reference name at position ${context.position}`
-    );
+    logger.debug("Failed to parse reference name", {
+      component: "imap.parser",
+      position: context.position
+    });
     return {
       success: false,
       error: "Invalid reference name in LIST",
@@ -52,9 +54,10 @@ export const parseList = (
   }
 
   if (!mailboxName.success) {
-    console.log(
-      `[PARSER] Failed to parse mailbox name at position ${context.position}`
-    );
+    logger.debug("Failed to parse mailbox name", {
+      component: "imap.parser",
+      position: context.position
+    });
     return {
       success: false,
       error: "Invalid mailbox name in LIST",
