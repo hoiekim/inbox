@@ -5,6 +5,7 @@ import path from "path";
 
 import { getDomain, PostgresSessionStore } from "server";
 import apiRouter from "./routes";
+import { startCleanupScheduler } from "./rate-limit";
 
 export const initializeHttp = async () => {
   const app = express();
@@ -43,6 +44,9 @@ export const initializeHttp = async () => {
       res(undefined);
     })
   );
+
+  // Start cleanup scheduler for rate limit data
+  startCleanupScheduler();
 
   return app;
 };
