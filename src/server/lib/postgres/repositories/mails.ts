@@ -488,6 +488,74 @@ export interface UpdatedMailFlags {
   answered: boolean;
 }
 
+/**
+ * Operation type for STORE command per RFC 3501
+ * - "FLAGS" or "FLAGS.SILENT": Replace all flags with the provided flags
+ * - "+FLAGS" or "+FLAGS.SILENT": Add the provided flags (leave others unchanged)
+ * - "-FLAGS" or "-FLAGS.SILENT": Remove the provided flags (leave others unchanged)
+ */
+export type StoreOperationType = "FLAGS" | "+FLAGS" | "-FLAGS";
+
+/**
+ * Build SET clause for flag updates based on operation type.
+ * Per RFC 3501 Section 6.4.6:
+ * - FLAGS: Replace all flags with the provided list
+ * - +FLAGS: Add the specified flags to existing flags
+ * - -FLAGS: Remove the specified flags from existing flags
+ */
+function buildFlagSetClause(
+  operation: StoreOperationType,
+  flags: string[]
+): string {
+  const hasFlag = (flag: string) => flags.includes(flag);
+
+  switch (operation) {
+    case "FLAGS":
+      // Replace mode: set all flags based on presence in flags array
+      return `
+        read = ${hasFlag("\\Seen")},
+        saved = ${hasFlag("\\Flagged")},
+        deleted = ${hasFlag("\\Deleted")},
+        draft = ${hasFlag("\\Draft")},
+        answered = ${hasFlag("\\Answered")}
+      `;
+
+    case "+FLAGS": {
+      // Add mode: only set flags that are in the array to true
+      const addClauses: string[] = [];
+      if (hasFlag("\\Seen")) addClauses.push("read = TRUE");
+      if (hasFlag("\\Flagged")) addClauses.push("saved = TRUE");
+      if (hasFlag("\\Deleted")) addClauses.push("deleted = TRUE");
+      if (hasFlag("\\Draft")) addClauses.push("draft = TRUE");
+      if (hasFlag("\\Answered")) addClauses.push("answered = TRUE");
+      // If no flags specified, return a no-op that still works
+      return addClauses.length > 0 ? addClauses.join(", ") : "updated = updated";
+    }
+
+    case "-FLAGS": {
+      // Remove mode: only set flags that are in the array to false
+      const removeClauses: string[] = [];
+      if (hasFlag("\\Seen")) removeClauses.push("read = FALSE");
+      if (hasFlag("\\Flagged")) removeClauses.push("saved = FALSE");
+      if (hasFlag("\\Deleted")) removeClauses.push("deleted = FALSE");
+      if (hasFlag("\\Draft")) removeClauses.push("draft = FALSE");
+      if (hasFlag("\\Answered")) removeClauses.push("answered = FALSE");
+      // If no flags specified, return a no-op that still works
+      return removeClauses.length > 0 ? removeClauses.join(", ") : "updated = updated";
+    }
+
+    default:
+      // Default to replace mode
+      return `
+        read = ${hasFlag("\\Seen")},
+        saved = ${hasFlag("\\Flagged")},
+        deleted = ${hasFlag("\\Deleted")},
+        draft = ${hasFlag("\\Draft")},
+        answered = ${hasFlag("\\Answered")}
+      `;
+  }
+}
+
 export const setMailFlags = async (
   user_id: string,
   account: string | null,
@@ -495,16 +563,12 @@ export const setMailFlags = async (
   start: number,
   end: number,
   flags: string[],
-  useUid: boolean
+  useUid: boolean,
+  operation: StoreOperationType = "FLAGS"
 ): Promise<UpdatedMailFlags[]> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
-    const read = flags.includes("\\Seen");
-    const saved = flags.includes("\\Flagged");
-    const deleted = flags.includes("\\Deleted");
-    const draft = flags.includes("\\Draft");
-    const answered = flags.includes("\\Answered");
+    const setClause = buildFlagSetClause(operation, flags);
 
     let sql: string;
     let values: ParamValue[];
@@ -513,54 +577,54 @@ export const setMailFlags = async (
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $6 AND sent = $7 AND ${uidField} >= $8 AND ${uidField} <= $9
+          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, answered, user_id, sent, start, end];
+        values = [user_id, sent, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
+          SET ${setClause}, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $6 AND sent = $7
+            WHERE user_id = $1 AND sent = $2
             ORDER BY ${uidField} ASC
-            OFFSET $8 LIMIT 1
+            OFFSET $3 LIMIT 1
           )
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, answered, user_id, sent, start];
+        values = [user_id, sent, start];
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
       // For sent mails, check from_address only
       // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $8::jsonb`
-        : `(${TO_ADDRESS} @> $8::jsonb OR cc_address @> $8::jsonb OR bcc_address @> $8::jsonb)`;
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       if (useUid) {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
-          WHERE user_id = $6 AND sent = $7 AND ${addressCondition}
-            AND ${uidField} >= $9 AND ${uidField} <= $10
+          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+            AND ${uidField} >= $4 AND ${uidField} <= $5
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, answered, user_id, sent, addressJson, start, end];
+        values = [user_id, sent, addressJson, start, end];
       } else {
         sql = `
           UPDATE mails 
-          SET read = $1, saved = $2, deleted = $3, draft = $4, answered = $5, updated = CURRENT_TIMESTAMP
+          SET ${setClause}, updated = CURRENT_TIMESTAMP
           WHERE mail_id IN (
             SELECT mail_id FROM mails
-            WHERE user_id = $6 AND sent = $7 AND ${addressCondition}
+            WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
             ORDER BY ${uidField} ASC
-            OFFSET $9 LIMIT 1
+            OFFSET $4 LIMIT 1
           )
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [read, saved, deleted, draft, answered, user_id, sent, addressJson, start];
+        values = [user_id, sent, addressJson, start];
       }
     }
 
