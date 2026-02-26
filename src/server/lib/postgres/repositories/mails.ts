@@ -118,13 +118,12 @@ export const markMailRead = async (
   mail_id: string
 ): Promise<boolean> => {
   try {
-    const sql = `
-      UPDATE mails SET read = TRUE, updated = CURRENT_TIMESTAMP
-      WHERE mail_id = $1 AND user_id = $2
-      RETURNING mail_id
-    `;
-    const result = await pool.query(sql, [mail_id, user_id]);
-    return result.rowCount !== null && result.rowCount > 0;
+    const rows = await mailsTable.updateWhere(
+      { [MAIL_ID]: mail_id, [USER_ID]: user_id },
+      { read: true, updated: new Date() },
+      [MAIL_ID]
+    );
+    return rows.length > 0;
   } catch (error) {
     console.error("Failed to mark mail as read:", error);
     return false;
@@ -137,13 +136,12 @@ export const markMailSaved = async (
   saved: boolean
 ): Promise<boolean> => {
   try {
-    const sql = `
-      UPDATE mails SET saved = $1, updated = CURRENT_TIMESTAMP
-      WHERE mail_id = $2 AND user_id = $3
-      RETURNING mail_id
-    `;
-    const result = await pool.query(sql, [saved, mail_id, user_id]);
-    return result.rowCount !== null && result.rowCount > 0;
+    const rows = await mailsTable.updateWhere(
+      { [MAIL_ID]: mail_id, [USER_ID]: user_id },
+      { saved, updated: new Date() },
+      [MAIL_ID]
+    );
+    return rows.length > 0;
   } catch (error) {
     console.error("Failed to mark mail as saved:", error);
     return false;
@@ -155,12 +153,11 @@ export const deleteMail = async (
   mail_id: string
 ): Promise<boolean> => {
   try {
-    const sql = `
-      DELETE FROM mails WHERE mail_id = $1 AND user_id = $2
-      RETURNING mail_id
-    `;
-    const result = await pool.query(sql, [mail_id, user_id]);
-    return result.rowCount !== null && result.rowCount > 0;
+    const count = await mailsTable.deleteWhere({
+      [MAIL_ID]: mail_id,
+      [USER_ID]: user_id
+    });
+    return count > 0;
   } catch (error) {
     console.error("Failed to delete mail:", error);
     return false;

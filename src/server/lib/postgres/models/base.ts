@@ -171,6 +171,46 @@ export abstract class Table<
     return result.rowCount !== null && result.rowCount > 0;
   }
 
+  async deleteWhere(
+    filters: Record<string, ParamValue | unknown>
+  ): Promise<number> {
+    const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) {
+      throw new Error("deleteWhere requires at least one filter");
+    }
+    const whereClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
+    const values = entries.map(([, v]) => v as ParamValue);
+    const sql = `DELETE FROM ${this.name} WHERE ${whereClauses.join(" AND ")} RETURNING ${this.primaryKey}`;
+    const result = await pool.query(sql, values);
+    return result.rowCount ?? 0;
+  }
+
+  async updateWhere(
+    filters: Record<string, ParamValue | unknown>,
+    data: QueryData,
+    returning?: string[]
+  ): Promise<Record<string, unknown>[]> {
+    const filterEntries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    const dataEntries = Object.entries(data).filter(([, v]) => v !== undefined);
+    if (filterEntries.length === 0) {
+      throw new Error("updateWhere requires at least one filter");
+    }
+    if (dataEntries.length === 0) {
+      return [];
+    }
+    let paramIdx = 1;
+    const setClauses = dataEntries.map(([k]) => `${k} = $${paramIdx++}`);
+    const whereClauses = filterEntries.map(([k]) => `${k} = $${paramIdx++}`);
+    const values: ParamValue[] = [
+      ...dataEntries.map(([, v]) => v as ParamValue),
+      ...filterEntries.map(([, v]) => v as ParamValue),
+    ];
+    const returningClause = returning?.length ? ` RETURNING ${returning.join(", ")}` : "";
+    const sql = `UPDATE ${this.name} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}${returningClause}`;
+    const result = await pool.query(sql, values);
+    return result.rows;
+  }
+
   async queryByIds(
     ids: ParamValue[],
     additionalFilters: Record<string, ParamValue | unknown> = {}
