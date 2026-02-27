@@ -4,8 +4,13 @@ import { postLoginRoute } from "./post-login";
 import { deleteLoginRoute } from "./delete-login";
 import { postTokenRoute } from "./post-token";
 import { postSetInfoRoute } from "./post-set-info";
+import { loginLimiter, tokenLimiter } from "../../rate-limit";
 
 const usersRouter = Router();
+
+// Apply rate limiters using route paths
+usersRouter.use(postLoginRoute.path, loginLimiter);
+usersRouter.use(postTokenRoute.path, tokenLimiter);
 
 const routes = [
   getLoginRoute,
