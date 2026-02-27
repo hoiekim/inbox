@@ -158,6 +158,23 @@ Database operations are in `src/server/lib/postgres/repositories/`:
 import { getMails, saveMail } from "./repositories/mails";
 ```
 
+### Table Class Methods (IMPORTANT)
+
+**Always use table class methods instead of direct SQL/pool operations.**
+
+```typescript
+// ✓ Correct - use table methods
+import { sessionsTable } from "./models";
+await sessionsTable.deleteByIds(sessionIds);
+await sessionsTable.insertOne(sessionData);
+
+// ✗ Avoid - direct pool/SQL usage
+import { pool } from "./client";
+await pool.query("DELETE FROM sessions WHERE ...");
+```
+
+This pattern ensures consistent transaction handling, logging, and type safety.
+
 ### Migrations
 
 Schema migrations run automatically on startup via `src/server/lib/postgres/migrate.ts`.
