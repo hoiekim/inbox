@@ -11,6 +11,7 @@ import {
   getAllUids as pgGetAllUids,
   SaveMailInput,
   UpdatedMailFlags,
+  StoreOperationType,
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
@@ -199,7 +200,8 @@ export class Store {
     start: number,
     end: number,
     flags: string[],
-    useUid: boolean = false
+    useUid: boolean = false,
+    operation: StoreOperationType = "FLAGS"
   ): Promise<UpdatedMailFlags[]> => {
     try {
       const isDomainInbox = box === "INBOX";
@@ -215,7 +217,8 @@ export class Store {
         start,
         end,
         flags,
-        useUid
+        useUid,
+        operation
       );
     } catch (error) {
       console.error("Error setting flags:", error);

@@ -6,6 +6,7 @@ import { readFileSync } from "fs";
 import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
 import { Store } from "./store";
+import { StoreOperationType } from "../postgres/repositories/mails";
 import {
   boxToAccount,
   encodeText,
@@ -789,12 +790,16 @@ export class ImapSession {
           uidEnd = endUid;
         }
         
+        // Extract base operation (FLAGS, +FLAGS, -FLAGS) by removing .SILENT suffix
+        const baseOperation = operation.replace(".SILENT", "") as StoreOperationType;
+        
         const updatedMails = await this.store!.setFlags(
           this.selectedMailbox!,
           uidStart,
           uidEnd,
           flags,
-          true // Always use UID for database operations
+          true, // Always use UID for database operations
+          baseOperation
         );
 
         if (updatedMails.length === 0) {
