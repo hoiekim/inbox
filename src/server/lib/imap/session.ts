@@ -431,47 +431,6 @@ export class ImapSession {
     });
   }
 
-  /**
-   * Resolve a sequence set to an array of UIDs.
-   * If isUidCommand is true, the sequence set is already UIDs.
-   * Otherwise, convert sequence numbers to UIDs.
-   */
-  private async resolveSequenceSetToUids(
-    sequenceSet: SequenceSet,
-    isUidCommand: boolean
-  ): Promise<number[]> {
-    const uids: number[] = [];
-    const isUidSequence = sequenceSet.type === "uid" || isUidCommand;
-    const ranges = this.convertSequenceSet(sequenceSet);
-    const maxSeq = this.getMessageCount();
-
-    for (const { start, end } of ranges) {
-      // Handle '*' (MAX_SAFE_INTEGER) for end
-      const actualEnd = end === Number.MAX_SAFE_INTEGER 
-        ? (isUidSequence ? Math.max(...Array.from(this.uidToSeq.keys())) : maxSeq)
-        : end;
-      const actualStart = start === Number.MAX_SAFE_INTEGER
-        ? actualEnd
-        : start;
-
-      for (let i = actualStart; i <= actualEnd; i++) {
-        if (isUidSequence) {
-          // i is already a UID
-          if (this.uidToSeq.has(i)) {
-            uids.push(i);
-          }
-        } else {
-          // i is a sequence number, convert to UID
-          if (i >= 1 && i <= this.seqToUid.length) {
-            uids.push(this.seqToUid[i - 1]);
-          }
-        }
-      }
-    }
-
-    return uids;
-  }
-
   private getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailType> {
     const fields = new Set<keyof MailType>(["uid"]);
 
@@ -880,129 +839,13 @@ export class ImapSession {
 
   copyMessageTyped = async (
     tag: string,
-    copyRequest: CopyRequest,
-    isUidCommand: boolean = false
+    _copyRequest: CopyRequest,
+    _isUidCommand: boolean = false
   ) => {
-    if (!this.authenticated || !this.store || !this.selectedMailbox) {
-      return this.write(`${tag} NO Not authenticated or no mailbox selected.\r\n`);
-    }
-
-    try {
-      const { sequenceSet, mailbox: targetMailbox } = copyRequest;
-      
-      // Resolve the sequence set to UIDs
-      const uids = await this.resolveSequenceSetToUids(sequenceSet, isUidCommand);
-      
-      if (uids.length === 0) {
-        return this.write(`${tag} NO No messages matched.\r\n`);
-      }
-
-      const copiedUids: number[] = [];
-      
-      for (const uid of uids) {
-        const newUid = await this.store.copyMessage(
-          uid,
-          this.selectedMailbox,
-          targetMailbox
-        );
-        if (newUid !== null) {
-          copiedUids.push(newUid);
-        }
-      }
-
-      if (copiedUids.length === 0) {
-        return this.write(`${tag} NO COPY failed.\r\n`);
-      }
-
-      // Return COPYUID response per RFC 4315
-      const uidValidity = 1; // We use a fixed UIDVALIDITY
-      const sourceUids = uids.join(",");
-      const destUids = copiedUids.join(",");
-      
-      this.write(
-        `${tag} OK [COPYUID ${uidValidity} ${sourceUids} ${destUids}] COPY completed\r\n`
-      );
-    } catch (error) {
-      console.error("[IMAP] COPY error:", error);
-      this.write(`${tag} NO COPY failed: internal error\r\n`);
-    }
-  };
-
-  /**
-   * MOVE command (RFC 6851) - atomically copy messages to another mailbox and expunge from source
-   */
-  moveMessageTyped = async (
-    tag: string,
-    moveRequest: CopyRequest,
-    isUidCommand: boolean = false
-  ) => {
-    if (!this.authenticated || !this.store || !this.selectedMailbox) {
-      return this.write(`${tag} NO Not authenticated or no mailbox selected.\r\n`);
-    }
-
-    try {
-      const { sequenceSet, mailbox: targetMailbox } = moveRequest;
-      
-      // Resolve the sequence set to UIDs
-      const uids = await this.resolveSequenceSetToUids(sequenceSet, isUidCommand);
-      
-      if (uids.length === 0) {
-        return this.write(`${tag} NO No messages matched.\r\n`);
-      }
-
-      const copiedUids: number[] = [];
-      const movedSourceUids: number[] = [];
-      
-      // Copy each message and mark source as deleted
-      for (const uid of uids) {
-        const newUid = await this.store.copyMessage(
-          uid,
-          this.selectedMailbox,
-          targetMailbox
-        );
-        if (newUid !== null) {
-          copiedUids.push(newUid);
-          movedSourceUids.push(uid);
-          
-          // Mark the source message as deleted
-          await this.store.setFlags(
-            this.selectedMailbox,
-            uid,
-            uid,
-            ["\\Deleted"],
-            true, // useUid
-            "+FLAGS"
-          );
-        }
-      }
-
-      if (copiedUids.length === 0) {
-        return this.write(`${tag} NO MOVE failed.\r\n`);
-      }
-
-      // Expunge the deleted messages (RFC 6851 requires atomic COPY+EXPUNGE)
-      const expunged = await this.store.expunge(this.selectedMailbox);
-      
-      // Send EXPUNGE responses for each removed message
-      for (const seq of expunged.sort((a, b) => b - a)) {
-        this.write(`* ${seq} EXPUNGE\r\n`);
-      }
-
-      // Return COPYUID response
-      const uidValidity = 1;
-      const sourceUids = movedSourceUids.join(",");
-      const destUids = copiedUids.join(",");
-      
-      this.write(
-        `${tag} OK [COPYUID ${uidValidity} ${sourceUids} ${destUids}] MOVE completed\r\n`
-      );
-      
-      // Rebuild the UID mapping after expunge
-      await this.buildSequenceMapping();
-    } catch (error) {
-      console.error("[IMAP] MOVE error:", error);
-      this.write(`${tag} NO MOVE failed: internal error\r\n`);
-    }
+    // COPY not permitted until we have user-created mailboxes (Phase 3)
+    // Currently all mailboxes are account-associated (INBOX/Sent per user)
+    // and COPY/MOVE across account mailboxes would change ownership semantics
+    this.write(`${tag} NO [CANNOT] COPY not permitted\r\n`);
   };
 
   /**

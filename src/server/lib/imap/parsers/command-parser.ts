@@ -16,7 +16,7 @@ import {
   parseSubscribe,
   parseUnsubscribe
 } from "./mailbox-parsers";
-import { parseStore, parseCopy, parseMove } from "./store-parsers";
+import { parseStore, parseCopy } from "./store-parsers";
 import { parseSearch } from "./search-parsers";
 import { parseAppend } from "./append-parser";
 
@@ -156,9 +156,6 @@ const parseImapRequest = (
 
     case "COPY":
       return parseCopy(context);
-
-    case "MOVE":
-      return parseMove(context);
 
     case "UID":
       return parseUid(context);

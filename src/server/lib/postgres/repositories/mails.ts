@@ -8,7 +8,6 @@ import {
   USER_ID,
   READ,
   SAVED,
-  SENT,
   UID_DOMAIN,
   UID_ACCOUNT,
   TO_ADDRESS,
@@ -164,94 +163,6 @@ export const deleteMail = async (
   } catch (error) {
     console.error("Failed to delete mail:", error);
     return false;
-  }
-};
-
-/**
- * Copy a mail to a different mailbox (changes the address fields based on target)
- * Returns the new mail's UID in the target mailbox
- */
-export const copyMail = async (
-  user_id: string,
-  mail_id: string,
-  targetSent: boolean
-): Promise<{ newUid: number; newMailId: string } | null> => {
-  try {
-    // Get the original mail
-    const originalMail = await mailsTable.queryOne({
-      [MAIL_ID]: mail_id,
-      [USER_ID]: user_id
-    });
-
-    if (!originalMail) {
-      console.error("Original mail not found for copy");
-      return null;
-    }
-
-    // Get the next UID for the target mailbox
-    const nextUid = await getDomainUidNext(user_id, targetSent);
-
-    // Create a copy with new mail_id and updated UID
-    const copyData: SaveMailInput = {
-      user_id,
-      message_id: originalMail.message_id,
-      subject: originalMail.subject,
-      date: originalMail.date,
-      html: originalMail.html,
-      text: originalMail.text,
-      from_address: originalMail.from_address,
-      from_text: originalMail.from_text,
-      to_address: originalMail.to_address,
-      to_text: originalMail.to_text,
-      cc_address: originalMail.cc_address,
-      cc_text: originalMail.cc_text,
-      bcc_address: originalMail.bcc_address,
-      bcc_text: originalMail.bcc_text,
-      reply_to_address: originalMail.reply_to_address,
-      reply_to_text: originalMail.reply_to_text,
-      envelope_from: originalMail.envelope_from,
-      envelope_to: originalMail.envelope_to,
-      attachments: originalMail.attachments,
-      read: originalMail.read,
-      saved: originalMail.saved,
-      sent: targetSent,
-      deleted: false, // Reset deleted flag on copy
-      draft: originalMail.draft,
-      answered: originalMail.answered,
-      insight: originalMail.insight,
-      uid_domain: nextUid,
-      uid_account: 0 // Will be recalculated if needed
-    };
-
-    const result = await saveMail(copyData);
-    if (!result) {
-      return null;
-    }
-
-    return { newUid: nextUid, newMailId: result._id };
-  } catch (error) {
-    console.error("Failed to copy mail:", error);
-    return null;
-  }
-};
-
-/**
- * Get a mail by its UID in a mailbox
- */
-export const getMailByUid = async (
-  user_id: string,
-  uid: number,
-  sent: boolean
-): Promise<MailModel | null> => {
-  try {
-    return await mailsTable.queryOne({
-      [USER_ID]: user_id,
-      [UID_DOMAIN]: uid,
-      [SENT]: sent
-    });
-  } catch (error) {
-    console.error("Failed to get mail by UID:", error);
-    return null;
   }
 };
 

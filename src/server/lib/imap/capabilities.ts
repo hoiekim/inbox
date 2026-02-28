@@ -7,9 +7,7 @@ export const getCapabilities = (port = 143) => {
     "ID",
     "ENABLE",
     "IDLE",
-    "AUTH=PLAIN",
-    "MOVE",        // RFC 6851 - MOVE command
-    "UIDPLUS"      // RFC 4315 - UIDPLUS (COPYUID response codes)
+    "AUTH=PLAIN"
   ];
 
   if (port === 993) {

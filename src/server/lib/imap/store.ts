@@ -15,8 +15,6 @@ import {
   saveMail as pgSaveMail,
   expungeDeletedMails,
   getAllUids as pgGetAllUids,
-  copyMail as pgCopyMail,
-  getMailByUid as pgGetMailByUid,
   SaveMailInput,
   UpdatedMailFlags,
   StoreOperationType,
@@ -360,42 +358,6 @@ export class Store {
     } catch (error) {
       console.error("Error storing mail:", error);
       return false;
-    }
-  };
-
-  /**
-   * Copy a message to another mailbox
-   * @param uid - The UID of the message to copy
-   * @param sourceBox - The source mailbox
-   * @param targetBox - The target mailbox
-   * @returns The new UID in the target mailbox, or null on failure
-   */
-  copyMessage = async (
-    uid: number,
-    sourceBox: string,
-    targetBox: string
-  ): Promise<number | null> => {
-    try {
-      const sourceSent = sourceBox.startsWith("Sent Messages/");
-      const targetSent = targetBox.startsWith("Sent Messages/");
-
-      // Get the original mail by UID
-      const originalMail = await pgGetMailByUid(this.user.id, uid, sourceSent);
-      if (!originalMail) {
-        console.error(`[STORE] Mail with UID ${uid} not found in ${sourceBox}`);
-        return null;
-      }
-
-      // Copy the mail
-      const result = await pgCopyMail(this.user.id, originalMail.mail_id, targetSent);
-      if (!result) {
-        return null;
-      }
-
-      return result.newUid;
-    } catch (error) {
-      console.error("[STORE] Error copying message:", error);
-      return null;
     }
   };
 }
