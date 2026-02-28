@@ -40,6 +40,7 @@ export interface SaveMailInput {
   deleted?: boolean;
   draft?: boolean;
   answered?: boolean;
+  expunged?: boolean;
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
@@ -84,6 +85,7 @@ export const saveMail = async (
       deleted: input.deleted ?? false,
       draft: input.draft ?? false,
       answered: input.answered ?? false,
+      expunged: input.expunged ?? false,
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
@@ -191,6 +193,7 @@ export const getMailHeaders = async (
       WHERE user_id = $1 
         AND sent = $2
         AND ${addressCondition}
+        AND expunged = FALSE
     `;
     const values: ParamValue[] = [user_id, options.sent, addressJson];
     let paramIdx = 4;
@@ -399,13 +402,13 @@ export const countMessages = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide count
+      // Domain-wide count (exclude expunged messages)
       sql = `
         SELECT 
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
         FROM mails 
-        WHERE user_id = $1 AND sent = $2
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
       `;
       values = [user_id, sent];
     } else {
@@ -420,7 +423,7 @@ export const countMessages = async (
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
         FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
       `;
       values = [user_id, sent, addressJson];
     }
@@ -454,25 +457,26 @@ export const getMailsByRange = async (
     const fieldList = fields.includes("*") ? "*" : fields.join(", ");
 
     if (account === null) {
-      // Domain-wide query
+      // Domain-wide query (exclude expunged messages)
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails 
           WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
+            AND expunged = FALSE
           ORDER BY ${uidField} ASC
         `;
         values = [user_id, sent, start, Math.min(end, 999999999)];
       } else {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2
+          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
           ORDER BY ${uidField} ASC
           OFFSET $3 LIMIT $4
         `;
         values = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
-      // Account-specific query
+      // Account-specific query (exclude expunged messages)
       const addressJson = JSON.stringify([{ address: account }]);
       // For sent mails, check from_address only
       // For received mails, check to_address, cc_address, and bcc_address
@@ -483,14 +487,14 @@ export const getMailsByRange = async (
         sql = `
           SELECT ${fieldList} FROM mails 
           WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-            AND ${uidField} >= $4 AND ${uidField} <= $5
+            AND ${uidField} >= $4 AND ${uidField} <= $5 AND expunged = FALSE
           ORDER BY ${uidField} ASC
         `;
         values = [user_id, sent, addressJson, start, Math.min(end, 999999999)];
       } else {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
           ORDER BY ${uidField} ASC
           OFFSET $4 LIMIT $5
         `;
@@ -683,7 +687,8 @@ export const searchMailsByUid = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
-    const conditions: string[] = ["user_id = $1", "sent = $2"];
+    // Always exclude expunged messages from search
+    const conditions: string[] = ["user_id = $1", "sent = $2", "expunged = FALSE"];
     const values: ParamValue[] = [user_id, sent];
     let paramIdx = 3;
 
@@ -732,6 +737,9 @@ export const searchMailsByUid = async (
       }
     }
 
+    // Always exclude expunged messages from search
+    conditions.push("expunged = FALSE");
+
     const sql = `
       SELECT ${uidField} as uid FROM mails 
       WHERE ${conditions.join(" AND ")}
@@ -762,7 +770,7 @@ export const getUnreadNotifications = async (
         COUNT(*) FILTER (WHERE read = FALSE) as unread_count,
         MAX(date) as latest
       FROM mails 
-      WHERE user_id IN (${placeholders}) AND sent = FALSE
+      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE
       GROUP BY user_id
     `;
 
@@ -800,22 +808,22 @@ export const getAllUids = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide query
+      // Domain-wide query (exclude expunged messages)
       sql = `
         SELECT ${uidField} as uid FROM mails 
-        WHERE user_id = $1 AND sent = $2
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
         ORDER BY ${uidField} ASC
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific query
+      // Account-specific query (exclude expunged messages)
       const addressJson = JSON.stringify([{ address: account }]);
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
         SELECT ${uidField} as uid FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
         ORDER BY ${uidField} ASC
       `;
       values = [user_id, sent, addressJson];
@@ -830,8 +838,9 @@ export const getAllUids = async (
 };
 
 /**
- * Permanently delete messages marked with \Deleted flag (EXPUNGE operation)
- * Returns the UIDs of deleted messages for EXPUNGE responses
+ * Soft-delete messages marked with \Deleted flag (EXPUNGE operation)
+ * Sets expunged = TRUE instead of hard deleting.
+ * Returns the UIDs of expunged messages for EXPUNGE responses.
  */
 export const expungeDeletedMails = async (
   user_id: string,
@@ -845,22 +854,22 @@ export const expungeDeletedMails = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide expunge
+      // Domain-wide expunge (soft-delete)
       sql = `
-        DELETE FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE
+        UPDATE mails SET expunged = TRUE
+        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific expunge
+      // Account-specific expunge (soft-delete)
       const addressJson = JSON.stringify([{ address: account }]);
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
-        DELETE FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE
+        UPDATE mails SET expunged = TRUE
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;
       values = [user_id, sent, addressJson];
@@ -910,5 +919,149 @@ export const markMailSpam = async (
   } catch (error) {
     console.error("Failed to mark mail as spam:", error);
     return false;
+  }
+};
+
+/**
+ * Result of a COPY operation
+ */
+export interface CopyMailResult {
+  sourceUid: number;
+  targetUid: number;
+}
+
+/**
+ * Copy a mail to a target mailbox with a new UID.
+ * Used for IMAP COPY command.
+ * Returns the source and target UIDs for the COPYUID response.
+ */
+export const copyMail = async (
+  user_id: string,
+  sourceUid: number,
+  sourceAccount: string | null,
+  sourceSent: boolean,
+  targetAccount: string | null,
+  targetSent: boolean
+): Promise<CopyMailResult | null> => {
+  try {
+    const sourceUidField = sourceAccount === null ? UID_DOMAIN : UID_ACCOUNT;
+    const targetUidField = targetAccount === null ? UID_DOMAIN : UID_ACCOUNT;
+
+    // Build the WHERE clause for finding the source message
+    let whereClause: string;
+    let selectValues: ParamValue[];
+
+    if (sourceAccount === null) {
+      whereClause = `user_id = $1 AND sent = $2 AND ${sourceUidField} = $3 AND expunged = FALSE`;
+      selectValues = [user_id, sourceSent, sourceUid];
+    } else {
+      const addressJson = JSON.stringify([{ address: sourceAccount }]);
+      const addressCondition = sourceSent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      whereClause = `user_id = $1 AND sent = $2 AND ${addressCondition} AND ${sourceUidField} = $4 AND expunged = FALSE`;
+      selectValues = [user_id, sourceSent, addressJson, sourceUid];
+    }
+
+    // Get the source message
+    const selectSql = `SELECT * FROM mails WHERE ${whereClause}`;
+    const selectResult = await pool.query(selectSql, selectValues);
+
+    if (selectResult.rows.length === 0) {
+      console.error(`[COPY] Source message not found: UID ${sourceUid}`);
+      return null;
+    }
+
+    const sourceMail = new MailModel(selectResult.rows[0]);
+
+    // Get the next UID for the target mailbox
+    let nextUid: number;
+    if (targetAccount === null) {
+      // Domain-wide UID
+      const uidResult = await pool.query(
+        `SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 as next_uid FROM mails WHERE user_id = $1 AND sent = $2`,
+        [user_id, targetSent]
+      );
+      nextUid = parseInt(uidResult.rows[0]?.next_uid || "1", 10);
+    } else {
+      // Account-specific UID
+      const addressJson = JSON.stringify([{ address: targetAccount }]);
+      const addressCondition = targetSent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      const uidResult = await pool.query(
+        `SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 as next_uid FROM mails WHERE user_id = $1 AND sent = $2 AND ${addressCondition}`,
+        [user_id, targetSent, addressJson]
+      );
+      nextUid = parseInt(uidResult.rows[0]?.next_uid || "1", 10);
+    }
+
+    // Create the copy with new mail_id and target UID
+    const newMailId = crypto.randomUUID();
+    const insertSql = `
+      INSERT INTO mails (
+        mail_id, user_id, message_id, subject, date, html, text,
+        from_address, from_text, to_address, to_text,
+        cc_address, cc_text, bcc_address, bcc_text,
+        reply_to_address, reply_to_text, envelope_from, envelope_to,
+        attachments, read, saved, sent, deleted, draft, answered, expunged,
+        insight, ${targetUidField}, spam_score, spam_reasons, is_spam
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11,
+        $12, $13, $14, $15,
+        $16, $17, $18, $19,
+        $20, $21, $22, $23, $24, $25, $26, $27,
+        $28, $29, $30, $31, $32
+      )
+      RETURNING ${targetUidField} as uid
+    `;
+
+    const insertValues = [
+      newMailId,
+      user_id,
+      sourceMail.message_id,
+      sourceMail.subject,
+      sourceMail.date,
+      sourceMail.html,
+      sourceMail.text,
+      sourceMail.from_address ? JSON.stringify(sourceMail.from_address) : null,
+      sourceMail.from_text,
+      sourceMail.to_address ? JSON.stringify(sourceMail.to_address) : null,
+      sourceMail.to_text,
+      sourceMail.cc_address ? JSON.stringify(sourceMail.cc_address) : null,
+      sourceMail.cc_text,
+      sourceMail.bcc_address ? JSON.stringify(sourceMail.bcc_address) : null,
+      sourceMail.bcc_text,
+      sourceMail.reply_to_address ? JSON.stringify(sourceMail.reply_to_address) : null,
+      sourceMail.reply_to_text,
+      sourceMail.envelope_from ? JSON.stringify(sourceMail.envelope_from) : null,
+      sourceMail.envelope_to ? JSON.stringify(sourceMail.envelope_to) : null,
+      sourceMail.attachments ? JSON.stringify(sourceMail.attachments) : null,
+      sourceMail.read,
+      sourceMail.saved,
+      targetSent,
+      false, // deleted - reset for the copy
+      sourceMail.draft,
+      sourceMail.answered,
+      false, // expunged - reset for the copy
+      sourceMail.insight ? JSON.stringify(sourceMail.insight) : null,
+      nextUid,
+      sourceMail.spam_score,
+      sourceMail.spam_reasons ? JSON.stringify(sourceMail.spam_reasons) : null,
+      sourceMail.is_spam,
+    ];
+
+    const insertResult = await pool.query(insertSql, insertValues);
+    const targetUid = insertResult.rows[0]?.uid as number;
+
+    return {
+      sourceUid,
+      targetUid,
+    };
+  } catch (error) {
+    console.error("Failed to copy mail:", error);
+    return null;
   }
 };
