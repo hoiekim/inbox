@@ -3,6 +3,7 @@ export const USERS = "users";
 export const MAILS = "mails";
 export const SESSIONS = "sessions";
 export const PUSH_SUBSCRIPTIONS = "push_subscriptions";
+export const SPAM_ALLOWLIST = "spam_allowlist";
 
 // Common column names
 export const UPDATED = "updated";
@@ -46,6 +47,9 @@ export const ANSWERED = "answered";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
 export const UID_ACCOUNT = "uid_account";
+export const SPAM_SCORE = "spam_score";
+export const SPAM_REASONS = "spam_reasons";
+export const IS_SPAM = "is_spam";
 
 // Sessions columns
 export const SESSION_ID = "session_id";

@@ -43,6 +43,9 @@ export interface SaveMailInput {
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
+  spam_score?: number;
+  spam_reasons?: string[] | null;
+  is_spam?: boolean;
 }
 
 export const saveMail = async (
@@ -84,6 +87,9 @@ export const saveMail = async (
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
+      spam_score: input.spam_score ?? 0,
+      spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
+      is_spam: input.is_spam ?? false,
     };
 
     const result = await mailsTable.insert(data as Record<string, ParamValue>, [
@@ -865,5 +871,44 @@ export const expungeDeletedMails = async (
   } catch (error) {
     console.error("Failed to expunge deleted mails:", error);
     return [];
+  }
+};
+
+/**
+ * Get all spam-flagged mails for a user.
+ * Returns mails where is_spam = true, sorted by date descending.
+ */
+export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
+  try {
+    const sql = `
+      SELECT * FROM mails 
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE
+      ORDER BY date DESC
+    `;
+    const result = await pool.query(sql, [user_id]);
+    return result.rows.map((row: Record<string, unknown>) => new MailModel(row));
+  } catch (error) {
+    console.error("Failed to get spam mails:", error);
+    return [];
+  }
+};
+
+/**
+ * Mark or unmark a mail as spam.
+ */
+export const markMailSpam = async (
+  user_id: string,
+  mail_id: string,
+  is_spam: boolean
+): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2 AND user_id = $3`,
+      [is_spam, mail_id, user_id]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error("Failed to mark mail as spam:", error);
+    return false;
   }
 };
