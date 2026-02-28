@@ -447,6 +447,7 @@ export type ImapRequest =
   | { type: "FETCH"; data: FetchRequest }
   | { type: "STORE"; data: StoreRequest }
   | { type: "COPY"; data: CopyRequest }
+  | { type: "MOVE"; data: CopyRequest }  // MOVE uses same structure as COPY (RFC 6851)
   | { type: "UID"; data: { command: string; request: ImapRequest } }
   | { type: "ID" }
   | { type: "DONE" }

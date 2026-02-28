@@ -219,6 +219,10 @@ export class ImapRequestHandler {
           await this.session.copyMessageTyped(tag, request.data, false);
           break;
 
+        case "MOVE":
+          await this.session.moveMessageTyped(tag, request.data, false);
+          break;
+
         case "UID":
           await this.handleUidCommand(tag, request.data);
           break;
@@ -284,6 +288,10 @@ export class ImapRequestHandler {
 
         case "COPY":
           await this.session.copyMessageTyped(tag, request.data, true);
+          break;
+
+        case "MOVE":
+          await this.session.moveMessageTyped(tag, request.data, true);
           break;
 
         default:
