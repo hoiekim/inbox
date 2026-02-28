@@ -66,12 +66,13 @@ export const initializePostgres = async (): Promise<void> => {
     }
 
     // Run automatic schema migrations for existing tables
-    // This must happen BEFORE index creation so new columns exist
+    // This must happen BEFORE index creation - new columns from schema
+    // must exist before we try to create indexes on them
     await runMigrations(
       tables.map((t) => ({ name: t.name, schema: t.schema }))
     );
 
-    // Create indexes after migrations (columns must exist first)
+    // Create indexes after migrations ensure all columns exist
     for (const table of tables) {
       for (const idx of table.indexes) {
         const createIndexSql = buildCreateIndex(table.name, idx.column);
