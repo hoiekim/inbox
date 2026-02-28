@@ -8,6 +8,9 @@
 import { promises as dns } from "dns";
 import { DnsBlocklist } from "./types";
 
+/** Timeout for individual DNSBL queries (in ms) */
+const DNSBL_TIMEOUT_MS = 2000;
+
 /**
  * Default DNS blocklists to check.
  * These are reputable, widely-used blocklists.
@@ -45,8 +48,18 @@ function reverseIp(ip: string): string | null {
 }
 
 /**
+ * Create a promise that rejects after a timeout.
+ */
+function timeout<T>(ms: number, message: string): Promise<T> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
+
+/**
  * Check if an IP is listed in a specific DNSBL.
  * Returns true if listed, false otherwise.
+ * Times out after DNSBL_TIMEOUT_MS to prevent hanging.
  */
 async function checkDnsbl(ip: string, dnsbl: DnsBlocklist): Promise<boolean> {
   const reversed = reverseIp(ip);
@@ -55,11 +68,15 @@ async function checkDnsbl(ip: string, dnsbl: DnsBlocklist): Promise<boolean> {
   const query = `${reversed}.${dnsbl.hostname}`;
   
   try {
-    const result = await dns.resolve4(query);
+    // Race DNS query against timeout to prevent hanging
+    const result = await Promise.race([
+      dns.resolve4(query),
+      timeout<string[]>(DNSBL_TIMEOUT_MS, `DNSBL query timeout: ${dnsbl.name}`),
+    ]);
     // If we get any result, the IP is listed
     return result.length > 0;
   } catch {
-    // NXDOMAIN (not listed) or other DNS errors
+    // NXDOMAIN (not listed), timeout, or other DNS errors
     // Not listed = not spam indicator
     return false;
   }
