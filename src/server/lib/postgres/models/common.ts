@@ -44,6 +44,7 @@ export const SENT = "sent";
 export const DELETED = "deleted";
 export const DRAFT = "draft";
 export const ANSWERED = "answered";
+export const EXPUNGED = "expunged";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
 export const UID_ACCOUNT = "uid_account";
