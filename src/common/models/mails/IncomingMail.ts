@@ -35,7 +35,8 @@ export interface IncomingMailAddressValue {
   address?: string;
   name?: string;
   /**
-   * I don't know what this data is supposed to look like.
+   * Group information for email distribution lists.
+   * Structure varies by email client/server implementation.
    */
-  group?: any | any[];
+  group?: IncomingMailAddressValue | IncomingMailAddressValue[];
 }

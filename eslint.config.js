@@ -26,7 +26,7 @@ export default [
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-explicit-any": "error",
 
       // Disable base rules that conflict with TypeScript
       "no-unused-vars": "off",
@@ -40,7 +40,7 @@ export default [
 
       // Helpful rules
       "no-console": "off", // Allow console
-      "prefer-const": "warn",
+      "prefer-const": "error",
     },
   },
   {

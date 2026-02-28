@@ -75,6 +75,23 @@ export class MailBodyData
   }
 }
 
+/**
+ * Data structure used when composing a reply or forward email.
+ * Contains the original email data needed to populate the composer.
+ */
+export interface ReplyData {
+  id?: string;
+  messageId?: string;
+  date?: string;
+  subject?: string;
+  from?: MailAddressType;
+  to?: { address: string };
+  cc?: MailAddressType;
+  bcc?: MailAddressType;
+  html?: string;
+  insight?: Insight;
+}
+
 export interface MailDataToSendType {
   sender: string;
   senderFullName: string;

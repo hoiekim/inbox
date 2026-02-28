@@ -3,6 +3,12 @@ import { PublicKeyGetResponse, RefreshGetResponse, SubscribePostBody, SubscribeP
 import { call } from "./call";
 import { getLocalStorageItem, setLocalStorageItem } from "./cache";
 
+// Extended Navigator interface for Badging API (not yet in standard TypeScript types)
+interface NavigatorWithBadging extends Navigator {
+  setAppBadge(contents?: number): Promise<void>;
+  clearAppBadge(): Promise<void>;
+}
+
 export class Notifier {
   constructor() {
     if ("setAppBadge" in navigator && "clearAppBadge" in navigator) {
@@ -22,12 +28,12 @@ export class Notifier {
 
   setBadge = (number: number) => {
     if (!this.isBadgeAvailable) return;
-    (navigator as any).setAppBadge(number).catch(console.error);
+    (navigator as NavigatorWithBadging).setAppBadge(number).catch(console.error);
   };
 
   clearBadge = () => {
     if (!this.isBadgeAvailable) return;
-    (navigator as any).clearAppBadge().catch(console.error);
+    (navigator as NavigatorWithBadging).clearAppBadge().catch(console.error);
   };
 
   requestPermission = () => {

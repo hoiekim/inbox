@@ -309,8 +309,8 @@ describe("IMAP util", () => {
       const mail: Partial<MailType> = {
         text: "Hello",
         attachments: [
-          { id: "att1", filename: "test.txt", size: 100, contentType: "text/plain" }
-        ] as any
+          { content: { data: "att1" }, filename: "test.txt", size: 100, contentType: "text/plain" }
+        ]
       };
       const result = formatHeaders(mail, "test-doc-id");
       expect(result).toContain("multipart/mixed");
@@ -361,12 +361,12 @@ describe("IMAP util", () => {
         text: "Hello",
         attachments: [
           {
-            id: "att1",
+            content: { data: "att1" },
             filename: "test.pdf",
             size: 1024,
             contentType: "application/pdf"
           }
-        ] as any
+        ]
       };
       const result = formatBodyStructure(mail);
       expect(result).toContain('"mixed"');
@@ -379,12 +379,12 @@ describe("IMAP util", () => {
         text: "Hello",
         attachments: [
           {
-            id: "att1",
+            content: { data: "att1" },
             filename: "document.pdf",
             size: 1024,
             contentType: "application/pdf"
           }
-        ] as any
+        ]
       };
       const result = formatBodyStructure(mail);
       expect(result).toContain('"ATTACHMENT"');

@@ -66,8 +66,9 @@ export abstract class Model<TJSON, TSchema extends Schema> {
     const errors = validateObject(data, typeChecker);
     if (errors.length > 0) throw new ModelValidationError(this.constructor.name, errors);
     // assigns value
+    const self = this as unknown as Record<string, unknown>;
     Object.keys(typeChecker).forEach((k) => {
-      (this as any)[k] = (data as TSchema)[k];
+      self[k] = (data as TSchema)[k];
     });
   }
 }

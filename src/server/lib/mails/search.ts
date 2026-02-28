@@ -1,4 +1,4 @@
-import { MailHeaderData, SignedUser } from "common";
+import { MailHeaderData, SignedUser, MailAddressValueType } from "common";
 import {
   searchMails,
   SearchMailModel,
@@ -23,10 +23,10 @@ export const searchMail = async (
       subject: m.subject,
       date: m.date,
       from: m.from_address
-        ? { value: m.from_address as any, text: m.from_text || "" }
+        ? { value: m.from_address as MailAddressValueType[], text: m.from_text || "" }
         : undefined,
       to: m.to_address
-        ? { value: m.to_address as any, text: m.to_text || "" }
+        ? { value: m.to_address as MailAddressValueType[], text: m.to_text || "" }
         : undefined,
       read: m.read,
       highlight: m.highlight,

@@ -10,7 +10,7 @@ import {
 import { QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
-import { Account, SignedUser } from "common";
+import { Account, SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
 
 import { Header, SignIn, Box, SignUp, ErrorBoundary, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
@@ -35,7 +35,7 @@ export interface ContextType {
   setIsAccountsOpen: Dispatch<SetStateAction<ContextType["isAccountsOpen"]>>;
   isWriterOpen: boolean;
   setIsWriterOpen: Dispatch<SetStateAction<ContextType["isWriterOpen"]>>;
-  replyData: any;
+  replyData: ReplyData;
   setReplyData: Dispatch<SetStateAction<ContextType["replyData"]>>;
   selectedAccount: string;
   setSelectedAccount: Dispatch<SetStateAction<ContextType["selectedAccount"]>>;
