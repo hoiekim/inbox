@@ -25,11 +25,15 @@ import {
   DELETED,
   DRAFT,
   ANSWERED,
+  EXPUNGED,
   INSIGHT,
   UID_DOMAIN,
   UID_ACCOUNT,
   UPDATED,
   MAILS,
+  SPAM_SCORE,
+  SPAM_REASONS,
+  IS_SPAM,
 } from "./common";
 import { Model, createTable } from "./base";
 
@@ -41,6 +45,8 @@ const isNumber = (v: unknown): v is number => typeof v === "number";
 const isBoolean = (v: unknown): v is boolean => typeof v === "boolean";
 const isNullableObject = (v: unknown): v is object | null =>
   v === null || typeof v === "object";
+const isNullableArray = (v: unknown): v is unknown[] | null =>
+  v === null || Array.isArray(v);
 
 export interface MailJSON {
   mail_id: string;
@@ -69,9 +75,13 @@ export interface MailJSON {
   deleted: boolean;
   draft: boolean;
   answered: boolean;
+  expunged: boolean;
   insight: object | null;
   uid_domain: number;
   uid_account: number;
+  spam_score: number;
+  spam_reasons: string[] | null;
+  is_spam: boolean;
 }
 
 const mailSchema = {
@@ -101,9 +111,13 @@ const mailSchema = {
   [DELETED]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [DRAFT]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [ANSWERED]: "BOOLEAN NOT NULL DEFAULT FALSE",
+  [EXPUNGED]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [INSIGHT]: "JSONB",
   [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
   [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
+  [SPAM_SCORE]: "INTEGER NOT NULL DEFAULT 0",
+  [SPAM_REASONS]: "JSONB",
+  [IS_SPAM]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
   search_vector: "TSVECTOR",
 };
@@ -137,9 +151,13 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   declare deleted: boolean;
   declare draft: boolean;
   declare answered: boolean;
+  declare expunged: boolean;
   declare insight: object | null;
   declare uid_domain: number;
   declare uid_account: number;
+  declare spam_score: number;
+  declare spam_reasons: string[] | null;
+  declare is_spam: boolean;
   declare updated: string;
 
   static typeChecker = {
@@ -169,9 +187,13 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     deleted: isBoolean,
     draft: isBoolean,
     answered: isBoolean,
+    expunged: isBoolean,
     insight: isNullableObject,
     uid_domain: isNumber,
     uid_account: isNumber,
+    spam_score: isNumber,
+    spam_reasons: isNullableArray,
+    is_spam: isBoolean,
     updated: isNullableString,
     search_vector: isNullableString,
   };
@@ -208,9 +230,13 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       deleted: this.deleted,
       draft: this.draft,
       answered: this.answered,
+      expunged: this.expunged,
       insight: this.insight,
       uid_domain: this.uid_domain,
       uid_account: this.uid_account,
+      spam_score: this.spam_score,
+      spam_reasons: this.spam_reasons,
+      is_spam: this.is_spam,
     };
   }
 }
@@ -229,6 +255,8 @@ export const mailsTable = createTable({
     { column: SAVED },
     { column: UID_DOMAIN },
     { column: UID_ACCOUNT },
+    { column: IS_SPAM },
+    { column: EXPUNGED },
   ],
 });
 

@@ -151,4 +151,64 @@ describe("IMAP parsers", () => {
     expect(storeRequest.data.sequenceSet.ranges[0].start).toBe(1);
     expect(storeRequest.data.sequenceSet.ranges[0].end).toBe(Number.MAX_SAFE_INTEGER);
   });
+
+  it("should parse COPY command with single UID", () => {
+    const COPY_COMMAND = '7.1 COPY 123 "INBOX/Archive"';
+    const result = parseCommand(COPY_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("7.1");
+    expect(result.value?.request.type).toBe("COPY");
+
+    if (result.value?.request.type !== "COPY") {
+      throw new Error("Expected COPY request type");
+    }
+
+    const copyRequest = result.value.request;
+    expect(copyRequest.data.sequenceSet.ranges[0].start).toBe(123);
+    expect(copyRequest.data.sequenceSet.ranges[0].end).toBeUndefined();
+    expect(copyRequest.data.mailbox).toBe("INBOX/Archive");
+  });
+
+  it("should parse UID COPY command with range", () => {
+    const COPY_COMMAND = '8.1 UID COPY 1:10 "Sent Messages/Archive"';
+    const result = parseCommand(COPY_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("8.1");
+    expect(result.value?.request.type).toBe("UID");
+
+    if (result.value?.request.type !== "UID") {
+      throw new Error("Expected UID request type");
+    }
+
+    const uidRequest = result.value.request;
+    expect(uidRequest.data.command).toBe("COPY");
+
+    if (uidRequest.data.request.type !== "COPY") {
+      throw new Error("Expected COPY request type");
+    }
+
+    const copyRequest = uidRequest.data.request;
+    expect(copyRequest.data.sequenceSet.ranges[0].start).toBe(1);
+    expect(copyRequest.data.sequenceSet.ranges[0].end).toBe(10);
+    expect(copyRequest.data.mailbox).toBe("Sent Messages/Archive");
+  });
+
+  it("should parse COPY command with multiple UIDs", () => {
+    const COPY_COMMAND = '9.1 COPY 1,5,10 "INBOX"';
+    const result = parseCommand(COPY_COMMAND);
+    expect(result.success).toBe(true);
+    expect(result.value?.tag).toBe("9.1");
+    expect(result.value?.request.type).toBe("COPY");
+
+    if (result.value?.request.type !== "COPY") {
+      throw new Error("Expected COPY request type");
+    }
+
+    const copyRequest = result.value.request;
+    expect(copyRequest.data.sequenceSet.ranges).toHaveLength(3);
+    expect(copyRequest.data.sequenceSet.ranges[0].start).toBe(1);
+    expect(copyRequest.data.sequenceSet.ranges[1].start).toBe(5);
+    expect(copyRequest.data.sequenceSet.ranges[2].start).toBe(10);
+    expect(copyRequest.data.mailbox).toBe("INBOX");
+  });
 });

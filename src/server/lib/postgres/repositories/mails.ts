@@ -40,9 +40,13 @@ export interface SaveMailInput {
   deleted?: boolean;
   draft?: boolean;
   answered?: boolean;
+  expunged?: boolean;
   insight?: object | null;
   uid_domain?: number;
   uid_account?: number;
+  spam_score?: number;
+  spam_reasons?: string[] | null;
+  is_spam?: boolean;
 }
 
 export const saveMail = async (
@@ -81,9 +85,13 @@ export const saveMail = async (
       deleted: input.deleted ?? false,
       draft: input.draft ?? false,
       answered: input.answered ?? false,
+      expunged: input.expunged ?? false,
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
+      spam_score: input.spam_score ?? 0,
+      spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
+      is_spam: input.is_spam ?? false,
     };
 
     const result = await mailsTable.insert(data as Record<string, ParamValue>, [
@@ -185,6 +193,7 @@ export const getMailHeaders = async (
       WHERE user_id = $1 
         AND sent = $2
         AND ${addressCondition}
+        AND expunged = FALSE
     `;
     const values: ParamValue[] = [user_id, options.sent, addressJson];
     let paramIdx = 4;
@@ -393,13 +402,13 @@ export const countMessages = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide count
+      // Domain-wide count (exclude expunged messages)
       sql = `
         SELECT 
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
         FROM mails 
-        WHERE user_id = $1 AND sent = $2
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
       `;
       values = [user_id, sent];
     } else {
@@ -414,7 +423,7 @@ export const countMessages = async (
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
         FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
       `;
       values = [user_id, sent, addressJson];
     }
@@ -448,25 +457,26 @@ export const getMailsByRange = async (
     const fieldList = fields.includes("*") ? "*" : fields.join(", ");
 
     if (account === null) {
-      // Domain-wide query
+      // Domain-wide query (exclude expunged messages)
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails 
           WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
+            AND expunged = FALSE
           ORDER BY ${uidField} ASC
         `;
         values = [user_id, sent, start, Math.min(end, 999999999)];
       } else {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2
+          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
           ORDER BY ${uidField} ASC
           OFFSET $3 LIMIT $4
         `;
         values = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
-      // Account-specific query
+      // Account-specific query (exclude expunged messages)
       const addressJson = JSON.stringify([{ address: account }]);
       // For sent mails, check from_address only
       // For received mails, check to_address, cc_address, and bcc_address
@@ -477,14 +487,14 @@ export const getMailsByRange = async (
         sql = `
           SELECT ${fieldList} FROM mails 
           WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-            AND ${uidField} >= $4 AND ${uidField} <= $5
+            AND ${uidField} >= $4 AND ${uidField} <= $5 AND expunged = FALSE
           ORDER BY ${uidField} ASC
         `;
         values = [user_id, sent, addressJson, start, Math.min(end, 999999999)];
       } else {
         sql = `
           SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
           ORDER BY ${uidField} ASC
           OFFSET $4 LIMIT $5
         `;
@@ -677,7 +687,8 @@ export const searchMailsByUid = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
-    const conditions: string[] = ["user_id = $1", "sent = $2"];
+    // Always exclude expunged messages from search
+    const conditions: string[] = ["user_id = $1", "sent = $2", "expunged = FALSE"];
     const values: ParamValue[] = [user_id, sent];
     let paramIdx = 3;
 
@@ -726,6 +737,9 @@ export const searchMailsByUid = async (
       }
     }
 
+    // Always exclude expunged messages from search
+    conditions.push("expunged = FALSE");
+
     const sql = `
       SELECT ${uidField} as uid FROM mails 
       WHERE ${conditions.join(" AND ")}
@@ -756,7 +770,7 @@ export const getUnreadNotifications = async (
         COUNT(*) FILTER (WHERE read = FALSE) as unread_count,
         MAX(date) as latest
       FROM mails 
-      WHERE user_id IN (${placeholders}) AND sent = FALSE
+      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE
       GROUP BY user_id
     `;
 
@@ -794,22 +808,22 @@ export const getAllUids = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide query
+      // Domain-wide query (exclude expunged messages)
       sql = `
         SELECT ${uidField} as uid FROM mails 
-        WHERE user_id = $1 AND sent = $2
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
         ORDER BY ${uidField} ASC
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific query
+      // Account-specific query (exclude expunged messages)
       const addressJson = JSON.stringify([{ address: account }]);
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
         SELECT ${uidField} as uid FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
         ORDER BY ${uidField} ASC
       `;
       values = [user_id, sent, addressJson];
@@ -824,8 +838,9 @@ export const getAllUids = async (
 };
 
 /**
- * Permanently delete messages marked with \Deleted flag (EXPUNGE operation)
- * Returns the UIDs of deleted messages for EXPUNGE responses
+ * Soft-delete messages marked with \Deleted flag (EXPUNGE operation)
+ * Sets expunged = TRUE instead of hard deleting.
+ * Returns the UIDs of expunged messages for EXPUNGE responses.
  */
 export const expungeDeletedMails = async (
   user_id: string,
@@ -839,22 +854,22 @@ export const expungeDeletedMails = async (
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide expunge
+      // Domain-wide expunge (soft-delete)
       sql = `
-        DELETE FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE
+        UPDATE mails SET expunged = TRUE
+        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific expunge
+      // Account-specific expunge (soft-delete)
       const addressJson = JSON.stringify([{ address: account }]);
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
-        DELETE FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE
+        UPDATE mails SET expunged = TRUE
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;
       values = [user_id, sent, addressJson];
@@ -865,5 +880,44 @@ export const expungeDeletedMails = async (
   } catch (error) {
     console.error("Failed to expunge deleted mails:", error);
     return [];
+  }
+};
+
+/**
+ * Get all spam-flagged mails for a user.
+ * Returns mails where is_spam = true, sorted by date descending.
+ */
+export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
+  try {
+    const sql = `
+      SELECT * FROM mails 
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE
+      ORDER BY date DESC
+    `;
+    const result = await pool.query(sql, [user_id]);
+    return result.rows.map((row: Record<string, unknown>) => new MailModel(row));
+  } catch (error) {
+    console.error("Failed to get spam mails:", error);
+    return [];
+  }
+};
+
+/**
+ * Mark or unmark a mail as spam.
+ */
+export const markMailSpam = async (
+  user_id: string,
+  mail_id: string,
+  is_spam: boolean
+): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2 AND user_id = $3`,
+      [is_spam, mail_id, user_id]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } catch (error) {
+    console.error("Failed to mark mail as spam:", error);
+    return false;
   }
 };
