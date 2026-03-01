@@ -7,6 +7,7 @@ import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem } from "./types";
 import { formatHeaders, encodeText } from "./util";
 import { getAttachment } from "server";
+import { logger } from "../logger";
 
 /**
  * Apply partial fetch range to content
@@ -82,9 +83,10 @@ export const buildFullMessage = (
   // For multipart messages, extract boundary from headers or use deterministic one
   const boundaryMatch = headers.match(/boundary="([^"]+)"/);
   if (!docId) {
-    console.warn(
-      `[IMAP] Warning: docId is missing in buildFullMessage, falling back to messageId: ${mail.messageId}`
-    );
+    logger.warn("docId is missing in buildFullMessage, falling back to messageId", {
+      component: "imap",
+      messageId: mail.messageId
+    });
   }
   const stableId = docId || mail.messageId || "default";
   const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;

@@ -5,6 +5,7 @@ import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
 import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
+import { logger } from "../logger";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
 import {
@@ -132,13 +133,13 @@ export class ImapSession {
 
   write = (data: string) => {
     if (this.socket.destroyed || !this.socket.writable) {
-      console.log("[IMAP] Attempted to write to destroyed/unwritable socket");
+      logger.warn("Attempted to write to destroyed/unwritable socket", { component: "imap" });
       return false;
     }
     try {
       return this.socket.write(data);
     } catch (error) {
-      console.error("[IMAP] Error writing to socket:", error);
+      logger.error("Error writing to socket", { component: "imap" }, error);
       return false;
     }
   };
@@ -189,7 +190,7 @@ export class ImapSession {
       await this.processFetchMessages(messages, fetchRequest, isUidCommand);
       this.write(`${tag} OK FETCH completed\r\n`);
     } catch (error) {
-      console.error("FETCH error", error);
+      logger.error("FETCH error", { component: "imap" }, error);
       this.write(`${tag} NO FETCH failed\r\n`);
     }
   };
@@ -229,7 +230,7 @@ export class ImapSession {
           const startUid = this.seqToUidNumber(start);
           const endUid = this.seqToUidNumber(end);
           if (startUid === undefined || endUid === undefined) {
-            console.warn(`[IMAP] Invalid sequence range ${start}-${end}`);
+            logger.warn("Invalid sequence range", { component: "imap", start, end });
             return;
           }
           uidStart = startUid;
@@ -267,7 +268,7 @@ export class ImapSession {
       const seqNum = this.uidToSeqNumber(uid);
       
       if (seqNum === undefined) {
-        console.warn(`[IMAP] No sequence number found for UID ${uid}`);
+        logger.warn("No sequence number found for UID", { component: "imap", uid });
         continue;
       }
 
@@ -286,7 +287,7 @@ export class ImapSession {
           await markRead(this.store!.getUser().id, id);
         }
       } catch (error) {
-        console.error(`[IMAP] Error processing message ${seqNum}:`, error);
+        logger.error("Error processing message", { component: "imap", seqNum }, error);
       }
     }
   }
@@ -624,7 +625,7 @@ export class ImapSession {
         `${tag} OK [CAPABILITY ${this.getCapabilities()}] AUTHENTICATE completed\r\n`
       );
     } catch (error) {
-      console.error("[IMAP] AUTHENTICATE error:", error);
+      logger.error("AUTHENTICATE error", { component: "imap" }, error);
       this.write(`${tag} BAD AUTHENTICATE failed\r\n`);
     }
   };
@@ -695,7 +696,7 @@ export class ImapSession {
       this.write(`* STATUS "${mailbox}" (${statusItems.join(" ")})\r\n`);
       this.write(`${tag} OK STATUS completed\r\n`);
     } catch (error) {
-      console.error("[IMAP] Error getting mailbox status:", error);
+      logger.error("Error getting mailbox status", { component: "imap", mailbox }, error);
       this.write(`${tag} NO STATUS failed\r\n`);
     }
   };
@@ -748,7 +749,7 @@ export class ImapSession {
       this.write(`* SEARCH ${result.join(" ")}\r\n`);
       this.write(`${tag} OK SEARCH completed\r\n`);
     } catch (error) {
-      console.error("Search failed:", error);
+      logger.error("Search failed", { component: "imap" }, error);
       this.write(`${tag} NO SEARCH failed\r\n`);
     }
   };
@@ -783,7 +784,7 @@ export class ImapSession {
           const startUid = this.seqToUidNumber(start);
           const endUid = this.seqToUidNumber(end);
           if (startUid === undefined || endUid === undefined) {
-            console.warn(`[IMAP] Invalid sequence range ${start}-${end}`);
+            logger.warn("Invalid sequence range", { component: "imap", start, end });
             continue;
           }
           uidStart = startUid;
@@ -832,7 +833,7 @@ export class ImapSession {
 
       this.write(`${tag} OK STORE completed\r\n`);
     } catch (error) {
-      console.error("Error storing flags:", error);
+      logger.error("Error storing flags", { component: "imap" }, error);
       this.write(`${tag} NO STORE failed\r\n`);
     }
   };
@@ -933,7 +934,7 @@ export class ImapSession {
         this.write(`${tag} NO APPEND failed to store message\r\n`);
       }
     } catch (error) {
-      console.error("APPEND error:", error);
+      logger.error("APPEND error", { component: "imap" }, error);
       this.write(`${tag} NO APPEND failed\r\n`);
     }
   };
@@ -991,7 +992,7 @@ export class ImapSession {
       });
       this.write(`${tag} OK LIST completed\r\n`);
     } catch (error) {
-      console.error("[IMAP] Error listing mailboxes:", error);
+      logger.error("Error listing mailboxes", { component: "imap" }, error);
       this.write(`${tag} NO LIST failed\r\n`);
     }
   };
@@ -1009,7 +1010,7 @@ export class ImapSession {
       });
       this.write(`${tag} OK LSUB completed\r\n`);
     } catch (error) {
-      console.error("[IMAP] Error listing subscribed mailboxes:", error);
+      logger.error("Error listing subscribed mailboxes", { component: "imap" }, error);
       this.write(`${tag} NO LSUB failed\r\n`);
     }
   };
@@ -1057,7 +1058,7 @@ export class ImapSession {
       this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
     } catch (error) {
-      console.error("[IMAP] Error selecting mailbox:", error);
+      logger.error("Error selecting mailbox", { component: "imap", name }, error);
       this.write(`${tag} NO SELECT failed\r\n`);
     }
   };
@@ -1099,7 +1100,7 @@ export class ImapSession {
       
       this.write(`${tag} OK EXPUNGE completed\r\n`);
     } catch (error) {
-      console.error("Expunge failed:", error);
+      logger.error("Expunge failed", { component: "imap" }, error);
       this.write(`${tag} NO EXPUNGE failed\r\n`);
     }
   };

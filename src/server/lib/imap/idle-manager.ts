@@ -3,6 +3,7 @@
  */
 
 import { ImapSession } from "./session";
+import { logger } from "../logger";
 
 interface IdleSession {
   session: ImapSession;
@@ -39,7 +40,7 @@ class IdleManager {
     };
 
     this.idleSessions.set(sessionId, idleSession);
-    console.log(`IDLE session started for ${username} on ${mailbox}`);
+    logger.debug("IDLE session started", { component: "imap.idle", username, mailbox });
   }
 
   /**
@@ -49,9 +50,11 @@ class IdleManager {
     const idleSession = this.idleSessions.get(sessionId);
     if (idleSession) {
       this.idleSessions.delete(sessionId);
-      console.log(
-        `IDLE session ended for ${idleSession.username} on ${idleSession.mailbox}`
-      );
+      logger.debug("IDLE session ended", {
+        component: "imap.idle",
+        username: idleSession.username,
+        mailbox: idleSession.mailbox
+      });
     }
   }
 
@@ -69,11 +72,12 @@ class IdleManager {
           idleSession.session.write("* 1 EXISTS\r\n");
           idleSession.session.write("* 1 RECENT\r\n");
 
-          console.log(
-            `Notified IDLE session for ${idleSession.username} about new mail`
-          );
+          logger.debug("Notified IDLE session about new mail", {
+            component: "imap.idle",
+            username: idleSession.username
+          });
         } catch (error) {
-          console.error(`Error notifying IDLE session ${sessionId}:`, error);
+          logger.error("Error notifying IDLE session", { component: "imap.idle", sessionId }, error);
           // Remove broken session
           this.removeIdleSession(sessionId);
         }
@@ -103,10 +107,7 @@ class IdleManager {
             this.removeIdleSession(sessionId);
           }
         } catch (error) {
-          console.error(
-            `Error sending heartbeat to session ${sessionId}:`,
-            error
-          );
+          logger.error("Error sending heartbeat to session", { component: "imap.idle", sessionId }, error);
           this.removeIdleSession(sessionId);
         }
       });

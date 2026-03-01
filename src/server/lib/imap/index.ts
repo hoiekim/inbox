@@ -3,6 +3,7 @@ import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
 import { readFileSync } from "fs";
+import { logger } from "../logger";
 
 export const getImapListener = (port: number) => {
   return (socket: Socket) => {
@@ -20,7 +21,7 @@ export const initializeImap = async () => {
     const imapListener = getImapListener(port);
     const server = createServer(imapListener);
     server.listen(port, () => {
-      console.log(`IMAP server listening on port ${port}`);
+      logger.info("IMAP server listening", { component: "imap", port });
       res();
     });
   });
@@ -32,7 +33,7 @@ export const initializeImap = async () => {
     const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
 
     if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
-      console.warn("IMAP: SSL certificate not found.");
+      logger.warn("IMAP: SSL certificate not found, TLS server not started", { component: "imap" });
       res();
       return;
     }
@@ -44,7 +45,7 @@ export const initializeImap = async () => {
 
     const server = createTLSServer(tlsOptions, imapListener);
     server.listen(port, () => {
-      console.log(`IMAP server listening on port ${port} over TLS`);
+      logger.info("IMAP server listening over TLS", { component: "imap", port });
       res();
     });
   });
