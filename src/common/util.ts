@@ -16,5 +16,10 @@ export const callWithDelay = <T>(callback: () => Promise<T>, delay: number) => {
 };
 
 export const getRandomId = () => {
-  return (65536 + Math.floor(Math.random() * 983040)).toString(16);
+  // Use Web Crypto API (available in both browser and Node.js 19+)
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 };
