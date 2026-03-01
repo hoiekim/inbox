@@ -26,6 +26,47 @@ call.post = <T, B = unknown>(path: string, body: B) => {
 };
 call.delete = <T>(path: string) => call<T>(path, { method: "DELETE" });
 
+/**
+ * Fetch text content (e.g., markdown files)
+ */
+call.text = async (path: string): Promise<string> => {
+  console.log(`<GET:text> ${path}`);
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${path}: ${response.status}`);
+  }
+  return response.text();
+};
+
+/**
+ * Fetch binary content as ArrayBuffer (e.g., file attachments)
+ */
+call.binary = async (path: string): Promise<ArrayBuffer> => {
+  console.log(`<GET:binary> ${path}`);
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${path}: ${response.status}`);
+  }
+  return response.arrayBuffer();
+};
+
+/**
+ * POST FormData (e.g., file uploads) and expect JSON response
+ */
+call.postFormData = async <T = any>(
+  path: string,
+  formData: FormData
+): Promise<ApiResponse<T>> => {
+  console.log(`<POST:formData> ${path}`);
+  const response = await fetch(path, {
+    method: "POST",
+    body: formData
+  });
+  const result: ApiResponse<T> = await response.json();
+  console.log(`<POST:formData> ${path}`, result);
+  return result;
+};
+
 export { call };
 
 export const read = async <T = unknown>(
