@@ -10,6 +10,11 @@ import { startCleanupScheduler } from "./rate-limit";
 export const initializeHttp = async () => {
   const app = express();
 
+  // Trust first proxy for secure cookie detection behind reverse proxy
+  if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", 1);
+  }
+
   app.use(json({ limit: "50mb" }));
   app.use(fileupload());
   app.use(
@@ -19,8 +24,9 @@ export const initializeHttp = async () => {
       saveUninitialized: false,
       rolling: true,
       cookie: {
-        secure: false,
-        maxAge: 1000 * 60 * 60 * 24 * 7
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: 1000 * 60 * 60 * 24 * 7,
       },
       store: new PostgresSessionStore()
     })
