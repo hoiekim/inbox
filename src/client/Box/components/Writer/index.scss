@@ -1,8 +1,17 @@
 .writer {
+  display: flex;
+  flex-direction: column;
   height: calc(100% - 10px);
+  max-height: calc(100% - 10px);
   margin-top: 5px;
   padding-top: 1rem;
   padding-right: calc(1rem + 50px);
+  overflow: hidden;
+
+  // Form field sections (From, To, Subject) should not shrink
+  > div:not(.writer-body):not(.writer-buttons) {
+    flex-shrink: 0;
+  }
 
   span {
     white-space: nowrap;
@@ -92,13 +101,16 @@
   }
 
   .writer-body {
-    height: calc(100% - 16rem);
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
 
     .writer-content-wrap {
       display: flex;
       flex-direction: column;
       width: 100%;
       height: calc(100% - 0.5rem - 20px);
+      max-height: calc(100% - 0.5rem - 20px);
 
       .writer-content {
         padding: 0 0.5rem;
@@ -140,6 +152,7 @@
     justify-content: center;
     width: 100%;
     margin-top: 1rem;
+    flex-shrink: 0;
 
     button {
       margin: 0 0.5rem;
