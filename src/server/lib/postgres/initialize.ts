@@ -61,17 +61,21 @@ export const initializePostgres = async (): Promise<void> => {
         table.constraints
       );
       await pool.query(createTableSql);
+    }
 
+    // Run automatic schema migrations for existing tables
+    // This must happen BEFORE index creation so new columns exist
+    await runMigrations(
+      tables.map((t) => ({ name: t.name, schema: t.schema }))
+    );
+
+    // Create indexes after migrations (columns must exist first)
+    for (const table of tables) {
       for (const idx of table.indexes) {
         const createIndexSql = buildCreateIndex(table.name, idx.column);
         await pool.query(createIndexSql);
       }
     }
-
-    // Run automatic schema migrations for existing tables
-    await runMigrations(
-      tables.map((t) => ({ name: t.name, schema: t.schema }))
-    );
 
     // Create GIN index for full-text search on mails
     await pool.query(`
