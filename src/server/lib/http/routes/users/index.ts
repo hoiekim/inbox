@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { getLoginRoute } from "./get-login";
 import { postLoginRoute } from "./post-login";
 import { deleteLoginRoute } from "./delete-login";
@@ -8,9 +8,19 @@ import { loginLimiter, tokenLimiter } from "../../rate-limit";
 
 const usersRouter = Router();
 
-// Apply rate limiters using route paths
-usersRouter.use(postLoginRoute.path, loginLimiter);
-usersRouter.use(postTokenRoute.path, tokenLimiter);
+// Helper to apply limiter only to POST requests
+const postOnly =
+  (limiter: (req: Request, res: Response, next: NextFunction) => void) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === "POST") {
+      return limiter(req, res, next);
+    }
+    next();
+  };
+
+// Apply rate limiters only to POST requests (not GET/DELETE)
+usersRouter.use(postLoginRoute.path, postOnly(loginLimiter));
+usersRouter.use(postTokenRoute.path, postOnly(tokenLimiter));
 
 const routes = [
   getLoginRoute,
