@@ -35,7 +35,11 @@ const Home = () => {
   if (mutation.isLoading) infoMessage = "🧐 Checking...";
   if (mutation.isError) infoMessage = "🤯 Server error";
   if (mutation.data?.status === "success") infoMessage = "🤗 Welcome!";
-  if (mutation.data?.status === "failed") infoMessage = "🤔 Wrong Password";
+  if (mutation.data?.status === "failed") {
+    infoMessage = mutation.data?.message
+      ? `🤔 ${mutation.data.message}`
+      : "🤔 Wrong Password";
+  }
 
   useEffect(() => {
     const isSuccess = mutation.data?.status === "success";
