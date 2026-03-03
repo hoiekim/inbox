@@ -1,6 +1,6 @@
 import { AUTH_ERROR_MESSAGE } from "server";
-import { getAllowlistForUser } from "../../../postgres/repositories/spamAllowlist";
-import { SpamAllowlistModel } from "../../../postgres/models/spamAllowlist";
+import { getAllowlistForUser } from "../../../postgres/repositories/spam_allowlists";
+import { SpamAllowlistModel } from "../../../postgres/models/spam_allowlist";
 import { Route } from "../route";
 
 /**
@@ -17,7 +17,7 @@ export type AllowlistGetResponse = AllowlistEntryResponse[];
 /**
  * Get the user's spam allowlist entries.
  */
-export const getAllowlistRoute = new Route<AllowlistGetResponse>(
+export const getSpamAllowlistRoute = new Route<AllowlistGetResponse>(
   "GET",
   "/allowlist",
   async (req) => {

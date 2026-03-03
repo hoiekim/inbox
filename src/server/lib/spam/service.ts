@@ -11,7 +11,7 @@
 import { SpamCheckResult, SpamFilterConfig, EmailContext } from "./types";
 import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
-import { isAllowlisted } from "../postgres/repositories/spamAllowlist";
+import { isAllowlisted } from "../postgres/repositories/spam_allowlists";
 
 /**
  * Default spam filter configuration.

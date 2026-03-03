@@ -1,5 +1,5 @@
 import { AUTH_ERROR_MESSAGE } from "server";
-import { removeAllowlistEntry } from "../../../postgres/repositories/spamAllowlist";
+import { removeAllowlistEntry } from "../../../postgres/repositories/spam_allowlists";
 import { Route } from "../route";
 
 export type AllowlistDeleteResponse = undefined;
@@ -7,7 +7,7 @@ export type AllowlistDeleteResponse = undefined;
 /**
  * Remove an entry from the user's spam allowlist.
  */
-export const deleteAllowlistRoute = new Route<AllowlistDeleteResponse>(
+export const deleteSpamAllowlistRoute = new Route<AllowlistDeleteResponse>(
   "DELETE",
   "/allowlist/:pattern",
   async (req) => {

@@ -6,7 +6,7 @@
 
 import { pool } from "../client";
 import { SPAM_ALLOWLIST, USER_ID } from "../models/common";
-import { PATTERN, SpamAllowlistModel, SpamAllowlistJSON } from "../models/spamAllowlist";
+import { PATTERN, SpamAllowlistModel, SpamAllowlistJSON } from "../models/spam_allowlist";
 
 /**
  * Get all allowlist entries for a user.

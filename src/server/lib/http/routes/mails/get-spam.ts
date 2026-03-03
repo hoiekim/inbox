@@ -8,7 +8,7 @@ export type SpamGetResponse = MailHeaderData[];
  * Get all spam-flagged emails for the authenticated user.
  * Returns email headers for display in a spam folder view.
  */
-export const getSpamRoute = new Route<SpamGetResponse>(
+export const getSpamMailsRoute = new Route<SpamGetResponse>(
   "GET",
   "/spam",
   async (req) => {

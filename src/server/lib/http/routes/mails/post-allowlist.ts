@@ -1,5 +1,5 @@
 import { AUTH_ERROR_MESSAGE } from "server";
-import { addAllowlistEntry } from "../../../postgres/repositories/spamAllowlist";
+import { addAllowlistEntry } from "../../../postgres/repositories/spam_allowlists";
 import { Route } from "../route";
 import { AllowlistEntryResponse } from "./get-allowlist";
 
@@ -13,7 +13,7 @@ export type AllowlistAddResponse = AllowlistEntryResponse | null;
  * Add an entry to the user's spam allowlist.
  * Pattern can be exact email (user@example.com) or domain wildcard (*@example.com).
  */
-export const postAllowlistRoute = new Route<AllowlistAddResponse>(
+export const postSpamAllowlistRoute = new Route<AllowlistAddResponse>(
   "POST",
   "/allowlist",
   async (req) => {

@@ -12,7 +12,7 @@ export interface SpamMarkPostBody {
  * Mark or unmark an email as spam.
  * Authorization is enforced at the repository layer via user_id in WHERE clause.
  */
-export const postSpamMarkRoute = new Route<SpamMarkPostResponse>(
+export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
   "POST",
   "/spam/mark",
   async (req) => {
