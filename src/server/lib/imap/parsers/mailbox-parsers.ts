@@ -23,9 +23,6 @@ export const parseList = (
   // Parse reference name (can be quoted string or atom)
   const referenceName = parseString(context);
   if (!referenceName.success) {
-    console.log(
-      `[PARSER] Failed to parse reference name at position ${context.position}`
-    );
     return {
       success: false,
       error: "Invalid reference name in LIST",
@@ -52,9 +49,6 @@ export const parseList = (
   }
 
   if (!mailboxName.success) {
-    console.log(
-      `[PARSER] Failed to parse mailbox name at position ${context.position}`
-    );
     return {
       success: false,
       error: "Invalid mailbox name in LIST",
