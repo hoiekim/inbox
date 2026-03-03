@@ -224,6 +224,7 @@ const MailBody = ({ mailId }: Props) => {
           srcDoc={processHtmlForViewer(data.html)}
           onLoad={onLoadIframe}
           ref={iframeElement}
+          sandbox="allow-same-origin"
         />
       </div>
     );
