@@ -8,9 +8,15 @@ import { loginLimiter, tokenLimiter } from "../../rate-limit";
 
 const usersRouter = Router();
 
-// Apply rate limiters using route paths
-usersRouter.use(postLoginRoute.path, loginLimiter);
-usersRouter.use(postTokenRoute.path, tokenLimiter);
+// Apply rate limiters only to POST requests (use() applies to all methods)
+usersRouter.use(postLoginRoute.path, (req, res, next) => {
+  if (req.method === "POST") return loginLimiter(req, res, next);
+  next();
+});
+usersRouter.use(postTokenRoute.path, (req, res, next) => {
+  if (req.method === "POST") return tokenLimiter(req, res, next);
+  next();
+});
 
 const routes = [
   getLoginRoute,
