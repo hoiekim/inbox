@@ -67,7 +67,7 @@ const SignUp = () => {
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
     if (mutation.data?.status === "success") infoMessage = "🤗 All set up!";
-    if (mutation.data?.status !== "success") {
+    if (mutation.data && mutation.data.status !== "success") {
       infoMessage = "🤔 Something is wrong. Please try again.";
     }
   } else {
@@ -78,7 +78,7 @@ const SignUp = () => {
       infoMessage =
         "🤗 Please check your mail box and continue to set your user information.";
     }
-    if (mutation.data?.status !== "success")
+    if (mutation.data && mutation.data.status !== "success")
       infoMessage = "🤔 Something is wrong. Please try again.";
   }
 
