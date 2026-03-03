@@ -67,7 +67,7 @@ const SignUp = () => {
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
     if (mutation.data?.status === "success") infoMessage = "🤗 All set up!";
-    else if (mutation.data && mutation.data.status !== "success") {
+    else if (mutation.data) {
       infoMessage = "🤔 Something is wrong. Please try again.";
     }
   } else {
@@ -77,8 +77,9 @@ const SignUp = () => {
     if (mutation.data?.status === "success") {
       infoMessage =
         "🤗 Please check your mail box and continue to set your user information.";
-    } else if (mutation.data && mutation.data.status !== "success")
+    } else if (mutation.data) {
       infoMessage = "🤔 Something is wrong. Please try again.";
+    }
   }
 
   useEffect(() => {
