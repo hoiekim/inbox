@@ -10,11 +10,9 @@ import { postSendMailRoute } from "./post-send";
 import { deleteMailRoute } from "./delete";
 import { getSpamRoute } from "./get-spam";
 import { postSpamMarkRoute } from "./post-spam-mark";
-import {
-  getAllowlistRoute,
-  postAllowlistRoute,
-  deleteAllowlistRoute
-} from "./allowlist";
+import { getAllowlistRoute } from "./get-allowlist";
+import { postAllowlistRoute } from "./post-allowlist";
+import { deleteAllowlistRoute } from "./delete-allowlist";
 
 const mailsRouter = Router();
 
@@ -50,4 +48,6 @@ export * from "./post-send";
 export * from "./delete";
 export * from "./get-spam";
 export * from "./post-spam-mark";
-export * from "./allowlist";
+export * from "./get-allowlist";
+export * from "./post-allowlist";
+export * from "./delete-allowlist";
