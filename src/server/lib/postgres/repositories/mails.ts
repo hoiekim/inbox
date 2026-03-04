@@ -128,15 +128,42 @@ export const saveMail = async (
       is_spam: input.is_spam ?? false,
     };
 
-    const result = await mailsTable.insert(data as Record<string, ParamValue>, [
-      MAIL_ID,
-    ]);
-    if (result) return { _id: result.mail_id as string };
+    // Use INSERT ... ON CONFLICT DO NOTHING for idempotent saves
+    // If a mail with the same (user_id, message_id) exists, skip insertion
+    const columns = Object.keys(data);
+    const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+    const values = Object.values(data);
+    const sql = `
+      INSERT INTO ${mailsTable.name} (${columns.join(", ")})
+      VALUES (${placeholders})
+      ON CONFLICT (user_id, message_id) DO NOTHING
+      RETURNING ${MAIL_ID}
+    `;
+
+    const result = await pool.query(sql, values as ParamValue[]);
+    if (result.rows.length > 0) {
+      return { _id: result.rows[0].mail_id as string };
+    }
+    // Conflict occurred - mail already exists, return existing mail_id
+    const existing = await getMailByMessageId(input.user_id, input.message_id);
+    if (existing) return { _id: existing.mail_id };
     return undefined;
   } catch (error) {
     console.error("Failed to save mail:", error);
     return undefined;
   }
+};
+
+/**
+ * Get a mail by user_id and message_id.
+ * Used to find existing mail when a conflict occurs.
+ */
+export const getMailByMessageId = async (
+  user_id: string,
+  message_id: string
+): Promise<MailModel | undefined> => {
+  const result = await mailsTable.query({ user_id, message_id });
+  return result[0];
 };
 
 export const getMailById = async (
