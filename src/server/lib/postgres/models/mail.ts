@@ -221,6 +221,7 @@ export const mailsTable = createTable({
   schema: mailSchema,
   ModelClass: MailModel,
   supportsSoftDelete: false,
+  constraints: ["UNIQUE (user_id, message_id)"],
   indexes: [
     { column: USER_ID },
     { column: DATE },
