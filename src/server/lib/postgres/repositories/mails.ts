@@ -168,6 +168,18 @@ export const saveMail = async (
   }
 };
 
+/**
+ * Get a mail by user_id and message_id.
+ * Used to find existing mail when a conflict occurs.
+ */
+export const getMailByMessageId = async (
+  user_id: string,
+  message_id: string
+): Promise<MailModel | undefined> => {
+  const result = await mailsTable.query({ user_id, message_id });
+  return result[0];
+};
+
 export const getMailById = async (
   user_id: string,
   mail_id: string
