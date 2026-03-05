@@ -8,6 +8,7 @@ import {
   usersTable,
   sessionsTable,
   mailsTable,
+  mailboxesTable,
   pushSubscriptionsTable,
 } from "./models";
 
@@ -17,6 +18,7 @@ export const index = "inbox" + (version ? `-${version}` : "");
 const tables: Table<unknown, Schema>[] = [
   usersTable,
   sessionsTable,
+  mailboxesTable, // Must be before mails due to foreign key reference
   mailsTable,
   pushSubscriptionsTable,
 ];
