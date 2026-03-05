@@ -15,8 +15,6 @@ const call = async <T = unknown>(path: string, options?: RequestInit) => {
     return r.json();
   });
 
-  console.log(`<${method}> ${path}`, response);
-
   return response;
 };
 
@@ -62,7 +60,6 @@ export const read = async <T = unknown>(
 
             try {
               const response: ApiResponse<T> = JSON.parse(e);
-              console.log(`<${method}> ${path}`, response);
               callback(response);
             } catch (error) {
               console.error(error);
