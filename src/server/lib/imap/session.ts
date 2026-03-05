@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { Socket } from "net";
 import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
+import crypto from "crypto";
 import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
 import { Store } from "./store";
@@ -71,9 +72,7 @@ export class ImapSession {
     private handler: ImapRequestHandler,
     public socket: Socket
   ) {
-    this.sessionId = `session_${Date.now()}_${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
+    this.sessionId = `session_${crypto.randomBytes(8).toString("hex")}`;
   }
 
   getCapabilities = () => {
