@@ -9,7 +9,7 @@ export type AllowlistDeleteResponse = undefined;
  */
 export const deleteSpamAllowlistRoute = new Route<AllowlistDeleteResponse>(
   "DELETE",
-  "/allowlist/:pattern",
+  "/spam-allowlist/:pattern",
   async (req) => {
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };

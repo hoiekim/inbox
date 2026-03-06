@@ -15,7 +15,7 @@ export type AllowlistAddResponse = AllowlistEntryResponse | null;
  */
 export const postSpamAllowlistRoute = new Route<AllowlistAddResponse>(
   "POST",
-  "/allowlist",
+  "/spam-allowlist",
   async (req) => {
     const { user } = req.session;
     if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
