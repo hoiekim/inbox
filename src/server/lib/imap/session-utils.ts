@@ -7,7 +7,7 @@ import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem } from "./types";
 import { formatHeaders, encodeText } from "./util";
 import { getAttachment } from "server";
-import { logger } from "../logger";
+import { logger } from "server";
 
 /**
  * Apply partial fetch range to content

@@ -3,7 +3,7 @@ import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
 import { readFileSync } from "fs";
-import { logger } from "../logger";
+import { logger } from "server";
 
 export const getImapListener = (port: number) => {
   return (socket: Socket) => {

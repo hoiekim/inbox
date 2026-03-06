@@ -6,7 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
-import { logger } from "../logger";
+import { logger } from "server";
 
 export class ImapRequestHandler {
   private session: ImapSession | null = null;

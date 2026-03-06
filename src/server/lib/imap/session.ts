@@ -6,7 +6,7 @@ import { readFileSync } from "fs";
 import crypto from "crypto";
 import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
-import { logger } from "../logger";
+import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
 import {

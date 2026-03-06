@@ -10,7 +10,7 @@ import {
 } from "./postgres/repositories/push_subscriptions";
 import { getUnreadNotifications } from "./postgres/repositories/mails";
 import { getActiveUsers } from "./users";
-import { logger } from "./logger";
+import { logger } from "server";
 
 // Import IDLE manager for real-time IMAP notifications
 import { idleManager } from "./imap/idle-manager";

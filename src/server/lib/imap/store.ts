@@ -21,7 +21,7 @@ import {
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
-import { logger } from "../logger";
+import { logger } from "server";
 
 // class that creates "store" object
 export class Store {

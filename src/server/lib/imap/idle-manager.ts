@@ -3,7 +3,7 @@
  */
 
 import { ImapSession } from "./session";
-import { logger } from "../logger";
+import { logger } from "server";
 
 interface IdleSession {
   session: ImapSession;
