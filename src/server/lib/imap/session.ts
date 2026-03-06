@@ -3,9 +3,11 @@ import bcrypt from "bcryptjs";
 import { Socket } from "net";
 import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
+import crypto from "crypto";
 import { MailType, Throttler } from "common";
 import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
 import { Store } from "./store";
+import { StoreOperationType } from "../postgres/repositories/mails";
 import {
   boxToAccount,
   encodeText,
@@ -70,9 +72,7 @@ export class ImapSession {
     private handler: ImapRequestHandler,
     public socket: Socket
   ) {
-    this.sessionId = `session_${Date.now()}_${Math.random()
-      .toString(36)
-      .substr(2, 9)}`;
+    this.sessionId = `session_${crypto.randomBytes(8).toString("hex")}`;
   }
 
   getCapabilities = () => {
@@ -282,7 +282,7 @@ export class ImapSession {
 
         // Mark as read if not using PEEK
         if (checkShouldMarkAsRead(fetchRequest.dataItems)) {
-          await markRead(id);
+          await markRead(this.store!.getUser().id, id);
         }
       } catch (error) {
         console.error(`[IMAP] Error processing message ${seqNum}:`, error);
@@ -789,12 +789,16 @@ export class ImapSession {
           uidEnd = endUid;
         }
         
+        // Extract base operation (FLAGS, +FLAGS, -FLAGS) by removing .SILENT suffix
+        const baseOperation = operation.replace(".SILENT", "") as StoreOperationType;
+        
         const updatedMails = await this.store!.setFlags(
           this.selectedMailbox!,
           uidStart,
           uidEnd,
           flags,
-          true // Always use UID for database operations
+          true, // Always use UID for database operations
+          baseOperation
         );
 
         if (updatedMails.length === 0) {

@@ -42,29 +42,29 @@ export const sendMail = async (
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
-
-    console.info("Email sending request succeeded");
-
-    if (!isToMyself(mailToSend.to)) {
-      const messageId = response.id || randomUUID();
-      const sentMail = await getSentMail(user, mailToSend, messageId, files);
-      await saveMail(sentMail, userId);
+    const messageId = response?.id || randomUUID();
+    const sentMail = await getSentMail(user, mailToSend, messageId, files);
+    await saveMail(sentMail, userId);
+    if (isToMyself(mailToSend.to)) {
+      // If the email is sent to myself, also save a copy in the inbox
+      await saveMail(new Mail({ ...sentMail, sent: false }), userId);
     }
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Email sending request failed", error);
 
     // Provide user-friendly error messages for common Mailgun errors
     let message = "Failed to send email. Please try again.";
 
-    if (error?.status === 401 || error?.status === 403) {
+    const err = error as { status?: number; message?: string; code?: string };
+    if (err?.status === 401 || err?.status === 403) {
       message = "Email service not configured correctly";
-    } else if (error?.status === 400) {
-      message = error?.message || "Invalid email request";
-    } else if (error?.status === 429) {
+    } else if (err?.status === 400) {
+      message = err?.message || "Invalid email request";
+    } else if (err?.status === 429) {
       message = "Too many requests. Please try again later.";
-    } else if (error?.code === "ENOTFOUND" || error?.code === "ECONNREFUSED") {
+    } else if (err?.code === "ENOTFOUND" || err?.code === "ECONNREFUSED") {
       message = "Unable to reach email service. Please try again later.";
     }
 

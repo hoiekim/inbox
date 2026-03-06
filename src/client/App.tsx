@@ -10,10 +10,10 @@ import {
 import { QueryClientProvider } from "react-query";
 import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
 
-import { Account, SignedUser } from "common";
+import { Account, SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
 
-import { Header, SignIn, Box, SignUp, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
+import { Header, SignIn, Box, SignUp, ErrorBoundary, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
 
 export enum Category {
   NewMails = "New Mails",
@@ -35,7 +35,7 @@ export interface ContextType {
   setIsAccountsOpen: Dispatch<SetStateAction<ContextType["isAccountsOpen"]>>;
   isWriterOpen: boolean;
   setIsWriterOpen: Dispatch<SetStateAction<ContextType["isWriterOpen"]>>;
-  replyData: any;
+  replyData: ReplyData;
   setReplyData: Dispatch<SetStateAction<ContextType["replyData"]>>;
   selectedAccount: string;
   setSelectedAccount: Dispatch<SetStateAction<ContextType["selectedAccount"]>>;
@@ -176,18 +176,20 @@ const App = ({ user: session }: Props) => {
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
           <BrowserRouter>
-            <Header />
-            <Switch>
-              <Route exact path="/">
-                {userInfo ? <Box /> : <Redirect to="/sign-in" />}
-              </Route>
-              <Route exact path="/sign-in">
-                {userInfo ? <Redirect to="/" /> : <SignIn />}
-              </Route>
-              <Route exact path={["/set-info", "/set-info/:email"]}>
-                {userInfo ? <Redirect to="/" /> : <SignUp />}
-              </Route>
-            </Switch>
+            <ErrorBoundary>
+              <Header />
+              <Switch>
+                <Route exact path="/">
+                  {userInfo ? <Box /> : <Redirect to="/sign-in" />}
+                </Route>
+                <Route exact path="/sign-in">
+                  {userInfo ? <Redirect to="/" /> : <SignIn />}
+                </Route>
+                <Route exact path={["/set-info", "/set-info/:email"]}>
+                  {userInfo ? <Redirect to="/" /> : <SignUp />}
+                </Route>
+              </Switch>
+            </ErrorBoundary>
           </BrowserRouter>
         </Context.Provider>
       </QueryClientProvider>

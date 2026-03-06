@@ -66,8 +66,9 @@ export abstract class Model<TJSON, TSchema extends Schema> {
     const errors = validateObject(data, typeChecker);
     if (errors.length > 0) throw new ModelValidationError(this.constructor.name, errors);
     // assigns value
+    const self = this as unknown as Record<string, unknown>;
     Object.keys(typeChecker).forEach((k) => {
-      (this as any)[k] = (data as TSchema)[k];
+      self[k] = (data as TSchema)[k];
     });
   }
 }
@@ -79,6 +80,20 @@ export interface ModelClass<TJSON, TModel extends Model<TJSON, Schema>> {
 export interface TableSearchFilters extends Omit<SearchFilters, "filters"> {
   filters?: Record<string, ParamValue>;
 }
+
+/**
+ * Type-safe filter keys: restricts filters to valid column names from the schema.
+ * This provides compile-time typo prevention and IDE autocomplete for filter keys.
+ */
+export type SchemaFilterKey<TSchema extends Schema> = keyof TSchema & string;
+
+/**
+ * Type-safe filters: maps schema keys to ParamValue.
+ * Restricts filter keys to valid column names defined in the schema.
+ */
+export type TypeSafeFilters<TSchema extends Schema> = {
+  [K in SchemaFilterKey<TSchema>]?: ParamValue | unknown;
+};
 
 export abstract class Table<
   TJSON,
@@ -94,7 +109,7 @@ export abstract class Table<
   abstract readonly supportsSoftDelete: boolean;
 
   async query(
-    filters: Record<string, ParamValue | unknown> = {}
+    filters: TypeSafeFilters<TSchema> = {}
   ): Promise<TModel[]> {
     const { sql, values } = buildSelectWithFilters(this.name, "*", {
       filters,
@@ -105,7 +120,7 @@ export abstract class Table<
   }
 
   async queryOne(
-    filters: Record<string, ParamValue | unknown>
+    filters: TypeSafeFilters<TSchema>
   ): Promise<TModel | null> {
     const { sql, values } = buildSelectWithFilters(this.name, "*", {
       filters,
@@ -171,9 +186,49 @@ export abstract class Table<
     return result.rowCount !== null && result.rowCount > 0;
   }
 
+  async deleteWhere(
+    filters: TypeSafeFilters<TSchema>
+  ): Promise<number> {
+    const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) {
+      throw new Error("deleteWhere requires at least one filter");
+    }
+    const whereClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
+    const values = entries.map(([, v]) => v as ParamValue);
+    const sql = `DELETE FROM ${this.name} WHERE ${whereClauses.join(" AND ")} RETURNING ${this.primaryKey}`;
+    const result = await pool.query(sql, values);
+    return result.rowCount ?? 0;
+  }
+
+  async updateWhere(
+    filters: TypeSafeFilters<TSchema>,
+    data: QueryData,
+    returning?: string[]
+  ): Promise<Record<string, unknown>[]> {
+    const filterEntries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    const dataEntries = Object.entries(data).filter(([, v]) => v !== undefined);
+    if (filterEntries.length === 0) {
+      throw new Error("updateWhere requires at least one filter");
+    }
+    if (dataEntries.length === 0) {
+      return [];
+    }
+    let paramIdx = 1;
+    const setClauses = dataEntries.map(([k]) => `${k} = $${paramIdx++}`);
+    const whereClauses = filterEntries.map(([k]) => `${k} = $${paramIdx++}`);
+    const values: ParamValue[] = [
+      ...dataEntries.map(([, v]) => v as ParamValue),
+      ...filterEntries.map(([, v]) => v as ParamValue),
+    ];
+    const returningClause = returning?.length ? ` RETURNING ${returning.join(", ")}` : "";
+    const sql = `UPDATE ${this.name} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}${returningClause}`;
+    const result = await pool.query(sql, values);
+    return result.rows;
+  }
+
   async queryByIds(
     ids: ParamValue[],
-    additionalFilters: Record<string, ParamValue | unknown> = {}
+    additionalFilters: TypeSafeFilters<TSchema> = {}
   ): Promise<TModel[]> {
     if (ids.length === 0) return [];
     const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");

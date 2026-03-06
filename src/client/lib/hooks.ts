@@ -12,7 +12,7 @@ export const useLocalStorage = <T>(key: string, initialValue: T) => {
   });
 
   const setValue = useCallback(
-    (value: any | ((val: any) => any)) => {
+    (value: T | ((val: T) => T)) => {
       try {
         setStoredValue((oldValue) => {
           const valueToStore =
@@ -37,7 +37,7 @@ export const useDarkTheme = () => {
   const getCurrentTheme = () =>
     window.matchMedia("(prefers-color-scheme: dark)").matches;
   const [isDarkTheme, setIsDarkTheme] = useState(getCurrentTheme());
-  const mqListener = (e: any) => setIsDarkTheme(e.matches);
+  const mqListener = (e: MediaQueryListEvent) => setIsDarkTheme(e.matches);
 
   useEffect(() => {
     const darkThemeMq = window.matchMedia("(prefers-color-scheme: dark)");

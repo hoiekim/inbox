@@ -36,10 +36,10 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
 
     if (read === true) {
       decrementBadgeCount([user]).catch(console.error);
-      await markRead(mail_id);
+      await markRead(user.id, mail_id);
     }
 
-    if (typeof save === "boolean") await markSaved(mail_id, save);
+    if (typeof save === "boolean") await markSaved(user.id, mail_id, save);
 
     return { status: "success" };
   }

@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, AppendRequest } from '../types';
-import { parseAtom, parseString, skipWhitespace } from './primitive-parsers';
+import { parseAtom, parseString, parseFlag, skipWhitespace } from './primitive-parsers';
 
 /**
  * Parse APPEND command
@@ -29,7 +29,7 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
           context.position++;
           continue;
         }
-        const flag = parseAtom(context);
+        const flag = parseFlag(context);
         if (flag.success) {
           flagsStr.push(flag.value!);
         } else {

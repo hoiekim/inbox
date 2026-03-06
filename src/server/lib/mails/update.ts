@@ -4,17 +4,19 @@ import {
   deleteMail as pgDeleteMail,
 } from "../postgres/repositories/mails";
 
-// TODO: authentication
-export const markRead = async (id: string) => {
-  return markMailRead(id);
+/**
+ * Mail update operations.
+ * Authorization is enforced at the repository layer via user_id in WHERE clauses.
+ */
+
+export const markRead = async (user_id: string, id: string) => {
+  return markMailRead(user_id, id);
 };
 
-// TODO: authentication
-export const markSaved = async (id: string, save: boolean) => {
-  return markMailSaved(id, save);
+export const markSaved = async (user_id: string, id: string, save: boolean) => {
+  return markMailSaved(user_id, id, save);
 };
 
-// TODO: authentication
-export const deleteMail = async (id: string) => {
-  return pgDeleteMail(id);
+export const deleteMail = async (user_id: string, id: string) => {
+  return pgDeleteMail(user_id, id);
 };

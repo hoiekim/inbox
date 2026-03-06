@@ -1,9 +1,6 @@
 import FormData from "form-data";
 import Mailgun from "mailgun.js";
-import type {
-  MailgunMessageData,
-  CustomFile
-} from "mailgun.js/definitions";
+import type { MailgunMessageData, CustomFile } from "mailgun.js/definitions";
 import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
@@ -32,6 +29,13 @@ export const sendMailgunMail = async (
   const { sender, senderFullName, to, cc, bcc, subject, html, inReplyTo } =
     mail;
 
+  const tos = to.split(",").map((addr) => addr.trim());
+  const envelopTo = tos.filter((addr) => !addr.endsWith(`@${EMAIL_DOMAIN}`));
+  if (tos.length && !envelopTo.length) {
+    console.log("All recipients are to myself, skipping Mailgun sending.");
+    return;
+  }
+
   const text = getText(html);
   const userDomain = getUserDomain(username);
   const from = `${senderFullName} <${sender}@${userDomain}>`;
@@ -44,17 +48,20 @@ export const sendMailgunMail = async (
 
   const mailgunMessage: MailgunMessageData = {
     from,
-    to,
+    to: envelopTo,
     cc,
     bcc,
     subject,
     html,
     text,
     attachment: getAttachments(files),
+    "h:To": to,
     "h:In-Reply-To": inReplyTo
   };
 
   const data = await mg.messages.create(EMAIL_DOMAIN, mailgunMessage);
+
+  console.info("Email sending request succeeded");
 
   return data;
 };
