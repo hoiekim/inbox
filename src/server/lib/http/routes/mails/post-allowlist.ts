@@ -1,5 +1,4 @@
-import { AUTH_ERROR_MESSAGE } from "server";
-import { addAllowlistEntry } from "../../../postgres/repositories/spam_allowlists";
+import { AUTH_ERROR_MESSAGE, addAllowlistEntry } from "server";
 import { Route } from "../route";
 import { AllowlistEntryResponse } from "./get-allowlist";
 

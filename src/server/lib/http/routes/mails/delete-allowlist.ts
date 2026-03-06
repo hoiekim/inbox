@@ -1,5 +1,4 @@
-import { AUTH_ERROR_MESSAGE } from "server";
-import { removeAllowlistEntry } from "../../../postgres/repositories/spam_allowlists";
+import { AUTH_ERROR_MESSAGE, removeAllowlistEntry } from "server";
 import { Route } from "../route";
 
 export type AllowlistDeleteResponse = undefined;
