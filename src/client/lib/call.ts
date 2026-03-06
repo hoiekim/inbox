@@ -51,7 +51,7 @@ call.binary = async (path: string): Promise<ArrayBuffer> => {
 /**
  * POST FormData (e.g., file uploads) and expect JSON response
  */
-call.postFormData = async <T = any>(
+call.postFormData = async <T = unknown>(
   path: string,
   formData: FormData
 ): Promise<ApiResponse<T>> => {
@@ -72,7 +72,7 @@ export const read = async <T = unknown>(
   callback: (response: ApiResponse<T>) => void,
   options?: RequestInit
 ) => {
-  const method = options?.method?.toUpperCase() || "GET";
+  const _method = options?.method?.toUpperCase() || "GET";
 
   const response = await fetch(path, options);
   const reader = response.body?.getReader();
