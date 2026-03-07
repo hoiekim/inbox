@@ -12,10 +12,22 @@ const mockGetUser = mock(() => Promise.resolve(null));
 const mockSaveMailHandler = mock(() => Promise.resolve());
 const mockSendMail = mock(() => Promise.resolve());
 
+const mockLogger = {
+  debug: mock(() => {}),
+  info: mock(() => {}),
+  warn: mock(() => {}),
+  error: mock(() => {}),
+};
+
 mock.module("server", () => ({
   getUser: mockGetUser,
   saveMailHandler: mockSaveMailHandler,
-  sendMail: mockSendMail
+  sendMail: mockSendMail,
+  logger: mockLogger,
+  getDomain: () => "mydomain",
+  getUserDomain: (username: string) =>
+    username === "admin" ? "mydomain" : `${username}.mydomain`,
+  isValidEmail: (email: string) => email.includes("@"),
 }));
 
 // Mock simpleParser
