@@ -343,7 +343,6 @@ const RenderedMails = ({ page }: { page: number }) => {
     isWriterOpen,
     setReplyData,
     selectedAccount,
-    setSelectedAccount,
     selectedCategory
   } = useContext(Context);
 
@@ -375,11 +374,7 @@ const RenderedMails = ({ page }: { page: number }) => {
       return body?.map((d) => new MailHeaderData(d)) || [];
     } else throw new Error(message);
   };
-  const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
-    onSuccess: (data) => {
-      if (!data?.length) setSelectedAccount("");
-    }
-  });
+  const query = useQuery<MailHeaderData[]>(queryUrl, getMails);
 
   if (query.isLoading) {
     return (
@@ -539,9 +534,31 @@ const RenderedMails = ({ page }: { page: number }) => {
       );
     });
 
+    if (!result.length) {
+      const emptyMessage = (() => {
+        switch (selectedCategory) {
+          case Category.NewMails:
+            return "All caught up! No unread emails.";
+          case Category.SavedMails:
+            return "No saved emails.";
+          case Category.SentMails:
+            return "No sent emails.";
+          case Category.Search:
+            return "No results found.";
+          default:
+            return "No emails in this account.";
+        }
+      })();
+      return (
+        <div className="mails_container empty">
+          <p className="empty_state">{emptyMessage}</p>
+        </div>
+      );
+    }
+
     return (
       <div className="mails_container">
-        {result && result.length ? result : null}
+        {result}
       </div>
     );
   }
