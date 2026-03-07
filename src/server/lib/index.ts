@@ -1,3 +1,6 @@
+// Logging (standalone, no dependencies)
+export { logger } from "./logger";
+
 // PostgreSQL database layer
 export * from "./postgres";
 
@@ -45,8 +48,13 @@ export {
   validateMailData,
   MailValidationError,
   MailSendingError,
+  getSpamHeaders,
+  markSpam,
 } from "./mails";
-export type { AccountsGetResponse, GetMailsOptions, ValidationResult } from "./mails";
+export type { AccountsGetResponse, GetMailsOptions, ValidationResult, SaveMailHandlerOptions } from "./mails";
+
+// Spam filter
+export * from "./spam";
 
 // Version
 export { version } from "./postgres/initialize";

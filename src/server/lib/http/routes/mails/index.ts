@@ -8,6 +8,11 @@ import { getSearchRoute } from "./get-search";
 import { postMarkMailRoute } from "./post-mark";
 import { postSendMailRoute } from "./post-send";
 import { deleteMailRoute } from "./delete";
+import { getSpamMailsRoute } from "./get-spam";
+import { postMarkSpamMailRoute } from "./post-spam-mark";
+import { getSpamAllowlistRoute } from "./get-allowlist";
+import { postSpamAllowlistRoute } from "./post-allowlist";
+import { deleteSpamAllowlistRoute } from "./delete-allowlist";
 
 const mailsRouter = Router();
 
@@ -20,7 +25,12 @@ const routes = [
   getSearchRoute,
   postMarkMailRoute,
   postSendMailRoute,
-  deleteMailRoute
+  deleteMailRoute,
+  getSpamMailsRoute,
+  postMarkSpamMailRoute,
+  getSpamAllowlistRoute,
+  postSpamAllowlistRoute,
+  deleteSpamAllowlistRoute
 ];
 
 routes.forEach((r) => r.register(mailsRouter));
@@ -36,3 +46,8 @@ export * from "./get-search";
 export * from "./post-mark";
 export * from "./post-send";
 export * from "./delete";
+export * from "./get-spam";
+export * from "./post-spam-mark";
+export * from "./get-allowlist";
+export * from "./post-allowlist";
+export * from "./delete-allowlist";

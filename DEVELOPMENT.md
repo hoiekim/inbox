@@ -90,12 +90,24 @@ const { status, body } = await call.post<ResponseType, BodyType>("/api/endpoint"
 
 ## Testing
 
+### Test Requirements (Mandatory)
+
+**Always write unit tests for new code files.** This is a project rule.
+
+- New files: Create a corresponding `*.test.ts` file
+- New functions: Add test cases covering expected behavior and edge cases
+- Bug fixes: Add regression tests that would have caught the bug
+- Security-critical code: Must have tests (auth, parsers, validation)
+
+Check coverage with `bun test --coverage`.
+
 ### Running Tests
 
 ```bash
 bun test                    # All tests
 bun test --watch           # Watch mode
 bun test src/path/file.test.ts  # Single file
+bun test --coverage        # With coverage report
 ```
 
 ### Test Location
@@ -213,6 +225,30 @@ Schema migrations run automatically on startup via `src/server/lib/postgres/migr
 
 - Tokens use `crypto.randomBytes()` (cryptographically secure)
 - Rate limiting on auth endpoints (15 min window, 10 attempts)
+
+### Email Display Security
+
+**Email HTML is untrusted content.** Always use iframe sandboxing:
+
+```tsx
+<iframe
+  srcDoc={processHtmlForViewer(data.html)}
+  sandbox="allow-same-origin"
+/>
+```
+
+The `sandbox` attribute restricts:
+- ❌ Script execution (no JS in emails)
+- ❌ Form submissions
+- ❌ Popups and new windows
+- ❌ Top navigation hijacking
+- ✅ `allow-same-origin` enables CSS styling
+
+**Never add `allow-scripts` to email iframes** - this would enable XSS attacks via malicious emails.
+
+Additional defense layers:
+- HTML sanitization (planned: #124)
+- CSP headers (planned: #151)
 
 ### IMAP Security
 

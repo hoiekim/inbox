@@ -28,8 +28,17 @@ import {
 } from "./util";
 import { notifyNewMails } from "../push";
 import { getInsight } from "../ai";
+import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 
-export const saveMailHandler = async (_: unknown, data: IncomingMail) => {
+export interface SaveMailHandlerOptions {
+  remoteAddress?: string;
+}
+
+export const saveMailHandler = async (
+  _: unknown,
+  data: IncomingMail,
+  options: SaveMailHandlerOptions = {}
+) => {
   console.info("Received an email at", new Date());
   console.group();
   const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));
@@ -46,14 +55,24 @@ export const saveMailHandler = async (_: unknown, data: IncomingMail) => {
   }
 
   const usernames = getUsernamesFromIncomingMail(validData);
-  await Promise.all(usernames.map((u) => saveIncomingMail(u, validData)));
+  await Promise.all(
+    usernames.map((u) => saveIncomingMail(u, validData, { remoteAddress: options.remoteAddress }))
+  );
   console.info("Successfully saved an email");
 
   await notifyNewMails(usernames);
   console.info(`Sent push notifications to users: [${usernames.toString()}]`);
 };
 
-const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
+interface SaveIncomingMailOptions {
+  remoteAddress?: string;
+}
+
+const saveIncomingMail = async (
+  username: string,
+  incoming: IncomingMail,
+  options: SaveIncomingMailOptions = {}
+) => {
   const user = await getUser({ username });
   if (!user) {
     console.warn(`User not found for username: ${username}`);
@@ -63,12 +82,72 @@ const saveIncomingMail = async (username: string, incoming: IncomingMail) => {
 
   const mail = await convertMail(user, incoming);
 
-  return saveMail(mail, user?.id);
+  // Run spam check
+  let spamResult: SpamCheckResult | undefined;
+  if (user.id) {
+    try {
+      // Extract from address handling both single and array formats
+      let fromAddress: string | undefined;
+      let fromName: string | undefined;
+      if (incoming.from) {
+        if (Array.isArray(incoming.from)) {
+          const firstFrom = incoming.from[0];
+          if (firstFrom?.value) {
+            const valueArray = Array.isArray(firstFrom.value) ? firstFrom.value : [firstFrom.value];
+            fromAddress = valueArray[0]?.address;
+          }
+          fromName = incoming.from[0]?.text;
+        } else {
+          const fromValue = incoming.from.value;
+          const valueArray = Array.isArray(fromValue) ? fromValue : [fromValue];
+          fromAddress = valueArray[0]?.address;
+          fromName = incoming.from.text;
+        }
+      }
+      
+      // Extract reply-to address handling both single and array formats
+      let replyToAddress: string | undefined;
+      if (incoming.replyTo) {
+        if (Array.isArray(incoming.replyTo)) {
+          const firstReplyTo = incoming.replyTo[0];
+          if (firstReplyTo?.value) {
+            const valueArray = Array.isArray(firstReplyTo.value) ? firstReplyTo.value : [firstReplyTo.value];
+            replyToAddress = valueArray[0]?.address;
+          }
+        } else {
+          const replyToValue = incoming.replyTo.value;
+          const valueArray = Array.isArray(replyToValue) ? replyToValue : [replyToValue];
+          replyToAddress = valueArray[0]?.address;
+        }
+      }
+      
+      const emailContext: EmailContext = {
+        fromAddress,
+        fromName,
+        replyToAddress,
+        subject: incoming.subject,
+        text: incoming.text,
+        html: incoming.html,
+        remoteAddress: options.remoteAddress,
+      };
+      
+      spamResult = await checkSpam(user.id, emailContext);
+      
+      if (spamResult.isSpam) {
+        console.info(`[SpamFilter] Email marked as spam for user ${username}: score=${spamResult.score}, reasons=[${spamResult.reasons.join(", ")}]`);
+      }
+    } catch (error) {
+      console.warn("[SpamFilter] Spam check failed, proceeding without spam filtering:", error);
+    }
+  }
+
+  return saveMail(mail, user?.id, spamResult);
 };
 
 export const saveMail = async (
   mail: Mail,
-  userId?: string
+  userId?: string,
+  spamResult?: SpamCheckResult
 ): Promise<{ _id: string } | undefined> => {
   if (!userId) return;
 
@@ -100,6 +179,9 @@ export const saveMail = async (
     insight: mail.insight,
     uid_domain: mail.uid?.domain,
     uid_account: mail.uid?.account,
+    spam_score: spamResult?.score ?? 0,
+    spam_reasons: spamResult?.reasons ?? null,
+    is_spam: spamResult?.isSpam ?? false,
   };
 
   try {

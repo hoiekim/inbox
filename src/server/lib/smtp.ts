@@ -90,7 +90,9 @@ const onDataIncoming = (
         }))
       };
 
-      await saveMailHandler(null, mail);
+      // Extract remote address for spam DNSBL checks
+      const remoteAddress = session.remoteAddress;
+      await saveMailHandler(null, mail, { remoteAddress });
       cb();
     })
     .catch((err) => {
