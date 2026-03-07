@@ -1,6 +1,12 @@
 // Logging (standalone, no dependencies)
 export { logger } from "./logger";
 
+// Shared utilities (domain helpers etc.) - no internal dependencies, safe to import anywhere.
+// Pattern: export * from "./util" here so consumers can `import { getDomain } from "server"`
+// without circular imports. Sub-modules that need these should also re-export via
+// `export * from "../util"` in their own util.ts barrel.
+export * from "./util";
+
 // PostgreSQL database layer
 export * from "./postgres";
 
@@ -37,9 +43,7 @@ export {
   getAccounts,
   getDomainUidNext,
   getAccountUidNext,
-  getDomain,
   getText,
-  getUserDomain,
   ATTACHMENT_FOLDER,
   getAttachmentId,
   getAttachmentFilePath,
