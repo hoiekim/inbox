@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect, ChangeEvent, KeyboardEvent } from "react";
+import { useState, useContext, useEffect, ChangeEvent, FormEvent } from "react";
 import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
 import { SignedUser, SignedUserType } from "common";
@@ -51,7 +51,8 @@ const Home = () => {
     }
   }, [mutation.data, setUserInfo]);
 
-  const onClickLogin = async () => {
+  const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
     const body: LoginBody = { password: passwordInput };
     if (usernameInput.includes("@")) body.email = usernameInput;
     else body.username = usernameInput;
@@ -59,32 +60,30 @@ const Home = () => {
     mutation.mutate(body);
   };
 
-  const onKeyDownInput = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") onClickLogin();
-  };
-
   return (
     <div className="container_login">
-      <blockquote className="login_card">
+      <form className="login_card" onSubmit={onSubmit}>
         <h3 className="greeting">Please log in</h3>
         <div className="info_message">{infoMessage}</div>
         <input
           className="login_ui"
           placeholder="username or email"
-          type="username"
+          type="text"
+          name="username"
+          autoComplete="username"
           value={usernameInput}
-          onKeyDown={onKeyDownInput}
           onChange={onChangeUsername}
         />
         <input
           className="login_ui"
           placeholder="password"
           type="password"
+          name="password"
+          autoComplete="current-password"
           value={passwordInput}
-          onKeyDown={onKeyDownInput}
           onChange={onChangePassword}
         />
-        <button className="login_ui" onClick={onClickLogin}>
+        <button className="login_ui" type="submit">
           <LoginIcon />
           <span>Login</span>
         </button>
@@ -100,7 +99,7 @@ const Home = () => {
             <Link to="/set-info">Sign Up</Link>
           </div>
         </div>
-      </blockquote>
+      </form>
     </div>
   );
 };
