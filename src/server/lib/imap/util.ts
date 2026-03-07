@@ -1,5 +1,5 @@
 import { MailType, MailAddressValueType, AttachmentType } from "common";
-import { getUserDomain } from "../mails/util";
+import { getUserDomain } from "../util";
 
 export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");

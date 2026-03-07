@@ -2,18 +2,13 @@ import fs from "fs";
 import { htmlToText } from "html-to-text";
 import { v4 as uuid } from "uuid";
 
+// Re-export domain utilities from lib/util for backward compatibility
+export { getDomain, getUserDomain } from "../util";
+
 export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
 export const FROM_ADDRESS_FIELD = "mail.from.value.address";
 export const nestedPath = (field: string) => {
   return field.slice(0, field.lastIndexOf("."));
-};
-
-export const getDomain = () => process.env.EMAIL_DOMAIN || "mydomain";
-
-export const getUserDomain = (username: string) => {
-  const domain = getDomain();
-  if (username === "admin") return domain;
-  return `${username}.${domain}`;
 };
 
 export const ATTACHMENT_FOLDER = "./attachments";
