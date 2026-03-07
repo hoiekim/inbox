@@ -1,3 +1,4 @@
+import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "../util";
 import { logger } from "server";
 
