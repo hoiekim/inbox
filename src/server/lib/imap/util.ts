@@ -1,5 +1,5 @@
 import { MailType, MailAddressValueType, AttachmentType } from "common";
-import { getUserDomain } from "../util";
+import { getUserDomain } from "server";
 import { logger } from "server";
 
 export const encodeText = (str: string) => {
