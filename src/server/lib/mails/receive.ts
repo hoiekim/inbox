@@ -27,7 +27,6 @@ import {
   getAttachmentId,
 } from "./util";
 import { notifyNewMails } from "../push";
-import { getInsight } from "../ai";
 
 export const saveMailHandler = async (_: unknown, data: IncomingMail) => {
   console.info("Received an email at", new Date());
@@ -140,7 +139,6 @@ export const convertMail = async (
   } = incoming;
 
   const text = incomingText ?? getText(html);
-  const insight = await getInsight({ subject, from, to, text });
   const envelopeToAddress = envelopeTo[0]?.address || "";
 
   if (!user.id) {
@@ -165,7 +163,6 @@ export const convertMail = async (
     envelopeTo,
     envelopeFrom,
     text,
-    insight,
     date,
     html,
     subject,
