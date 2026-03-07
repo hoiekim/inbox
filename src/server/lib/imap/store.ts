@@ -1,5 +1,11 @@
 /* eslint-disable no-case-declarations */
-import { Mail, SignedUser } from "common";
+import {
+  Mail,
+  SignedUser,
+  MailAddressValueType,
+  AttachmentType,
+  Insight,
+} from "common";
 import {
   getAccountStats,
   countMessages,
@@ -142,39 +148,39 @@ export class Store {
 
         if (model.from_address) {
           mail.from = {
-            value: model.from_address as any,
+            value: model.from_address as MailAddressValueType[],
             text: model.from_text || "",
           };
         }
         if (model.to_address) {
           mail.to = {
-            value: model.to_address as any,
+            value: model.to_address as MailAddressValueType[],
             text: model.to_text || "",
           };
         }
         if (model.cc_address) {
           mail.cc = {
-            value: model.cc_address as any,
+            value: model.cc_address as MailAddressValueType[],
             text: model.cc_text || "",
           };
         }
         if (model.bcc_address) {
           mail.bcc = {
-            value: model.bcc_address as any,
+            value: model.bcc_address as MailAddressValueType[],
             text: model.bcc_text || "",
           };
         }
         if (model.envelope_from) {
-          mail.envelopeFrom = model.envelope_from as any;
+          mail.envelopeFrom = model.envelope_from as MailAddressValueType[];
         }
         if (model.envelope_to) {
-          mail.envelopeTo = model.envelope_to as any;
+          mail.envelopeTo = model.envelope_to as MailAddressValueType[];
         }
         if (model.attachments) {
-          mail.attachments = model.attachments as any;
+          mail.attachments = model.attachments as AttachmentType[];
         }
         if (model.insight) {
-          mail.insight = model.insight as any;
+          mail.insight = model.insight as Insight;
         }
 
         mails.set(id, mail);

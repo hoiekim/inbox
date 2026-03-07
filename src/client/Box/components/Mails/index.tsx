@@ -7,9 +7,10 @@ import {
 } from "react";
 import { useQuery } from "react-query";
 import { marked } from "marked";
-import { MailHeaderData } from "common";
+import { MailHeaderData, ReplyData } from "common";
 
 import {
+  ApiResponse,
   HeadersGetResponse,
   MarkMailPostBody,
   MarkMailPostResponse,
@@ -85,10 +86,10 @@ interface RenderedMailProps {
   i: number;
   activeMailId: ActiveMailMap;
   setActiveMailId: Dispatch<SetStateAction<ActiveMailMap>>;
-  requestMarkRead: (mail: MailHeaderData) => Promise<any>;
+  requestMarkRead: (mail: MailHeaderData) => Promise<ApiResponse<MarkMailPostResponse>>;
   markReadInQueryData: (mail: MailHeaderData) => void;
-  setReplyData: Dispatch<SetStateAction<any>>;
-  requestDeleteMail: (mail: MailHeaderData) => Promise<any>;
+  setReplyData: Dispatch<SetStateAction<ReplyData>>;
+  requestDeleteMail: (mail: MailHeaderData) => Promise<ApiResponse<MailDeleteResponse>>;
   selectedAccount: string;
   accountsCache: AccountsCache;
   selectedCategory: Category;

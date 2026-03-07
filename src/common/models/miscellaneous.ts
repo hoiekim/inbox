@@ -10,7 +10,8 @@ export type UserId = string;
 export type Username = string;
 export type BadgeCount = { count: number; latest?: Date };
 
-export type Constructor<T = any> = new (...args: any[]) => T;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type Constructor<T = object> = new (...args: any[]) => T;
 
 export class Pagination {
   from = 0;

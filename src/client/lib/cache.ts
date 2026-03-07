@@ -27,7 +27,7 @@ export const getLocalStorageItem = (key: string) => {
   }
 };
 
-export const setLocalStorageItem = (key: string, item: any) => {
+export const setLocalStorageItem = (key: string, item: unknown) => {
   if (item === undefined) {
     window.localStorage.removeItem(key);
   } else {

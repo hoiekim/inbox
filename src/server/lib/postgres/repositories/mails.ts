@@ -245,8 +245,14 @@ export const searchMails = async (
       LIMIT 1000
     `;
 
+    interface SearchRow {
+      rank: number;
+      subject_highlight: string;
+      text_highlight: string;
+      [key: string]: unknown;
+    }
     const result = await pool.query(sql, [user_id, searchTerm]);
-    return result.rows.map((row: any) => {
+    return result.rows.map((row: SearchRow) => {
       const model = new MailModel(row) as SearchMailModel;
       model.rank = row.rank;
       model.highlight = {};

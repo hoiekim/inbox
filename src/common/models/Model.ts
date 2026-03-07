@@ -11,22 +11,27 @@ import { Constructor } from "./miscellaneous";
  * const result = assign(target, source);
  * console.log(result); // { a: 1, c: 3 }
  */
-const assign = (target: any, source: any) => {
-  for (const key in source) {
-    const value = source[key];
+type AssignTarget = Record<string, unknown> | unknown[];
+
+const assign = <T extends AssignTarget>(target: T, source: AssignTarget): T => {
+  const src = source as Record<string, unknown>;
+  const tgt = target as Record<string, unknown>;
+  for (const key in src) {
+    const value = src[key];
     if (typeof value === "function") continue;
     if (Array.isArray(value)) {
-      target[key] = assign([], value);
+      tgt[key] = assign([] as unknown[], value);
     } else if (typeof value === "object" && value !== null) {
-      if (typeof value.clone === "function") {
-        target[key] = value.clone();
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.clone === "function") {
+        tgt[key] = (obj.clone as () => unknown)();
       } else if (value instanceof Date) {
-        target[key] = new Date(value);
+        tgt[key] = new Date(value);
       } else {
-        target[key] = assign({}, value);
+        tgt[key] = assign({}, obj);
       }
     } else {
-      target[key] = value;
+      tgt[key] = value;
     }
   }
   return target;
@@ -37,7 +42,7 @@ const assign = (target: any, source: any) => {
  * match names in `exclude` list.
  * @returns target with source's properties overridden to it.
  */
-const override = (target: any, source: any, exclude: string[] = []) => {
+const override = (target: object, source: object, exclude: string[] = []) => {
   for (const prop of Object.getOwnPropertyNames(source)) {
     const descriptor = Object.getOwnPropertyDescriptor(source, prop)!;
     if (exclude.includes(prop)) continue;
@@ -65,7 +70,7 @@ export class Model<T = unknown> {
   };
 
   constructor(init?: Partial<T>) {
-    if (init) assign(this, init);
+    if (init) assign(this as unknown as Record<string, unknown>, init as Record<string, unknown>);
   }
 
   /**

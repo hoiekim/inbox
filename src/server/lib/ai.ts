@@ -43,7 +43,9 @@ export const getInsight = async (mail: IncomingMail) => {
     for (const _key in insight) {
       const key = _key as keyof Insight;
       const value = insight[key];
-      if (Array.isArray(value)) insight[key] = value.filter((e) => e) as any;
+      if (Array.isArray(value)) {
+        (insight[key] as string[]) = value.filter((e) => e);
+      }
     }
     return insight;
   } catch (error) {

@@ -1,6 +1,6 @@
 import { ApiResponse } from "server";
 
-const call = async <T = any>(path: string, options?: RequestInit) => {
+const call = async <T = unknown>(path: string, options?: RequestInit) => {
   const method = options?.method || "GET";
   const body = options?.body;
 
@@ -15,22 +15,20 @@ const call = async <T = any>(path: string, options?: RequestInit) => {
     return r.json();
   });
 
-  console.log(`<${method}> ${path}`, response);
-
   return response;
 };
 
 call.get = <T>(path: string) => call<T>(path);
-call.post = <T, B = any>(path: string, body: B) => {
+call.post = <T, B = unknown>(path: string, body: B) => {
   return call<T>(path, { method: "POST", body: body as BodyInit });
 };
 call.delete = <T>(path: string) => call<T>(path, { method: "DELETE" });
 
 export { call };
 
-export const read = async <T = any>(
+export const read = async <T = unknown>(
   path: string,
-  callback: (response: ApiResponse<T>) => any,
+  callback: (response: ApiResponse<T>) => void,
   options?: RequestInit
 ) => {
   const method = options?.method?.toUpperCase() || "GET";
@@ -41,7 +39,7 @@ export const read = async <T = any>(
 
   let streamBuilder = "";
 
-  const start = async (controller: ReadableStreamController<any>) => {
+  const start = async (controller: ReadableStreamDefaultController<Uint8Array>) => {
     const push = async () => {
       try {
         const { done, value } = await reader.read();
@@ -62,7 +60,6 @@ export const read = async <T = any>(
 
             try {
               const response: ApiResponse<T> = JSON.parse(e);
-              console.log(`<${method}> ${path}`, response);
               callback(response);
             } catch (error) {
               console.error(error);

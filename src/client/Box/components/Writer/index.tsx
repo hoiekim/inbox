@@ -25,8 +25,18 @@ import FileIcon from "../FileIcon";
 
 import "./index.scss";
 
-const replyDataToOriginalMessage = (replyData: any) => {
-  if (!replyData) {
+import { ReplyData } from "common";
+
+interface OriginalMessage {
+  id: string;
+  messageId: string;
+  subject: string;
+  prefix: string;
+  html: string;
+}
+
+const replyDataToOriginalMessage = (replyData: ReplyData): OriginalMessage => {
+  if (!replyData || !replyData.id) {
     return {
       id: "",
       messageId: "",
@@ -37,23 +47,23 @@ const replyDataToOriginalMessage = (replyData: any) => {
   }
   const { id, messageId, date, subject, from, html } = replyData;
 
-  const { date: localeDate, time: localeTime } = getDateForMailHeader(
-    new Date(date)
-  );
+  const parsedDate = date ? new Date(date) : new Date();
+  const { date: localeDate, time: localeTime } = getDateForMailHeader(parsedDate);
 
-  const prefix = `On ${localeDate} at ${localeTime}, ${from.text} wrote:`;
-  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html}</blockquote>`;
+  const fromText = from?.text || "Unknown";
+  const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
+  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html || ""}</blockquote>`;
 
   return {
-    id: id as string,
-    messageId: messageId as string,
-    subject: subject as string,
+    id: id || "",
+    messageId: messageId || "",
+    subject: subject || "",
     prefix,
     html: newHtml
   };
 };
 
-const getReplyContainerHtml = (originalMessage: any) => {
+const getReplyContainerHtml = (originalMessage: OriginalMessage) => {
   const inner =
     `<p>${originalMessage.prefix
       .replace("<", "&lt;")
@@ -87,7 +97,7 @@ const Writer = () => {
       prefix: ""
     }
   );
-  const [attachments, setAttachments] = useState<any>({});
+  const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
 
   const editor = useEditor({
@@ -109,27 +119,25 @@ const Writer = () => {
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
-      setSender(replyData.to.address.split("@")[0]);
-      setTo(replyData.from.value[0].address);
-      setCc(replyData.cc?.value?.map((e: any) => e.address).join(", ") || "");
-      setBcc(replyData.bcc?.value?.map((e: any) => e.address).join(", ") || "");
+      setSender(replyData.to?.address?.split("@")[0] || "");
+      setTo(replyData.from?.value?.[0]?.address || "");
+      setCc(replyData.cc?.value?.map((e) => e.address).join(", ") || "");
+      setBcc(replyData.bcc?.value?.map((e) => e.address).join(", ") || "");
 
-      const replyMarkExistsInSubect = !replyData.subject
-        .toLowerCase()
-        .indexOf("re:");
-      const forwardMarkExistsInSubect = !replyData.subject
-        .toLowerCase()
-        .indexOf("fwd:");
-      const subject = replyData.to.address
+      const subjectLower = (replyData.subject || "").toLowerCase();
+      const replyMarkExistsInSubect = subjectLower.indexOf("re:") === 0;
+      const forwardMarkExistsInSubect = subjectLower.indexOf("fwd:") === 0;
+      const originalSubject = replyData.subject || "";
+      const subject = replyData.to?.address
         ? replyMarkExistsInSubect
-          ? replyData.subject
-          : "Re: " + replyData.subject
+          ? originalSubject
+          : "Re: " + originalSubject
         : forwardMarkExistsInSubect
-        ? replyData.subject
-        : "Fwd: " + replyData.subject;
+        ? originalSubject
+        : "Fwd: " + originalSubject;
       setSubject(subject);
 
-      const editorContent = replyData.to.address
+      const editorContent = replyData.to?.address
         ? replyData.insight?.suggested_reply || ""
         : "";
 
@@ -172,7 +180,7 @@ const Writer = () => {
 
   const mutation = useMutation(sendMail, { onSuccess: onSuccessSendMail });
 
-  const onChangeName = (e: any) => {
+  const onChangeName = (e: React.ChangeEvent<HTMLInputElement>) => {
     const name = e.target.value;
     setName(name);
   };
@@ -206,10 +214,10 @@ const Writer = () => {
     fileInput.click();
     fileInput.addEventListener("change", () => {
       const timeStamp = Date.now();
-      const clonedAttachments: any = { ...attachments };
-      const files = Array.from(fileInput.files as unknown as any[]);
-      files.forEach(async (e, i) => {
-        clonedAttachments[`${timeStamp}-${i}`] = e;
+      const clonedAttachments: Record<string, File> = { ...attachments };
+      const files = Array.from(fileInput.files || []);
+      files.forEach((file, i) => {
+        clonedAttachments[`${timeStamp}-${i}`] = file;
       });
       setAttachments(clonedAttachments);
     });
@@ -272,7 +280,8 @@ const Writer = () => {
   });
 
   const onClickPadding: MouseEventHandler<HTMLDivElement> = (e) => {
-    const targetClassList = Array.from((e.target as any).classList);
+    const target = e.target as HTMLElement;
+    const targetClassList = Array.from(target.classList);
     const targetIsPadding = !!targetClassList.find(
       (f) => f === "editor_container_bottom_padding"
     );

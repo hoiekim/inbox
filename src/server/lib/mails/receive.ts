@@ -29,7 +29,7 @@ import {
 import { notifyNewMails } from "../push";
 import { getInsight } from "../ai";
 
-export const saveMailHandler = async (_: any, data: IncomingMail) => {
+export const saveMailHandler = async (_: unknown, data: IncomingMail) => {
   console.info("Received an email at", new Date());
   console.group();
   const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));

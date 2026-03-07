@@ -1,4 +1,4 @@
-import { MailBodyData } from "common";
+import { MailBodyData, AttachmentType, Insight } from "common";
 import { getMailById } from "../postgres/repositories/mails";
 
 export const getMailBody = async (
@@ -12,8 +12,8 @@ export const getMailBody = async (
   return new MailBodyData({
     id: mailModel.mail_id,
     html: mailModel.html,
-    attachments: mailModel.attachments as any,
+    attachments: mailModel.attachments as AttachmentType[] | undefined,
     messageId: mailModel.message_id,
-    insight: mailModel.insight as any,
+    insight: mailModel.insight as Insight | undefined,
   });
 };

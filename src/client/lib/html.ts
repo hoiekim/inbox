@@ -2,8 +2,9 @@ export const processHtmlToSendMail = (html: string) => {
   const div = window.document.createElement("div");
   div.innerHTML = html;
   div.querySelectorAll("*").forEach((e) => {
-    const anyE = e as any;
-    anyE.style.fontWeight = "normal";
+    if (e instanceof HTMLElement) {
+      e.style.fontWeight = "normal";
+    }
   });
   div.querySelectorAll("p").forEach((e) => {
     if (!e.innerText.trim()) {
