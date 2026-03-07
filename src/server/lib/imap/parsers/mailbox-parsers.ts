@@ -223,7 +223,7 @@ export const parseDelete = (
   }
 
   return {
-    success: false,
+    success: true,
     value: {
       type: "DELETE",
       data: { mailbox: mailbox.value! }
