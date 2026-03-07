@@ -235,6 +235,99 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   }
 }
 
+/**
+ * Represents the subset of mail columns returned by the getMailHeaders query.
+ * This model only validates header fields (subject, date, addresses, flags) —
+ * it intentionally excludes heavy columns like html, text, and attachments
+ * to allow memory-efficient partial SELECT queries.
+ */
+export interface MailHeaderJSON {
+  mail_id: string;
+  user_id: string;
+  subject: string;
+  date: string;
+  from_address: object | null;
+  from_text: string | null;
+  to_address: object | null;
+  to_text: string | null;
+  cc_address: object | null;
+  cc_text: string | null;
+  bcc_address: object | null;
+  bcc_text: string | null;
+  read: boolean;
+  saved: boolean;
+  sent: boolean;
+  insight: object | null;
+}
+
+export class MailHeaderModel extends Model<MailHeaderJSON, Pick<MailSchema,
+  | "mail_id" | "user_id" | "subject" | "date"
+  | "from_address" | "from_text" | "to_address" | "to_text"
+  | "cc_address" | "cc_text" | "bcc_address" | "bcc_text"
+  | "read" | "saved" | "sent" | "insight"
+>> {
+  declare mail_id: string;
+  declare user_id: string;
+  declare subject: string;
+  declare date: string;
+  declare from_address: object | null;
+  declare from_text: string | null;
+  declare to_address: object | null;
+  declare to_text: string | null;
+  declare cc_address: object | null;
+  declare cc_text: string | null;
+  declare bcc_address: object | null;
+  declare bcc_text: string | null;
+  declare read: boolean;
+  declare saved: boolean;
+  declare sent: boolean;
+  declare insight: object | null;
+
+  static typeChecker = {
+    mail_id: isString,
+    user_id: isString,
+    subject: isString,
+    date: isString,
+    from_address: isNullableObject,
+    from_text: isNullableString,
+    to_address: isNullableObject,
+    to_text: isNullableString,
+    cc_address: isNullableObject,
+    cc_text: isNullableString,
+    bcc_address: isNullableObject,
+    bcc_text: isNullableString,
+    read: isBoolean,
+    saved: isBoolean,
+    sent: isBoolean,
+    insight: isNullableObject,
+  };
+
+  constructor(data: unknown) {
+    super(data, MailHeaderModel.typeChecker);
+  }
+
+  toJSON(): MailHeaderJSON {
+    return {
+      mail_id: this.mail_id,
+      user_id: this.user_id,
+      subject: this.subject,
+      date: this.date,
+      from_address: this.from_address,
+      from_text: this.from_text,
+      to_address: this.to_address,
+      to_text: this.to_text,
+      cc_address: this.cc_address,
+      cc_text: this.cc_text,
+      bcc_address: this.bcc_address,
+      bcc_text: this.bcc_text,
+      read: this.read,
+      saved: this.saved,
+      sent: this.sent,
+      insight: this.insight,
+    };
+  }
+}
+
 export const mailsTable = createTable({
   name: MAILS,
   primaryKey: MAIL_ID,

@@ -3,6 +3,7 @@ import { pool } from "../client";
 import { ParamValue } from "../database";
 import {
   MailModel,
+  MailHeaderModel,
   mailsTable,
   MAIL_ID,
   USER_ID,
@@ -188,7 +189,7 @@ export const getMailHeaders = async (
   user_id: string,
   address: string,
   options: GetMailHeadersOptions
-): Promise<MailModel[]> => {
+): Promise<MailHeaderModel[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
     // For sent mails, check from_address only
@@ -234,7 +235,7 @@ export const getMailHeaders = async (
     }
 
     const result = await pool.query(sql, values);
-    return result.rows.map((row: unknown) => new MailModel(row));
+    return result.rows.map((row: unknown) => new MailHeaderModel(row));
   } catch (error) {
     console.error("Failed to get mail headers:", error);
     return [];
