@@ -24,6 +24,30 @@ import {
   INSIGHT,
 } from "../models";
 
+/**
+ * Represents the subset of mail fields returned by getMailHeaders.
+ * This is a partial view that excludes body fields (html, text, attachments, etc.)
+ * for performance reasons.
+ */
+export interface MailHeaderResult {
+  mail_id: string;
+  user_id: string;
+  subject: string;
+  date: string;
+  from_address: object | null;
+  from_text: string | null;
+  to_address: object | null;
+  to_text: string | null;
+  cc_address: object | null;
+  cc_text: string | null;
+  bcc_address: object | null;
+  bcc_text: string | null;
+  read: boolean;
+  saved: boolean;
+  sent: boolean;
+  insight: object | null;
+}
+
 export interface SaveMailInput {
   user_id: string;
   message_id: string;
@@ -188,7 +212,7 @@ export const getMailHeaders = async (
   user_id: string,
   address: string,
   options: GetMailHeadersOptions
-): Promise<MailModel[]> => {
+): Promise<MailHeaderResult[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
     // For sent mails, check from_address only
@@ -234,7 +258,7 @@ export const getMailHeaders = async (
     }
 
     const result = await pool.query(sql, values);
-    return result.rows.map((row: unknown) => new MailModel(row));
+    return result.rows as MailHeaderResult[];
   } catch (error) {
     console.error("Failed to get mail headers:", error);
     return [];
