@@ -842,7 +842,9 @@ export class ImapSession {
     _copyRequest: CopyRequest,
     _isUidCommand: boolean = false
   ) => {
-    // Reject all COPY operations - we don't want clients moving messages around
+    // COPY not permitted until we have user-created mailboxes (Phase 3)
+    // Currently all mailboxes are account-associated (INBOX/Sent per user)
+    // and COPY/MOVE across account mailboxes would change ownership semantics
     this.write(`${tag} NO [CANNOT] COPY not permitted\r\n`);
   };
 
