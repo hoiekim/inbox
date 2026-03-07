@@ -10,6 +10,7 @@ import {
   mailsTable,
   mailboxesTable,
   pushSubscriptionsTable,
+  spamAllowlistTable,
 } from "./models";
 
 export const version = "1";
@@ -21,6 +22,7 @@ const tables: Table<unknown, Schema>[] = [
   mailboxesTable, // Must be before mails due to foreign key reference
   mailsTable,
   pushSubscriptionsTable,
+  spamAllowlistTable,
 ];
 
 export const postgresIsAvailable = async (): Promise<void> => {
@@ -61,17 +63,21 @@ export const initializePostgres = async (): Promise<void> => {
         table.constraints
       );
       await pool.query(createTableSql);
+    }
 
+    // Run automatic schema migrations for existing tables
+    // This must happen BEFORE index creation so new columns exist
+    await runMigrations(
+      tables.map((t) => ({ name: t.name, schema: t.schema }))
+    );
+
+    // Create indexes after migrations (columns must exist first)
+    for (const table of tables) {
       for (const idx of table.indexes) {
         const createIndexSql = buildCreateIndex(table.name, idx.column);
         await pool.query(createIndexSql);
       }
     }
-
-    // Run automatic schema migrations for existing tables
-    await runMigrations(
-      tables.map((t) => ({ name: t.name, schema: t.schema }))
-    );
 
     // Create GIN index for full-text search on mails
     await pool.query(`

@@ -5,3 +5,4 @@ export * from "./mail";
 export * from "./mailbox";
 export * from "./session";
 export * from "./push_subscription";
+export * from "./spam_allowlist";

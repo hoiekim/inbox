@@ -8,3 +8,4 @@ export * from "./body";
 export * from "./search";
 export * from "./accounts";
 export * from "./update";
+export * from "./spam";
