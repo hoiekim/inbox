@@ -1,3 +1,6 @@
+// Logging (standalone, no dependencies)
+export { logger } from "./logger";
+
 // PostgreSQL database layer
 export * from "./postgres";
 
