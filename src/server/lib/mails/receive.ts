@@ -27,7 +27,6 @@ import {
   getAttachmentId,
 } from "./util";
 import { notifyNewMails } from "../push";
-import { getInsight } from "../ai";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 
 export interface SaveMailHandlerOptions {
@@ -176,7 +175,6 @@ export const saveMail = async (
     sent: mail.sent,
     deleted: mail.deleted,
     draft: mail.draft,
-    insight: mail.insight,
     uid_domain: mail.uid?.domain,
     uid_account: mail.uid?.account,
     spam_score: spamResult?.score ?? 0,
@@ -222,7 +220,6 @@ export const convertMail = async (
   } = incoming;
 
   const text = incomingText ?? getText(html);
-  const insight = await getInsight({ subject, from, to, text });
   const envelopeToAddress = envelopeTo[0]?.address || "";
 
   if (!user.id) {
@@ -247,7 +244,6 @@ export const convertMail = async (
     envelopeTo,
     envelopeFrom,
     text,
-    insight,
     date,
     html,
     subject,

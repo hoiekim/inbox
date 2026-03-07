@@ -4,9 +4,6 @@ export { logger } from "./logger";
 // PostgreSQL database layer
 export * from "./postgres";
 
-// AI features
-export * from "./ai";
-
 // Push notifications (uses postgres internally)
 export {
   getPushPublicKey,
