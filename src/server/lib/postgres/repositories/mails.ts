@@ -12,6 +12,16 @@ import {
   UID_ACCOUNT,
   TO_ADDRESS,
   FROM_ADDRESS,
+  SUBJECT,
+  DATE,
+  FROM_TEXT,
+  TO_TEXT,
+  CC_ADDRESS,
+  CC_TEXT,
+  BCC_ADDRESS,
+  BCC_TEXT,
+  SENT,
+  INSIGHT,
 } from "../models";
 
 export interface SaveMailInput {
@@ -180,8 +190,18 @@ export const getMailHeaders = async (
     const addressCondition = options.sent
       ? `${FROM_ADDRESS} @> $3::jsonb`
       : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+    // Select only columns needed for mail headers — excludes html/text/attachments
+    // to avoid loading full email bodies into memory for every concurrent request.
+    const headerColumns = [
+      MAIL_ID, USER_ID, SUBJECT, DATE,
+      FROM_ADDRESS, FROM_TEXT,
+      TO_ADDRESS, TO_TEXT,
+      CC_ADDRESS, CC_TEXT,
+      BCC_ADDRESS, BCC_TEXT,
+      READ, SAVED, SENT, INSIGHT,
+    ].join(", ");
     let sql = `
-      SELECT * FROM mails 
+      SELECT ${headerColumns} FROM mails 
       WHERE user_id = $1 
         AND sent = $2
         AND ${addressCondition}
