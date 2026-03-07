@@ -235,7 +235,6 @@ const Accounts = ({
 
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
-        setSelectedAccount("");
         setSelectedCategory(e);
       };
       const classes = [];

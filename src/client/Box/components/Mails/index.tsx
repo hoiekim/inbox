@@ -340,7 +340,6 @@ const RenderedMails = ({ page }: { page: number }) => {
     isWriterOpen,
     setReplyData,
     selectedAccount,
-    setSelectedAccount,
     selectedCategory
   } = useContext(Context);
 
@@ -372,11 +371,7 @@ const RenderedMails = ({ page }: { page: number }) => {
       return body?.map((d) => new MailHeaderData(d)) || [];
     } else throw new Error(message);
   };
-  const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
-    onSuccess: (data) => {
-      if (!data?.length) setSelectedAccount("");
-    }
-  });
+  const query = useQuery<MailHeaderData[]>(queryUrl, getMails);
 
   if (query.isLoading) {
     return (
