@@ -294,6 +294,7 @@ export const searchMails = async (
       FROM mails 
       WHERE user_id = $1 
         AND search_vector @@ plainto_tsquery('english', $2)
+        AND expunged = FALSE
       ORDER BY rank DESC, date DESC
       LIMIT 1000
     `;
