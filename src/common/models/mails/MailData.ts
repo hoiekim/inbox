@@ -118,8 +118,8 @@ export class MailDataToSend
 
   constructor(data?: Partial<MailDataToSend>) {
     super(data);
-    if (!data?.sender) this.sender = "Unknown";
-    if (!data?.senderFullName) this.senderFullName = "Unknown";
+    if (!data?.sender) this.sender = "";
+    if (!data?.senderFullName) this.senderFullName = "";
     if (!data?.to) this.to = "";
     if (!data?.subject) this.subject = "No Subject";
     if (!data?.html) this.html = "";

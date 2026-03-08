@@ -73,8 +73,14 @@ const getReplyContainerHtml = (originalMessage: OriginalMessage) => {
 };
 
 const Writer = () => {
-  const { domainName, isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
-    useContext(Context);
+  const {
+    domainName,
+    isWriterOpen,
+    setIsWriterOpen,
+    replyData,
+    setReplyData,
+    userInfo
+  } = useContext(Context);
 
   const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);
 
@@ -83,7 +89,10 @@ const Writer = () => {
   const [cc, setCc] = useLocalStorage("cc", "");
   const [bcc, setBcc] = useLocalStorage("bcc", "");
   const [subject, setSubject] = useLocalStorage("subject", "");
-  const [sender, setSender] = useLocalStorage("sender", "");
+  const [sender, setSender] = useLocalStorage(
+    "sender",
+    userInfo?.username || ""
+  );
   const [initialContent, setInitialContent] = useLocalStorage(
     "initialContent",
     "Say something really cool here!"
@@ -117,6 +126,12 @@ const Writer = () => {
     },
     [setInitialContent]
   );
+
+  useEffect(() => {
+    if (!sender && userInfo?.username) {
+      setSender(userInfo.username);
+    }
+  }, [userInfo, sender, setSender]);
 
   useEffect(() => {
     if (replyData.id && replyData.messageId && setReplyData && isWriterOpen) {
