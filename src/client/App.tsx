@@ -92,16 +92,16 @@ const App = ({ user: session }: Props) => {
   const lastRefresh = useRef(Date.now());
 
   useEffect(() => {
-    window.addEventListener("resize", () => {
+    const handleResize = () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
-    });
-    window.addEventListener("orientationchange", () => {
+    };
+    const handleOrientationChange = () => {
       setViewSize({ width: window.innerWidth, height: window.innerHeight });
-    });
-    window.addEventListener("scroll", () => {
+    };
+    const handleScroll = () => {
       window.scrollTo(window.scrollX, window.scrollY);
-    });
-    window.addEventListener("focus", async () => {
+    };
+    const handleFocus = async () => {
       const user = await callUser();
       if (!user) return;
       const duration = Date.now() - lastRefresh.current;
@@ -109,7 +109,19 @@ const App = ({ user: session }: Props) => {
       if (duration < oneDay) return;
       new Notifier().subscribe();
       lastRefresh.current = Date.now();
-    });
+    };
+
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("orientationchange", handleOrientationChange);
+    window.addEventListener("scroll", handleScroll);
+    window.addEventListener("focus", handleFocus);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      window.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("focus", handleFocus);
+    };
   }, []);
 
   useEffect(() => {
