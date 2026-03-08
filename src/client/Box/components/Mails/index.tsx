@@ -312,7 +312,7 @@ const RenderedMail = ({
           </>
         ) : (
           <>
-            {!!(summary?.length || actionItems?.length) ? (
+            {(summary?.length || actionItems?.length) ? (
               <div key="robot" className="iconBox cursor" onClick={onClickRobot}>
                 <RobotIcon />
               </div>
