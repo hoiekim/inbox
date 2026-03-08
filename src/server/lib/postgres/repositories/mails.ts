@@ -405,6 +405,7 @@ export const getAccountStats = async (
           ${addressExpansion}
         FROM mails 
         WHERE user_id = $1 AND sent = $2 
+          AND expunged = FALSE
           AND ${addressNotNull}
       )
       SELECT 
