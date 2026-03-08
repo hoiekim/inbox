@@ -1,6 +1,6 @@
 import { Account, SignedUser } from "common";
 import { getAccountStats } from "../postgres/repositories/mails";
-import { getUserDomain } from "./util";
+import { getUserDomain } from "server";
 
 export interface AccountsGetResponse {
   received: Account[];

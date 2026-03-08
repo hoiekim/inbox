@@ -8,14 +8,6 @@ export const nestedPath = (field: string) => {
   return field.slice(0, field.lastIndexOf("."));
 };
 
-export const getDomain = () => process.env.EMAIL_DOMAIN || "mydomain";
-
-export const getUserDomain = (username: string) => {
-  const domain = getDomain();
-  if (username === "admin") return domain;
-  return `${username}.${domain}`;
-};
-
 export const ATTACHMENT_FOLDER = "./attachments";
 
 export const getAttachmentId = (): string => {
