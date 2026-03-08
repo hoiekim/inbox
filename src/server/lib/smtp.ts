@@ -26,7 +26,7 @@ const registerListeners = (
   server.listen(port, callback);
 };
 
-const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
+export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   if (session.user) return cb(null, { user: session.user });
   const { username, password } = auth;
   const user = await getUser({ username });
@@ -37,7 +37,7 @@ const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   cb(null, { user: username });
 };
 
-const onData = (
+export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void

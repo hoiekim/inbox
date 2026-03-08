@@ -2,10 +2,6 @@ import fs from "fs";
 import { htmlToText } from "html-to-text";
 import { v4 as uuid } from "uuid";
 
-// Re-export shared domain utilities - barrel pattern, consistent with how other
-// sub-modules expose shared utilities (e.g. mails/index.ts: export * from "./util")
-export * from "../util";
-
 export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
 export const FROM_ADDRESS_FIELD = "mail.from.value.address";
 export const nestedPath = (field: string) => {
