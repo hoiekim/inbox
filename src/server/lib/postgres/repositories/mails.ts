@@ -1181,3 +1181,27 @@ export const copyMail = async (
     return null;
   }
 };
+
+/**
+ * Checks whether the attachment with the given file ID belongs to a mail
+ * owned by the specified user. Used to prevent IDOR on the attachment endpoint.
+ */
+export const isAttachmentOwnedByUser = async (
+  attachmentId: string,
+  userId: string
+): Promise<boolean> => {
+  try {
+    const sql = `
+      SELECT 1 FROM mails
+      WHERE user_id = $1
+        AND attachments::jsonb @> $2::jsonb
+      LIMIT 1
+    `;
+    const needle = JSON.stringify([{ content: { data: attachmentId } }]);
+    const result = await pool.query(sql, [userId, needle]);
+    return result.rowCount !== null && result.rowCount > 0;
+  } catch (error) {
+    console.error("Failed to verify attachment ownership:", error);
+    return false;
+  }
+};
