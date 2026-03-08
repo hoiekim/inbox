@@ -270,6 +270,7 @@ const RenderedMail = ({
         {isKebabOpen ? (
           <>
             <div
+              key="star"
               className="iconBox cursor"
               onClick={onClickStar}
               onTouchStart={(e) => e.stopPropagation()}
@@ -282,6 +283,7 @@ const RenderedMail = ({
               )}
             </div>
             <div
+              key="reply"
               className="iconBox cursor"
               onClick={onClickReply}
               onTouchStart={(e) => e.stopPropagation()}
@@ -290,6 +292,7 @@ const RenderedMail = ({
               <ReplyIcon />
             </div>
             <div
+              key="share"
               className="iconBox cursor"
               onClick={onClickShare}
               onTouchStart={(e) => e.stopPropagation()}
@@ -298,6 +301,7 @@ const RenderedMail = ({
               <ShareIcon />
             </div>
             <div
+              key="trash"
               className="iconBox cursor"
               onClick={onClickTrash}
               onTouchStart={(e) => e.stopPropagation()}
@@ -308,17 +312,18 @@ const RenderedMail = ({
           </>
         ) : (
           <>
-            {!!(summary?.length || actionItems?.length) && (
-              <div className="iconBox cursor" onClick={onClickRobot}>
+            {!!(summary?.length || actionItems?.length) ? (
+              <div key="robot" className="iconBox cursor" onClick={onClickRobot}>
                 <RobotIcon />
               </div>
-            )}
-            {mail.saved && (
-              <div className="iconBox cursor" onClick={onClickStar}>
+            ) : null}
+            {mail.saved ? (
+              <div key="star" className="iconBox cursor" onClick={onClickStar}>
                 <SolidStarIcon className="star" />
               </div>
-            )}
+            ) : null}
             <div
+              key="kebab"
               className="iconBox cursor"
               onClick={() => setOpenedKebab(mail.id)}
             >
