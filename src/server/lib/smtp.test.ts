@@ -18,14 +18,15 @@ const mockLogger = {
   error: mock(() => {}),
 };
 
+// Only mock what smtp.ts actually imports from "server": getUser, saveMailHandler, sendMail, logger.
+// Do NOT add getDomain/getUserDomain/etc here — Bun's mock.module is global and persists across
+// test files in the same run. Unused mocks leak into subsequent files (e.g. mails/util.test.ts),
+// replacing the real implementations with mock stubs.
 mock.module("server", () => ({
   getUser: mockGetUser,
   saveMailHandler: mockSaveMailHandler,
   sendMail: mockSendMail,
   logger: mockLogger,
-  getDomain: () => "test.com",
-  getUserDomain: (username: string) => `${username}.test.com`,
-  isValidEmail: (email: string) => email.includes("@"),
 }));
 
 const mockSimpleParser = mock(() =>

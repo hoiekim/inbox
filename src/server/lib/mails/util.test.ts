@@ -7,7 +7,7 @@ import {
   getAttachmentFilePath,
   getText,
 } from "./util";
-import { getDomain, getUserDomain } from "../util";
+import { getDomain, getUserDomain } from "server";
 
 describe("field constants", () => {
   it("should have correct TO_ADDRESS_FIELD", () => {
