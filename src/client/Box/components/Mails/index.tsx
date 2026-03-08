@@ -209,9 +209,9 @@ const RenderedMail = ({
   let searchHighlight;
 
   if ("highlight" in mail && mail.highlight) {
-    searchHighlight = Object.values(mail.highlight).map((e) => {
+    searchHighlight = Object.values(mail.highlight).map((e, index) => {
       const __html = "..." + e.join("... ...") + "...";
-      return <div dangerouslySetInnerHTML={{ __html }}></div>;
+      return <div key={`highlight_${index}`} dangerouslySetInnerHTML={{ __html }} />;
     });
   }
 
