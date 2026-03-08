@@ -19,6 +19,7 @@ import {
   UpdatedMailFlags,
   StoreOperationType,
 } from "../postgres/repositories/mails";
+import { getMailboxesByUser } from "../postgres/repositories/mailboxes";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
 import { logger } from "server";
@@ -36,9 +37,10 @@ export class Store {
 
   listMailboxes = async (): Promise<string[]> => {
     try {
-      const [receivedStats, sentStats] = await Promise.all([
+      const [receivedStats, sentStats, userMailboxes] = await Promise.all([
         getAccountStats(this.user.id, false),
         getAccountStats(this.user.id, true),
+        getMailboxesByUser(this.user.id),
       ]);
 
       const mailboxes = ["INBOX"];
@@ -58,6 +60,16 @@ export class Store {
           mailboxes.push(`Sent Messages/${boxName}`);
         }
       });
+
+      // Add user-created mailboxes (those without a special_use and no address tie-in)
+      const systemNames = new Set(mailboxes.map((m) => m.toLowerCase()));
+      userMailboxes
+        .filter((mb) => mb.special_use === null && mb.address === null)
+        .forEach((mb) => {
+          if (!systemNames.has(mb.name.toLowerCase())) {
+            mailboxes.push(mb.name);
+          }
+        });
 
       return mailboxes;
     } catch (error) {
