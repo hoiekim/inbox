@@ -1,5 +1,6 @@
 import {
   useState,
+  useRef,
   useContext,
   useEffect,
   Dispatch,
@@ -52,6 +53,7 @@ const Accounts = ({
   const [searchInputDom, setSearchInputDom] = useState<HTMLInputElement | null>(
     null
   );
+  const preSearchAccount = useRef<string>("");
   const [sortBy, setSortBy] = useLocalStorage<SortBy>("sortBy", SortBy.Name);
   const [sortAscending, setSortAscending] = useLocalStorage(
     "sortAscending",
@@ -235,6 +237,13 @@ const Accounts = ({
 
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
+        if (e === Category.Search) {
+          // Entering search: save current account so we can restore it later
+          preSearchAccount.current = selectedAccount;
+        } else if (selectedCategory === Category.Search) {
+          // Leaving search: restore the pre-search account
+          setSelectedAccount(preSearchAccount.current);
+        }
         setSelectedCategory(e);
       };
       const classes = [];
