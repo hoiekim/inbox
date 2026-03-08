@@ -212,9 +212,18 @@ const RenderedMail = ({
   let searchHighlight;
 
   if ("highlight" in mail && mail.highlight) {
-    searchHighlight = Object.values(mail.highlight).map((e) => {
-      const __html = "..." + e.join("... ...") + "...";
-      return <div dangerouslySetInnerHTML={{ __html }}></div>;
+    const escapeHighlight = (html: string) => {
+      const escaped = html
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      return escaped
+        .replace(/&lt;em&gt;/g, "<em>")
+        .replace(/&lt;\/em&gt;/g, "</em>");
+    };
+    searchHighlight = Object.values(mail.highlight).map((e, index) => {
+      const __html = "..." + e.map(escapeHighlight).join("... ...") + "...";
+      return <div key={`highlight_${index}`} dangerouslySetInnerHTML={{ __html }} />;
     });
   }
 
