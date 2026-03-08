@@ -73,8 +73,13 @@ const getReplyContainerHtml = (originalMessage: OriginalMessage) => {
 };
 
 const Writer = () => {
-  const { domainName, isWriterOpen, setIsWriterOpen, replyData, setReplyData } =
-    useContext(Context);
+  const {
+    domainName,
+    isWriterOpen,
+    setIsWriterOpen,
+    replyData,
+    setReplyData
+  } = useContext(Context);
 
   const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);
 
