@@ -3,12 +3,11 @@ import {
   TO_ADDRESS_FIELD,
   FROM_ADDRESS_FIELD,
   nestedPath,
-  getDomain,
-  getUserDomain,
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
   getText,
 } from "./util";
+import { getDomain, getUserDomain } from "../util";
 
 describe("field constants", () => {
   it("should have correct TO_ADDRESS_FIELD", () => {
