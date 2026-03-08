@@ -10,6 +10,7 @@ import {
 import { useMutation } from "react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import Placeholder from "@tiptap/extension-placeholder";
 
 import { ApiResponse, SendMailPostBody, SendMailPostResponse } from "server";
 
@@ -91,7 +92,7 @@ const Writer = () => {
   const [sender, setSender] = useLocalStorage("sender", "");
   const [initialContent, setInitialContent] = useLocalStorage(
     "initialContent",
-    "Say something really cool here!"
+    ""
   );
   const [originalMessage, setOriginalMessage] = useLocalStorage(
     "originalMessage",
@@ -107,7 +108,12 @@ const Writer = () => {
   const [editorKey, setEditorKey] = useState(1);
 
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: [
+      StarterKit,
+      Placeholder.configure({
+        placeholder: "Say something really cool here!",
+      }),
+    ],
     content: initialContent
   });
 
@@ -173,7 +179,7 @@ const Writer = () => {
 
   const onSuccessSendMail = (data: ApiResponse<SendMailPostResponse>) => {
     if (data.status !== "success") {
-      return alert("Failed to send. Please Try again");
+      return alert(data.message || "Failed to send. Please try again.");
     }
     alert("Your mail is sent successfully");
     setIsWriterOpen(false);
@@ -226,6 +232,8 @@ const Writer = () => {
   };
 
   const onClickSend = () => {
+    if (!sender.trim()) return alert("Please enter a sender account name.");
+    if (!to.trim()) return alert("Please enter a recipient email address.");
     if (!window.confirm("Do you want to send it?")) return;
 
     const formData = new FormData();

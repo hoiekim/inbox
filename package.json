@@ -25,6 +25,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@tiptap/extension-placeholder": "^2.0.0",
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
