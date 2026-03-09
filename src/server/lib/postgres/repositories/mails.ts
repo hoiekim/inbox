@@ -490,7 +490,7 @@ export const getMailsByRange = async (
   start: number,
   end: number,
   useUid: boolean,
-  fields: string[] = ["*"]
+  _fields: string[] = ["*"]
 ): Promise<Map<string, MailModel>> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
@@ -498,7 +498,9 @@ export const getMailsByRange = async (
     let sql: string;
     let values: ParamValue[];
 
-    const fieldList = fields.includes("*") ? "*" : fields.join(", ");
+    // Always SELECT * to avoid MailModel validation errors with partial columns.
+    // IMAP fetch limit (50 messages) already constrains result size.
+    const fieldList = "*";
 
     if (account === null) {
       // Domain-wide query (exclude expunged messages)
