@@ -61,6 +61,7 @@ export const getMailHeaders = async (
         : undefined,
       read: m.read,
       saved: m.saved,
+      sent: m.sent,
       insight: m.insight as Insight | undefined,
     });
   });
