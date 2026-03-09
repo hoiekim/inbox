@@ -5,6 +5,7 @@ export * from "./route";
 import usersRouter from "./users";
 import mailsRouter from "./mails";
 import pushRouter from "./push";
+import healthRouter from "./health";
 
 const apiRouter = Router();
 
@@ -20,6 +21,7 @@ apiRouter.use((req, _res, next) => {
   next();
 });
 
+apiRouter.use("/health", healthRouter);
 apiRouter.use("/users", usersRouter);
 apiRouter.use("/mails", mailsRouter);
 apiRouter.use("/push", pushRouter);
