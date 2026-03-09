@@ -1,5 +1,5 @@
 import { PushSubscription } from "web-push";
-import { storeSubscription, AUTH_ERROR_MESSAGE } from "server";
+import { storeSubscription } from "server";
 import { Route } from "../route";
 
 export type SubscribePostResponse = string;
@@ -12,8 +12,7 @@ export const postSubscribeRoute = new Route<SubscribePostResponse>(
   "POST",
   "/subscribe",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const { id: userId } = user;
     const body: SubscribePostBody = req.body;

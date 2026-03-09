@@ -1,5 +1,5 @@
 import { Account } from "common";
-import { getAccounts, AUTH_ERROR_MESSAGE } from "server";
+import { getAccounts } from "server";
 import { Route } from "../route";
 
 export interface AccountsGetResponse {
@@ -11,8 +11,7 @@ export const getAccountsRoute = new Route<AccountsGetResponse>(
   "GET",
   "/accounts",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const accounts = await getAccounts(user);
     return { status: "success", body: { ...accounts } };
