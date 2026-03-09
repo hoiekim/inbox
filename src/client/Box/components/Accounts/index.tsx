@@ -236,6 +236,24 @@ const Accounts = ({
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
         setSelectedCategory(e);
+        // Clear selectedAccount if it doesn't exist in the new category's account list.
+        // Prevents stale selection showing an account not visible in the sidebar.
+        if (e !== Category.Search && query.data) {
+          let newCategoryAccounts: Account[] = [];
+          if (e === Category.NewMails) {
+            newCategoryAccounts = received.filter((a) => a.unread_doc_count);
+          } else if (e === Category.AllMails) {
+            newCategoryAccounts = received;
+          } else if (e === Category.SavedMails) {
+            newCategoryAccounts = received.filter((a) => a.saved_doc_count);
+          } else if (e === Category.SentMails) {
+            newCategoryAccounts = sent;
+          }
+          const exists = newCategoryAccounts.some((a) => a.key === selectedAccount);
+          if (!exists) {
+            setSelectedAccount(newCategoryAccounts[0]?.key || "");
+          }
+        }
       };
       const classes = [];
       if (selectedCategory === e) classes.push("clicked");
