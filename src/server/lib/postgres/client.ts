@@ -37,6 +37,12 @@ const config: PoolConfig = {
 
 export const pool = new Pool(config);
 
+// Log unexpected pool-level errors so they appear in server logs and are not silently swallowed.
+// Without this, a background idle client error would surface as an unhandled rejection.
+pool.on("error", (err) => {
+  console.error("Unexpected database pool error:", err);
+});
+
 // Graceful shutdown
 process.on("SIGINT", async () => {
   await pool.end();
