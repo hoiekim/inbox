@@ -16,7 +16,14 @@ export const initializeHttp = async () => {
   }
 
   app.use(json({ limit: "50mb" }));
-  app.use(fileupload());
+  app.use(
+    fileupload({
+      limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max per file
+      abortOnLimit: true,
+      useTempFiles: true,
+      tempFileDir: "/tmp/",
+    })
+  );
   app.use(
     session({
       secret: process.env.SECRET || "secret",
