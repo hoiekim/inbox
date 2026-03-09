@@ -1,5 +1,5 @@
 import { MailHeaderData } from "common";
-import { getSpamHeaders, AUTH_ERROR_MESSAGE } from "server";
+import { getSpamHeaders } from "server";
 import { Route } from "../route";
 
 export type SpamGetResponse = MailHeaderData[];
@@ -12,8 +12,7 @@ export const getSpamMailsRoute = new Route<SpamGetResponse>(
   "GET",
   "/spam",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const mails = await getSpamHeaders(user);
     return { status: "success", body: mails };

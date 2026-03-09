@@ -2,8 +2,7 @@ import {
   decrementBadgeCount,
   getMailBody,
   markRead,
-  markSaved,
-  AUTH_ERROR_MESSAGE
+  markSaved
 } from "server";
 import { Route } from "../route";
 
@@ -19,8 +18,7 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
   "POST",
   "/mark",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const body: MarkMailPostBody = req.body;
     const { mail_id, read, save } = body;

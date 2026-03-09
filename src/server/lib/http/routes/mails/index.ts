@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { authRequired } from "../route";
 import { getDomainRoute } from "./get-domain";
 import { getAccountsRoute } from "./get-accounts";
 import { getHeadersRoute } from "./get-headers";
@@ -15,6 +16,12 @@ import { postSpamAllowlistRoute } from "./post-allowlist";
 import { deleteSpamAllowlistRoute } from "./delete-allowlist";
 
 const mailsRouter = Router();
+
+// All mails routes require authentication, except /domain (public info).
+mailsRouter.use((req, res, next) => {
+  if (req.path === "/domain") return next();
+  return authRequired(req, res, next);
+});
 
 const routes = [
   getDomainRoute,

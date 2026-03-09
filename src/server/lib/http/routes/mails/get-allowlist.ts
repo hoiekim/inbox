@@ -1,4 +1,4 @@
-import { AUTH_ERROR_MESSAGE, getAllowlistForUser, SpamAllowlistModel } from "server";
+import { getAllowlistForUser, SpamAllowlistModel } from "server";
 import { Route } from "../route";
 
 /**
@@ -19,8 +19,7 @@ export const getSpamAllowlistRoute = new Route<AllowlistGetResponse>(
   "GET",
   "/spam-allowlist",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const entries = await getAllowlistForUser(user.id);
     const response: AllowlistEntryResponse[] = entries.map((e: SpamAllowlistModel) => ({

@@ -1,4 +1,4 @@
-import { AUTH_ERROR_MESSAGE, addAllowlistEntry } from "server";
+import { addAllowlistEntry } from "server";
 import { Route } from "../route";
 import { AllowlistEntryResponse } from "./get-allowlist";
 
@@ -16,8 +16,7 @@ export const postSpamAllowlistRoute = new Route<AllowlistAddResponse>(
   "POST",
   "/spam-allowlist",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const body: AllowlistAddBody = req.body;
     const { pattern } = body;

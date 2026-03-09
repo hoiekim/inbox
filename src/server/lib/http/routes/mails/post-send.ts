@@ -1,5 +1,5 @@
 import { MailDataToSend, MailDataToSendType } from "common";
-import { sendMail, AUTH_ERROR_MESSAGE, MailValidationError, MailSendingError } from "server";
+import { sendMail, MailValidationError, MailSendingError } from "server";
 import { Route } from "../route";
 
 export type SendMailPostResponse =
@@ -12,8 +12,7 @@ export const postSendMailRoute = new Route<SendMailPostResponse>(
   "POST",
   "/send",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const body: SendMailPostBody = req.body;
     const attachments = req.files?.attachments;
