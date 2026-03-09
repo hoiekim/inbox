@@ -1,4 +1,4 @@
-import { markSpam, AUTH_ERROR_MESSAGE } from "server";
+import { markSpam } from "server";
 import { Route } from "../route";
 
 export type SpamMarkPostResponse = undefined;
@@ -16,8 +16,7 @@ export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
   "POST",
   "/spam/mark",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const body: SpamMarkPostBody = req.body;
     const { mail_id, is_spam } = body;
