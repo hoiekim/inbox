@@ -174,7 +174,7 @@ export const initializeSmtp = async () => {
   }
 
   const smtpServer = await new Promise<SMTPServer>((res) => {
-    const port = 25;
+    const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 25;
     const server = new SMTPServer({ ...options, secure: false });
     registerListeners(server, port, () => {
       console.log(`SMTP server listening on port ${port}`);
