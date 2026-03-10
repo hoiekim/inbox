@@ -45,6 +45,7 @@ export const sendMail = async (
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
     await saveMail(sentMail, userId);
 
+
     return response;
   } catch (error: unknown) {
     console.error("Email sending request failed", error);
