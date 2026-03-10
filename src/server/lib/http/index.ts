@@ -15,7 +15,7 @@ export const initializeHttp = async () => {
     app.set("trust proxy", 1);
   }
 
-  app.use(json({ limit: "50mb" }));
+  app.use(json({ limit: "1mb" }));
   app.use(fileupload());
   app.use(
     session({
