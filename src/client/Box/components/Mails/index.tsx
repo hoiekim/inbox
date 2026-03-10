@@ -429,7 +429,7 @@ const RenderedMails = ({ page }: { page: number }) => {
       const key = selectedCategory === Category.SentMails ? "sent" : "received";
       newData[key].find((account, i) => {
         const found = account.key === selectedAccount;
-        if (found) newData.received.splice(i, 1);
+        if (found) newData[key].splice(i, 1);
         return found;
       });
 
