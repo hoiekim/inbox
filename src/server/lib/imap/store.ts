@@ -304,44 +304,98 @@ export class Store {
         ? null
         : boxToAccount(this.user.username, box);
 
-      // Convert criteria to a simpler format
+      // Convert criteria to a simpler flat format for searchMailsByUid
       const simplifiedCriteria: { type: string; value?: unknown }[] = [];
 
-      for (let i = 0; i < criteria.length; i++) {
-        const criterion = criteria[i];
+      for (const criterion of criteria) {
         const type = criterion.type.toUpperCase();
 
         switch (type) {
+          // Flag-based: no additional value
+          case "ALL":
           case "UNSEEN":
           case "SEEN":
+          case "ANSWERED":
+          case "UNANSWERED":
+          case "DELETED":
+          case "UNDELETED":
           case "FLAGGED":
           case "UNFLAGGED":
+          case "DRAFT":
+          case "UNDRAFT":
+          case "NEW":
+          case "OLD":
+          case "RECENT":
             simplifiedCriteria.push({ type });
             break;
+
+          // Text search: value is embedded in the criterion object
           case "SUBJECT":
           case "FROM":
           case "TO":
-            if (i + 1 < criteria.length) {
-              simplifiedCriteria.push({ type, value: criteria[++i] });
-            }
+          case "CC":
+          case "BCC":
+          case "BODY":
+          case "TEXT": {
+            const textCriterion = criterion as { type: string; value: string };
+            simplifiedCriteria.push({ type, value: textCriterion.value });
             break;
-          case "UID":
-            // Handle UID ranges
+          }
+
+          // Header search
+          case "HEADER": {
+            const hdr = criterion as { type: string; field: string; value: string };
+            simplifiedCriteria.push({ type, value: { field: hdr.field, text: hdr.value } });
+            break;
+          }
+
+          // Date criteria: value is a Date object
+          case "BEFORE":
+          case "ON":
+          case "SINCE":
+          case "SENTBEFORE":
+          case "SENTON":
+          case "SENTSINCE": {
+            const dateCriterion = criterion as { type: string; date: Date };
+            simplifiedCriteria.push({ type, value: dateCriterion.date });
+            break;
+          }
+
+          // Size criteria
+          case "LARGER":
+          case "SMALLER": {
+            const sizeCriterion = criterion as { type: string; size: number };
+            simplifiedCriteria.push({ type, value: sizeCriterion.size });
+            break;
+          }
+
+          // Logical NOT: negate a single criterion
+          case "NOT": {
+            const notCriterion = criterion as { type: string; criterion: SearchCriterion };
+            simplifiedCriteria.push({ type: "NOT", value: notCriterion.criterion });
+            break;
+          }
+
+          // Logical OR: two criteria
+          case "OR": {
+            const orCriterion = criterion as { type: string; left: SearchCriterion; right: SearchCriterion };
+            simplifiedCriteria.push({ type: "OR", value: { left: orCriterion.left, right: orCriterion.right } });
+            break;
+          }
+
+          // UID ranges
+          case "UID": {
             const uidCriterion = criterion as UidCriterion;
             for (const range of uidCriterion.sequenceSet.ranges) {
               if (range.end === undefined) {
-                simplifiedCriteria.push({
-                  type: "UID_EXACT",
-                  value: range.start,
-                });
+                simplifiedCriteria.push({ type: "UID_EXACT", value: range.start });
               } else {
-                simplifiedCriteria.push({
-                  type: "UID_RANGE",
-                  value: { start: range.start, end: range.end },
-                });
+                simplifiedCriteria.push({ type: "UID_RANGE", value: { start: range.start, end: range.end } });
               }
             }
             break;
+          }
+
           default:
             logger.warn("Unsupported search criterion", { component: "imap.store", type });
         }
