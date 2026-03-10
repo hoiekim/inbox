@@ -141,11 +141,16 @@ export class Store {
           deleted: model.deleted,
           draft: model.draft,
           answered: model.answered,
-          uid: {
+        };
+        if (
+          model.uid_domain !== undefined &&
+          model.uid_account !== undefined
+        ) {
+          mail.uid = {
             domain: model.uid_domain,
             account: model.uid_account,
-          },
-        };
+          };
+        }
 
         if (model.from_address) {
           mail.from = {

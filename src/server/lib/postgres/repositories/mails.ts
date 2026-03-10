@@ -1,8 +1,10 @@
 import crypto from "crypto";
+import { logger } from "../../logger";
 import { pool } from "../client";
 import { ParamValue } from "../database";
 import {
   MailModel,
+  PartialMailModel,
   mailsTable,
   MAIL_ID,
   USER_ID,
@@ -490,17 +492,33 @@ export const getMailsByRange = async (
   start: number,
   end: number,
   useUid: boolean,
-  _fields: string[] = ["*"]
-): Promise<Map<string, MailModel>> => {
+  fields: string[] = ["*"]
+): Promise<Map<string, PartialMailModel>> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     let sql: string;
     let values: ParamValue[];
 
-    // Always SELECT * to avoid MailModel validation errors with partial columns.
-    // IMAP fetch limit (50 messages) already constrains result size.
-    const fieldList = "*";
+    // Validate and resolve the field list.
+    // "*" expands to all valid MailModel columns; otherwise each field is validated.
+    const isSelectAll = fields.length === 1 && fields[0] === "*";
+    const resolvedFields = isSelectAll
+      ? [...PartialMailModel.validFields]
+      : fields;
+    // Validate field names up-front so bad requests fail fast
+    const unknownFields = resolvedFields.filter(
+      (f) => !PartialMailModel.validFields.has(f)
+    );
+    if (unknownFields.length > 0) {
+      logger.warn("getMailsByRange: unknown fields requested", {
+        unknownFields,
+      });
+    }
+    const safeFields = resolvedFields.filter((f) =>
+      PartialMailModel.validFields.has(f)
+    );
+    const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
 
     if (account === null) {
       // Domain-wide query (exclude expunged messages)
@@ -549,9 +567,9 @@ export const getMailsByRange = async (
     }
 
     const result = await pool.query(sql, values);
-    const mails = new Map<string, MailModel>();
+    const mails = new Map<string, PartialMailModel>();
     for (const row of result.rows) {
-      mails.set(row.mail_id, new MailModel(row));
+      mails.set(row.mail_id, new PartialMailModel(safeFields, row));
     }
     return mails;
   } catch (error) {
