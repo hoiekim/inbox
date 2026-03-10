@@ -115,6 +115,14 @@ const Accounts = ({
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
+  // Auto-select the first received account on fresh login when no account is
+  // stored in localStorage (e.g., first visit or cleared storage).
+  useEffect(() => {
+    if (!selectedAccount && query.isSuccess && query.data?.received?.length) {
+      setSelectedAccount(query.data.received[0].key);
+    }
+  }, [selectedAccount, query.isSuccess, query.data]);
+
   const touchStartHandler = () => setShowSortOptions(false);
 
   useEffect(() => {
