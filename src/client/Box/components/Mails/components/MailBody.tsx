@@ -46,6 +46,13 @@ const MailBody = ({ mailId }: Props) => {
   const query = useQuery<MailBodyData>(queryUrl, getMail);
 
   const iframeElement = useRef<HTMLIFrameElement>(null);
+  const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resizeTimeoutRef.current !== null) clearTimeout(resizeTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -150,7 +157,8 @@ const MailBody = ({ mailId }: Props) => {
       if (!content) return;
 
       content.addEventListener("click", () => {
-        setTimeout(() => adjustMailContentSize(iframeDom), 50);
+        if (resizeTimeoutRef.current !== null) clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = setTimeout(() => adjustMailContentSize(iframeDom), 50);
       });
 
       Array.from(content.querySelectorAll("a")).forEach((e) => {
@@ -206,7 +214,8 @@ const MailBody = ({ mailId }: Props) => {
         });
 
       adjustMailContentSize(iframeDom);
-      setTimeout(() => adjustMailContentSize(iframeDom), 50);
+      if (resizeTimeoutRef.current !== null) clearTimeout(resizeTimeoutRef.current);
+      resizeTimeoutRef.current = setTimeout(() => adjustMailContentSize(iframeDom), 50);
     };
 
     return (
