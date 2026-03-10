@@ -93,6 +93,13 @@ const SignUp = () => {
   }, [mutation.data, setUserInfo]);
 
   const onClickSignUp = () => {
+    if (email) {
+      if (!passwordInput) return;
+      if (passwordInput !== passwordConfirmInput) {
+        alert("Passwords do not match. Please try again.");
+        return;
+      }
+    }
     mutation.mutate({
       email: emailInput,
       token,
@@ -125,7 +132,7 @@ const SignUp = () => {
             <input
               className="login_ui"
               placeholder="username"
-              type="username"
+              type="text"
               value={usernameInput}
               onKeyDown={onKeyDownInput}
               onChange={onChangeUsername}
