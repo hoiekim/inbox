@@ -314,6 +314,8 @@ const Accounts = ({
     };
 
     const onClickLogout = async () => {
+      const confirmed = window.confirm("Are you sure you want to log out?");
+      if (!confirmed) return;
       const response = await call.delete<LoginDeleteResponse>(
         "/api/users/login"
       );
@@ -331,7 +333,14 @@ const Accounts = ({
               <RefreshIcon onClick={onClickRefresh} />
             </div>
             <div className="flex">
-              <LogoutIcon onClick={onClickLogout} />
+              <button
+                className="icon-button"
+                onClick={onClickLogout}
+                aria-label="Logout"
+                title="Logout"
+              >
+                <LogoutIcon />
+              </button>
             </div>
           </div>
         </div>
