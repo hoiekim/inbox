@@ -106,7 +106,8 @@ export class Store {
     box: string,
     start: number,
     end: number,
-    fields: string[],
+    // fields is accepted for API compatibility but ignored — see comment below
+    _fields: string[],
     useUid: boolean = false
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
@@ -116,14 +117,16 @@ export class Store {
         ? null
         : boxToAccount(this.user.username, box);
 
+      // Always SELECT * for IMAP — partial field queries cause MailModel validation
+      // failures because the constructor requires all 29 columns. The IMAP fetch
+      // limit is capped at 50 messages so the overhead is acceptable.
       const mailModels = await getMailsByRange(
         this.user.id,
         accountName,
         isSent,
         start,
         end,
-        useUid,
-        fields.map((f) => this.mapFieldName(f))
+        useUid
       );
 
       const mails = new Map<string, Partial<Mail>>();
