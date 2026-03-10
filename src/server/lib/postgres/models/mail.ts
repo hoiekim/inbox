@@ -247,7 +247,11 @@ export const mailsTable = createTable({
   schema: mailSchema,
   ModelClass: MailModel,
   supportsSoftDelete: false,
-  constraints: ["UNIQUE (user_id, message_id)"],
+  // Note: UNIQUE (user_id, message_id) constraint is applied via SQL migration
+  // (migrations/001_unique_user_message_id.sql) to ensure existing duplicate rows
+  // are de-duplicated before the constraint is added. Do NOT add it here, as
+  // createTable() runs on every startup and would fail if duplicates exist.
+  constraints: [],
   indexes: [
     { column: USER_ID },
     { column: DATE },
