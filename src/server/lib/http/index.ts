@@ -15,7 +15,7 @@ export const initializeHttp = async () => {
     app.set("trust proxy", 1);
   }
 
-  app.use(json({ limit: "1mb" }));
+  app.use(json({ limit: "10mb" }));
   app.use(fileupload());
   app.use(
     session({
@@ -26,7 +26,7 @@ export const initializeHttp = async () => {
       cookie: {
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 1000 * 60 * 60 * 24 * 7,
+        maxAge: 1000 * 60 * 60 * 24 * 7
       },
       store: new PostgresSessionStore()
     })
