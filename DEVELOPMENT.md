@@ -266,6 +266,56 @@ This pattern is used in the IMAP EXPUNGE implementation where deleted messages r
 - Session IDs are cryptographically random
 - Per-user UIDVALIDITY tracking prevents cross-user data leaks
 
+## Query Optimization
+
+### Select Only Needed Columns
+
+**Never `SELECT *` when you only need a subset of columns**, especially for tables with large text/blob columns. The mail table's `text` and `html` columns can be several MB per row.
+
+```typescript
+// ❌ Bad - loads full mail bodies into memory
+const result = await pool.query("SELECT * FROM mails WHERE account_id = $1", [accountId]);
+
+// ✅ Good - select only header columns
+const result = await pool.query(
+  "SELECT id, account_id, from_address, to_address, subject, date, read, saved, expunged FROM mails WHERE account_id = $1",
+  [accountId]
+);
+```
+
+This pattern was critical in PR #161 where `getMailHeaders` was selecting all columns including mail bodies, causing OOM crashes when accounts had thousands of emails.
+
+**Rule:** Repository functions that return lists should explicitly select only the columns they need.
+
+## Accessibility
+
+### Interactive Elements
+
+**Use semantic HTML for interactive elements.** Clickable `<div>` elements are not keyboard-accessible.
+
+```tsx
+// ❌ Bad - invisible to keyboard and screen readers
+<div className="mail-card" onClick={onClickMail}>
+
+// ✅ Good - focusable, keyboard-accessible, announced as interactive
+<button className="mail-card" onClick={onClickMail}>
+
+// ✅ Acceptable - when button styling is impractical
+<div role="button" tabIndex={0} onClick={onClickMail}
+  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClickMail(); }}>
+```
+
+### Form Inputs
+
+**Every `<input>` must have an associated label:**
+
+```tsx
+<label htmlFor="search">Search</label>
+<input id="search" value={query} onChange={onChange} />
+// or
+<input aria-label="Search emails" value={query} onChange={onChange} />
+```
+
 ## CI/CD
 
 ### Pull Request Checks
