@@ -41,21 +41,31 @@ export class Store {
         getAccountStats(this.user.id, true),
       ]);
 
+      const seen = new Set<string>();
       const mailboxes = ["INBOX"];
+      seen.add("INBOX");
 
-      // Add received mail accounts as mailboxes
+      // Add received mail accounts as mailboxes (deduplicated after local-part extraction)
       receivedStats.forEach((stat) => {
         if (stat.address && stat.address !== "INBOX") {
-          const boxName = accountToBox(stat.address);
-          mailboxes.push(`INBOX/${boxName}`);
+          const boxName = accountToBox(stat.address).trim();
+          const fullName = `INBOX/${boxName}`;
+          if (!seen.has(fullName)) {
+            seen.add(fullName);
+            mailboxes.push(fullName);
+          }
         }
       });
 
-      // Add sent mail accounts as mailboxes with "Sent Messages/" prefix
+      // Add sent mail accounts as mailboxes with "Sent Messages/" prefix (deduplicated)
       sentStats.forEach((stat) => {
         if (stat.address) {
-          const boxName = accountToBox(stat.address);
-          mailboxes.push(`Sent Messages/${boxName}`);
+          const boxName = accountToBox(stat.address).trim();
+          const fullName = `Sent Messages/${boxName}`;
+          if (!seen.has(fullName)) {
+            seen.add(fullName);
+            mailboxes.push(fullName);
+          }
         }
       });
 
