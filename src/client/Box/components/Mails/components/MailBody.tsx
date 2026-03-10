@@ -62,7 +62,7 @@ const MailBody = ({ mailId }: Props) => {
     }
   }, [setIsWriterOpen, replyData, setReplyData, query]);
 
-  const audjstMailContnetSize = useCallback(
+  const adjustMailContentSize = useCallback(
     (iframeDom: HTMLIFrameElement | null) => {
       if (!iframeDom || !iframeDom.contentWindow) return;
       const content = iframeDom.contentWindow.document.body;
@@ -150,7 +150,7 @@ const MailBody = ({ mailId }: Props) => {
       if (!content) return;
 
       content.addEventListener("click", () => {
-        setTimeout(() => audjstMailContnetSize(iframeDom), 50);
+        setTimeout(() => adjustMailContentSize(iframeDom), 50);
       });
 
       Array.from(content.querySelectorAll("a")).forEach((e) => {
@@ -205,8 +205,8 @@ const MailBody = ({ mailId }: Props) => {
           }
         });
 
-      audjstMailContnetSize(iframeDom);
-      setTimeout(() => audjstMailContnetSize(iframeDom), 50);
+      adjustMailContentSize(iframeDom);
+      setTimeout(() => adjustMailContentSize(iframeDom), 50);
     };
 
     return (
