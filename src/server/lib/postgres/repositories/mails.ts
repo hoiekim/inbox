@@ -755,6 +755,11 @@ export const searchMailsByUid = async (
     for (const criterion of criteria) {
       const type = criterion.type.toUpperCase();
       switch (type) {
+        // ALL: match everything — no additional condition needed
+        case "ALL":
+          break;
+
+        // Flag / status criteria
         case "UNSEEN":
           conditions.push("read = FALSE");
           break;
@@ -767,6 +772,35 @@ export const searchMailsByUid = async (
         case "UNFLAGGED":
           conditions.push("saved = FALSE");
           break;
+        // ANSWERED / UNANSWERED: not tracked in schema; treat as ALL/NONE
+        // to avoid incorrect filtering. ANSWERED = match all, UNANSWERED = match none.
+        case "ANSWERED":
+          break; // assume no answered-flag tracking → match all
+        case "UNANSWERED":
+          conditions.push("FALSE"); // no messages satisfy this
+          break;
+        // DELETED / UNDELETED: our schema uses expunged for physical removal; there is no
+        // separate \Deleted flag. Non-expunged messages are always "UNDELETED" in IMAP terms.
+        case "DELETED":
+          conditions.push("FALSE"); // no messages are flagged \Deleted without being expunged
+          break;
+        case "UNDELETED":
+          break; // all visible (non-expunged) messages qualify
+        // DRAFT / UNDRAFT: not tracked; treat conservatively
+        case "DRAFT":
+          conditions.push("FALSE");
+          break;
+        case "UNDRAFT":
+          break; // all messages are non-draft
+        // NEW = RECENT + UNSEEN; RECENT / OLD: not tracked, treat as ALL
+        case "NEW":
+          conditions.push("read = FALSE");
+          break;
+        case "OLD":
+        case "RECENT":
+          break; // no \Recent flag tracking; match all
+
+        // Text search criteria
         case "SUBJECT":
           conditions.push(`subject ILIKE $${paramIdx}`);
           values.push(`%${criterion.value}%`);
@@ -782,6 +816,105 @@ export const searchMailsByUid = async (
           values.push(`%${criterion.value}%`);
           paramIdx++;
           break;
+        case "CC":
+          conditions.push(`cc_text ILIKE $${paramIdx}`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+        case "BCC":
+          conditions.push(`bcc_text ILIKE $${paramIdx}`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+        case "BODY":
+        case "TEXT":
+        case "SUBJECT_TEXT":
+          // Full-text search across subject (extend to body when indexed)
+          conditions.push(`(subject ILIKE $${paramIdx} OR from_text ILIKE $${paramIdx} OR to_text ILIKE $${paramIdx})`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+
+        // Header search
+        case "HEADER": {
+          const { field, text } = criterion.value as { field: string; text: string };
+          const fieldLower = field.toLowerCase();
+          if (fieldLower === "subject") {
+            conditions.push(`subject ILIKE $${paramIdx}`);
+          } else if (fieldLower === "from") {
+            conditions.push(`from_text ILIKE $${paramIdx}`);
+          } else if (fieldLower === "to") {
+            conditions.push(`to_text ILIKE $${paramIdx}`);
+          } else if (fieldLower === "message-id") {
+            conditions.push(`message_id ILIKE $${paramIdx}`);
+          } else {
+            // Unsupported header field — skip to avoid incorrect results
+            break;
+          }
+          values.push(`%${text}%`);
+          paramIdx++;
+          break;
+        }
+
+        // Date criteria (using internal date — date column)
+        case "BEFORE":
+          conditions.push(`date < $${paramIdx}`);
+          values.push(criterion.value as Date);
+          paramIdx++;
+          break;
+        case "ON": {
+          const onDate = criterion.value as Date;
+          const nextDay = new Date(onDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
+          values.push(onDate, nextDay);
+          paramIdx += 2;
+          break;
+        }
+        case "SINCE":
+          conditions.push(`date >= $${paramIdx}`);
+          values.push(criterion.value as Date);
+          paramIdx++;
+          break;
+        // SENT* criteria use the same date column (we have only one date field)
+        case "SENTBEFORE":
+          conditions.push(`date < $${paramIdx}`);
+          values.push(criterion.value as Date);
+          paramIdx++;
+          break;
+        case "SENTON": {
+          const sentOnDate = criterion.value as Date;
+          const nextDay = new Date(sentOnDate);
+          nextDay.setDate(nextDay.getDate() + 1);
+          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
+          values.push(sentOnDate, nextDay);
+          paramIdx += 2;
+          break;
+        }
+        case "SENTSINCE":
+          conditions.push(`date >= $${paramIdx}`);
+          values.push(criterion.value as Date);
+          paramIdx++;
+          break;
+
+        // Size criteria: not tracked per-row; skip to avoid incorrect results
+        case "LARGER":
+        case "SMALLER":
+          break;
+
+        // UID ranges (already split from UidCriterion in store.ts)
+        case "UID_EXACT":
+          conditions.push(`${uidField} = $${paramIdx}`);
+          values.push(criterion.value as number);
+          paramIdx++;
+          break;
+        case "UID_RANGE": {
+          const range = criterion.value as { start: number; end: number };
+          conditions.push(`${uidField} >= $${paramIdx} AND ${uidField} <= $${paramIdx + 1}`);
+          values.push(range.start, range.end);
+          paramIdx += 2;
+          break;
+        }
       }
     }
 
