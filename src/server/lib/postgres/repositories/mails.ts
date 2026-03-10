@@ -217,11 +217,13 @@ export const getMailHeaders = async (
 ): Promise<MailHeaderResult[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
-    // For sent mails, check from_address only
-    // For received mails, check to_address, cc_address, and bcc_address
+    // Detect sent/received by address matching, not the `sent` flag.
+    // For sent mails, check from_address only.
+    // For received mails, check to_address, cc_address, and bcc_address.
+    // This ensures self-emails appear in both Sent and Inbox views correctly.
     const addressCondition = options.sent
-      ? `${FROM_ADDRESS} @> $3::jsonb`
-      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      ? `${FROM_ADDRESS} @> $2::jsonb`
+      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
     const headerColumns = [
@@ -235,12 +237,11 @@ export const getMailHeaders = async (
     let sql = `
       SELECT ${headerColumns} FROM mails 
       WHERE user_id = $1 
-        AND sent = $2
         AND ${addressCondition}
         AND expunged = FALSE
     `;
-    const values: ParamValue[] = [user_id, options.sent, addressJson];
-    let paramIdx = 4;
+    const values: ParamValue[] = [user_id, addressJson];
+    let paramIdx = 3;
 
     if (options.new) {
       sql += ` AND read = FALSE`;
@@ -394,8 +395,10 @@ export const getAccountStats = async (
       ? `from_address IS NOT NULL`
       : `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL)`;
 
+    // Use address matching (from_address for sent, to/cc/bcc for received) rather
+    // than the `sent` boolean flag, so self-emails appear in both views correctly.
     const domainCondition = domainFilter
-      ? `AND address ILIKE '%@' || $3`
+      ? `AND address ILIKE '%@' || $2`
       : "";
 
     const sql = `
@@ -404,7 +407,7 @@ export const getAccountStats = async (
           mail_id, read, saved, date,
           ${addressExpansion}
         FROM mails 
-        WHERE user_id = $1 AND sent = $2 
+        WHERE user_id = $1
           AND expunged = FALSE
           AND ${addressNotNull}
       )
@@ -421,8 +424,8 @@ export const getAccountStats = async (
       ORDER BY latest DESC
     `;
     const values: ParamValue[] = domainFilter
-      ? [user_id, sent, domainFilter]
-      : [user_id, sent];
+      ? [user_id, domainFilter]
+      : [user_id];
     const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => ({
       address: row.address as string,
