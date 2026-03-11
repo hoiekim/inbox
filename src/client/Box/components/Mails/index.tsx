@@ -1,4 +1,5 @@
 import {
+  KeyboardEvent,
   useState,
   useContext,
   useEffect,
@@ -200,6 +201,14 @@ const RenderedMail = ({
     setIsSummaryOpen((v) => !v);
   };
 
+  const makeKeyHandler =
+    (fn: () => void) => (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fn();
+      }
+    };
+
   const classes = ["mailcard"];
 
   if (!mail.read) classes.push("unread");
@@ -281,8 +290,12 @@ const RenderedMail = ({
             <div
               className="iconBox cursor"
               onClick={onClickStar}
+              onKeyDown={makeKeyHandler(onClickStar)}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
+              role="button"
+              tabIndex={0}
+              aria-label={mail.saved ? "Unstar email" : "Star email"}
             >
               {mail.saved ? (
                 <SolidStarIcon className="star" />
@@ -293,24 +306,36 @@ const RenderedMail = ({
             <div
               className="iconBox cursor"
               onClick={onClickReply}
+              onKeyDown={makeKeyHandler(onClickReply)}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
+              role="button"
+              tabIndex={0}
+              aria-label="Reply"
             >
               <ReplyIcon />
             </div>
             <div
               className="iconBox cursor"
               onClick={onClickShare}
+              onKeyDown={makeKeyHandler(onClickShare)}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
+              role="button"
+              tabIndex={0}
+              aria-label="Forward email"
             >
               <ShareIcon />
             </div>
             <div
               className="iconBox cursor"
               onClick={onClickTrash}
+              onKeyDown={makeKeyHandler(onClickTrash)}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
+              role="button"
+              tabIndex={0}
+              aria-label="Delete email"
             >
               <TrashIcon />
             </div>
@@ -318,18 +343,36 @@ const RenderedMail = ({
         ) : (
           <>
             {!!(summary?.length || actionItems?.length) && (
-              <div className="iconBox cursor" onClick={onClickRobot}>
+              <div
+                className="iconBox cursor"
+                onClick={onClickRobot}
+                onKeyDown={makeKeyHandler(onClickRobot)}
+                role="button"
+                tabIndex={0}
+                aria-label={isSummaryOpen ? "Hide AI summary" : "Show AI summary"}
+              >
                 <RobotIcon />
               </div>
             )}
             {mail.saved && (
-              <div className="iconBox cursor" onClick={onClickStar}>
+              <div
+                className="iconBox cursor"
+                onClick={onClickStar}
+                onKeyDown={makeKeyHandler(onClickStar)}
+                role="button"
+                tabIndex={0}
+                aria-label="Unstar email"
+              >
                 <SolidStarIcon className="star" />
               </div>
             )}
             <div
               className="iconBox cursor"
               onClick={() => setOpenedKebab(mail.id)}
+              onKeyDown={makeKeyHandler(() => setOpenedKebab(mail.id))}
+              role="button"
+              tabIndex={0}
+              aria-label="More actions"
             >
               <KebabIcon />
             </div>

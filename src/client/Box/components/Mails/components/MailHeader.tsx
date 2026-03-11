@@ -1,4 +1,4 @@
-import { ComponentProps, useContext } from "react";
+import React, { ComponentProps, KeyboardEvent, useContext } from "react";
 import { Context, getDateForMailHeader } from "client";
 import { MailAddressValueType, MailHeaderData } from "common";
 
@@ -24,11 +24,27 @@ const MailHeader = (props: MailHeaderProps) => {
   if (cc?.value && !Array.isArray(cc.value)) cc.value = [cc.value];
   if (bcc?.value && !Array.isArray(bcc.value)) bcc.value = [bcc.value];
 
+  const subject = mail.subject || "Email";
+  const from = mail?.from?.value?.map((e) => e?.name || e?.address).join(", ") || "";
+
   return (
     <div
       className="header cursor"
       onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e: KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick(e as unknown as React.MouseEvent<HTMLDivElement>);
+              }
+            }
+          : undefined
+      }
       onMouseLeave={onMouseLeave}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={from ? `Email from ${from}: ${subject}` : subject}
     >
       <div className="mailcard-small content">{duration}</div>
       <div className={"mailcard-small content" + (isActive ? "" : " closed")}>
