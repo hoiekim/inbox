@@ -3,10 +3,16 @@ import { AttachmentType, MailAddressType } from "./Mail";
 import { Insight } from "./Insight";
 import { Model } from "../Model";
 
+/**
+ * Partial mail model for inbox list views. Only includes metadata fields —
+ * excludes html, text, attachments to avoid loading full bodies into memory.
+ * Corresponds to the partial SELECT performed by getMailHeaders().
+ */
 export interface MailHeaderDataType {
   id: string;
   read: boolean;
   saved: boolean;
+  sent: boolean;
   date: DateString;
   subject: string;
   from?: MailAddressType;
@@ -29,6 +35,7 @@ export class MailHeaderData
   declare date: DateString;
   declare read: boolean;
   declare saved: boolean;
+  declare sent: boolean;
   declare from?: MailAddressType;
   declare to?: MailAddressType;
   declare cc?: MailAddressType;
@@ -46,6 +53,7 @@ export class MailHeaderData
     if (!data?.date) this.date = new Date().toISOString();
     if (!data?.read) this.read = false;
     if (!data?.saved) this.saved = false;
+    if (!data?.sent) this.sent = false;
   }
 }
 
