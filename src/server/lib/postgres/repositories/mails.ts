@@ -1113,3 +1113,27 @@ export const copyMail = async (
     return null;
   }
 };
+
+/**
+ * Verify that an attachment (by its UUID) belongs to a specific user.
+ * Checks the attachments JSONB column for a matching content.data value.
+ * Returns true if the user owns a mail containing this attachment ID.
+ */
+export const verifyAttachmentOwnership = async (
+  user_id: string,
+  attachment_id: string
+): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      `SELECT 1 FROM mails
+       WHERE user_id = $1
+         AND attachments @> $2::jsonb
+       LIMIT 1`,
+      [user_id, JSON.stringify([{ content: { data: attachment_id } }])]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+  } catch (error) {
+    console.error("Failed to verify attachment ownership:", error);
+    return false;
+  }
+};
