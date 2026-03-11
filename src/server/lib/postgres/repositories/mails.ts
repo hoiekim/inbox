@@ -217,11 +217,16 @@ export const getMailHeaders = async (
 ): Promise<MailHeaderResult[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
-    // For sent mails, check from_address only
-    // For received mails, check to_address, cc_address, and bcc_address
+    // Determine which address field to match against based on whether the
+    // caller is requesting sent or received mail:
+    //   - Sent view: match from_address (mails the user sent)
+    //   - Received view: match to/cc/bcc_address (mails addressed to the user)
+    // Using address-based filtering instead of the `sent` boolean column means
+    // a self-sent mail (from_address = to_address = user) naturally appears in
+    // both views without needing a duplicate row.
     const addressCondition = options.sent
-      ? `${FROM_ADDRESS} @> $3::jsonb`
-      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      ? `${FROM_ADDRESS} @> $2::jsonb`
+      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
     const headerColumns = [
@@ -235,12 +240,11 @@ export const getMailHeaders = async (
     let sql = `
       SELECT ${headerColumns} FROM mails 
       WHERE user_id = $1 
-        AND sent = $2
         AND ${addressCondition}
         AND expunged = FALSE
     `;
-    const values: ParamValue[] = [user_id, options.sent, addressJson];
-    let paramIdx = 4;
+    const values: ParamValue[] = [user_id, addressJson];
+    let paramIdx = 3;
 
     if (options.new) {
       sql += ` AND read = FALSE`;
