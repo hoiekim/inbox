@@ -95,6 +95,26 @@ export type TypeSafeFilters<TSchema extends Schema> = {
   [K in SchemaFilterKey<TSchema>]?: ParamValue | unknown;
 };
 
+/**
+ * A filter condition with an explicit comparison operator.
+ * Use with deleteWhere() to support range comparisons (e.g. <=, <, >, >=).
+ * If notNull is true, an extra "col IS NOT NULL" clause is prepended.
+ *
+ * Example: deleteWhere({ cookie_expires: { op: '<=', value: now, notNull: true } })
+ */
+export interface FilterCondition {
+  op: "=" | "<" | "<=" | ">" | ">=";
+  value: ParamValue;
+  notNull?: boolean;
+}
+
+/** Accepts either a plain equality value or a FilterCondition for deleteWhere(). */
+export type DeleteWhereFilter = ParamValue | FilterCondition;
+
+export type DeleteWhereFilters<TSchema extends Schema> = {
+  [K in SchemaFilterKey<TSchema>]?: DeleteWhereFilter | unknown;
+};
+
 export abstract class Table<
   TJSON,
   TSchema extends Schema,
@@ -187,14 +207,26 @@ export abstract class Table<
   }
 
   async deleteWhere(
-    filters: TypeSafeFilters<TSchema>
+    filters: DeleteWhereFilters<TSchema>
   ): Promise<number> {
     const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
     if (entries.length === 0) {
       throw new Error("deleteWhere requires at least one filter");
     }
-    const whereClauses = entries.map(([k], i) => `${k} = $${i + 1}`);
-    const values = entries.map(([, v]) => v as ParamValue);
+    const whereClauses: string[] = [];
+    const values: ParamValue[] = [];
+    let paramIdx = 1;
+    for (const [col, filter] of entries) {
+      if (filter !== null && typeof filter === "object" && "op" in (filter as object)) {
+        const cond = filter as FilterCondition;
+        if (cond.notNull) whereClauses.push(`${col} IS NOT NULL`);
+        whereClauses.push(`${col} ${cond.op} $${paramIdx++}`);
+        values.push(cond.value);
+      } else {
+        whereClauses.push(`${col} = $${paramIdx++}`);
+        values.push(filter as ParamValue);
+      }
+    }
     const sql = `DELETE FROM ${this.name} WHERE ${whereClauses.join(" AND ")} RETURNING ${this.primaryKey}`;
     const result = await pool.query(sql, values);
     return result.rowCount ?? 0;
