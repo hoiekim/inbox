@@ -179,6 +179,25 @@ This is especially important in background tasks where failures need to be track
 - IDLE manager handles long-lived connections with 29-minute refresh
 - Parser functions return structured results or throw on invalid input
 
+### Sent Mail Detection
+
+Sent mail is detected by **address matching**, not a boolean `sent` flag:
+
+- A mail appears in "Received" if the recipient's address matches the account
+- A mail appears in "Sent" if the sender's `from_address` matches the account
+- Self-sent emails (same from and to) appear in **both** views correctly
+
+This was changed in PR #199 from the previous `sent` column approach. The address-based method handles edge cases better:
+- Self-email: one DB row, visible in both views
+- Multi-recipient: each user's copy is scoped correctly
+- No ambiguity about what "sent" means for forwarded or relayed mail
+
+Key functions:
+- `getMailHeaders()` — filters by `from_address` or `to_address` based on view
+- `getAccountStats()` — counts using address matching (not `sent` flag)
+
+**Note:** The IMAP layer still uses the legacy `sent` column for mailbox routing. A future refactor should align IMAP with the address-based approach.
+
 ## Database
 
 ### PostgreSQL Setup
