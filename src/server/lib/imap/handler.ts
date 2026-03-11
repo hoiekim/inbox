@@ -89,6 +89,7 @@ export class ImapRequestHandler {
 
     socket.on("close", () => {
       logger.debug("IMAP connection closed", { component: "imap" });
+      session.cleanup();
     });
 
     socket.on("error", (error) => {
