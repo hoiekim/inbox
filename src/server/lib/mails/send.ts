@@ -8,7 +8,6 @@ import {
   SignedUser
 } from "common";
 import {
-  getDomain,
   getUserDomain,
   saveMail,
   getText,
@@ -45,18 +44,9 @@ export const sendMail = async (
     const messageId = response?.id || randomUUID();
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
     await saveMail(sentMail, userId);
-    if (isToMyself(mailToSend.to)) {
-      // If the email is sent to myself, also save a copy in the inbox.
-      // Use a distinct messageId so the UNIQUE (user_id, message_id) constraint
-      // allows both the sent row and the received row to coexist.
-      const receivedMessageId = sentMail.messageId
-        ? sentMail.messageId.replace(/^<|>$/g, "") + "-received"
-        : randomUUID();
-      await saveMail(
-        new Mail({ ...sentMail, sent: false, messageId: `<${receivedMessageId}>` }),
-        userId
-      );
-    }
+    // No clone saved for self-emails. The single row (sent: true) appears in both
+    // Sent and Inbox views because getMailHeaders uses address-based matching:
+    // from_address for Sent, to/cc/bcc for Inbox. PR #199 made this possible.
 
     return response;
   } catch (error: unknown) {
@@ -156,16 +146,4 @@ export const addressParser = (str: string) => {
     .filter((str) => typeof str === "string" && str.split("@").length === 2)
     .map((e) => ({ email: e }));
   return result;
-};
-
-const isToMyself = (to: string) => {
-  const toDomains = addressParser(to)?.map(({ email }) => {
-    const splitString = email.split("@")[1].split(".");
-    const length = splitString.length;
-    return splitString[length - 2] + "." + splitString[length - 1];
-  });
-
-  const domain = getDomain();
-
-  return !!toDomains?.find((e: string) => e === domain);
 };
