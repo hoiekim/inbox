@@ -399,7 +399,7 @@ export const getAccountStats = async (
       : `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL)`;
 
     const domainCondition = domainFilter
-      ? `AND address ILIKE '%@' || $3`
+      ? `AND address ILIKE '%@' || $2`
       : "";
 
     const sql = `
@@ -408,7 +408,7 @@ export const getAccountStats = async (
           mail_id, read, saved, date,
           ${addressExpansion}
         FROM mails 
-        WHERE user_id = $1 AND sent = $2 
+        WHERE user_id = $1
           AND expunged = FALSE
           AND ${addressNotNull}
       )
@@ -425,8 +425,8 @@ export const getAccountStats = async (
       ORDER BY latest DESC
     `;
     const values: ParamValue[] = domainFilter
-      ? [user_id, sent, domainFilter]
-      : [user_id, sent];
+      ? [user_id, domainFilter]
+      : [user_id];
     const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => ({
       address: row.address as string,
