@@ -185,9 +185,24 @@ const Accounts = ({
       if (selectedAccount === accountName) classes.push("clicked");
       else classes.push("cursor");
 
+      const onKeyDownAccount: KeyboardEventHandler<HTMLDivElement> = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClickAccount();
+        }
+      };
+
       return (
         <div key={i}>
-          <div className={classes.join(" ")} onClick={onClickAccount}>
+          <div
+            className={classes.join(" ")}
+            onClick={onClickAccount}
+            onKeyDown={onKeyDownAccount}
+            role="button"
+            tabIndex={0}
+            aria-label={`${accountName?.split("@")[0] || "Unknown"} account`}
+            aria-pressed={selectedAccount === accountName}
+          >
             <span>{accountName?.split("@")[0] || "Unknown"}</span>
             {unreadNo && selectedCategory !== Category.SavedMails ? (
               <div className="numberBall">{unreadNo}</div>
@@ -260,8 +275,24 @@ const Accounts = ({
       if (selectedCategory === e) classes.push("clicked");
       if (e === Category.Search) classes.push("flex");
 
+      const onKeyDownCategory: KeyboardEventHandler<HTMLDivElement> = (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          onClickCategory();
+        }
+      };
+
       return (
-        <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
+        <div
+          key={i}
+          className={classes.join(" ")}
+          onClick={onClickCategory}
+          onKeyDown={onKeyDownCategory}
+          role="button"
+          tabIndex={0}
+          aria-label={e === Category.Search ? "Search" : e.split(" ")[0]}
+          aria-pressed={selectedCategory === e}
+        >
           {e === Category.Search ? (
             <SearchIcon />
           ) : (
