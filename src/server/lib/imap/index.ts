@@ -15,11 +15,14 @@ export const getImapListener = (port: number) => {
   };
 };
 
+const IMAP_MAX_CONNECTIONS = 100;
+
 export const initializeImap = async () => {
   await new Promise<void>((res) => {
     const port = 143;
     const imapListener = getImapListener(port);
     const server = createServer(imapListener);
+    server.maxConnections = IMAP_MAX_CONNECTIONS;
     server.listen(port, () => {
       logger.info("IMAP server listening", { component: "imap", port });
       res();
@@ -44,6 +47,7 @@ export const initializeImap = async () => {
     };
 
     const server = createTLSServer(tlsOptions, imapListener);
+    server.maxConnections = IMAP_MAX_CONNECTIONS;
     server.listen(port, () => {
       logger.info("IMAP server listening over TLS", { component: "imap", port });
       res();
