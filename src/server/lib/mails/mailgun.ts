@@ -38,7 +38,9 @@ export const sendMailgunMail = async (
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
-  const from = `${senderFullName} <${sender}@${userDomain}>`;
+  const from = senderFullName
+    ? `${senderFullName} <${sender}@${userDomain}>`
+    : `${sender}@${userDomain}`;
 
   const mailgun = new Mailgun(FormData);
   const mg = mailgun.client({
