@@ -236,6 +236,16 @@ const Accounts = ({
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
         setSelectedCategory(e);
+        // Reset selectedAccount if it doesn't exist in the new category's account list
+        let targetAccounts: Account[];
+        if (e === Category.SentMails) targetAccounts = sent;
+        else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
+        else if (e === Category.SavedMails) targetAccounts = received.filter((a) => a.saved_doc_count);
+        else if (e === Category.Search) targetAccounts = searchHistory;
+        else targetAccounts = received;
+        if (!targetAccounts.some((a) => a.key === selectedAccount)) {
+          setSelectedAccount(targetAccounts[0]?.key || "");
+        }
       };
       const classes = [];
       if (selectedCategory === e) classes.push("clicked");
