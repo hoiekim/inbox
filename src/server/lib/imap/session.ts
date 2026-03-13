@@ -195,14 +195,18 @@ export class ImapSession {
   };
 
   private countSequenceSetMessages(sequenceSet: SequenceSet): number {
+    const maxSeq = this.seqToUid.length;
     let count = 0;
     for (const range of sequenceSet.ranges) {
       if (range.end === undefined) {
         // Single message
         count += 1;
       } else {
-        // Range of messages
-        count += range.end - range.start + 1;
+        // Clamp end to actual mailbox size so that `*` (MAX_SAFE_INTEGER) is
+        // resolved to the real message count before applying the limit check.
+        const effectiveEnd = Math.min(range.end, maxSeq);
+        const effectiveStart = Math.min(range.start, maxSeq);
+        count += Math.max(0, effectiveEnd - effectiveStart + 1);
       }
     }
     return count;
