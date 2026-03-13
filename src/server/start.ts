@@ -8,7 +8,7 @@ import {
   initializeSmtp,
   initializeHttp,
 } from "server";
-import { pool } from "server/lib/postgres/client";
+import { pool } from "server";
 
 const start = async () => {
   await initializePostgres();
