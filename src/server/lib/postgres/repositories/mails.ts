@@ -142,7 +142,7 @@ export const saveMail = async (
     // envelope_to values so we can correctly identify BCC recipients later.
     const pgError = error as { code?: string };
     if (pgError.code === "23505") {
-      const existing = (await mailsTable.query({ user_id: input.user_id, message_id: input.message_id }))[0];
+      const existing = await getMailByMessageId(input.user_id, input.message_id);
       if (!existing) return undefined;
 
       if (input.envelope_to) {

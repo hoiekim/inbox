@@ -44,9 +44,6 @@ export const sendMail = async (
     const messageId = response?.id || randomUUID();
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
     await saveMail(sentMail, userId);
-    // No clone saved for self-emails. The single row (sent: true) appears in both
-    // Sent and Inbox views because getMailHeaders uses address-based matching:
-    // from_address for Sent, to/cc/bcc for Inbox. PR #199 made this possible.
 
     return response;
   } catch (error: unknown) {
