@@ -141,11 +141,16 @@ export class Store {
           deleted: model.deleted,
           draft: model.draft,
           answered: model.answered,
-          uid: {
+        };
+        if (
+          model.uid_domain !== undefined &&
+          model.uid_account !== undefined
+        ) {
+          mail.uid = {
             domain: model.uid_domain,
             account: model.uid_account,
-          },
-        };
+          };
+        }
 
         if (model.from_address) {
           mail.from = {
@@ -195,11 +200,16 @@ export class Store {
   };
 
   private mapFieldName(field: string): string {
-    const fieldMap: Record<string, string> = {
-      messageId: "message_id",
-      uid: "uid_domain, uid_account",
+    const fieldMap: Record<string, string[]> = {
+      messageId: ["message_id"],
+      uid: ["uid_domain", "uid_account"],
+      from: ["from_address", "from_text"],
+      to: ["to_address", "to_text"],
+      cc: ["cc_address", "cc_text"],
+      bcc: ["bcc_address", "bcc_text"],
+      replyTo: ["reply_to_address", "reply_to_text"],
     };
-    return fieldMap[field] || field;
+    return (fieldMap[field] || [field]).join(", ");
   }
 
   setFlags = async (
