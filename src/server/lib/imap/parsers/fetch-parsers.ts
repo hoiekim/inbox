@@ -118,7 +118,42 @@ export const parseFetchDataItem = (context: ParseContext): ParseResult<FetchData
   
   // Handle BODY items
   if (itemName.startsWith('BODY')) {
-    const bodyResult = parseBodyFetch(itemName, context);
+    // When input is e.g. BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)], parseAtom
+    // stops at the space before the field list, giving us "BODY[HEADER.FIELDS"
+    // (without the closing bracket).  We need to read the rest of the section
+    // spec from the context before delegating to parseBodyFetch.
+    let fullBodyExpr = itemName;
+
+    const openCount = (fullBodyExpr.match(/\[/g) || []).length;
+    const closeCount = (fullBodyExpr.match(/\]/g) || []).length;
+
+    if (openCount > closeCount) {
+      // Atom consumed "BODY[..." but the section is not yet closed.
+      // Consume remaining characters up to and including the closing ']'.
+      let extra = '';
+      while (context.position < context.length) {
+        const ch = context.input[context.position];
+        context.position++;
+        if (ch === ']') break;
+        extra += ch;
+      }
+      fullBodyExpr = fullBodyExpr + extra + ']';
+    }
+
+    // Consume optional partial range <start.length> that follows the section
+    if (peek(context) === '<') {
+      context.position++; // consume '<'
+      let partial = '';
+      while (context.position < context.length) {
+        const ch = context.input[context.position];
+        context.position++;
+        if (ch === '>') break;
+        partial += ch;
+      }
+      fullBodyExpr = fullBodyExpr + '<' + partial + '>';
+    }
+
+    const bodyResult = parseBodyFetch(fullBodyExpr, context);
     if (bodyResult.success) return bodyResult;
   }
   

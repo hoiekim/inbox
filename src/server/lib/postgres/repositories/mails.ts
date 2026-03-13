@@ -22,6 +22,7 @@ import {
   BCC_TEXT,
   SENT,
   INSIGHT,
+  ENVELOPE_TO,
 } from "../models";
 
 /**
@@ -128,15 +129,53 @@ export const saveMail = async (
       is_spam: input.is_spam ?? false,
     };
 
-    const result = await mailsTable.insert(data as Record<string, ParamValue>, [
-      MAIL_ID,
-    ]);
-    if (result) return { _id: result.mail_id as string };
+    const row = await mailsTable.insert(data, [MAIL_ID]);
+    if (row) return { _id: row[MAIL_ID] as string };
     return undefined;
-  } catch (error) {
+  } catch (error: unknown) {
+    // Unique constraint violation on (user_id, message_id):
+    // This can happen legitimately when one email is delivered to multiple accounts
+    // (e.g. account1@inbox.app, account2@inbox.app). The sender uses separate
+    // envelopes, but the message_id is the same. In that case we must merge the
+    // envelope_to values so we can correctly identify BCC recipients later.
+    const pgError = error as { code?: string };
+    if (pgError.code === "23505") {
+      const existing = await getMailByMessageId(input.user_id, input.message_id);
+      if (!existing) return undefined;
+
+      if (input.envelope_to) {
+        type AddressEntry = { address?: string };
+        const existingTo = (existing.envelope_to as AddressEntry[] | null) ?? [];
+        const incomingTo = input.envelope_to as AddressEntry[];
+        const seen = new Set(existingTo.map((a) => a.address));
+        const merged = [
+          ...existingTo,
+          ...incomingTo.filter((a) => !seen.has(a.address)),
+        ];
+        await mailsTable.updateWhere(
+          { user_id: input.user_id, message_id: input.message_id },
+          { [ENVELOPE_TO]: JSON.stringify(merged) }
+        );
+      }
+
+      return { _id: existing.mail_id };
+    }
+
     console.error("Failed to save mail:", error);
     return undefined;
   }
+};
+
+/**
+ * Get a mail by user_id and message_id.
+ * Used to find existing mail when a conflict occurs.
+ */
+export const getMailByMessageId = async (
+  user_id: string,
+  message_id: string
+): Promise<MailModel | undefined> => {
+  const result = await mailsTable.query({ user_id, message_id });
+  return result[0];
 };
 
 export const getMailById = async (
@@ -940,7 +979,7 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
   try {
     const sql = `
       SELECT * FROM mails 
-      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE AND expunged = FALSE
       ORDER BY date DESC
     `;
     const result = await pool.query(sql, [user_id]);
