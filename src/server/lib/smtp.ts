@@ -139,6 +139,8 @@ const onDataOutgoing = async (
 };
 
 export const initializeSmtp = async () => {
+  const servers: SMTPServer[] = [];
+
   const options: SMTPServerOptions = { authOptional: true, onAuth, onData };
 
   const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
@@ -151,26 +153,28 @@ export const initializeSmtp = async () => {
     console.warn("SMTP: SSL certificate not found.");
   }
 
-  await new Promise<void>((res) => {
+  const smtpServer = await new Promise<SMTPServer>((res) => {
     const port = 25;
     const server = new SMTPServer({ ...options, secure: false });
     registerListeners(server, port, () => {
       console.log(`SMTP server listening on port ${port}`);
-      res();
+      res(server);
     });
   });
+  servers.push(smtpServer);
 
   if (isSslAvailable) {
-    await new Promise<void>((res) => {
+    const smtpsServer = await new Promise<SMTPServer>((res) => {
       const port = 465;
       const server = new SMTPServer({ ...options, secure: true });
       registerListeners(server, port, () => {
         console.log(`SMTP server listening on port ${port}`);
-        res();
+        res(server);
       });
     });
+    servers.push(smtpsServer);
 
-    await new Promise<void>((res) => {
+    const submissionServer = await new Promise<SMTPServer>((res) => {
       const port = 587;
       const server = new SMTPServer({
         ...options,
@@ -179,10 +183,11 @@ export const initializeSmtp = async () => {
       });
       registerListeners(server, port, () => {
         console.log(`SMTP server listening on port ${port}`);
-        res();
+        res(server);
       });
     });
+    servers.push(submissionServer);
   }
 
-  return;
+  return servers;
 };

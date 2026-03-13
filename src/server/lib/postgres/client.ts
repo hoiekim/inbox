@@ -37,17 +37,7 @@ const config: PoolConfig = {
 
 export const pool = new Pool(config);
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await pool.end();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  await pool.end();
-  process.exit(0);
-});
-
+// Process-level error handlers (SIGTERM/SIGINT are handled in start.ts for ordered shutdown)
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
 });
