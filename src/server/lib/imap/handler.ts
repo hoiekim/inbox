@@ -26,17 +26,68 @@ export class ImapRequestHandler {
 
     let buffer = "";
 
+    // State for APPEND literal accumulation
+    let pendingAppendLine: string | null = null;
+    let literalBytesNeeded = 0;
+
     socket.on("data", async (data) => {
       try {
         buffer += data.toString();
 
         // Process complete lines
         let lineEnd;
-        while ((lineEnd = buffer.indexOf("\r\n")) !== -1) {
+        while (true) {
+          // If accumulating literal data for APPEND, consume raw bytes first
+          if (pendingAppendLine !== null) {
+            if (buffer.length < literalBytesNeeded) {
+              // Wait for more data
+              break;
+            }
+            // We have enough bytes — reconstruct the full APPEND input and parse
+            const literalData = buffer.substring(0, literalBytesNeeded);
+            buffer = buffer.substring(literalBytesNeeded);
+            // Skip optional \r\n after literal
+            if (buffer.startsWith("\r\n")) {
+              buffer = buffer.substring(2);
+            }
+
+            const fullInput = pendingAppendLine + "\r\n" + literalData;
+            pendingAppendLine = null;
+            literalBytesNeeded = 0;
+
+            try {
+              const parseResult = parseCommand(fullInput.trim());
+              if (parseResult.success && parseResult.value) {
+                const { tag, request } = parseResult.value;
+                await this.handleRequest(tag, request);
+              } else {
+                logger.debug("Parse failed (APPEND literal)", {
+                  component: "imap.parser",
+                  error: parseResult.error
+                });
+                const tag = fullInput.trim().split(" ")[0] || "BAD";
+                session.write(`${tag} BAD ${parseResult.error || "Invalid APPEND command"}\r\n`);
+              }
+            } catch (error) {
+              logger.error("Error processing APPEND literal", { component: "imap" }, error);
+              session.write(`* BAD Internal server error\r\n`);
+            }
+            continue;
+          }
+
+          lineEnd = buffer.indexOf("\r\n");
+          if (lineEnd === -1) break;
+
           const line = buffer.substring(0, lineEnd);
           buffer = buffer.substring(lineEnd + 2);
 
           if (line.trim()) {
+            // When session is in IDLE mode, skip normal command processing —
+            // the IDLE data handler on session.ts handles DONE exclusively.
+            if (session.isInIdleMode()) {
+              continue;
+            }
+
             logger.debug("IMAP command received", {
               component: "imap",
               command: line.trim(),
@@ -49,6 +100,30 @@ export class ImapRequestHandler {
                 "* NO [TEMPORARY UNAVAILABLE] Server is busy. Please try again later.\r\n"
               );
               continue;
+            }
+
+            // Detect APPEND command with a literal size indicator {N} or {N+}
+            // e.g. "a001 APPEND INBOX (\Seen) {512}"
+            // When found, switch to literal accumulation mode instead of parsing now.
+            const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
+            if (literalMatch) {
+              const upperLine = line.trim().toUpperCase();
+              // Only intercept APPEND literals here; other commands with literals
+              // (e.g. LOGIN with quoted strings) don't need this treatment.
+              const parts = upperLine.split(/\s+/);
+              const commandWord = parts[1] || parts[0];
+              if (commandWord === "APPEND") {
+                pendingAppendLine = line.trim();
+                literalBytesNeeded = parseInt(literalMatch[1], 10);
+                // Synchronizing literals {N} (without +) require a continuation
+                // response before the client will send the literal data.
+                // Non-synchronizing literals {N+} (LITERAL+) do not.
+                const isSynchronizing = !literalMatch[2];
+                if (isSynchronizing) {
+                  session.write("+ go ahead\r\n");
+                }
+                continue;
+              }
             }
 
             try {
