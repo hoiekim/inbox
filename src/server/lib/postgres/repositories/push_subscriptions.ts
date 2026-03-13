@@ -1,6 +1,5 @@
 import crypto from "crypto";
 import { PushSubscription } from "web-push";
-import { pool } from "../client";
 import {
   pushSubscriptionsTable,
   PUSH_SUBSCRIPTION_ID,
@@ -66,13 +65,7 @@ export const deleteSubscription = async (
 export const cleanSubscriptions = async (): Promise<number> => {
   try {
     const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const sql = `
-      DELETE FROM push_subscriptions 
-      WHERE updated < $1
-      RETURNING push_subscription_id
-    `;
-    const result = await pool.query(sql, [cutoffDate]);
-    return result.rowCount ?? 0;
+    return await pushSubscriptionsTable.deleteOlderThan(cutoffDate);
   } catch (error) {
     console.error("Failed to clean push subscriptions:", error);
     return 0;
@@ -91,32 +84,24 @@ export const getSubscriptions = async (
     if (users.length === 0) return [];
 
     const userIds = users.map((u) => u.id);
-    const placeholders = userIds.map((_, i) => `$${i + 1}`).join(", ");
-
-    const sql = `
-      SELECT * FROM push_subscriptions 
-      WHERE user_id IN (${placeholders})
-    `;
-
-    const result = await pool.query(sql, userIds);
-
+    const rows = await pushSubscriptionsTable.getByUserIds(userIds);
     const userMap = new Map(users.map((u) => [u.id, u]));
 
-    return result.rows
-      .map((row: Record<string, unknown>): ComputedPushSubscription | null => {
-        const user = userMap.get(row.user_id as string);
+    return rows
+      .map((row): ComputedPushSubscription | null => {
+        const user = userMap.get(row.user_id);
         if (!user) return null;
 
         return {
-          endpoint: row.endpoint as string,
+          endpoint: row.endpoint,
           keys: {
-            p256dh: row.keys_p256dh as string,
-            auth: row.keys_auth as string,
+            p256dh: row.keys_p256dh,
+            auth: row.keys_auth,
           },
-          push_subscription_id: row.push_subscription_id as string,
+          push_subscription_id: row.push_subscription_id,
           username: user.username,
           lastNotified: new Date(row.last_notified as string),
-          updated: new Date(row.updated as string),
+          updated: new Date(row.updated),
         };
       })
       .filter((s): s is ComputedPushSubscription => s !== null);
