@@ -22,6 +22,7 @@ import {
   BCC_TEXT,
   SENT,
   INSIGHT,
+  ENVELOPE_TO,
 } from "../models";
 
 /**
@@ -128,27 +129,38 @@ export const saveMail = async (
       is_spam: input.is_spam ?? false,
     };
 
-    // Use INSERT ... ON CONFLICT DO NOTHING for idempotent saves
-    // If a mail with the same (user_id, message_id) exists, skip insertion
-    const columns = Object.keys(data);
-    const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
-    const values = Object.values(data);
-    const sql = `
-      INSERT INTO ${mailsTable.name} (${columns.join(", ")})
-      VALUES (${placeholders})
-      ON CONFLICT (user_id, message_id) DO NOTHING
-      RETURNING ${MAIL_ID}
-    `;
-
-    const result = await pool.query(sql, values as ParamValue[]);
-    if (result.rows.length > 0) {
-      return { _id: result.rows[0].mail_id as string };
-    }
-    // Conflict occurred - mail already exists, return existing mail_id
-    const existing = await getMailByMessageId(input.user_id, input.message_id);
-    if (existing) return { _id: existing.mail_id };
+    const row = await mailsTable.insert(data, [MAIL_ID]);
+    if (row) return { _id: row[MAIL_ID] as string };
     return undefined;
-  } catch (error) {
+  } catch (error: unknown) {
+    // Unique constraint violation on (user_id, message_id):
+    // This can happen legitimately when one email is delivered to multiple accounts
+    // (e.g. account1@inbox.app, account2@inbox.app). The sender uses separate
+    // envelopes, but the message_id is the same. In that case we must merge the
+    // envelope_to values so we can correctly identify BCC recipients later.
+    const pgError = error as { code?: string };
+    if (pgError.code === "23505") {
+      const existing = await getMailByMessageId(input.user_id, input.message_id);
+      if (!existing) return undefined;
+
+      if (input.envelope_to) {
+        type AddressEntry = { address?: string };
+        const existingTo = (existing.envelope_to as AddressEntry[] | null) ?? [];
+        const incomingTo = input.envelope_to as AddressEntry[];
+        const seen = new Set(existingTo.map((a) => a.address));
+        const merged = [
+          ...existingTo,
+          ...incomingTo.filter((a) => !seen.has(a.address)),
+        ];
+        await mailsTable.updateWhere(
+          { user_id: input.user_id, message_id: input.message_id },
+          { [ENVELOPE_TO]: JSON.stringify(merged) }
+        );
+      }
+
+      return { _id: existing.mail_id };
+    }
+
     console.error("Failed to save mail:", error);
     return undefined;
   }
