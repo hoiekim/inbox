@@ -8,7 +8,6 @@ import {
   SignedUser
 } from "common";
 import {
-  getDomain,
   getUserDomain,
   saveMail,
   getText,
@@ -45,10 +44,6 @@ export const sendMail = async (
     const messageId = response?.id || randomUUID();
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
     await saveMail(sentMail, userId);
-    if (isToMyself(mailToSend.to)) {
-      // If the email is sent to myself, also save a copy in the inbox
-      await saveMail(new Mail({ ...sentMail, sent: false }), userId);
-    }
 
     return response;
   } catch (error: unknown) {
@@ -148,16 +143,4 @@ export const addressParser = (str: string) => {
     .filter((str) => typeof str === "string" && str.split("@").length === 2)
     .map((e) => ({ email: e }));
   return result;
-};
-
-const isToMyself = (to: string) => {
-  const toDomains = addressParser(to)?.map(({ email }) => {
-    const splitString = email.split("@")[1].split(".");
-    const length = splitString.length;
-    return splitString[length - 2] + "." + splitString[length - 1];
-  });
-
-  const domain = getDomain();
-
-  return !!toDomains?.find((e: string) => e === domain);
 };
