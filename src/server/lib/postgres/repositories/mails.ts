@@ -140,7 +140,7 @@ export const saveMail = async (
     // envelope_to values so we can correctly identify BCC recipients later.
     const pgError = error as { code?: string };
     if (pgError.code === "23505") {
-      const existing = await getMailByMessageId(input.user_id, input.message_id);
+      const existing = (await mailsTable.query({ user_id: input.user_id, message_id: input.message_id }))[0];
       if (!existing) return undefined;
 
       if (input.envelope_to) {
@@ -164,18 +164,6 @@ export const saveMail = async (
     console.error("Failed to save mail:", error);
     return undefined;
   }
-};
-
-/**
- * Get a mail by user_id and message_id.
- * Used to find existing mail when a conflict occurs.
- */
-export const getMailByMessageId = async (
-  user_id: string,
-  message_id: string
-): Promise<MailModel | undefined> => {
-  const result = await mailsTable.query({ user_id, message_id });
-  return result[0];
 };
 
 export const getMailById = async (
