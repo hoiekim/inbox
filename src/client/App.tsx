@@ -82,7 +82,11 @@ const App = ({ user: session }: Props) => {
   );
   const [selectedCategory, setSelectedCategory] = useLocalStorage(
     "selectedCategory",
-    Category.AllMails
+    Category.AllMails,
+    // Search is transient (requires a live search query + preSearchAccount ref
+    // that don't survive a page reload). Restoring Category.Search would use
+    // the account address as the search term, producing confusing sort order.
+    (v) => (v === Category.Search ? Category.AllMails : v)
   );
   const [searchHistory, setSearchHistory] = useState<
     ContextType["searchHistory"]
