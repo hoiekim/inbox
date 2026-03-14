@@ -89,6 +89,16 @@ const App = ({ user: session }: Props) => {
   >([]);
   const [newMailsTotal, setNewMailsTotal] = useState(0);
 
+  // On mount: if the app reloaded while in search mode, exit search state.
+  // The search query was stored in selectedAccount (a ref in Accounts component),
+  // so we reset both to defaults to avoid showing stale search results on reload.
+  useEffect(() => {
+    if (selectedCategory === Category.Search) {
+      setSelectedCategory(Category.AllMails);
+      setSelectedAccount("");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const lastRefresh = useRef(Date.now());
 
   useEffect(() => {
