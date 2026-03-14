@@ -90,6 +90,7 @@ const App = ({ user: session }: Props) => {
   const [newMailsTotal, setNewMailsTotal] = useState(0);
 
   const lastRefresh = useRef(Date.now());
+  const lastFocusCheck = useRef(0);
 
   useEffect(() => {
     const handleResize = () => {
@@ -102,13 +103,18 @@ const App = ({ user: session }: Props) => {
       window.scrollTo(window.scrollX, window.scrollY);
     };
     const handleFocus = async () => {
+      const now = Date.now();
+      const fiveSeconds = 5000;
+      if (now - lastFocusCheck.current < fiveSeconds) return;
+      lastFocusCheck.current = now;
+
       const user = await callUser();
       if (!user) return;
-      const duration = Date.now() - lastRefresh.current;
+      const duration = now - lastRefresh.current;
       const oneDay = 1000 * 60 * 60 * 24;
       if (duration < oneDay) return;
       new Notifier().subscribe();
-      lastRefresh.current = Date.now();
+      lastRefresh.current = now;
     };
 
     window.addEventListener("resize", handleResize);
