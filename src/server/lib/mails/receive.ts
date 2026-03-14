@@ -324,21 +324,13 @@ const convertAttachment = async ({
   });
 };
 
-export const saveBuffer = (buffer: Buffer | string): Promise<string> => {
+export const saveBuffer = async (buffer: Buffer | string): Promise<string> => {
   const id = getAttachmentId();
-  if (!fs.existsSync(ATTACHMENT_FOLDER)) fs.mkdirSync(ATTACHMENT_FOLDER);
+  fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
   const attachmentFilePath = getAttachmentFilePath(id);
-  return new Promise((res, rej) => {
-    try {
-      if (typeof buffer === "string") {
-        buffer = Buffer.from(buffer, "base64");
-      }
-      fs.writeFileSync(attachmentFilePath, buffer as unknown as Uint8Array);
-      res(id);
-    } catch (reason) {
-      rej(reason);
-    }
-  });
+  const data = typeof buffer === "string" ? Buffer.from(buffer, "base64") : buffer;
+  await fs.promises.writeFile(attachmentFilePath, data);
+  return id;
 };
 
 const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
