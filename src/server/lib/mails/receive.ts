@@ -320,7 +320,8 @@ export const saveBuffer = async (buffer: Buffer | string): Promise<string> => {
   fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
   const attachmentFilePath = getAttachmentFilePath(id);
   const bytes = typeof buffer === "string" ? Buffer.from(buffer, "base64") : buffer;
-  // Cast via Uint8Array to satisfy strict @types/node ArrayBuffer vs SharedArrayBuffer distinction
+  // Wrap in Uint8Array to satisfy strict @types/node: Buffer.slice().buffer is
+  // ArrayBufferLike (includes SharedArrayBuffer), but writeFile needs ArrayBuffer.
   await fs.promises.writeFile(attachmentFilePath, new Uint8Array(bytes));
   return id;
 };
