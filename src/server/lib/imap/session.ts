@@ -14,6 +14,7 @@ import {
   getMailboxesByUser,
 } from "server";
 import { logger } from "server";
+import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "../auth-rate-limit";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
 import {
@@ -711,6 +712,14 @@ export class ImapSession {
       return;
     }
 
+    const ip = this.socket.remoteAddress ?? "unknown";
+
+    if (isAuthRateLimited(ip)) {
+      this.write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+      this.socket.end();
+      return;
+    }
+
     try {
       // Decode base64 initial response
       const decoded = Buffer.from(initialResponse, "base64").toString("utf8");
@@ -735,6 +744,12 @@ export class ImapSession {
 
       if (!password || !user || !signedUser || !pwMatches) {
         this.authenticated = false;
+        const limited = await recordAuthFailure(ip);
+        if (limited) {
+          this.write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+          this.socket.end();
+          return;
+        }
         return this.write(
           `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
         );
@@ -742,6 +757,7 @@ export class ImapSession {
 
       this.store = new Store(signedUser);
       this.authenticated = true;
+      resetAuthFailures(ip);
 
       this.write(
         `${tag} OK [CAPABILITY ${this.getCapabilities()}] AUTHENTICATE completed\r\n`
@@ -1158,6 +1174,14 @@ export class ImapSession {
       return this.write(`${tag} BAD LOGIN requires username and password\r\n`);
     }
 
+    const ip = this.socket.remoteAddress ?? "unknown";
+
+    if (isAuthRateLimited(ip)) {
+      this.write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+      this.socket.end();
+      return;
+    }
+
     const [username, password] = args;
 
     // Remove quotes if present
@@ -1175,6 +1199,12 @@ export class ImapSession {
     );
 
     if (!cleanPassword || !user || !signedUser || !pwMatches) {
+      const limited = await recordAuthFailure(ip);
+      if (limited) {
+        this.write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+        this.socket.end();
+        return;
+      }
       return this.write(
         `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
       );
@@ -1182,6 +1212,7 @@ export class ImapSession {
 
     this.store = new Store(signedUser);
     this.authenticated = true;
+    resetAuthFailures(ip);
 
     return this.write(
       `${tag} OK [CAPABILITY ${this.getCapabilities()}] LOGIN completed\r\n`
