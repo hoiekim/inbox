@@ -319,8 +319,9 @@ export const saveBuffer = async (buffer: Buffer | string): Promise<string> => {
   const id = getAttachmentId();
   fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
   const attachmentFilePath = getAttachmentFilePath(id);
-  const data = typeof buffer === "string" ? Buffer.from(buffer, "base64") : buffer;
-  await fs.promises.writeFile(attachmentFilePath, data);
+  const bytes = typeof buffer === "string" ? Buffer.from(buffer, "base64") : buffer;
+  // Cast via Uint8Array to satisfy strict @types/node ArrayBuffer vs SharedArrayBuffer distinction
+  await fs.promises.writeFile(attachmentFilePath, new Uint8Array(bytes));
   return id;
 };
 
