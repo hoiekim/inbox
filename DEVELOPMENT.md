@@ -352,6 +352,40 @@ This pattern was critical in PR #161 where `getMailHeaders` was selecting all co
 <input aria-label="Search emails" value={query} onChange={onChange} />
 ```
 
+### File I/O in Async Context
+
+**Use async filesystem APIs, not sync wrappers in Promise constructors.**
+
+```typescript
+// ❌ Bad - sync I/O blocks the event loop despite Promise wrapper
+return new Promise((resolve, reject) => {
+  try {
+    fs.writeFileSync(path, data);
+    resolve(id);
+  } catch (e) { reject(e); }
+});
+
+// ✅ Good - truly async
+await fs.promises.writeFile(path, data);
+return id;
+```
+
+**Directory creation:** Use `{ recursive: true }` instead of check-then-create:
+
+```typescript
+// ❌ TOCTOU race
+if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+
+// ✅ Idempotent
+await fs.promises.mkdir(dir, { recursive: true });
+```
+
+### IMAP/SMTP Authentication Rate Limiting
+
+IMAP and SMTP auth attempts should be rate-limited per IP, similar to the HTTP login limiter. Unlike HTTP connections behind a reverse proxy, IMAP/SMTP connections are direct — an attacker can try unlimited passwords on a single persistent connection.
+
+Rate limit counters should be shared across HTTP/IMAP/SMTP to prevent protocol-switching attacks.
+
 ## CI/CD
 
 ### Pull Request Checks
