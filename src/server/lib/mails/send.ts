@@ -99,11 +99,11 @@ const getSentMail = async (
       value: [{ name: senderFullName, address: fromEmail }],
       text: `${senderFullName} <${fromEmail}>`
     },
-    to: { value: [{ address: to }], text: to },
-    cc: !cc ? undefined : { value: [{ address: cc }], text: cc },
-    bcc: !bcc ? undefined : { value: [{ address: bcc }], text: bcc },
+    to: { value: parseRecipientAddresses(to), text: to },
+    cc: !cc ? undefined : { value: parseRecipientAddresses(cc), text: cc },
+    bcc: !bcc ? undefined : { value: parseRecipientAddresses(bcc), text: bcc },
     envelopeFrom: [{ name: senderFullName, address: fromEmail }],
-    envelopeTo: [{ address: to }],
+    envelopeTo: parseRecipientAddresses(to),
     replyTo: {
       value: [{ name: senderFullName, address: fromEmail }],
       text: fromEmail
@@ -135,6 +135,13 @@ const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
 
   return attachmentsToSave;
 };
+
+const parseRecipientAddresses = (str: string): { address: string }[] =>
+  str
+    .split(",")
+    .map((addr) => addr.trim())
+    .filter(Boolean)
+    .map((address) => ({ address }));
 
 export const addressParser = (str: string) => {
   const result = str
