@@ -86,15 +86,19 @@ export const initializePostgres = async (): Promise<void> => {
       ON mails USING GIN(search_vector)
     `);
 
-    // Create trigger function for auto-updating search_vector
+    // Create trigger function for auto-updating search_vector.
+    // subject, from_text, and to_text are plain-text fields — escape angle brackets
+    // before calling to_tsvector so that words like "alert" in a subject such as
+    // "<alert>" are not silently stripped.  The text (HTML body) field is left as-is
+    // because stripping HTML tags there is the desired behaviour.
     await pool.query(`
       CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
       BEGIN
-        NEW.search_vector := to_tsvector('english', 
-          coalesce(NEW.subject, '') || ' ' || 
-          coalesce(NEW.text, '') || ' ' || 
-          coalesce(NEW.from_text, '') || ' ' || 
-          coalesce(NEW.to_text, '')
+        NEW.search_vector := to_tsvector('english',
+          coalesce(replace(replace(NEW.subject,   '<', ' '), '>', ' '), '') || ' ' ||
+          coalesce(NEW.text, '') || ' ' ||
+          coalesce(replace(replace(NEW.from_text, '<', ' '), '>', ' '), '') || ' ' ||
+          coalesce(replace(replace(NEW.to_text,   '<', ' '), '>', ' '), '')
         );
         RETURN NEW;
       END
@@ -107,6 +111,24 @@ export const initializePostgres = async (): Promise<void> => {
       CREATE TRIGGER mails_search_update 
         BEFORE INSERT OR UPDATE ON mails 
         FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
+    `);
+
+    // Reindex existing rows so that the corrected trigger is applied retroactively.
+    // This is idempotent — a no-op when search_vector is already up to date.
+    await pool.query(`
+      UPDATE mails
+      SET search_vector = to_tsvector('english',
+        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(text, '') || ' ' ||
+        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
+      )
+      WHERE search_vector IS DISTINCT FROM to_tsvector('english',
+        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(text, '') || ' ' ||
+        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
+      )
     `);
 
     console.info("Database tables created/verified successfully.");
