@@ -97,7 +97,7 @@ const App = ({ user: session }: Props) => {
       setSelectedCategory(Category.AllMails);
       setSelectedAccount("");
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // intentional: run once on mount only
 
   const lastRefresh = useRef(Date.now());
 
