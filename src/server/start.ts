@@ -10,6 +10,21 @@ import {
 } from "server";
 import { pool } from "server";
 
+// Process-level error handlers (centralised here alongside SIGTERM/SIGINT)
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", async (error) => {
+  console.error("Uncaught exception:", error);
+  try {
+    await pool.end();
+  } catch (e) {
+    // ignore pool shutdown errors during crash
+  }
+  process.exit(1);
+});
+
 const start = async () => {
   await initializePostgres();
   await initializeAdminUser();
