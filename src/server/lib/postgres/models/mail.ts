@@ -35,7 +35,7 @@ import {
   SPAM_REASONS,
   IS_SPAM,
 } from "./common";
-import { Model, createTable } from "./base";
+import { Model, ModelValidationError, createTable, validateObject } from "./base";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -238,6 +238,96 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       spam_reasons: this.spam_reasons,
       is_spam: this.is_spam,
     };
+  }
+}
+
+/**
+ * A partial view of a MailModel with only the requested fields validated.
+ * Use when querying a subset of mail columns (e.g., IMAP FETCH with specific fields).
+ *
+ * Validates:
+ * 1. Each requested field name exists in MailModel (unknown column → throws)
+ * 2. Each selected field's value passes the MailModel type check
+ *
+ * Usage:
+ *   const partial = new PartialMailModel(["mail_id", "subject", "read"], row);
+ *   partial.subject // string | undefined
+ */
+export class PartialMailModel {
+  static readonly validFields: ReadonlySet<string> = new Set(
+    Object.keys(MailModel.typeChecker)
+  );
+
+  readonly selectedFields: ReadonlySet<string>;
+
+  // All MailModel fields exposed as optional properties
+  readonly mail_id?: string;
+  readonly user_id?: string;
+  readonly message_id?: string;
+  readonly subject?: string;
+  readonly date?: string;
+  readonly html?: string;
+  readonly text?: string;
+  readonly from_address?: object | null;
+  readonly from_text?: string | null;
+  readonly to_address?: object | null;
+  readonly to_text?: string | null;
+  readonly cc_address?: object | null;
+  readonly cc_text?: string | null;
+  readonly bcc_address?: object | null;
+  readonly bcc_text?: string | null;
+  readonly reply_to_address?: object | null;
+  readonly reply_to_text?: string | null;
+  readonly envelope_from?: object | null;
+  readonly envelope_to?: object | null;
+  readonly attachments?: object | null;
+  readonly read?: boolean;
+  readonly saved?: boolean;
+  readonly sent?: boolean;
+  readonly deleted?: boolean;
+  readonly draft?: boolean;
+  readonly answered?: boolean;
+  readonly expunged?: boolean;
+  readonly insight?: object | null;
+  readonly uid_domain?: number;
+  readonly uid_account?: number;
+  readonly spam_score?: number;
+  readonly spam_reasons?: string[] | null;
+  readonly is_spam?: boolean;
+  readonly updated?: string;
+
+  constructor(fields: string[], data: unknown) {
+    // 1. Validate all field names are known MailModel columns
+    const unknownFields = fields.filter(
+      (f) => !PartialMailModel.validFields.has(f)
+    );
+    if (unknownFields.length > 0) {
+      throw new ModelValidationError(
+        "PartialMailModel",
+        unknownFields.map((f) => `Unknown field: ${f}`)
+      );
+    }
+
+    // 2. Build a checker for only the requested fields and validate
+    const partialChecker = Object.fromEntries(
+      fields.map((f) => [
+        f,
+        MailModel.typeChecker[f as keyof typeof MailModel.typeChecker],
+      ])
+    ) as Record<string, (v: unknown) => boolean>;
+
+    const errors = validateObject(data, partialChecker);
+    if (errors.length > 0) {
+      throw new ModelValidationError("PartialMailModel", errors);
+    }
+
+    // 3. Assign only the selected fields
+    this.selectedFields = new Set(fields);
+    const self = this as Record<string, unknown>;
+    const obj = data as Record<string, unknown>;
+    for (const field of fields) {
+      self[field] = obj[field];
+    }
   }
 }
 
