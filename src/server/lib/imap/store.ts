@@ -21,7 +21,7 @@ import {
 } from "../postgres/repositories/mails";
 import { accountToBox, boxToAccount } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
-import { logger } from "server";
+import { logger, getUserDomain } from "server";
 
 // class that creates "store" object
 export class Store {
@@ -36,9 +36,12 @@ export class Store {
 
   listMailboxes = async (): Promise<string[]> => {
     try {
+      // Match HTTP client: filter by user's domain so we only expose addresses
+      // that belong to this server, not every external CC/BCC address
+      const userDomain = getUserDomain(this.user.username);
       const [receivedStats, sentStats] = await Promise.all([
-        getAccountStats(this.user.id, false),
-        getAccountStats(this.user.id, true),
+        getAccountStats(this.user.id, false, userDomain),
+        getAccountStats(this.user.id, true, userDomain),
       ]);
 
       const mailboxes = ["INBOX"];
