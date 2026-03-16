@@ -10,8 +10,13 @@ import { logger } from "server";
 
 export class ImapRequestHandler {
   private session: ImapSession | null = null;
+  private _pendingSaslTag: string | null = null;
 
   constructor(public port = 143) {}
+
+  setPendingSaslTag = (tag: string) => {
+    this._pendingSaslTag = tag;
+  };
 
   setSocket = (socket: Socket) => {
     if (this.session) {
@@ -29,6 +34,8 @@ export class ImapRequestHandler {
     // State for APPEND literal accumulation
     let pendingAppendLine: string | null = null;
     let literalBytesNeeded = 0;
+
+    // pendingSaslTag is stored on this (class property) so session can set it
 
     socket.on("data", async (data) => {
       try {
@@ -80,6 +87,19 @@ export class ImapRequestHandler {
 
           const line = buffer.substring(0, lineEnd);
           buffer = buffer.substring(lineEnd + 2);
+
+          // Handle SASL challenge response (client sends base64 after "+ " challenge)
+          if (this._pendingSaslTag !== null) {
+            const tag = this._pendingSaslTag;
+            this._pendingSaslTag = null;
+            // Client may send "*" to cancel authentication
+            if (line.trim() === "*") {
+              session.write(`${tag} BAD Authentication cancelled\r\n`);
+            } else {
+              await session.authenticate(tag, "PLAIN", line.trim());
+            }
+            continue;
+          }
 
           if (line.trim()) {
             // When session is in IDLE mode, skip normal command processing —
