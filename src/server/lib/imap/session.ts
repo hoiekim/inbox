@@ -176,11 +176,20 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
-    // Check fetch limit
-    const requestedCount = this.countSequenceSetMessages(
-      fetchRequest.sequenceSet
+    // Check fetch limit — only apply to body-fetching requests, not FLAGS/header-only
+    const isFlagsOnly = fetchRequest.dataItems.every(
+      (item) => item.type === "FLAGS" || item.type === "UID" || item.type === "RFC822.SIZE" || item.type === "INTERNALDATE"
     );
-    if (requestedCount > 50) {
+    const isHeaderOnly = fetchRequest.dataItems.every(
+      (item) =>
+        item.type === "FLAGS" || item.type === "UID" || item.type === "RFC822.SIZE" ||
+        item.type === "INTERNALDATE" ||
+        (item.type === "BODY" && item.section?.type === "HEADER") ||
+        (item.type === "BODY" && item.section?.type === "HEADER_FIELDS")
+    );
+    const requestedCount = this.countSequenceSetMessages(fetchRequest.sequenceSet);
+    const limit = isFlagsOnly ? Infinity : isHeaderOnly ? 500 : 50;
+    if (requestedCount > limit) {
       return this.write(`${tag} NO [LIMIT] FETCH too much data requested\r\n`);
     }
 
@@ -1056,7 +1065,10 @@ export class ImapSession {
     try {
       const boxes = await this.store.listMailboxes();
       boxes.forEach((box) => {
-        const response = `* LIST (\\HasNoChildren) "/" "${box}"\r\n`;
+        // Sub-mailboxes (INBOX/x, Sent Messages/x) are virtual — mark \Noselect
+        const isSubMailbox = box.includes("/");
+        const flags = isSubMailbox ? "\\Noselect \\HasNoChildren" : "\\HasNoChildren";
+        const response = `* LIST (${flags}) "/" "${box}"\r\n`;
         this.write(response);
       });
       this.write(`${tag} OK LIST completed\r\n`);
