@@ -1065,10 +1065,7 @@ export class ImapSession {
     try {
       const boxes = await this.store.listMailboxes();
       boxes.forEach((box) => {
-        // Sub-mailboxes (INBOX/x, Sent Messages/x) are virtual — mark \Noselect
-        const isSubMailbox = box.includes("/");
-        const flags = isSubMailbox ? "\\Noselect \\HasNoChildren" : "\\HasNoChildren";
-        const response = `* LIST (${flags}) "/" "${box}"\r\n`;
+        const response = `* LIST (\\HasNoChildren) "/" "${box}"\r\n`;
         this.write(response);
       });
       this.write(`${tag} OK LIST completed\r\n`);
