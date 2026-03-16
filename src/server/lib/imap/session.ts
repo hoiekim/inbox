@@ -646,7 +646,11 @@ export class ImapSession {
     }
 
     if (!initialResponse) {
-      return this.write(`${tag} BAD Missing initial response\r\n`);
+      // Send empty challenge — client will respond with base64(\0user\0pass)
+      // The handler will catch the next line and call authenticate() again with the response
+      this.write(`+ \r\n`);
+      this.handler.setPendingSaslTag(tag);
+      return;
     }
 
     try {
