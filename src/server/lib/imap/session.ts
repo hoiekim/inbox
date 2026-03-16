@@ -512,6 +512,38 @@ export class ImapSession {
         fields.add("messageId");
         break;
 
+      case "HEADER_FIELDS": {
+        // Map IMAP header field names to MailType fields needed from DB
+        const headerFieldMap: Record<string, (keyof MailType)[]> = {
+          "FROM": ["from"],
+          "TO": ["to"],
+          "CC": ["cc"],
+          "BCC": ["bcc"],
+          "REPLY-TO": ["replyTo"],
+          "SUBJECT": ["subject"],
+          "DATE": ["date"],
+          "MESSAGE-ID": ["messageId"],
+        };
+        const requested = bodyFetch.section.fields ?? [];
+        if (bodyFetch.section.not) {
+          // HEADER.FIELDS.NOT: load all header fields to exclude the listed ones
+          fields.add("subject");
+          fields.add("from");
+          fields.add("to");
+          fields.add("cc");
+          fields.add("bcc");
+          fields.add("date");
+          fields.add("messageId");
+        } else {
+          // HEADER.FIELDS: load only the requested fields
+          for (const f of requested) {
+            const mapped = headerFieldMap[f.toUpperCase()];
+            if (mapped) mapped.forEach((k) => fields.add(k));
+          }
+        }
+        break;
+      }
+
       case "MIME_PART":
         fields.add("text");
         fields.add("html");
@@ -562,6 +594,38 @@ export class ImapSession {
 
       case "HEADER":
         return formatHeaders(mail, docId) + "\r\n";
+
+      case "HEADER_FIELDS": {
+        const allHeaders = formatHeaders(mail, docId);
+        const requestedFields = section.fields.map((f: string) => f.toUpperCase());
+        const lines = allHeaders.split("\r\n");
+        const filtered: string[] = [];
+        let i = 0;
+        while (i < lines.length) {
+          const line = lines[i];
+          if (line === "") break; // end of headers
+          // Continuation lines (folded headers) start with whitespace
+          if (line.match(/^[ \t]/) && filtered.length > 0) {
+            filtered[filtered.length - 1] += "\r\n" + line;
+            i++;
+            continue;
+          }
+          const colonIdx = line.indexOf(":");
+          if (colonIdx > 0) {
+            const fieldName = line.substring(0, colonIdx).toUpperCase();
+            const include = section.not
+              ? !requestedFields.includes(fieldName)
+              : requestedFields.includes(fieldName);
+            if (include) {
+              filtered.push(line);
+            }
+          }
+          i++;
+        }
+        return filtered.length > 0
+          ? filtered.join("\r\n") + "\r\n\r\n"
+          : "\r\n";
+      }
 
       case "MIME_PART":
         return getBodyPart(mail, section.partNumber);
