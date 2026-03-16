@@ -123,7 +123,7 @@ export class Store {
         start,
         end,
         useUid,
-        fields.map((f) => this.mapFieldName(f))
+        fields.flatMap((f) => this.mapFieldName(f))
       );
 
       const mails = new Map<string, Partial<Mail>>();
@@ -199,7 +199,7 @@ export class Store {
     }
   };
 
-  private mapFieldName(field: string): string {
+  private mapFieldName(field: string): string[] {
     const fieldMap: Record<string, string[]> = {
       messageId: ["message_id"],
       uid: ["uid_domain", "uid_account"],
@@ -209,7 +209,7 @@ export class Store {
       bcc: ["bcc_address", "bcc_text"],
       replyTo: ["reply_to_address", "reply_to_text"],
     };
-    return (fieldMap[field] || [field]).join(", ");
+    return fieldMap[field] || [field];
   }
 
   setFlags = async (
