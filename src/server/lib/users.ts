@@ -112,7 +112,11 @@ export const isValidEmail = (email: string) => {
 };
 
 export const startTimer = (userId: string) => {
+  // Clear any existing timer to prevent duplicate fires
+  if (expiryTimer[userId]) clearTimeout(expiryTimer[userId]);
+
   expiryTimer[userId] = setTimeout(async () => {
+    delete expiryTimer[userId];
     const updatedUserInfo = await getUser({ id: userId });
     if (!updatedUserInfo) return;
     const { expiry } = updatedUserInfo;
