@@ -568,6 +568,16 @@ export class ImapSession {
         fields.add("html");
         fields.add("attachments");
         break;
+
+      case "HEADER_FIELDS":
+        fields.add("subject");
+        fields.add("from");
+        fields.add("to");
+        fields.add("cc");
+        fields.add("bcc");
+        fields.add("date");
+        fields.add("messageId");
+        break;
     }
   }
 
@@ -592,24 +602,15 @@ export class ImapSession {
       case "FULL":
         return buildFullMessage(mail, docId);
 
-      case "TEXT":
-        // For multipart messages, TEXT should return the body after headers
-        const hasText = mail.text && mail.text.trim().length > 0;
-        const hasHtml = mail.html && mail.html.trim().length > 0;
-        const hasAttachments = mail.attachments && mail.attachments.length > 0;
-
-        // If it's a multipart message, build the multipart body
-        if ((hasText && hasHtml) || hasAttachments) {
-          const fullMessage = buildFullMessage(mail, docId);
-          // Extract body part after headers (after first \r\n\r\n)
-          const headerEndIndex = fullMessage.indexOf("\r\n\r\n");
-          if (headerEndIndex !== -1) {
-            return fullMessage.substring(headerEndIndex + 4);
-          }
+      case "TEXT": {
+        // Return body after headers for all message types
+        const fullMessage = buildFullMessage(mail, docId);
+        const headerEndIndex = fullMessage.indexOf("\r\n\r\n");
+        if (headerEndIndex !== -1) {
+          return fullMessage.substring(headerEndIndex + 4);
         }
-
-        // For simple messages, return just the text content
-        return mail.text || "";
+        return "";
+      }
 
       case "HEADER":
         return formatHeaders(mail, docId) + "\r\n";
@@ -648,6 +649,31 @@ export class ImapSession {
 
       case "MIME_PART":
         return getBodyPart(mail, section.partNumber);
+
+      case "HEADER_FIELDS": {
+        // Return only the requested (or excluded) headers followed by blank line
+        const allHeaders = formatHeaders(mail, docId);
+        const fieldSet = new Set(section.fields.map((f) => f.toUpperCase()));
+        const lines = allHeaders.split("\r\n");
+        const filtered: string[] = [];
+        let include = false;
+
+        for (const line of lines) {
+          // Continuation lines (start with whitespace) inherit the previous header's decision
+          if (line.length > 0 && (line[0] === " " || line[0] === "\t")) {
+            if (include) filtered.push(line);
+            continue;
+          }
+          const colonIdx = line.indexOf(":");
+          if (colonIdx > 0) {
+            const headerName = line.substring(0, colonIdx).toUpperCase();
+            include = section.not ? !fieldSet.has(headerName) : fieldSet.has(headerName);
+            if (include) filtered.push(line);
+          }
+        }
+
+        return filtered.join("\r\n") + "\r\n";
+      }
 
       default:
         return null;
@@ -765,7 +791,7 @@ export class ImapSession {
             statusItems.push("MESSAGES", total.toString());
             break;
           case "UIDNEXT":
-            statusItems.push("UIDNEXT", (total + 1).toString());
+            statusItems.push("UIDNEXT", (countResult.maxUid + 1).toString());
             break;
           case "UIDVALIDITY":
             statusItems.push("UIDVALIDITY", uidValidity!.toString());
@@ -1169,8 +1195,12 @@ export class ImapSession {
       this.write(
         `* OK [UNSEEN ${unread}] Message ${unread} is first unseen\r\n`
       );
+      // UIDNEXT must be max(uid) + 1, not count + 1
+      const uidNext = this.seqToUid.length > 0
+        ? this.seqToUid[this.seqToUid.length - 1] + 1
+        : (countResult.maxUid + 1 || 1);
       this.write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
-      this.write(`* OK [UIDNEXT ${total + 1}] Predicted next UID\r\n`);
+      this.write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
       this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
       this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`);
       this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);

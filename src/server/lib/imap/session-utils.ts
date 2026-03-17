@@ -4,7 +4,7 @@
  */
 
 import { MailType } from "common";
-import { PartialRange, BodySection, FetchDataItem } from "./types";
+import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from "./types";
 import { formatHeaders, encodeText } from "./util";
 import { getAttachment } from "server";
 import { logger } from "server";
@@ -42,8 +42,13 @@ export const getBodySectionKey = (section: BodySection): string => {
       return "BODY[HEADER]";
     case "MIME_PART":
       return `BODY[${section.partNumber}]`;
-    case "HEADER_FIELDS":
-      return section.not ? "BODY[HEADER.FIELDS.NOT]" : "BODY[HEADER.FIELDS]";
+    case "HEADER_FIELDS": {
+      const hfs = section as HeaderFieldsSection;
+      const fieldList = hfs.fields.join(" ");
+      return hfs.not
+        ? `BODY[HEADER.FIELDS.NOT (${fieldList})]`
+        : `BODY[HEADER.FIELDS (${fieldList})]`;
+    }
     default:
       return "BODY[]";
   }
@@ -73,11 +78,11 @@ export const buildFullMessage = (
   }
 
   if (hasText && !hasHtml && !hasAttachments) {
-    return `${headers}\r\n\r\n${mail.text}`;
+    return `${headers}\r\n\r\n${encodeText(mail.text!)}\r\n`;
   }
 
   if (!hasText && hasHtml && !hasAttachments) {
-    return `${headers}\r\n\r\n${mail.html}`;
+    return `${headers}\r\n\r\n${encodeText(mail.html!)}\r\n`;
   }
 
   // For multipart messages, extract boundary from headers or use deterministic one

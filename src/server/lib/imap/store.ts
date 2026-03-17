@@ -93,7 +93,7 @@ export class Store {
 
   countMessages = async (
     box: string
-  ): Promise<{ total: number; unread: number } | null> => {
+  ): Promise<{ total: number; unread: number; maxUid: number } | null> => {
     try {
       const isDomainInbox = box === "INBOX";
       const isUnifiedSent = box === SENT_MESSAGES_FOLDER;

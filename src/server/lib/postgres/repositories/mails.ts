@@ -486,17 +486,19 @@ export const countMessages = async (
   user_id: string,
   account: string | null,
   sent: boolean
-): Promise<{ total: number; unread: number }> => {
+): Promise<{ total: number; unread: number; maxUid: number }> => {
   try {
     let sql: string;
     let values: ParamValue[];
+    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     if (account === null) {
       // Domain-wide count (exclude expunged messages)
       sql = `
         SELECT 
           COUNT(*) as total,
-          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
+          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
+          COALESCE(MAX(${uidField}), 0) as max_uid
         FROM mails 
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
       `;
@@ -511,7 +513,8 @@ export const countMessages = async (
       sql = `
         SELECT 
           COUNT(*) as total,
-          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread
+          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
+          COALESCE(MAX(${uidField}), 0) as max_uid
         FROM mails 
         WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
       `;
@@ -522,10 +525,11 @@ export const countMessages = async (
     return {
       total: parseInt(result.rows[0]?.total || "0", 10),
       unread: parseInt(result.rows[0]?.unread || "0", 10),
+      maxUid: parseInt(result.rows[0]?.max_uid || "0", 10),
     };
   } catch (error) {
     console.error("Failed to count messages:", error);
-    return { total: 0, unread: 0 };
+    return { total: 0, unread: 0, maxUid: 0 };
   }
 };
 
