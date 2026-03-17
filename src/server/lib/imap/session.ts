@@ -355,7 +355,7 @@ export class ImapSession {
         const encodedHtml = encodeText(mail.html || "");
         const htmlSize = Buffer.byteLength(encodedHtml, "utf-8");
         const attachmentSize = (mail.attachments ?? []).reduce(
-          (acc, { size }) => acc + Math.ceil(size / 3) * 4,
+          (acc, { size }) => acc + (size ? Math.ceil(size / 3) * 4 : 0),
           0
         );
         const size = textSize + htmlSize + attachmentSize;
