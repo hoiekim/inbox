@@ -44,17 +44,17 @@ export const initializeHttp = async () => {
   const domain = getDomain();
   const port = process.env.PORT || 3004;
 
-  await new Promise((res) =>
-    app.listen(port, () => {
+  const httpServer = await new Promise<import("http").Server>((resolve) => {
+    const server = app.listen(port, () => {
       console.info(`${domain} mail server is listening`);
-      res(undefined);
-    })
-  );
+      resolve(server);
+    });
+  });
 
   // Start cleanup scheduler for rate limit data
   startCleanupScheduler();
 
-  return app;
+  return httpServer;
 };
 
 export * from "./routes";

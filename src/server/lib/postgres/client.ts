@@ -36,28 +36,3 @@ const config: PoolConfig = {
 };
 
 export const pool = new Pool(config);
-
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await pool.end();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  await pool.end();
-  process.exit(0);
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled promise rejection:", reason);
-});
-
-process.on("uncaughtException", async (error) => {
-  console.error("Uncaught exception:", error);
-  try {
-    await pool.end();
-  } catch (e) {
-    // ignore pool shutdown errors during crash
-  }
-  process.exit(1);
-});

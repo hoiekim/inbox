@@ -16,39 +16,40 @@ export const getImapListener = (port: number) => {
 };
 
 export const initializeImap = async () => {
-  await new Promise<void>((res) => {
+  const servers: import("net").Server[] = [];
+
+  const imapServer = await new Promise<import("net").Server>((res) => {
     const port = 143;
     const imapListener = getImapListener(port);
     const server = createServer(imapListener);
     server.listen(port, () => {
       logger.info("IMAP server listening", { component: "imap", port });
-      res();
+      res(server);
     });
   });
+  servers.push(imapServer);
 
-  await new Promise<void>((res) => {
-    const port = 993;
-    const imapListener = getImapListener(port);
+  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+  if (SSL_CERTIFICATE && SSL_CERTIFICATE_KEY) {
+    const imapTlsServer = await new Promise<import("net").Server>((res) => {
+      const port = 993;
+      const imapListener = getImapListener(port);
 
-    const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
+      const tlsOptions = {
+        key: readFileSync(SSL_CERTIFICATE_KEY),
+        cert: readFileSync(SSL_CERTIFICATE)
+      };
 
-    if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) {
-      logger.warn("IMAP: SSL certificate not found, TLS server not started", { component: "imap" });
-      res();
-      return;
-    }
-
-    const tlsOptions = {
-      key: readFileSync(SSL_CERTIFICATE_KEY),
-      cert: readFileSync(SSL_CERTIFICATE)
-    };
-
-    const server = createTLSServer(tlsOptions, imapListener);
-    server.listen(port, () => {
-      logger.info("IMAP server listening over TLS", { component: "imap", port });
-      res();
+      const server = createTLSServer(tlsOptions, imapListener);
+      server.listen(port, () => {
+        logger.info("IMAP server listening over TLS", { component: "imap", port });
+        res(server);
+      });
     });
-  });
+    servers.push(imapTlsServer);
+  } else {
+    logger.warn("IMAP: SSL certificate not found, TLS server not started", { component: "imap" });
+  }
 
-  return;
+  return servers;
 };
