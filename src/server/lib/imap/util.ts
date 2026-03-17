@@ -243,14 +243,48 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
   return flags;
 };
 
+export const ACCOUNTS_FOLDER = "accounts";
+export const SENT_MESSAGES_FOLDER = "Sent Messages";
+export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
+
+/** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {
-  return accountName.split("@")[0];
+  const localPart = accountName.split("@")[0];
+  return `${ACCOUNTS_FOLDER}/${localPart}`;
+};
+
+/** Maps an email address to its sent-mail virtual mailbox name. */
+export const accountToSentBox = (accountName: string): string => {
+  const localPart = accountName.split("@")[0];
+  return `${SENT_MESSAGES_ACCOUNTS_FOLDER}/${localPart}`;
+};
+
+/**
+ * Returns true for any sent mailbox:
+ * - "Sent Messages" (unified across all accounts)
+ * - "Sent Messages/accounts/{name}" (per-account sent)
+ */
+export const isSentBox = (box: string): boolean => {
+  return box === SENT_MESSAGES_FOLDER || box.startsWith(`${SENT_MESSAGES_ACCOUNTS_FOLDER}/`);
+};
+
+/** Returns true for the accounts/ parent folder itself (non-selectable). */
+export const isAccountsFolder = (box: string): boolean => {
+  return box === ACCOUNTS_FOLDER;
+};
+
+/** Returns true for the Sent Messages/accounts/ parent folder itself (non-selectable). */
+export const isSentMessagesAccountsFolder = (box: string): boolean => {
+  return box === SENT_MESSAGES_ACCOUNTS_FOLDER;
 };
 
 export const boxToAccount = (username: string, box: string): string => {
-  const cleanBoxname = box.replace("Sent Messages/", "").replace("INBOX/", "");
   const domain = getUserDomain(username);
-  return `${cleanBoxname}@${domain}`;
+  // Strip Sent Messages/accounts/ or accounts/ prefix to extract the local part
+  const localPart = box
+    .replace(new RegExp(`^${SENT_MESSAGES_ACCOUNTS_FOLDER}/`), "")
+    .replace(new RegExp(`^${ACCOUNTS_FOLDER}/`), "");
+  return `${localPart}@${domain}`;
 };
 
 export const formatInternalDate = (d: Date): string => {
