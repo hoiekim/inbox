@@ -243,14 +243,37 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
   return flags;
 };
 
+export const ACCOUNTS_FOLDER = "accounts";
+
+/** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {
-  return accountName.split("@")[0];
+  const localPart = accountName.split("@")[0];
+  return `${ACCOUNTS_FOLDER}/${localPart}`;
+};
+
+/** Maps an email address to its sent-mail virtual mailbox name. */
+export const accountToSentBox = (accountName: string): string => {
+  const localPart = accountName.split("@")[0];
+  return `${ACCOUNTS_FOLDER}/${localPart}/Sent`;
+};
+
+/** Returns true for sent mailboxes under accounts/ (e.g. accounts/alice/Sent). */
+export const isSentBox = (box: string): boolean => {
+  return box.startsWith(`${ACCOUNTS_FOLDER}/`) && box.endsWith("/Sent");
+};
+
+/** Returns true for the accounts/ parent folder itself. */
+export const isAccountsFolder = (box: string): boolean => {
+  return box === ACCOUNTS_FOLDER;
 };
 
 export const boxToAccount = (username: string, box: string): string => {
-  const cleanBoxname = box.replace("Sent Messages/", "").replace("INBOX/", "");
   const domain = getUserDomain(username);
-  return `${cleanBoxname}@${domain}`;
+  // Strip /Sent suffix and accounts/ prefix to extract the local part
+  const localPart = box
+    .replace(/\/Sent$/, "")
+    .replace(new RegExp(`^${ACCOUNTS_FOLDER}/`), "");
+  return `${localPart}@${domain}`;
 };
 
 export const formatInternalDate = (d: Date): string => {

@@ -16,7 +16,10 @@ import {
   formatBodyStructure,
   formatFlags,
   formatHeaders,
-  formatInternalDate
+  formatInternalDate,
+  ACCOUNTS_FOLDER,
+  isAccountsFolder,
+  isSentBox,
 } from "./util";
 import {
   applyPartialFetch,
@@ -980,6 +983,19 @@ export class ImapSession {
     );
   };
 
+  private getMailboxAttributes(box: string, allBoxes: string[]): string {
+    if (isAccountsFolder(box)) {
+      // accounts/ is a non-selectable parent folder
+      return "\\HasChildren \\Noselect";
+    }
+    // An account box (e.g. accounts/alice) has children if accounts/alice/Sent exists
+    const hasSentChild = allBoxes.includes(`${box}/Sent`);
+    if (box.startsWith(`${ACCOUNTS_FOLDER}/`) && !isSentBox(box) && hasSentChild) {
+      return "\\HasChildren";
+    }
+    return "\\HasNoChildren";
+  }
+
   listMailboxes = async (tag: string) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
@@ -988,8 +1004,8 @@ export class ImapSession {
     try {
       const boxes = await this.store.listMailboxes();
       boxes.forEach((box) => {
-        const response = `* LIST (\\HasNoChildren) "/" "${box}"\r\n`;
-        this.write(response);
+        const attrs = this.getMailboxAttributes(box, boxes);
+        this.write(`* LIST (${attrs}) "/" "${box}"\r\n`);
       });
       this.write(`${tag} OK LIST completed\r\n`);
     } catch (error) {
@@ -1006,8 +1022,8 @@ export class ImapSession {
     try {
       const boxes = await this.store.listMailboxes();
       boxes.forEach((box) => {
-        const response = `* LSUB (\\HasNoChildren) "/" "${box}"\r\n`;
-        this.write(response);
+        const attrs = this.getMailboxAttributes(box, boxes);
+        this.write(`* LSUB (${attrs}) "/" "${box}"\r\n`);
       });
       this.write(`${tag} OK LSUB completed\r\n`);
     } catch (error) {
@@ -1026,6 +1042,10 @@ export class ImapSession {
 
     if (!cleanName) {
       return this.write(`${tag} NO Empty mailbox name\r\n`);
+    }
+
+    if (isAccountsFolder(cleanName)) {
+      return this.write(`${tag} NO [CANNOT] ${ACCOUNTS_FOLDER} is not selectable\r\n`);
     }
 
     try {

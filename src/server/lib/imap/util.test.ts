@@ -132,16 +132,16 @@ describe("IMAP util", () => {
   });
 
   describe("accountToBox", () => {
-    it("should extract local part from email", () => {
-      expect(accountToBox("user@example.com")).toBe("user");
+    it("should extract local part from email under accounts/ folder", () => {
+      expect(accountToBox("user@example.com")).toBe("accounts/user");
     });
 
     it("should handle email with dots in local part", () => {
-      expect(accountToBox("first.last@example.com")).toBe("first.last");
+      expect(accountToBox("first.last@example.com")).toBe("accounts/first.last");
     });
 
     it("should handle email with plus addressing", () => {
-      expect(accountToBox("user+tag@example.com")).toBe("user+tag");
+      expect(accountToBox("user+tag@example.com")).toBe("accounts/user+tag");
     });
   });
 
