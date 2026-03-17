@@ -57,6 +57,7 @@ const throttler = new Throttler();
 
 export class ImapSession {
   public selectedMailbox: string | null = null;
+  private selectedMailboxMessageCount: number = 0;
   private store: Store | null = null;
   private authenticated: boolean = false;
   private isIdling: boolean = false;
@@ -204,14 +205,17 @@ export class ImapSession {
   };
 
   private countSequenceSetMessages(sequenceSet: SequenceSet): number {
+    // Cap * (MAX_SAFE_INTEGER) at the actual mailbox size so limit checks
+    // work correctly for ranges like 1:* or *:*
+    const mailboxSize = this.selectedMailboxMessageCount ?? 0;
     let count = 0;
     for (const range of sequenceSet.ranges) {
       if (range.end === undefined) {
-        // Single message
         count += 1;
       } else {
-        // Range of messages
-        count += range.end - range.start + 1;
+        const start = Math.min(range.start, mailboxSize);
+        const end = range.end === Number.MAX_SAFE_INTEGER ? mailboxSize : Math.min(range.end, mailboxSize);
+        count += Math.max(0, end - start + 1);
       }
     }
     return count;
@@ -1115,12 +1119,14 @@ export class ImapSession {
 
       if (countResult === null) {
         this.selectedMailbox = null;
+      this.selectedMailboxMessageCount = 0;
         this.seqToUid = [];
         this.uidToSeq.clear();
         return this.write(`${tag} NO Mailbox does not exist\r\n`);
       }
 
       const { total, unread } = countResult;
+      this.selectedMailboxMessageCount = total;
 
       // Get UIDVALIDITY for this user (initialized on first IMAP access)
       const uidValidity = await getImapUidValidity(this.store.getUser().id);
@@ -1194,6 +1200,7 @@ export class ImapSession {
 
     // Clear the selected mailbox and sequence mapping
     this.selectedMailbox = null;
+      this.selectedMailboxMessageCount = 0;
     this.seqToUid = [];
     this.uidToSeq.clear();
     this.write(`${tag} OK CLOSE completed\r\n`);
@@ -1207,6 +1214,7 @@ export class ImapSession {
 
     this.store = null;
     this.selectedMailbox = null;
+      this.selectedMailboxMessageCount = 0;
     this.seqToUid = [];
     this.uidToSeq.clear();
     this.authenticated = false;
