@@ -130,6 +130,42 @@ Security-critical parsers have dedicated test coverage:
 - Test the public interface and edge cases
 - PRs adding new code without tests will require justification
 
+### Bun `mock.module` — Global Scope Warning
+
+**`mock.module()` replaces modules globally for the entire test run**, not just the current test file. This has caused repeated CI failures.
+
+**Rules:**
+1. **Mock only what the module under test actually imports.** Don't mock extra exports "just in case" — they leak into other test files.
+2. **Never mock utility functions** (`getDomain`, `getUserDomain`, `isValidEmail`) unless the code under test directly calls them.
+3. **If a mock must override a barrel** (`'server'`), re-export everything the barrel normally exports to avoid breaking downstream tests.
+
+**Example of the bug pattern:**
+```typescript
+// ❌ smtp.test.ts mocked 'server' with getDomain: () => 'test.com'
+// → mails/util.test.ts also imports getDomain from 'server'
+// → getDomain resolves to the mock stub, 4 tests fail
+
+// ✅ Only mock what smtp.ts actually uses
+mock.module("server", () => ({
+  getUser: mockGetUser,
+  saveMailHandler: mockSave,
+  sendMail: mockSend,
+  // Don't include getDomain — smtp.ts doesn't import it
+}));
+```
+
+### React Component Cleanup
+
+Always return cleanup functions from `useEffect` when adding event listeners:
+
+```typescript
+useEffect(() => {
+  const handler = (e: Event) => { /* ... */ };
+  window.addEventListener("focus", handler);
+  return () => window.removeEventListener("focus", handler);
+}, []);
+```
+
 ## Code Style
 
 ### TypeScript
