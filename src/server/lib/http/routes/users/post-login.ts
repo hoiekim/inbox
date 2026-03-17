@@ -26,6 +26,12 @@ export const postLoginRoute = new Route<LoginPostResponse>(
       return { status: "failed", message: "Invalid credentials." };
     }
 
+    await new Promise<void>((resolve, reject) => {
+      req.session.regenerate((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
     req.session.user = signedUser;
 
     return { status: "success", body: signedUser };
