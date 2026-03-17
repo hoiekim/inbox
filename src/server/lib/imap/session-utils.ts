@@ -181,15 +181,18 @@ export const getBodyPart = (
     return null;
   }
 
+  // Helper: base64-encode text content to match BODYSTRUCTURE encoding declaration
+  const b64 = (str: string) => Buffer.from(str, "utf8").toString("base64");
+
   if (!hasAttachments) {
     if (hasText && hasHtml) {
       // multipart/alternative
-      if (mainPart === 1) return mail.text || null;
-      if (mainPart === 2) return mail.html || null;
+      if (mainPart === 1) return b64(mail.text!);
+      if (mainPart === 2) return b64(mail.html!);
     } else if (hasText && mainPart === 1) {
-      return mail.text || null;
+      return b64(mail.text!);
     } else if (hasHtml && mainPart === 1) {
-      return mail.html || null;
+      return b64(mail.html!);
     }
     return null;
   }
@@ -202,25 +205,27 @@ export const getBodyPart = (
     if (hasText && hasHtml) {
       // This would be a multipart/alternative part
       const subPart = parts[1] ? parseInt(parts[1], 10) : 1;
-      if (subPart === 1) return mail.text || null;
-      if (subPart === 2) return mail.html || null;
+      if (subPart === 1) return b64(mail.text!);
+      if (subPart === 2) return b64(mail.html!);
     } else if (hasText) {
-      return mail.text || null;
+      return b64(mail.text!);
     } else if (hasHtml) {
-      return mail.html || null;
+      return b64(mail.html!);
     }
   }
 
   partIndex++;
 
-  // Subsequent parts are attachments
+  // Subsequent parts are attachments — serve base64-encoded binary
   const attachmentIndex = mainPart - partIndex;
   if (
     mail.attachments &&
     attachmentIndex >= 0 &&
     attachmentIndex < mail.attachments.length
   ) {
-    return mail.attachments[attachmentIndex].content.data;
+    const att = mail.attachments[attachmentIndex];
+    const data = getAttachment(att.content.data);
+    return data ? data.toString("base64") : null;
   }
 
   return null;
