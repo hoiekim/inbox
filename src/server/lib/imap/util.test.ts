@@ -156,7 +156,7 @@ describe("IMAP util", () => {
     });
 
     it("should convert Sent Messages mailbox to account", () => {
-      const result = boxToAccount("testuser", "Sent Messages/support");
+      const result = boxToAccount("testuser", "Sent Messages/accounts/support");
       expect(result).toMatch(/support@/);
     });
 

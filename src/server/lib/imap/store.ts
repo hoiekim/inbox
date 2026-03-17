@@ -26,6 +26,8 @@ import {
   isSentBox,
   isAccountsFolder,
   ACCOUNTS_FOLDER,
+  SENT_MESSAGES_FOLDER,
+  SENT_MESSAGES_ACCOUNTS_FOLDER,
 } from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
 import { logger } from "server";
@@ -48,18 +50,15 @@ export class Store {
         getAccountStats(this.user.id, true),
       ]);
 
-      // Track which accounts have sent mail (for \HasChildren attribute)
-      const accountsWithSent = new Set<string>();
-      sentStats.forEach((stat) => {
-        if (stat.address) {
-          accountsWithSent.add(accountToBox(stat.address));
-        }
-      });
-
       const mailboxes: string[] = ["INBOX"];
 
-      // Add accounts/ parent folder if any account mailboxes exist
-      if (receivedStats.length > 0 || sentStats.length > 0) {
+      // Add Sent Messages (unified across all accounts) if any sent mail exists
+      if (sentStats.length > 0) {
+        mailboxes.push(SENT_MESSAGES_FOLDER);
+      }
+
+      // Add accounts/ parent folder if any received-mail accounts exist
+      if (receivedStats.length > 0) {
         mailboxes.push(ACCOUNTS_FOLDER);
       }
 
@@ -67,19 +66,17 @@ export class Store {
       receivedStats.forEach((stat) => {
         if (stat.address) {
           mailboxes.push(accountToBox(stat.address));
-          // Add Sent subfolder if this account has sent mail
-          if (accountsWithSent.has(accountToBox(stat.address))) {
-            mailboxes.push(accountToSentBox(stat.address));
-          }
         }
       });
 
-      // Add Sent mailboxes for accounts that only have sent mail (no received)
-      const receivedBoxes = new Set(
-        receivedStats.map((s) => s.address && accountToBox(s.address))
-      );
+      // Add Sent Messages/accounts/ parent folder if any per-account sent mail exists
+      if (sentStats.length > 0) {
+        mailboxes.push(SENT_MESSAGES_ACCOUNTS_FOLDER);
+      }
+
+      // Add per-account sent mailboxes under Sent Messages/accounts/
       sentStats.forEach((stat) => {
-        if (stat.address && !receivedBoxes.has(accountToBox(stat.address))) {
+        if (stat.address) {
           mailboxes.push(accountToSentBox(stat.address));
         }
       });
@@ -96,8 +93,9 @@ export class Store {
   ): Promise<{ total: number; unread: number } | null> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 
@@ -115,8 +113,9 @@ export class Store {
   getAllUids = async (box: string): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 
@@ -136,8 +135,9 @@ export class Store {
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 
@@ -237,8 +237,9 @@ export class Store {
   ): Promise<UpdatedMailFlags[]> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 
@@ -265,8 +266,9 @@ export class Store {
   expunge = async (box: string): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 
@@ -283,8 +285,9 @@ export class Store {
   ): Promise<number[]> => {
     try {
       const isDomainInbox = box === "INBOX";
+      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
       const isSent = isSentBox(box);
-      const accountName = isDomainInbox
+      const accountName = (isDomainInbox || isUnifiedSent)
         ? null
         : boxToAccount(this.user.username, box);
 

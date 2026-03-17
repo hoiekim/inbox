@@ -20,6 +20,9 @@ import {
   ACCOUNTS_FOLDER,
   isAccountsFolder,
   isSentBox,
+  SENT_MESSAGES_ACCOUNTS_FOLDER,
+  isSentMessagesAccountsFolder,
+  SENT_MESSAGES_FOLDER,
 } from "./util";
 import {
   applyPartialFetch,
@@ -984,14 +987,20 @@ export class ImapSession {
   };
 
   private getMailboxAttributes(box: string, allBoxes: string[]): string {
+    // accounts/ is a non-selectable parent folder
     if (isAccountsFolder(box)) {
-      // accounts/ is a non-selectable parent folder
       return "\\HasChildren \\Noselect";
     }
-    // An account box (e.g. accounts/alice) has children if accounts/alice/Sent exists
-    const hasSentChild = allBoxes.includes(`${box}/Sent`);
-    if (box.startsWith(`${ACCOUNTS_FOLDER}/`) && !isSentBox(box) && hasSentChild) {
-      return "\\HasChildren";
+    // Sent Messages/accounts/ is a non-selectable parent folder
+    if (isSentMessagesAccountsFolder(box)) {
+      return "\\HasChildren \\Noselect";
+    }
+    // "Sent Messages" has children if there are per-account sent boxes
+    if (box === SENT_MESSAGES_FOLDER) {
+      const hasSentAccountChildren = allBoxes.some((b) =>
+        b.startsWith(`${SENT_MESSAGES_ACCOUNTS_FOLDER}/`)
+      );
+      return hasSentAccountChildren ? "\\HasChildren" : "\\HasNoChildren";
     }
     return "\\HasNoChildren";
   }
@@ -1046,6 +1055,10 @@ export class ImapSession {
 
     if (isAccountsFolder(cleanName)) {
       return this.write(`${tag} NO [CANNOT] ${ACCOUNTS_FOLDER} is not selectable\r\n`);
+    }
+
+    if (isSentMessagesAccountsFolder(cleanName)) {
+      return this.write(`${tag} NO [CANNOT] ${SENT_MESSAGES_ACCOUNTS_FOLDER} is not selectable\r\n`);
     }
 
     try {

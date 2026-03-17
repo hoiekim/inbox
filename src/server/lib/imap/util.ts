@@ -244,6 +244,8 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
 };
 
 export const ACCOUNTS_FOLDER = "accounts";
+export const SENT_MESSAGES_FOLDER = "Sent Messages";
+export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
 
 /** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {
@@ -254,24 +256,33 @@ export const accountToBox = (accountName: string): string => {
 /** Maps an email address to its sent-mail virtual mailbox name. */
 export const accountToSentBox = (accountName: string): string => {
   const localPart = accountName.split("@")[0];
-  return `${ACCOUNTS_FOLDER}/${localPart}/Sent`;
+  return `${SENT_MESSAGES_ACCOUNTS_FOLDER}/${localPart}`;
 };
 
-/** Returns true for sent mailboxes under accounts/ (e.g. accounts/alice/Sent). */
+/**
+ * Returns true for any sent mailbox:
+ * - "Sent Messages" (unified across all accounts)
+ * - "Sent Messages/accounts/{name}" (per-account sent)
+ */
 export const isSentBox = (box: string): boolean => {
-  return box.startsWith(`${ACCOUNTS_FOLDER}/`) && box.endsWith("/Sent");
+  return box === SENT_MESSAGES_FOLDER || box.startsWith(`${SENT_MESSAGES_ACCOUNTS_FOLDER}/`);
 };
 
-/** Returns true for the accounts/ parent folder itself. */
+/** Returns true for the accounts/ parent folder itself (non-selectable). */
 export const isAccountsFolder = (box: string): boolean => {
   return box === ACCOUNTS_FOLDER;
 };
 
+/** Returns true for the Sent Messages/accounts/ parent folder itself (non-selectable). */
+export const isSentMessagesAccountsFolder = (box: string): boolean => {
+  return box === SENT_MESSAGES_ACCOUNTS_FOLDER;
+};
+
 export const boxToAccount = (username: string, box: string): string => {
   const domain = getUserDomain(username);
-  // Strip /Sent suffix and accounts/ prefix to extract the local part
+  // Strip Sent Messages/accounts/ or accounts/ prefix to extract the local part
   const localPart = box
-    .replace(/\/Sent$/, "")
+    .replace(new RegExp(`^${SENT_MESSAGES_ACCOUNTS_FOLDER}/`), "")
     .replace(new RegExp(`^${ACCOUNTS_FOLDER}/`), "");
   return `${localPart}@${domain}`;
 };
