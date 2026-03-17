@@ -562,6 +562,10 @@ export const getMailsByRange = async (
     const safeFields = resolvedFields.filter((f) =>
       PartialMailModel.validFields.has(f)
     );
+    // Always include mail_id — it is the Map key; without it all rows collapse to key=undefined
+    if (!safeFields.includes("mail_id")) {
+      safeFields.unshift("mail_id");
+    }
     const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
 
     if (account === null) {
