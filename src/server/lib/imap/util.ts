@@ -155,7 +155,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     ).split("/");
     const filename = attachment.filename || "unnamed";
     // base64 length calculation without actually encoding
-    const size = Math.ceil(attachment.size / 3) * 4;
+    const size = attachment.size ? Math.ceil(attachment.size / 3) * 4 : 0;
     const params: Record<string, string> = { NAME: filename };
     const disposition = { type: "ATTACHMENT", params: { FILENAME: filename } };
 
