@@ -94,10 +94,10 @@ export const formatHeaders = (
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
   } else if (hasHtml) {
     headers.push("Content-Type: text/html; charset=utf-8");
-    headers.push("Content-Transfer-Encoding: 8bit");
+    headers.push("Content-Transfer-Encoding: base64");
   } else {
     headers.push("Content-Type: text/plain; charset=utf-8");
-    headers.push("Content-Transfer-Encoding: 8bit");
+    headers.push("Content-Transfer-Encoding: base64");
   }
 
   return headers.join("\r\n");
