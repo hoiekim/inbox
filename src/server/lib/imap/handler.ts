@@ -339,6 +339,26 @@ export class ImapRequestHandler {
           await this.session.startTls(tag);
           break;
 
+        case "NAMESPACE":
+          // RFC 2342: single personal namespace, no other/shared namespaces
+          this.session.write(`* NAMESPACE (("" "/")) NIL NIL\r\n${tag} OK NAMESPACE completed\r\n`);
+          break;
+
+        case "ENABLE":
+          // RFC 5161: acknowledge requested capabilities; we don't activate any extensions
+          this.session.write(`* ENABLED\r\n${tag} OK ENABLE completed\r\n`);
+          break;
+
+        case "UNSELECT":
+          // RFC 3691: like CLOSE but without expunging; deselect the current mailbox
+          this.session.closeMailbox(tag, true);
+          break;
+
+        case "GETQUOTAROOT":
+          // RFC 2087: quota not supported, return empty quota
+          this.session.write(`${tag} NO Quota not supported\r\n`);
+          break;
+
         default:
           this.session.write(`${tag} BAD Unknown command\r\n`);
           break;

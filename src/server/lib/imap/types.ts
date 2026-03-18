@@ -451,7 +451,11 @@ export type ImapRequest =
   | { type: "ID" }
   | { type: "DONE" }
   | { type: "LOGOUT" }
-  | { type: "STARTTLS" };
+  | { type: "STARTTLS" }
+  | { type: "NAMESPACE" }
+  | { type: "ENABLE"; data: { capabilities: string[] } }
+  | { type: "UNSELECT" }
+  | { type: "GETQUOTAROOT"; data: { mailbox: string } };
 
 // Response types for better type safety
 export interface ImapResponse {

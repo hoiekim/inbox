@@ -194,6 +194,48 @@ const parseImapRequest = (
         consumed: context.position
       };
 
+    case "NAMESPACE":
+      return {
+        success: true,
+        value: { type: "NAMESPACE" },
+        consumed: context.position
+      };
+
+    case "ENABLE": {
+      // ENABLE <capability> [<capability> ...]
+      const caps: string[] = [];
+      skipWhitespace(context);
+      while (context.position < context.length) {
+        const capAtom = parseAtom(context);
+        if (!capAtom.success) break;
+        caps.push(capAtom.value!.toUpperCase());
+        skipWhitespace(context);
+      }
+      return {
+        success: true,
+        value: { type: "ENABLE", data: { capabilities: caps } },
+        consumed: context.position
+      };
+    }
+
+    case "UNSELECT":
+      return {
+        success: true,
+        value: { type: "UNSELECT" },
+        consumed: context.position
+      };
+
+    case "GETQUOTAROOT": {
+      skipWhitespace(context);
+      const mbAtom = parseAtom(context);
+      const mb = mbAtom.success ? mbAtom.value! : "INBOX";
+      return {
+        success: true,
+        value: { type: "GETQUOTAROOT", data: { mailbox: mb } },
+        consumed: context.position
+      };
+    }
+
     default:
       return {
         success: false,

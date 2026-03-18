@@ -1252,7 +1252,7 @@ export class ImapSession {
     }
   };
 
-  closeMailbox = (tag: string) => {
+  closeMailbox = (tag: string, unselect = false) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -1263,10 +1263,11 @@ export class ImapSession {
 
     // Clear the selected mailbox and sequence mapping
     this.selectedMailbox = null;
-      this.selectedMailboxMessageCount = 0;
+    this.selectedMailboxMessageCount = 0;
     this.seqToUid = [];
     this.uidToSeq.clear();
-    this.write(`${tag} OK CLOSE completed\r\n`);
+    const verb = unselect ? "UNSELECT" : "CLOSE";
+    this.write(`${tag} OK ${verb} completed\r\n`);
   };
 
   logout = async (tag: string) => {
