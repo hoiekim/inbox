@@ -394,3 +394,39 @@ a001 LOGIN user@domain.com password
 a002 SELECT INBOX
 a003 FETCH 1:* FLAGS
 ```
+
+## IMAP Implementation Patterns
+
+### RFC Compliance
+
+IMAP clients vary widely in which commands and responses they use. Always test changes with multiple clients:
+- **iOS Mail** — strict about BODYSTRUCTURE encoding; body parts must match declared encoding
+- **Thunderbird** — uses AUTHENTICATE PLAIN (sometimes without inline initial response)
+- **Apple Mail (macOS)** — uses FETCH macros (ALL, FAST, FULL) and expects correct sequence numbers
+
+Key RFC 3501 rules to remember:
+- `* <n> EXISTS` must report **total** mailbox message count, not incremental
+- Sequence numbers are contiguous 1..N; gaps are not allowed
+- FETCH responses must include UID when `UID FETCH` is used
+- BODYSTRUCTURE encoding declarations must match actual body part encoding
+
+### FETCH Limit Tiers
+
+To prevent denial-of-service from unbounded FETCH requests, limits are tiered by data weight:
+
+| Request type | Limit | Rationale |
+|-------------|-------|-----------|
+| FLAGS/UID/RFC822.SIZE/INTERNALDATE only | Unlimited | Metadata only, lightweight |
+| HEADER/HEADER.FIELDS | 500 | Text parsing but no body fetch |
+| BODY/FULL | 50 | Full message reconstruction |
+
+### Sequence Number ↔ UID Mapping
+
+The session maintains bidirectional mappings (`seqToUid[]` and `uidToSeq` Map) rebuilt on SELECT. All FETCH/SEARCH/STORE commands must translate between sequence numbers and UIDs:
+- `FETCH` (non-UID): client sends sequence numbers → translate to UIDs for DB query → respond with sequence numbers
+- `UID FETCH`: client sends UIDs → query directly → respond with UIDs
+- `SEARCH`: returns sequence numbers; `UID SEARCH` returns UIDs
+
+### Avoiding Duplicate Switch Cases
+
+`session.ts` uses large switch statements. TypeScript/JavaScript allows duplicate `case` labels without error — only the first match executes. Always search for existing cases before adding new ones. The `/* eslint-disable no-case-declarations */` at file scope masks warnings; prefer scoping it to individual cases.
