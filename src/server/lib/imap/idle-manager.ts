@@ -59,43 +59,41 @@ class IdleManager {
   }
 
   /**
-   * Notify IDLE sessions about new mail.
-   * @param usernames - usernames whose sessions should be notified
-   * @param mailboxes - optional set of mailbox paths that received mail.
-   *   When provided, only sessions whose selected mailbox is in this set
-   *   (or is "INBOX") will be notified. When omitted, all sessions for
-   *   the given users are notified.
+   * Notify all IDLE sessions for specific users about new mail.
+   * Queries the actual mailbox message count before sending EXISTS per RFC 3501 §7.3.1.
    */
-  notifyNewMail(usernames: string[], mailboxes?: string[]) {
+  async notifyNewMail(usernames: string[]) {
     const usernameSet = new Set(usernames);
     const mailboxSet = mailboxes ? new Set(mailboxes) : null;
 
+    const notifications: Array<{ sessionId: string; idleSession: IdleSession }> = [];
     this.idleSessions.forEach((idleSession, sessionId) => {
-      if (!usernameSet.has(idleSession.username)) return;
-
-      // If specific mailboxes are provided, only notify sessions watching
-      // one of those mailboxes or the catch-all INBOX.
-      if (mailboxSet !== null) {
-        const watching = idleSession.mailbox;
-        if (watching !== "INBOX" && !mailboxSet.has(watching)) return;
-      }
-
-      try {
-        // Send EXISTS notification (new message count)
-        idleSession.session.write("* 1 EXISTS\r\n");
-        idleSession.session.write("* 1 RECENT\r\n");
-
-        logger.debug("Notified IDLE session about new mail", {
-          component: "imap.idle",
-          username: idleSession.username,
-          mailbox: idleSession.mailbox,
-        });
-      } catch (error) {
-        logger.error("Error notifying IDLE session", { component: "imap.idle", sessionId }, error);
-        // Remove broken session
-        this.removeIdleSession(sessionId);
+      if (usernameSet.has(idleSession.username)) {
+        notifications.push({ sessionId, idleSession });
       }
     });
+
+    await Promise.all(
+      notifications.map(async ({ sessionId, idleSession }) => {
+        try {
+          const counts = await idleSession.session.countMailboxMessages(idleSession.mailbox);
+          const total = counts?.total ?? 1;
+
+          idleSession.session.write(`* ${total} EXISTS\r\n`);
+          idleSession.session.write(`* 0 RECENT\r\n`);
+
+          logger.debug("Notified IDLE session about new mail", {
+            component: "imap.idle",
+            username: idleSession.username,
+            mailbox: idleSession.mailbox,
+            total,
+          });
+        } catch (error) {
+          logger.error("Error notifying IDLE session", { component: "imap.idle", sessionId }, error);
+          this.removeIdleSession(sessionId);
+        }
+      })
+    );
   }
 
   /**
