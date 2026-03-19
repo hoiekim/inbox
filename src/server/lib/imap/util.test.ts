@@ -133,15 +133,15 @@ describe("IMAP util", () => {
 
   describe("accountToBox", () => {
     it("should extract local part from email under accounts/ folder", () => {
-      expect(accountToBox("user@example.com")).toBe("accounts/user");
+      expect(accountToBox("user@example.com")).toBe("INBOX/accounts/user");
     });
 
     it("should handle email with dots in local part", () => {
-      expect(accountToBox("first.last@example.com")).toBe("accounts/first.last");
+      expect(accountToBox("first.last@example.com")).toBe("INBOX/accounts/first.last");
     });
 
     it("should handle email with plus addressing", () => {
-      expect(accountToBox("user+tag@example.com")).toBe("accounts/user+tag");
+      expect(accountToBox("user+tag@example.com")).toBe("INBOX/accounts/user+tag");
     });
   });
 
@@ -150,8 +150,8 @@ describe("IMAP util", () => {
     // The default is "mydomain", so for admin user it returns "mydomain"
     // For other users it returns "username.mydomain"
 
-    it("should convert INBOX mailbox to account for admin", () => {
-      const result = boxToAccount("admin", "INBOX/support");
+    it("should convert INBOX/accounts mailbox to account for admin", () => {
+      const result = boxToAccount("admin", "INBOX/accounts/support");
       expect(result).toMatch(/support@/);
     });
 
