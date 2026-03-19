@@ -88,6 +88,17 @@ export class ImapSession {
   };
 
   /**
+   * Count messages in a mailbox. Returns null if the store is not available.
+   * Used by IdleManager to send accurate EXISTS notifications.
+   */
+  countMailboxMessages = async (box: string): Promise<{ total: number; recent: number } | null> => {
+    if (!this.store) return null;
+    const result = await this.store.countMessages(box);
+    if (!result) return null;
+    return { total: result.total, recent: 0 };
+  };
+
+  /**
    * Build sequence number → UID mapping for the selected mailbox.
    * Per RFC 3501, sequence numbers must be contiguous 1..N.
    */
