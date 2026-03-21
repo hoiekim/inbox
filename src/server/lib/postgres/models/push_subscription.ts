@@ -8,7 +8,8 @@ import {
   UPDATED,
   PUSH_SUBSCRIPTIONS,
 } from "./common";
-import { Model, createTable } from "./base";
+import { Model, Table, Constraints } from "./base";
+import { pool } from "../client";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -71,13 +72,46 @@ export class PushSubscriptionModel extends Model<PushSubscriptionJSON, PushSubsc
   }
 }
 
-export const pushSubscriptionsTable = createTable({
-  name: PUSH_SUBSCRIPTIONS,
-  primaryKey: PUSH_SUBSCRIPTION_ID,
-  schema: pushSubscriptionSchema,
-  ModelClass: PushSubscriptionModel,
-  supportsSoftDelete: false,
-  indexes: [{ column: USER_ID }],
-});
+class PushSubscriptionsTable extends Table<
+  PushSubscriptionJSON,
+  PushSubscriptionSchema,
+  PushSubscriptionModel
+> {
+  readonly name = PUSH_SUBSCRIPTIONS;
+  readonly primaryKey = PUSH_SUBSCRIPTION_ID;
+  readonly schema = pushSubscriptionSchema;
+  readonly constraints: Constraints = [];
+  readonly indexes = [{ column: USER_ID }];
+  readonly ModelClass = PushSubscriptionModel;
+  readonly supportsSoftDelete = false;
+
+  /**
+   * Returns all subscriptions for the given list of user IDs.
+   */
+  async getByUserIds(userIds: string[]): Promise<PushSubscriptionModel[]> {
+    if (userIds.length === 0) return [];
+    const placeholders = userIds.map((_, i) => `$${i + 1}`).join(", ");
+    const sql = `SELECT * FROM ${this.name} WHERE ${USER_ID} IN (${placeholders})`;
+    const result = await pool.query(sql, userIds);
+    return result.rows.map((row: unknown) => new PushSubscriptionModel(row));
+  }
+
+  /**
+   * Deletes push subscriptions whose `updated` timestamp is older than the given cutoff.
+   * @param cutoff ISO timestamp string; rows with updated < cutoff are deleted.
+   * @returns Number of rows deleted.
+   */
+  async deleteOlderThan(cutoff: string): Promise<number> {
+    const sql = `
+      DELETE FROM ${this.name}
+      WHERE ${UPDATED} < $1
+      RETURNING ${this.primaryKey}
+    `;
+    const result = await pool.query(sql, [cutoff]);
+    return result.rowCount ?? 0;
+  }
+}
+
+export const pushSubscriptionsTable = new PushSubscriptionsTable();
 
 export const pushSubscriptionColumns = Object.keys(pushSubscriptionsTable.schema);
