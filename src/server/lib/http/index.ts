@@ -39,6 +39,34 @@ export const initializeHttp = async () => {
     })
   );
 
+  // Security response headers (defense-in-depth)
+  app.use((_req, res, next) => {
+    // Restrict resource origins. 'unsafe-inline' for styles is required by React.
+    // 'blob:' in img-src allows inline email images loaded as object URLs.
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "connect-src 'self'",
+        // sandbox attribute on email iframes restricts their content;
+        // frame-src 'self' allows those sandboxed iframes to be embedded.
+        "frame-src 'self'",
+        "font-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+      ].join("; ")
+    );
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    next();
+  });
+
   app.use("/api", apiRouter);
 
   const clientPath = path.resolve(__dirname, "../../../../build/client");
