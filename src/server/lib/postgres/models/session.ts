@@ -15,7 +15,8 @@ import {
   UPDATED,
   SESSIONS,
 } from "./common";
-import { Model, createTable } from "./base";
+import { Model, Table, Constraints } from "./base";
+import { pool } from "../client";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -117,13 +118,31 @@ export class SessionModel extends Model<SessionJSON, SessionSchema> {
   }
 }
 
-export const sessionsTable = createTable({
-  name: SESSIONS,
-  primaryKey: SESSION_ID,
-  schema: sessionSchema,
-  ModelClass: SessionModel,
-  supportsSoftDelete: false,
-  indexes: [{ column: SESSION_USER_ID }, { column: COOKIE_EXPIRES }],
-});
+class SessionsTable extends Table<SessionJSON, SessionSchema, SessionModel> {
+  readonly name = SESSIONS;
+  readonly primaryKey = SESSION_ID;
+  readonly schema = sessionSchema;
+  readonly constraints: Constraints = [];
+  readonly indexes = [{ column: SESSION_USER_ID }, { column: COOKIE_EXPIRES }];
+  readonly ModelClass = SessionModel;
+  readonly supportsSoftDelete = false;
+
+  /**
+   * Deletes all sessions whose cookie_expires timestamp is in the past.
+   * @returns Number of sessions deleted.
+   */
+  async purgeExpired(): Promise<number> {
+    const now = new Date().toISOString();
+    const sql = `
+      DELETE FROM ${this.name}
+      WHERE ${COOKIE_EXPIRES} IS NOT NULL AND ${COOKIE_EXPIRES} <= $1
+      RETURNING ${this.primaryKey}
+    `;
+    const result = await pool.query(sql, [now]);
+    return result.rowCount ?? 0;
+  }
+}
+
+export const sessionsTable = new SessionsTable();
 
 export const sessionColumns = Object.keys(sessionsTable.schema);
