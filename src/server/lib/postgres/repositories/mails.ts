@@ -895,94 +895,18 @@ export const searchMailsByUid = async (
           paramIdx++;
           break;
         case "BODY":
-        case "TEXT":
-        case "SUBJECT_TEXT":
-          // Full-text search across subject (extend to body when indexed)
-          conditions.push(`(subject ILIKE $${paramIdx} OR from_text ILIKE $${paramIdx} OR to_text ILIKE $${paramIdx})`);
+          conditions.push(`(html ILIKE $${paramIdx} OR text ILIKE $${paramIdx})`);
           values.push(`%${criterion.value}%`);
           paramIdx++;
           break;
-
-        // Header search
-        case "HEADER": {
-          const { field, text } = criterion.value as { field: string; text: string };
-          const fieldLower = field.toLowerCase();
-          if (fieldLower === "subject") {
-            conditions.push(`subject ILIKE $${paramIdx}`);
-          } else if (fieldLower === "from") {
-            conditions.push(`from_text ILIKE $${paramIdx}`);
-          } else if (fieldLower === "to") {
-            conditions.push(`to_text ILIKE $${paramIdx}`);
-          } else if (fieldLower === "message-id") {
-            conditions.push(`message_id ILIKE $${paramIdx}`);
-          } else {
-            // Unsupported header field — skip to avoid incorrect results
-            break;
-          }
-          values.push(`%${text}%`);
+        case "TEXT":
+          // RFC 3501: TEXT matches envelope fields and body
+          conditions.push(
+            `(subject ILIKE $${paramIdx} OR from_text ILIKE $${paramIdx} OR to_text ILIKE $${paramIdx} OR html ILIKE $${paramIdx} OR text ILIKE $${paramIdx})`
+          );
+          values.push(`%${criterion.value}%`);
           paramIdx++;
           break;
-        }
-
-        // Date criteria (using internal date — date column)
-        case "BEFORE":
-          conditions.push(`date < $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        case "ON": {
-          const onDate = criterion.value as Date;
-          const nextDay = new Date(onDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
-          values.push(onDate, nextDay);
-          paramIdx += 2;
-          break;
-        }
-        case "SINCE":
-          conditions.push(`date >= $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        // SENT* criteria use the same date column (we have only one date field)
-        case "SENTBEFORE":
-          conditions.push(`date < $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        case "SENTON": {
-          const sentOnDate = criterion.value as Date;
-          const nextDay = new Date(sentOnDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
-          values.push(sentOnDate, nextDay);
-          paramIdx += 2;
-          break;
-        }
-        case "SENTSINCE":
-          conditions.push(`date >= $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-
-        // Size criteria: not tracked per-row; skip to avoid incorrect results
-        case "LARGER":
-        case "SMALLER":
-          break;
-
-        // UID ranges (already split from UidCriterion in store.ts)
-        case "UID_EXACT":
-          conditions.push(`${uidField} = $${paramIdx}`);
-          values.push(criterion.value as number);
-          paramIdx++;
-          break;
-        case "UID_RANGE": {
-          const range = criterion.value as { start: number; end: number };
-          conditions.push(`${uidField} >= $${paramIdx} AND ${uidField} <= $${paramIdx + 1}`);
-          values.push(range.start, range.end);
-          paramIdx += 2;
-          break;
-        }
       }
     }
 
