@@ -853,9 +853,6 @@ export const searchMailsByUid = async (
       }
     }
 
-    // Always exclude expunged messages from search
-    conditions.push("expunged = FALSE");
-
     const sql = `
       SELECT ${uidField} as uid FROM mails 
       WHERE ${conditions.join(" AND ")}
