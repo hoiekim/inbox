@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { KeyboardEvent, useContext } from "react";
 import { Context } from "client";
 import HamburgerIcon from "./components/HamburgerIcon";
 
@@ -19,7 +19,19 @@ const LeftMenu = () => {
   };
 
   return (
-    <div className="menu left cursor" onClick={onClickHamburger}>
+    <div
+      className="menu left cursor"
+      onClick={onClickHamburger}
+      onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClickHamburger();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={isAccountsOpen ? "Close account panel" : "Open account panel"}
+    >
       <div id="hamburger" className="iconBox">
         <div>
           <HamburgerIcon />
