@@ -1367,6 +1367,24 @@ export class ImapSession {
     return this.sessionId;
   };
 
+  /**
+   * Clean up session resources on socket disconnect.
+   * Must be called when the socket closes unexpectedly so that
+   * IDLE manager entries and any other in-flight state are released.
+   */
+  cleanup = () => {
+    if (this.isIdling) {
+      idleManager.removeIdleSession(this.sessionId);
+      this.socket.off("data", this.handleIdleData);
+      this.isIdling = false;
+      this.idleTag = null;
+      logger.debug("IDLE session cleaned up on socket close", {
+        component: "imap",
+        sessionId: this.sessionId
+      });
+    }
+  };
+
   startTls = async (tag: string) => {
     const { SSL_CERTIFICATE = "", SSL_CERTIFICATE_KEY = "" } = process.env;
 
