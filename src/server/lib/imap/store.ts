@@ -358,53 +358,13 @@ export class Store {
           case "BODY":
           case "TEXT": {
             const textCriterion = criterion as { type: string; value: string };
-            simplifiedCriteria.push({ type, value: textCriterion.value });
+            if (textCriterion.value !== undefined) {
+              simplifiedCriteria.push({ type, value: textCriterion.value });
+            }
             break;
           }
-
-          // Header search
-          case "HEADER": {
-            const hdr = criterion as { type: string; field: string; value: string };
-            simplifiedCriteria.push({ type, value: { field: hdr.field, text: hdr.value } });
-            break;
-          }
-
-          // Date criteria: value is a Date object
-          case "BEFORE":
-          case "ON":
-          case "SINCE":
-          case "SENTBEFORE":
-          case "SENTON":
-          case "SENTSINCE": {
-            const dateCriterion = criterion as { type: string; date: Date };
-            simplifiedCriteria.push({ type, value: dateCriterion.date });
-            break;
-          }
-
-          // Size criteria
-          case "LARGER":
-          case "SMALLER": {
-            const sizeCriterion = criterion as { type: string; size: number };
-            simplifiedCriteria.push({ type, value: sizeCriterion.size });
-            break;
-          }
-
-          // Logical NOT: negate a single criterion
-          case "NOT": {
-            const notCriterion = criterion as { type: string; criterion: SearchCriterion };
-            simplifiedCriteria.push({ type: "NOT", value: notCriterion.criterion });
-            break;
-          }
-
-          // Logical OR: two criteria
-          case "OR": {
-            const orCriterion = criterion as { type: string; left: SearchCriterion; right: SearchCriterion };
-            simplifiedCriteria.push({ type: "OR", value: { left: orCriterion.left, right: orCriterion.right } });
-            break;
-          }
-
-          // UID ranges
-          case "UID": {
+          case "UID":
+            // Handle UID ranges
             const uidCriterion = criterion as UidCriterion;
             for (const range of uidCriterion.sequenceSet.ranges) {
               if (range.end === undefined) {
