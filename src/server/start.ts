@@ -7,6 +7,7 @@ import {
   initializeImap,
   initializeSmtp,
   initializeHttp,
+  idleManager,
 } from "server";
 import { pool } from "server";
 
@@ -39,6 +40,10 @@ const start = async () => {
     // Stop accepting new HTTP connections; finish in-flight requests
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     console.info("HTTP server closed");
+
+    // Notify IDLE clients and stop heartbeat timer before closing sockets
+    idleManager.shutdown();
+    console.info("IDLE sessions cleaned up");
 
     // Close IMAP servers (send BYE to active sessions handled by socket destroy)
     await Promise.all(
