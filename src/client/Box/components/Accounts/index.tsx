@@ -252,8 +252,11 @@ const Accounts = ({
         else if (e === Category.SavedMails) targetAccounts = received.filter((a) => a.saved_doc_count);
         else if (e === Category.Search) targetAccounts = searchHistory;
         else targetAccounts = received;
-        if (!targetAccounts.some((a) => a.key === selectedAccount)) {
-          setSelectedAccount(targetAccounts[0]?.key || "");
+        if (
+          targetAccounts.length > 0 &&
+          !targetAccounts.some((a) => a.key === selectedAccount)
+        ) {
+          setSelectedAccount(targetAccounts[0].key);
         }
       };
       const classes = [];
