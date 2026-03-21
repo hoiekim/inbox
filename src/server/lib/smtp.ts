@@ -138,10 +138,12 @@ const onDataOutgoing = async (
   }
 };
 
+const SMTP_MAX_CLIENTS = 100;
+
 export const initializeSmtp = async () => {
   const servers: SMTPServer[] = [];
 
-  const options: SMTPServerOptions = { authOptional: true, onAuth, onData };
+  const options: SMTPServerOptions = { authOptional: true, onAuth, onData, maxClients: SMTP_MAX_CLIENTS };
 
   const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
   const isSslAvailable = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
