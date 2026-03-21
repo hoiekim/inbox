@@ -61,7 +61,11 @@ const MailHeader = (props: MailHeaderProps) => {
       ) : (
         <></>
       )}
-      <div className="mailcard-subject content">{mail.subject}</div>
+      <div className="mailcard-subject content">
+        {mail.subject || (
+          <span className="no-subject">(No Subject)</span>
+        )}
+      </div>
     </div>
   );
 };
