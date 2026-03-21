@@ -241,8 +241,11 @@ const Accounts = ({
           // Entering search: save current account so we can restore it later
           preSearchAccount.current = selectedAccount;
         } else if (selectedCategory === Category.Search) {
-          // Leaving search: restore the pre-search account
-          setSelectedAccount(preSearchAccount.current);
+          // Leaving search: restore the pre-search account if we have one
+          // (preSearchAccount is a ref and won't survive a page reload)
+          if (preSearchAccount.current) {
+            setSelectedAccount(preSearchAccount.current);
+          }
         }
         setSelectedCategory(e);
         // Reset selectedAccount if it doesn't exist in the new category's account list
