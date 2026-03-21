@@ -96,16 +96,16 @@ const getSentMail = async (
     attachments,
     messageId: `<${messageId}@${userDomain}>`,
     from: {
-      value: [{ name: senderFullName, address: fromEmail }],
-      text: `${senderFullName} <${fromEmail}>`
+      value: [{ name: senderFullName || undefined, address: fromEmail }],
+      text: senderFullName ? `${senderFullName} <${fromEmail}>` : fromEmail
     },
     to: { value: [{ address: to }], text: to },
     cc: !cc ? undefined : { value: [{ address: cc }], text: cc },
     bcc: !bcc ? undefined : { value: [{ address: bcc }], text: bcc },
-    envelopeFrom: [{ name: senderFullName, address: fromEmail }],
+    envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],
     envelopeTo: [{ address: to }],
     replyTo: {
-      value: [{ name: senderFullName, address: fromEmail }],
+      value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: fromEmail
     },
     read: true,
