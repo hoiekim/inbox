@@ -372,13 +372,13 @@ export const getDomainUidNext = async (
 ): Promise<number> => {
   try {
     const sql = `
-      SELECT COUNT(*) as count FROM mails 
+      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 AS next_uid FROM mails
       WHERE user_id = $1 AND sent = $2
     `;
     const result = await pool.query(sql, [user_id, sent]);
-    return parseInt(result.rows[0]?.count || "0", 10) + 1;
+    return parseInt(result.rows[0]?.next_uid || "1", 10);
   } catch (error) {
-    console.error("Error getting next UID:", error);
+    console.error("Error getting next domain UID:", error);
     return 1;
   }
 };
@@ -396,15 +396,15 @@ export const getAccountUidNext = async (
       ? `${FROM_ADDRESS} @> $2::jsonb`
       : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
     const sql = `
-      SELECT COUNT(*) as count FROM mails 
-      WHERE user_id = $1 
+      SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 AS next_uid FROM mails
+      WHERE user_id = $1
         AND ${addressCondition}
         AND sent = $3
     `;
     const result = await pool.query(sql, [user_id, addressJson, sent]);
-    return parseInt(result.rows[0]?.count || "0", 10) + 1;
+    return parseInt(result.rows[0]?.next_uid || "1", 10);
   } catch (error) {
-    console.error("Error getting account UID next:", error);
+    console.error("Error getting next account UID:", error);
     return 1;
   }
 };
