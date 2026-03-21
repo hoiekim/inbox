@@ -34,6 +34,7 @@ const SignUp = () => {
   const [usernameInput, setUsernameInput] = useState(username || "");
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordConfirmInput, setPasswordConfirmInput] = useState("");
+  const [passwordMismatch, setPasswordMismatch] = useState(false);
 
   const onChangeEmail = (e: ChangeEvent<HTMLInputElement>) => {
     setEmailInput(e.target.value);
@@ -45,10 +46,12 @@ const SignUp = () => {
 
   const onChangePassword = (e: ChangeEvent<HTMLInputElement>) => {
     setPasswordInput(e.target.value);
+    setPasswordMismatch(false);
   };
 
   const onChangePasswordConfirm = (e: ChangeEvent<HTMLInputElement>) => {
     setPasswordConfirmInput(e.target.value);
+    setPasswordMismatch(false);
   };
 
   type DynamicResponse = SetInfoPostResponse | TokenPostResponse;
@@ -64,6 +67,7 @@ const SignUp = () => {
 
   if (email) {
     infoMessage = "🤐 Please set your user information.";
+    if (passwordMismatch) infoMessage = "⚠️ Passwords do not match. Please try again.";
     if (mutation.isLoading) infoMessage = "🧐 Setting your information...";
     if (mutation.isError) infoMessage = "🤯 Server error";
     if (mutation.data?.status === "success") infoMessage = "🤗 All set up!";
@@ -93,6 +97,11 @@ const SignUp = () => {
   }, [mutation.data, setUserInfo]);
 
   const onClickSignUp = () => {
+    if (email && passwordInput && passwordInput !== passwordConfirmInput) {
+      setPasswordMismatch(true);
+      return;
+    }
+    setPasswordMismatch(false);
     mutation.mutate({
       email: emailInput,
       token,
