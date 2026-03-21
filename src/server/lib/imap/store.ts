@@ -321,10 +321,16 @@ export class Store {
           case "SUBJECT":
           case "FROM":
           case "TO":
-            if (i + 1 < criteria.length) {
-              simplifiedCriteria.push({ type, value: criteria[++i] });
+          case "CC":
+          case "BCC":
+          case "BODY":
+          case "TEXT": {
+            const textCriterion = criterion as { type: string; value: string };
+            if (textCriterion.value !== undefined) {
+              simplifiedCriteria.push({ type, value: textCriterion.value });
             }
             break;
+          }
           case "UID":
             // Handle UID ranges
             const uidCriterion = criterion as UidCriterion;
