@@ -243,7 +243,7 @@ export const formatFlags = (mail: Partial<MailType>): string[] => {
   return flags;
 };
 
-export const ACCOUNTS_FOLDER = "accounts";
+export const ACCOUNTS_FOLDER = "INBOX/accounts";
 export const SENT_MESSAGES_FOLDER = "Sent Messages";
 export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
 
