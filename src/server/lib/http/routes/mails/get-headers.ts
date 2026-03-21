@@ -2,8 +2,7 @@ import { MailHeaderDataType } from "common";
 import {
   getMailHeaders,
   addressToUsername,
-  GetMailsOptions,
-  AUTH_ERROR_MESSAGE
+  GetMailsOptions
 } from "server";
 import { Route } from "../route";
 
@@ -13,8 +12,7 @@ export const getHeadersRoute = new Route<HeadersGetResponse>(
   "GET",
   "/headers/:account",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const { username } = user;
     const usernameInAccount = addressToUsername(req.params.account);

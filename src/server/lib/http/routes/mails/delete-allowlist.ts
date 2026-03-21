@@ -1,4 +1,4 @@
-import { AUTH_ERROR_MESSAGE, removeAllowlistEntry } from "server";
+import { removeAllowlistEntry } from "server";
 import { Route } from "../route";
 
 export type AllowlistDeleteResponse = undefined;
@@ -10,8 +10,7 @@ export const deleteSpamAllowlistRoute = new Route<AllowlistDeleteResponse>(
   "DELETE",
   "/spam-allowlist/:pattern",
   async (req) => {
-    const { user } = req.session;
-    if (!user) return { status: "failed", message: AUTH_ERROR_MESSAGE };
+    const user = req.session.user!;
 
     const pattern = decodeURIComponent(req.params.pattern);
     const removed = await removeAllowlistEntry(user.id, pattern);

@@ -1,4 +1,4 @@
-import { Router, RequestHandler, Request, Response } from "express";
+import { Router, RequestHandler, Request, Response, NextFunction } from "express";
 
 export type Method = "GET" | "POST" | "DELETE";
 
@@ -71,3 +71,16 @@ export class Route<T> {
 }
 
 export const AUTH_ERROR_MESSAGE = "Request user is not logged in.";
+
+/**
+ * Middleware that rejects unauthenticated requests with a 401.
+ * Apply at the router level so every route is protected by default —
+ * explicitly exclude public paths instead of relying on each handler.
+ */
+export const authRequired = (req: Request, res: Response, next: NextFunction) => {
+  if (!req.session.user) {
+    res.status(401).json({ status: "failed", message: AUTH_ERROR_MESSAGE });
+    return;
+  }
+  next();
+};
