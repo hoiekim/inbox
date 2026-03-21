@@ -850,6 +850,29 @@ export const searchMailsByUid = async (
           values.push(`%${criterion.value}%`);
           paramIdx++;
           break;
+        case "CC":
+          conditions.push(`cc_text ILIKE $${paramIdx}`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+        case "BCC":
+          conditions.push(`bcc_text ILIKE $${paramIdx}`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+        case "BODY":
+          conditions.push(`(html ILIKE $${paramIdx} OR text ILIKE $${paramIdx})`);
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
+        case "TEXT":
+          // RFC 3501: TEXT matches envelope fields and body
+          conditions.push(
+            `(subject ILIKE $${paramIdx} OR from_text ILIKE $${paramIdx} OR to_text ILIKE $${paramIdx} OR html ILIKE $${paramIdx} OR text ILIKE $${paramIdx})`
+          );
+          values.push(`%${criterion.value}%`);
+          paramIdx++;
+          break;
       }
     }
 
