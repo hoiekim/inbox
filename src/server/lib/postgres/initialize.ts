@@ -130,4 +130,15 @@ export const initializeAdminUser = async (): Promise<void> => {
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
 
   console.info("Successfully initialized PostgreSQL database and setup admin user.");
+
+  // Warn if EMAIL_DOMAIN is not explicitly configured.
+  // Without a correct domain, getAccountStats() filters all emails out (domain condition)
+  // causing the inbox to appear empty even when emails exist.
+  if (!process.env.EMAIL_DOMAIN) {
+    console.warn(
+      "[CONFIG WARNING] EMAIL_DOMAIN is not set. Defaulting to 'mydomain'.\n" +
+        "  The inbox will appear empty if your emails are addressed to a different domain.\n" +
+        "  Set EMAIL_DOMAIN=yourdomain.com in your .env file to see incoming emails."
+    );
+  }
 };
