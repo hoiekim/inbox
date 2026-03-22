@@ -21,7 +21,7 @@ jobs:
           fi
 
   docker-build-push:
-    needs: check-secrets
+    needs: [check-secrets]
     runs-on: ubuntu-latest
     if: needs.check-secrets.outputs.secrets-exist == 'true'
     steps:
