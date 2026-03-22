@@ -20,7 +20,17 @@ import {
   StoreOperationType,
 } from "../postgres/repositories/mails";
 import { getMailboxesByUser } from "../postgres/repositories/mailboxes";
-import { accountToBox, boxToAccount } from "./util";
+import {
+  accountToBox,
+  accountToSentBox,
+  boxToAccount,
+  isSentBox,
+  isAccountsFolder,
+  isSentMessagesAccountsFolder,
+  ACCOUNTS_FOLDER,
+  SENT_MESSAGES_FOLDER,
+  SENT_MESSAGES_ACCOUNTS_FOLDER,
+} from "./util";
 import { SearchCriterion, UidCriterion } from "./types";
 import { logger, getUserDomain } from "server";
 
