@@ -53,34 +53,44 @@ export class Store {
         getAccountStats(this.user.id, true, userDomain),
       ]);
 
-      const mailboxes: string[] = ["INBOX"];
+      const seen = new Set<string>();
+      const addMailbox = (name: string) => {
+        const trimmed = name.trim();
+        if (!seen.has(trimmed)) {
+          seen.add(trimmed);
+          mailboxes.push(trimmed);
+        }
+      };
+
+      const mailboxes: string[] = [];
+      addMailbox("INBOX");
 
       // Add Sent Messages (unified across all accounts) if any sent mail exists
       if (sentStats.length > 0) {
-        mailboxes.push(SENT_MESSAGES_FOLDER);
+        addMailbox(SENT_MESSAGES_FOLDER);
       }
 
       // Add accounts/ parent folder if any received-mail accounts exist
       if (receivedStats.length > 0) {
-        mailboxes.push(ACCOUNTS_FOLDER);
+        addMailbox(ACCOUNTS_FOLDER);
       }
 
-      // Add received mail accounts under accounts/
+      // Add received mail accounts under accounts/ (deduplicated)
       receivedStats.forEach((stat) => {
         if (stat.address) {
-          mailboxes.push(accountToBox(stat.address));
+          addMailbox(accountToBox(stat.address));
         }
       });
 
       // Add Sent Messages/accounts/ parent folder if any per-account sent mail exists
       if (sentStats.length > 0) {
-        mailboxes.push(SENT_MESSAGES_ACCOUNTS_FOLDER);
+        addMailbox(SENT_MESSAGES_ACCOUNTS_FOLDER);
       }
 
-      // Add per-account sent mailboxes under Sent Messages/accounts/
+      // Add per-account sent mailboxes under Sent Messages/accounts/ (deduplicated)
       sentStats.forEach((stat) => {
         if (stat.address) {
-          mailboxes.push(accountToSentBox(stat.address));
+          addMailbox(accountToSentBox(stat.address));
         }
       });
 
