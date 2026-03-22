@@ -850,6 +850,39 @@ export const searchMailsByUid = async (
           values.push(`%${criterion.value}%`);
           paramIdx++;
           break;
+        case "BEFORE":
+          // BEFORE: internal date < date (day boundary, inclusive day is excluded)
+          conditions.push(`date < $${paramIdx}`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
+        case "SINCE":
+          // SINCE: internal date >= date
+          conditions.push(`date >= $${paramIdx}`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
+        case "ON":
+          // ON: internal date is on the same day
+          conditions.push(`date::date = $${paramIdx}::date`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
+        case "SENTBEFORE":
+          conditions.push(`date < $${paramIdx}`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
+        case "SENTON":
+          conditions.push(`date::date = $${paramIdx}::date`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
+        case "SENTSINCE":
+          conditions.push(`date >= $${paramIdx}`);
+          values.push((criterion.value as Date).toISOString());
+          paramIdx++;
+          break;
       }
     }
 
