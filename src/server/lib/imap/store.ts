@@ -31,7 +31,16 @@ import {
   SENT_MESSAGES_FOLDER,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
 } from "./util";
-import { SearchCriterion, UidCriterion } from "./types";
+import {
+  SearchCriterion,
+  UidCriterion,
+  BeforeCriterion,
+  OnCriterion,
+  SinceCriterion,
+  SentBeforeCriterion,
+  SentOnCriterion,
+  SentSinceCriterion,
+} from "./types";
 import { logger, getUserDomain } from "server";
 
 // class that creates "store" object
@@ -415,6 +424,25 @@ export class Store {
             }
             break;
           }
+
+          case "BEFORE":
+            simplifiedCriteria.push({ type: "BEFORE", value: (criterion as BeforeCriterion).date });
+            break;
+          case "ON":
+            simplifiedCriteria.push({ type: "ON", value: (criterion as OnCriterion).date });
+            break;
+          case "SINCE":
+            simplifiedCriteria.push({ type: "SINCE", value: (criterion as SinceCriterion).date });
+            break;
+          case "SENTBEFORE":
+            simplifiedCriteria.push({ type: "SENTBEFORE", value: (criterion as SentBeforeCriterion).date });
+            break;
+          case "SENTON":
+            simplifiedCriteria.push({ type: "SENTON", value: (criterion as SentOnCriterion).date });
+            break;
+          case "SENTSINCE":
+            simplifiedCriteria.push({ type: "SENTSINCE", value: (criterion as SentSinceCriterion).date });
+            break;
 
           default:
             logger.warn("Unsupported search criterion", { component: "imap.store", type });
