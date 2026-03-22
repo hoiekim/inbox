@@ -1,4 +1,4 @@
-import { AUTH_ERROR_MESSAGE, getAttachment, isAttachmentOwnedByUser } from "server";
+import { AUTH_ERROR_MESSAGE, getAttachment, mailsTable } from "server";
 import { Route } from "../route";
 
 export const getAttachmentRoute = new Route<Buffer>(
@@ -10,11 +10,15 @@ export const getAttachmentRoute = new Route<Buffer>(
 
     const attachmentId = req.params.id;
 
-    // Verify the attachment belongs to a mail owned by this user (IDOR prevention)
-    const owned = await isAttachmentOwnedByUser(attachmentId, user.id);
-    if (!owned) return { status: "failed", message: "Not found" };
+    // Single query: verify ownership AND confirm attachment exists on this user's mail.
+    // mailsTable.queryOne uses JSONB @> containment for the attachments filter.
+    const mail = await mailsTable.queryOne({
+      user_id: user.id,
+      attachments: [{ content: { data: attachmentId } }],
+    });
+    if (!mail) return { status: "failed", message: "Not found" };
 
-    const attachment = await getAttachment(attachmentId);
+    const attachment = getAttachment(attachmentId);
     if (attachment === undefined) return { status: "failed" };
     return attachment;
   }

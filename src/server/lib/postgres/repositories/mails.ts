@@ -1182,11 +1182,4 @@ export const copyMail = async (
   }
 };
 
-/**
- * Checks whether the attachment with the given file ID belongs to a mail
- * owned by the specified user. Used to prevent IDOR on the attachment endpoint.
- */
-export const isAttachmentOwnedByUser = (
-  attachmentId: string,
-  userId: string
-): Promise<boolean> => mailsTable.isAttachmentOwnedByUser(attachmentId, userId);
+

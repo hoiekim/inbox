@@ -36,7 +36,6 @@ import {
   IS_SPAM,
 } from "./common";
 import { Model, ModelValidationError, Table, validateObject } from "./base";
-import { pool } from "../client";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -351,29 +350,7 @@ class MailsTable extends Table<MailJSON, MailSchema, MailModel> {
   readonly ModelClass = MailModel;
   readonly supportsSoftDelete = false;
 
-  /**
-   * Checks whether an attachment with the given file ID belongs to a mail
-   * owned by the specified user. Used to prevent IDOR on the attachment endpoint.
-   */
-  async isAttachmentOwnedByUser(
-    attachmentId: string,
-    userId: string
-  ): Promise<boolean> {
-    try {
-      const sql = `
-        SELECT 1 FROM mails
-        WHERE user_id = $1
-          AND attachments::jsonb @> $2::jsonb
-        LIMIT 1
-      `;
-      const needle = JSON.stringify([{ content: { data: attachmentId } }]);
-      const result = await pool.query(sql, [userId, needle]);
-      return result.rowCount !== null && result.rowCount > 0;
-    } catch (error) {
-      console.error("Failed to verify attachment ownership:", error);
-      return false;
-    }
-  }
+
 }
 
 export const mailsTable = new MailsTable();
