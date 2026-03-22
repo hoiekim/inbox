@@ -234,65 +234,33 @@ Key functions:
 
 **Note:** The IMAP layer still uses the legacy `sent` column for mailbox routing. A future refactor should align IMAP with the address-based approach.
 
-### IMAP Parser-to-Consumer Contract
+### IMAP Mailbox Hierarchy
 
-**Parsers produce self-contained criterion objects.** Each parsed criterion has its value embedded as a property — never rely on adjacent array indices.
+Mailboxes are organized under a flat namespace with `/` as delimiter:
 
-```typescript
-// Parser output for "SEARCH FROM user@example.com UNSEEN":
-[
-  { type: "FROM", value: "user@example.com" },  // value is a property
-  { type: "UNSEEN" }                              // no value needed
-]
-
-// ✅ Correct — read from the criterion object
-for (const criterion of criteria) {
-  switch (criterion.type) {
-    case "FROM":
-      filter.from = criterion.value;  // value is on the object
-      break;
-  }
-}
-
-// ❌ Wrong — don't index into the array for values
-for (let i = 0; i < criteria.length; i++) {
-  if (criteria[i].type === "FROM") {
-    value = criteria[++i];  // BUG: next element is a separate criterion
-  }
-}
+```
+INBOX                              ← Unified inbox (all accounts)
+accounts/user@example.com          ← Per-account received mail
+Sent Messages                     ← Unified sent mail
+Sent Messages/accounts/user@...   ← Per-account sent mail
 ```
 
-This pattern also applies to FETCH data items and STORE operations — each parsed item is self-contained.
+Key implementation details (see `src/server/lib/imap/util.ts`):
+- `accountToBox()` / `boxToAccount()` map between email addresses and IMAP mailbox names
+- `isSentBox()` detects sent-mail mailboxes at any level
+- Mailboxes are filtered by user domain — only addresses belonging to the server's domain are exposed
+- NAMESPACE response declares `("" "/")` as the personal namespace
 
 ### IMAP Client Compatibility
 
-Different mail clients send different IMAP commands. Known quirks:
+The IMAP server targets compatibility with standard mail clients (Apple Mail, iOS Mail, Thunderbird). Key patterns learned from client testing:
 
-- **iOS Mail**: Expects `BODY[1]` to return decoded content, uses `BODY.PEEK[HEADER.FIELDS (...)]`, requires accurate `RFC822.SIZE` for display
-- **Thunderbird**: Uses `UID FETCH ... (FLAGS BODY.PEEK[HEADER.FIELDS (Date From Subject ...)])` in batches
-- **Apple Mail (macOS)**: Similar to iOS but also uses `NAMESPACE` and `GETQUOTAROOT`
-
-When fixing IMAP bugs, always test with the affected client and document which client triggered the issue in the PR description.
-
-### Graceful Shutdown Order
-
-Shutdown must follow this order to avoid connection errors:
-
-1. Stop accepting new connections (HTTP, IMAP, SMTP servers)
-2. Close idle IMAP connections via `idleManager.shutdown()`
-3. Wait for in-flight requests to complete
-4. Close database pool
-
-```typescript
-// Correct order (see start.ts)
-httpServer.close();
-imapServer.close();
-smtpServer.close();
-await idleManager.shutdown();
-await pool.end();
-```
-
-Closing DB before servers causes "connection terminated" errors on active requests.
+- **BODYSTRUCTURE must match BODY[] encoding**: If BODYSTRUCTURE declares `base64`, the corresponding `BODY[n]` fetch must return base64-encoded content (not raw UTF-8)
+- **RFC822.SIZE must account for encoding**: Size should reflect the encoded (wire-format) message size
+- **CAPABILITY response must match port**: Port 993 (implicit TLS) must NOT advertise STARTTLS; port 143 must advertise it
+- **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
+- **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
+- **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them
 
 ## Database
 
