@@ -282,6 +282,11 @@ export function buildSelectWithFilters(
     if (isUndefined(value)) continue;
     if (isNull(value)) {
       conditions.push(`${key} IS NULL`);
+    } else if (typeof value === "object") {
+      // JSONB containment: col @> $n::jsonb
+      // Handles both array and object JSONB filters generically.
+      conditions.push(`${key} @> $${paramIndex++}::jsonb`);
+      values.push(JSON.stringify(value));
     } else {
       conditions.push(`${key} = $${paramIndex++}`);
       values.push(prepareParamValue(value as ParamValue));

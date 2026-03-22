@@ -331,12 +331,10 @@ export class PartialMailModel {
   }
 }
 
-export const mailsTable = createTable({
+export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
   name: MAILS,
   primaryKey: MAIL_ID,
   schema: mailSchema,
-  ModelClass: MailModel,
-  supportsSoftDelete: false,
   constraints: ["UNIQUE (user_id, message_id)"],
   indexes: [
     { column: USER_ID },
@@ -349,6 +347,8 @@ export const mailsTable = createTable({
     { column: IS_SPAM },
     { column: EXPUNGED },
   ],
+  ModelClass: MailModel,
+  supportsSoftDelete: false,
 });
 
 export const mailColumns = Object.keys(mailsTable.schema);
