@@ -1312,4 +1312,32 @@ export const copyMail = async (
   }
 };
 
-
+/**
+ * Verifies that an attachment belongs to a mail owned by the given user.
+ * Used to prevent IDOR attacks on the attachment endpoint.
+ *
+ * @param userId - The session user's ID
+ * @param attachmentId - The attachment UUID (stored as content.data in attachments JSONB)
+ * @returns true if the user owns a mail containing this attachment, false otherwise
+ */
+export const getMailByAttachmentId = async (
+  userId: string,
+  attachmentId: string
+): Promise<boolean> => {
+  try {
+    const result = await pool.query(
+      `SELECT 1 FROM mails
+       WHERE user_id = $1
+         AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(attachments) AS att
+           WHERE att->'content'->>'data' = $2
+         )
+       LIMIT 1`,
+      [userId, attachmentId]
+    );
+    return result.rowCount !== null && result.rowCount > 0;
+  } catch (error) {
+    console.error("Failed to verify attachment ownership:", error);
+    return false;
+  }
+};
