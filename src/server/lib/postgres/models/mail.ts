@@ -35,7 +35,7 @@ import {
   SPAM_REASONS,
   IS_SPAM,
 } from "./common";
-import { Model, ModelValidationError, Table, validateObject } from "./base";
+import { Model, ModelValidationError, createTable, validateObject } from "./base";
 
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
@@ -331,12 +331,12 @@ export class PartialMailModel {
   }
 }
 
-class MailsTable extends Table<MailJSON, MailSchema, MailModel> {
-  readonly name = MAILS;
-  readonly primaryKey = MAIL_ID;
-  readonly schema = mailSchema;
-  readonly constraints = ["UNIQUE (user_id, message_id)"];
-  readonly indexes = [
+export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
+  name: MAILS,
+  primaryKey: MAIL_ID,
+  schema: mailSchema,
+  constraints: ["UNIQUE (user_id, message_id)"],
+  indexes: [
     { column: USER_ID },
     { column: DATE },
     { column: SENT },
@@ -346,13 +346,9 @@ class MailsTable extends Table<MailJSON, MailSchema, MailModel> {
     { column: UID_ACCOUNT },
     { column: IS_SPAM },
     { column: EXPUNGED },
-  ];
-  readonly ModelClass = MailModel;
-  readonly supportsSoftDelete = false;
-
-
-}
-
-export const mailsTable = new MailsTable();
+  ],
+  ModelClass: MailModel,
+  supportsSoftDelete: false,
+});
 
 export const mailColumns = Object.keys(mailsTable.schema);
