@@ -215,6 +215,34 @@ This is especially important in background tasks where failures need to be track
 - IDLE manager handles long-lived connections with 29-minute refresh
 - Parser functions return structured results or throw on invalid input
 
+### IMAP Mailbox Hierarchy
+
+Mailboxes are organized under a flat namespace with `/` as delimiter:
+
+```
+INBOX                              ← Unified inbox (all accounts)
+accounts/user@example.com          ← Per-account received mail
+Sent Messages                     ← Unified sent mail
+Sent Messages/accounts/user@...   ← Per-account sent mail
+```
+
+Key implementation details (see `src/server/lib/imap/util.ts`):
+- `accountToBox()` / `boxToAccount()` map between email addresses and IMAP mailbox names
+- `isSentBox()` detects sent-mail mailboxes at any level
+- Mailboxes are filtered by user domain — only addresses belonging to the server's domain are exposed
+- NAMESPACE response declares `("" "/")` as the personal namespace
+
+### IMAP Client Compatibility
+
+The IMAP server targets compatibility with standard mail clients (Apple Mail, iOS Mail, Thunderbird). Key patterns learned from client testing:
+
+- **BODYSTRUCTURE must match BODY[] encoding**: If BODYSTRUCTURE declares `base64`, the corresponding `BODY[n]` fetch must return base64-encoded content (not raw UTF-8)
+- **RFC822.SIZE must account for encoding**: Size should reflect the encoded (wire-format) message size
+- **CAPABILITY response must match port**: Port 993 (implicit TLS) must NOT advertise STARTTLS; port 143 must advertise it
+- **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
+- **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
+- **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them
+
 ## Database
 
 ### PostgreSQL Setup
