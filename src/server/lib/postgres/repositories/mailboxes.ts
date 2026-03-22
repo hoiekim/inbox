@@ -1,3 +1,4 @@
+import { pool } from "../client";
 import {
   MailboxModel,
   mailboxesTable,
@@ -24,16 +25,22 @@ export const getMailboxesByUser = async (
 
 /**
  * Find a mailbox by user_id and name (case-insensitive).
- * Returns null if not found.
+ * Uses direct SQL for the LOWER() comparison — the Table base class only
+ * supports exact equality filters, so direct SQL is appropriate here.
  */
 export const getMailboxByName = async (
   user_id: string,
   name: string
 ): Promise<MailboxModel | null> => {
-  const mailboxes = await mailboxesTable.query({ [MAILBOX_USER_ID]: user_id });
-  return (
-    mailboxes.find((m) => m.name.toLowerCase() === name.toLowerCase()) ?? null
-  );
+  const sql = `
+    SELECT * FROM mailboxes
+    WHERE ${MAILBOX_USER_ID} = $1
+      AND LOWER(${MAILBOX_NAME}) = LOWER($2)
+    LIMIT 1
+  `;
+  const result = await pool.query(sql, [user_id, name]);
+  if (result.rows.length === 0) return null;
+  return new MailboxModel(result.rows[0]);
 };
 
 /**
