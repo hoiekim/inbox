@@ -8,16 +8,25 @@ interface AttemptRecord {
   resetAt: number;
 }
 
-// Shared attempt storage for all limiters
-const attempts = new Map<string, AttemptRecord>();
+// Tracks all per-limiter attempt Maps so the scheduler can clean them all.
+const allAttemptMaps: Map<string, AttemptRecord>[] = [];
 
 /**
  * Create a rate limiter middleware.
+ *
+ * Each call to createLimiter gets its own isolated attempt Map so that
+ * separate limiters (e.g. loginLimiter and tokenLimiter) do not share
+ * counters. Previously a single shared Map caused token requests to
+ * consume login quota and vice versa.
  *
  * @param maxAttempts Maximum attempts allowed within the window
  * @param message Error message to return when limit is exceeded
  */
 export const createLimiter = (maxAttempts: number, message: string) => {
+  // Per-limiter isolated storage — not shared with any other limiter.
+  const attempts = new Map<string, AttemptRecord>();
+  allAttemptMaps.push(attempts);
+
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || "unknown";
     const now = Date.now();
@@ -38,17 +47,19 @@ export const createLimiter = (maxAttempts: number, message: string) => {
 };
 
 /**
- * Clean up expired attempt records.
+ * Clean up expired attempt records across all limiter Maps.
  * Called periodically to prevent memory buildup.
  */
 export const cleanupExpiredAttempts = (): number => {
   const now = Date.now();
   let cleaned = 0;
 
-  for (const [ip, record] of attempts) {
-    if (now >= record.resetAt) {
-      attempts.delete(ip);
-      cleaned++;
+  for (const attempts of allAttemptMaps) {
+    for (const [ip, record] of attempts) {
+      if (now >= record.resetAt) {
+        attempts.delete(ip);
+        cleaned++;
+      }
     }
   }
 
