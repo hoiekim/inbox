@@ -46,6 +46,15 @@ const MailBody = ({ mailId }: Props) => {
   const query = useQuery<MailBodyData>(queryUrl, getMail);
 
   const iframeElement = useRef<HTMLIFrameElement>(null);
+  const pendingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  // Cancel all pending timers when the component unmounts
+  useEffect(() => {
+    return () => {
+      pendingTimers.current.forEach(clearTimeout);
+      pendingTimers.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -62,7 +71,7 @@ const MailBody = ({ mailId }: Props) => {
     }
   }, [setIsWriterOpen, replyData, setReplyData, query]);
 
-  const audjstMailContnetSize = useCallback(
+  const adjustMailContentSize = useCallback(
     (iframeDom: HTMLIFrameElement | null) => {
       if (!iframeDom || !iframeDom.contentWindow) return;
       const content = iframeDom.contentWindow.document.body;
@@ -150,7 +159,8 @@ const MailBody = ({ mailId }: Props) => {
       if (!content) return;
 
       content.addEventListener("click", () => {
-        setTimeout(() => audjstMailContnetSize(iframeDom), 50);
+        const id = setTimeout(() => adjustMailContentSize(iframeDom), 50);
+        pendingTimers.current.push(id);
       });
 
       Array.from(content.querySelectorAll("a")).forEach((e) => {
@@ -205,8 +215,9 @@ const MailBody = ({ mailId }: Props) => {
           }
         });
 
-      audjstMailContnetSize(iframeDom);
-      setTimeout(() => audjstMailContnetSize(iframeDom), 50);
+      adjustMailContentSize(iframeDom);
+      const id = setTimeout(() => adjustMailContentSize(iframeDom), 50);
+      pendingTimers.current.push(id);
     };
 
     return (
