@@ -50,6 +50,7 @@ export const processHtmlToSendMail = (html: string) => {
 
 export const processHtmlForViewer = (html: string) => {
   return `
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: cid:; font-src 'none';">
 <style>
   body {
       margin: 0;
