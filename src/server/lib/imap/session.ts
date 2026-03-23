@@ -5,7 +5,14 @@ import { TLSSocket } from "tls";
 import { readFileSync } from "fs";
 import crypto from "crypto";
 import { MailType, Throttler } from "common";
-import { getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity } from "server";
+import {
+  getUser, markRead, getDomainUidNext, getAccountUidNext, getImapUidValidity,
+  createMailbox as dbCreateMailbox,
+  deleteMailboxByName,
+  renameMailbox as dbRenameMailbox,
+  setMailboxSubscribed,
+  getMailboxesByUser,
+} from "server";
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
@@ -742,24 +749,110 @@ export class ImapSession {
     }
   };
 
-  createMailbox = async (tag: string, _mailbox: string) => {
-    this.write(`${tag} NO CREATE not supported\r\n`);
+  createMailbox = async (tag: string, mailbox: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+    const cleanName = mailbox.replace(/^"(.*)"$/, "$1");
+    if (!cleanName) {
+      return this.write(`${tag} NO Empty mailbox name\r\n`);
+    }
+    try {
+      const userId = this.store.getUser().id;
+      const created = await dbCreateMailbox({ user_id: userId, name: cleanName });
+      if (!created) {
+        return this.write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);
+      }
+      logger.info("Mailbox created", { component: "imap", mailbox: cleanName });
+      this.write(`${tag} OK CREATE completed\r\n`);
+    } catch (error) {
+      logger.error("Error creating mailbox", { component: "imap", mailbox: cleanName }, error);
+      this.write(`${tag} NO CREATE failed\r\n`);
+    }
   };
 
-  deleteMailbox = async (tag: string, _mailbox: string) => {
-    this.write(`${tag} NO DELETE not supported\r\n`);
+  deleteMailbox = async (tag: string, mailbox: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+    const cleanName = mailbox.replace(/^"(.*)"$/, "$1");
+    if (!cleanName) {
+      return this.write(`${tag} NO Empty mailbox name\r\n`);
+    }
+    try {
+      const userId = this.store.getUser().id;
+      const result = await deleteMailboxByName(userId, cleanName);
+      if (result === "not_found") {
+        return this.write(`${tag} NO [NONEXISTENT] Mailbox does not exist\r\n`);
+      }
+      if (result === "protected") {
+        return this.write(`${tag} NO [CANNOT] Cannot delete system mailbox\r\n`);
+      }
+      logger.info("Mailbox deleted", { component: "imap", mailbox: cleanName });
+      this.write(`${tag} OK DELETE completed\r\n`);
+    } catch (error) {
+      logger.error("Error deleting mailbox", { component: "imap", mailbox: cleanName }, error);
+      this.write(`${tag} NO DELETE failed\r\n`);
+    }
   };
 
-  renameMailbox = async (tag: string, _oldName: string, _newName: string) => {
-    this.write(`${tag} NO RENAME not supported\r\n`);
+  renameMailbox = async (tag: string, oldName: string, newName: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+    const cleanOld = oldName.replace(/^"(.*)"$/, "$1");
+    const cleanNew = newName.replace(/^"(.*)"$/, "$1");
+    if (!cleanOld || !cleanNew) {
+      return this.write(`${tag} NO Empty mailbox name\r\n`);
+    }
+    try {
+      const userId = this.store.getUser().id;
+      const result = await dbRenameMailbox(userId, cleanOld, cleanNew);
+      if (result === "not_found") {
+        return this.write(`${tag} NO [NONEXISTENT] Mailbox does not exist\r\n`);
+      }
+      if (result === "protected") {
+        return this.write(`${tag} NO [CANNOT] Cannot rename system mailbox\r\n`);
+      }
+      if (result === "name_taken") {
+        return this.write(`${tag} NO [ALREADYEXISTS] Target mailbox already exists\r\n`);
+      }
+      logger.info("Mailbox renamed", { component: "imap", from: cleanOld, to: cleanNew });
+      this.write(`${tag} OK RENAME completed\r\n`);
+    } catch (error) {
+      logger.error("Error renaming mailbox", { component: "imap" }, error);
+      this.write(`${tag} NO RENAME failed\r\n`);
+    }
   };
 
-  subscribeMailbox = async (tag: string, _mailbox: string) => {
-    this.write(`${tag} OK SUBSCRIBE completed\r\n`);
+  subscribeMailbox = async (tag: string, mailbox: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+    const cleanName = mailbox.replace(/^"(.*)"$/, "$1");
+    try {
+      const userId = this.store.getUser().id;
+      await setMailboxSubscribed(userId, cleanName, true);
+      this.write(`${tag} OK SUBSCRIBE completed\r\n`);
+    } catch (error) {
+      logger.error("Error subscribing mailbox", { component: "imap", mailbox: cleanName }, error);
+      this.write(`${tag} OK SUBSCRIBE completed\r\n`); // RFC allows OK even if mailbox unknown
+    }
   };
 
-  unsubscribeMailbox = async (tag: string, _mailbox: string) => {
-    this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
+  unsubscribeMailbox = async (tag: string, mailbox: string) => {
+    if (!this.authenticated || !this.store) {
+      return this.write(`${tag} NO Not authenticated.\r\n`);
+    }
+    const cleanName = mailbox.replace(/^"(.*)"$/, "$1");
+    try {
+      const userId = this.store.getUser().id;
+      await setMailboxSubscribed(userId, cleanName, false);
+      this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
+    } catch (error) {
+      logger.error("Error unsubscribing mailbox", { component: "imap", mailbox: cleanName }, error);
+      this.write(`${tag} OK UNSUBSCRIBE completed\r\n`);
+    }
   };
 
   statusMailbox = async (tag: string, mailbox: string, items: StatusItem[]) => {

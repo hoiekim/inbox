@@ -19,12 +19,14 @@ import {
   UpdatedMailFlags,
   StoreOperationType,
 } from "../postgres/repositories/mails";
+import { getMailboxesByUser } from "../postgres/repositories/mailboxes";
 import {
   accountToBox,
   accountToSentBox,
   boxToAccount,
   isSentBox,
   isAccountsFolder,
+  isSentMessagesAccountsFolder,
   ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
@@ -45,12 +47,10 @@ export class Store {
 
   listMailboxes = async (): Promise<string[]> => {
     try {
-      // Match HTTP client: filter by user's domain so we only expose addresses
-      // that belong to this server, not every external CC/BCC address
-      const userDomain = getUserDomain(this.user.username);
-      const [receivedStats, sentStats] = await Promise.all([
-        getAccountStats(this.user.id, false, userDomain),
-        getAccountStats(this.user.id, true, userDomain),
+      const [receivedStats, sentStats, userMailboxes] = await Promise.all([
+        getAccountStats(this.user.id, false),
+        getAccountStats(this.user.id, true),
+        getMailboxesByUser(this.user.id),
       ]);
 
       const seen = new Set<string>();
@@ -93,6 +93,16 @@ export class Store {
           addMailbox(accountToSentBox(stat.address));
         }
       });
+
+      // Add user-created mailboxes (those without a special_use and no address tie-in)
+      const systemNames = new Set(mailboxes.map((m) => m.toLowerCase()));
+      userMailboxes
+        .filter((mb) => mb.special_use === null && mb.address === null)
+        .forEach((mb) => {
+          if (!systemNames.has(mb.name.toLowerCase())) {
+            mailboxes.push(mb.name);
+          }
+        });
 
       return mailboxes;
     } catch (error) {
