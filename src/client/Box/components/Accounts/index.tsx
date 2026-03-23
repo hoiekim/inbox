@@ -121,7 +121,8 @@ const Accounts = ({
   // stored in localStorage (e.g., first visit or cleared storage).
   useEffect(() => {
     if (!selectedAccount && query.isSuccess && query.data?.received?.length) {
-      setSelectedAccount(query.data.received[0].key);
+      const firstKey = query.data.received[0].key;
+      if (firstKey) setSelectedAccount(firstKey);
     }
   }, [selectedAccount, query.isSuccess, query.data]);
 
