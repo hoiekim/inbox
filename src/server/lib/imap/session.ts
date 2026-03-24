@@ -218,17 +218,17 @@ export class ImapSession {
   };
 
   private countSequenceSetMessages(sequenceSet: SequenceSet): number {
-    // Cap * (MAX_SAFE_INTEGER) at the actual mailbox size so limit checks
-    // work correctly for ranges like 1:* or *:*
-    const mailboxSize = this.selectedMailboxMessageCount ?? 0;
+    const maxSeq = this.seqToUid.length;
     let count = 0;
     for (const range of sequenceSet.ranges) {
       if (range.end === undefined) {
         count += 1;
       } else {
-        const start = Math.min(range.start, mailboxSize);
-        const end = range.end === Number.MAX_SAFE_INTEGER ? mailboxSize : Math.min(range.end, mailboxSize);
-        count += Math.max(0, end - start + 1);
+        // Clamp end to actual mailbox size so that `*` (MAX_SAFE_INTEGER) is
+        // resolved to the real message count before applying the limit check.
+        const effectiveEnd = Math.min(range.end, maxSeq);
+        const effectiveStart = Math.min(range.start, maxSeq);
+        count += Math.max(0, effectiveEnd - effectiveStart + 1);
       }
     }
     return count;
