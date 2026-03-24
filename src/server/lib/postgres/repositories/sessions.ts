@@ -1,4 +1,6 @@
 import { Store } from "express-session";
+import { pool } from "../client";
+import { logger } from "../../logger";
 import {
   SessionModel,
   sessionsTable,
@@ -37,7 +39,7 @@ export const searchSession = async (
   try {
     return await sessionsTable.queryOne({ [SESSION_ID]: session_id });
   } catch (error) {
-    console.error(`Failed to get session from PostgreSQL: ${session_id}`, error);
+    logger.error(`Failed to get session from PostgreSQL`, { session_id }, error);
     return null;
   }
 };
@@ -73,7 +75,7 @@ export const updateSession = async (
     const result = await sessionsTable.upsert(data);
     return result !== null;
   } catch (error) {
-    console.error("Failed to update session:", error);
+    logger.error("Failed to update session", {}, error);
     return false;
   }
 };
@@ -87,7 +89,7 @@ export const deleteSession = async (session_id: string): Promise<boolean> => {
   try {
     return await sessionsTable.hardDelete(session_id);
   } catch (error) {
-    console.error("Failed to delete session:", error);
+    logger.error("Failed to delete session", {}, error);
     return false;
   }
 };
@@ -103,7 +105,7 @@ export const purgeSessions = async (): Promise<number> => {
       [COOKIE_EXPIRES]: { op: "<=", value: now, notNull: true },
     });
   } catch (error) {
-    console.error("Failed to purge sessions:", error);
+    logger.error("Failed to purge sessions", {}, error);
     return 0;
   }
 };
@@ -122,7 +124,7 @@ export class PostgresSessionStore extends Store {
    * Repeatedly run every hour to remove expired session data.
    */
   private autoRemoveScheduler = () => {
-    purgeSessions().catch(console.error);
+    purgeSessions().catch((error) => logger.error("Failed to purge sessions on startup", {}, error));
     setTimeout(this.autoRemoveScheduler, 1000 * 60 * 60);
   };
 

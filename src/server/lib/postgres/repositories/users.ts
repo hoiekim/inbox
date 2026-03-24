@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { MaskedUser, User, usersTable, USER_ID, EMAIL, IMAP_UID_VALIDITY } from "../models";
+import { logger } from "../../logger";
 
 export type IndexUserInput = Omit<User, "user_id"> & { user_id?: string };
 export type PartialUser = { user_id: string } & Partial<User>;
@@ -24,7 +25,7 @@ export const writeUser = async (
     if (result) return { _id: result.user_id as string };
     return undefined;
   } catch (error) {
-    console.error("Failed to write user:", error);
+    logger.error("Failed to write user", {}, error);
     return undefined;
   }
 };
@@ -43,7 +44,7 @@ export const searchUser = async (
     const model = await usersTable.queryOne(filters);
     return model?.toUser();
   } catch (error) {
-    console.error("Failed to search user:", error);
+    logger.error("Failed to search user", {}, error);
     return undefined;
   }
 };
@@ -64,7 +65,7 @@ export const updateUser = async (user: PartialUser): Promise<boolean> => {
     const model = await usersTable.update(user_id, updates);
     return model !== null;
   } catch (error) {
-    console.error("Failed to update user:", error);
+    logger.error("Failed to update user", {}, error);
     return false;
   }
 };
@@ -76,7 +77,7 @@ export const getUserById = async (
     const model = await usersTable.queryOne({ [USER_ID]: user_id });
     return model?.toUser();
   } catch (error) {
-    console.error("Failed to get user by ID:", error);
+    logger.error("Failed to get user by ID", {}, error);
     return undefined;
   }
 };
@@ -85,7 +86,7 @@ export const deleteUser = async (user_id: string): Promise<boolean> => {
   try {
     return await usersTable.softDelete(user_id);
   } catch (error) {
-    console.error("Failed to delete user:", error);
+    logger.error("Failed to delete user", {}, error);
     return false;
   }
 };
@@ -97,7 +98,7 @@ export const getUserByEmail = async (
     const model = await usersTable.queryOne({ [EMAIL]: email });
     return model?.toUser();
   } catch (error) {
-    console.error("Failed to get user by email:", error);
+    logger.error("Failed to get user by email", {}, error);
     return undefined;
   }
 };
@@ -130,7 +131,7 @@ export const getImapUidValidity = async (user_id: string): Promise<number> => {
     
     return uidValidity;
   } catch (error) {
-    console.error("Failed to get IMAP UIDVALIDITY:", error);
+    logger.error("Failed to get IMAP UIDVALIDITY", {}, error);
     // Return a fallback value - timestamp ensures uniqueness
     return Math.floor(Date.now() / 1000);
   }

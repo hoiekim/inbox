@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { logger } from "../../logger";
 import { pool } from "../client";
+import { logger } from "../../logger";
 import { ParamValue } from "../database";
 import {
   MailModel,
@@ -134,36 +135,8 @@ export const saveMail = async (
     const row = await mailsTable.insert(data, [MAIL_ID]);
     if (row) return { _id: row[MAIL_ID] as string };
     return undefined;
-  } catch (error: unknown) {
-    // Unique constraint violation on (user_id, message_id):
-    // This can happen legitimately when one email is delivered to multiple accounts
-    // (e.g. account1@inbox.app, account2@inbox.app). The sender uses separate
-    // envelopes, but the message_id is the same. In that case we must merge the
-    // envelope_to values so we can correctly identify BCC recipients later.
-    const pgError = error as { code?: string };
-    if (pgError.code === "23505") {
-      const existing = await getMailByMessageId(input.user_id, input.message_id);
-      if (!existing) return undefined;
-
-      if (input.envelope_to) {
-        type AddressEntry = { address?: string };
-        const existingTo = (existing.envelope_to as AddressEntry[] | null) ?? [];
-        const incomingTo = input.envelope_to as AddressEntry[];
-        const seen = new Set(existingTo.map((a) => a.address));
-        const merged = [
-          ...existingTo,
-          ...incomingTo.filter((a) => !seen.has(a.address)),
-        ];
-        await mailsTable.updateWhere(
-          { user_id: input.user_id, message_id: input.message_id },
-          { [ENVELOPE_TO]: JSON.stringify(merged) }
-        );
-      }
-
-      return { _id: existing.mail_id };
-    }
-
-    console.error("Failed to save mail:", error);
+  } catch (error) {
+    logger.error("Failed to save mail", {}, error);
     return undefined;
   }
 };
@@ -187,7 +160,7 @@ export const getMailById = async (
   try {
     return await mailsTable.queryOne({ [MAIL_ID]: mail_id, [USER_ID]: user_id });
   } catch (error) {
-    console.error("Failed to get mail by ID:", error);
+    logger.error("Failed to get mail by ID", {}, error);
     return null;
   }
 };
@@ -204,7 +177,7 @@ export const markMailRead = async (
     );
     return rows.length > 0;
   } catch (error) {
-    console.error("Failed to mark mail as read:", error);
+    logger.error("Failed to mark mail as read", {}, error);
     return false;
   }
 };
@@ -222,7 +195,7 @@ export const markMailSaved = async (
     );
     return rows.length > 0;
   } catch (error) {
-    console.error("Failed to mark mail as saved:", error);
+    logger.error("Failed to mark mail as saved", {}, error);
     return false;
   }
 };
@@ -238,7 +211,7 @@ export const deleteMail = async (
     });
     return count > 0;
   } catch (error) {
-    console.error("Failed to delete mail:", error);
+    logger.error("Failed to delete mail", {}, error);
     return false;
   }
 };
@@ -305,7 +278,7 @@ export const getMailHeaders = async (
     const result = await pool.query(sql, values);
     return result.rows as MailHeaderResult[];
   } catch (error) {
-    console.error("Failed to get mail headers:", error);
+    logger.error("Failed to get mail headers", {}, error);
     return [];
   }
 };
@@ -361,7 +334,7 @@ export const searchMails = async (
       return model;
     });
   } catch (error) {
-    console.error("Failed to search mails:", error);
+    logger.error("Failed to search mails", {}, error);
     return [];
   }
 };
@@ -378,7 +351,7 @@ export const getDomainUidNext = async (
     const result = await pool.query(sql, [user_id, sent]);
     return parseInt(result.rows[0]?.next_uid || "1", 10);
   } catch (error) {
-    console.error("Error getting next domain UID:", error);
+    logger.error("Error getting next UID", {}, error);
     return 1;
   }
 };
@@ -404,7 +377,7 @@ export const getAccountUidNext = async (
     const result = await pool.query(sql, [user_id, addressJson, sent]);
     return parseInt(result.rows[0]?.next_uid || "1", 10);
   } catch (error) {
-    console.error("Error getting next account UID:", error);
+    logger.error("Error getting account UID next", {}, error);
     return 1;
   }
 };
@@ -477,7 +450,7 @@ export const getAccountStats = async (
       latest: new Date(row.latest as string),
     }));
   } catch (error) {
-    console.error("Failed to get account stats:", error);
+    logger.error("Failed to get account stats", {}, error);
     return [];
   }
 };
@@ -528,8 +501,8 @@ export const countMessages = async (
       maxUid: parseInt(result.rows[0]?.max_uid || "0", 10),
     };
   } catch (error) {
-    console.error("Failed to count messages:", error);
-    return { total: 0, unread: 0, maxUid: 0 };
+    logger.error("Failed to count messages", {}, error);
+    return { total: 0, unread: 0 };
   }
 };
 
@@ -625,7 +598,7 @@ export const getMailsByRange = async (
     }
     return mails;
   } catch (error) {
-    console.error("Failed to get mails by range:", error);
+    logger.error("Failed to get mails by range", {}, error);
     return new Map();
   }
 };
@@ -789,7 +762,7 @@ export const setMailFlags = async (
       answered: row.answered as boolean,
     }));
   } catch (error) {
-    console.error("Failed to set mail flags:", error);
+    logger.error("Failed to set mail flags", {}, error);
     return [];
   }
 };
@@ -998,7 +971,7 @@ export const searchMailsByUid = async (
       .map((row: Record<string, unknown>) => row.uid as number)
       .filter((uid: number) => uid > 0);
   } catch (error) {
-    console.error("Failed to search mails by UID:", error);
+    logger.error("Failed to search mails by UID", {}, error);
     return [];
   }
 };
@@ -1033,7 +1006,7 @@ export const getUnreadNotifications = async (
 
     return notifications;
   } catch (error) {
-    console.error("Failed to get unread notifications:", error);
+    logger.error("Failed to get unread notifications", {}, error);
     return new Map();
   }
 };
@@ -1078,7 +1051,7 @@ export const getAllUids = async (
     const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => row.uid as number);
   } catch (error) {
-    console.error("Failed to get all UIDs:", error);
+    logger.error("Failed to get all UIDs", {}, error);
     return [];
   }
 };
@@ -1124,7 +1097,7 @@ export const expungeDeletedMails = async (
     const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => row.uid as number);
   } catch (error) {
-    console.error("Failed to expunge deleted mails:", error);
+    logger.error("Failed to expunge deleted mails", {}, error);
     return [];
   }
 };
@@ -1143,7 +1116,7 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
     const result = await pool.query(sql, [user_id]);
     return result.rows.map((row: Record<string, unknown>) => new MailModel(row));
   } catch (error) {
-    console.error("Failed to get spam mails:", error);
+    logger.error("Failed to get spam mails", {}, error);
     return [];
   }
 };
@@ -1163,7 +1136,7 @@ export const markMailSpam = async (
     );
     return (result.rowCount ?? 0) > 0;
   } catch (error) {
-    console.error("Failed to mark mail as spam:", error);
+    logger.error("Failed to mark mail as spam", {}, error);
     return false;
   }
 };
@@ -1214,7 +1187,7 @@ export const copyMail = async (
     const selectResult = await pool.query(selectSql, selectValues);
 
     if (selectResult.rows.length === 0) {
-      console.error(`[COPY] Source message not found: UID ${sourceUid}`);
+      logger.error(`[COPY] Source message not found`, { sourceUid });
       return null;
     }
 
@@ -1307,7 +1280,7 @@ export const copyMail = async (
       targetUid,
     };
   } catch (error) {
-    console.error("Failed to copy mail:", error);
+    logger.error("Failed to copy mail", {}, error);
     return null;
   }
 };

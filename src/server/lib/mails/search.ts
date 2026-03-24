@@ -5,6 +5,7 @@ import {
   getDomainUidNext as pgGetDomainUidNext,
   getAccountUidNext as pgGetAccountUidNext,
 } from "../postgres/repositories/mails";
+import { logger } from "../logger";
 
 export const searchMail = async (
   user: SignedUser,
@@ -49,7 +50,7 @@ export const getDomainUidNext = async (
   try {
     return await pgGetDomainUidNext(userId, sent);
   } catch (error) {
-    console.error("Error getting next UID:", error);
+    logger.error("Error getting next UID", {}, error);
     return 1;
   }
 };
@@ -62,7 +63,7 @@ export const getAccountUidNext = async (
   try {
     return await pgGetAccountUidNext(userId, account, sent);
   } catch (error) {
-    console.error("Error getting next UID:", error);
+    logger.error("Error getting next UID", {}, error);
     return 1;
   }
 };

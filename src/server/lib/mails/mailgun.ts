@@ -6,6 +6,7 @@ import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
 import { UploadedFile } from "express-fileupload";
+import { logger } from "../logger";
 
 const { EMAIL_DOMAIN = "mydomain", MAILGUN_KEY = "mailgun_key" } = process.env;
 
@@ -42,7 +43,7 @@ export const sendMailgunMail = async (
   const tos = to.split(",").map((addr) => addr.trim());
   const envelopTo = tos.filter((addr) => !addr.endsWith(`@${EMAIL_DOMAIN}`));
   if (tos.length && !envelopTo.length) {
-    console.log("All recipients are to myself, skipping Mailgun sending.");
+    logger.info("All recipients are to myself, skipping Mailgun sending.");
     return;
   }
 
@@ -74,7 +75,7 @@ export const sendMailgunMail = async (
 
   const data = await mg.messages.create(EMAIL_DOMAIN, mailgunMessage);
 
-  console.info("Email sending request succeeded");
+  logger.info("Email sending request succeeded");
 
   return data;
 };

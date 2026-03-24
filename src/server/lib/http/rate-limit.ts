@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { logger } from "../logger";
 
 /**
  * Resolve the real client IP from the request.
@@ -94,7 +95,7 @@ export const startCleanupScheduler = () => {
   cleanupInterval = setInterval(() => {
     const cleaned = cleanupExpiredAttempts();
     if (cleaned > 0) {
-      console.log(`[Rate Limit] Cleaned up ${cleaned} expired attempt records`);
+      logger.info(`[Rate Limit] Cleaned up ${cleaned} expired attempt records`);
     }
   }, CLEANUP_INTERVAL_MS);
 

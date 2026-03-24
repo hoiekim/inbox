@@ -1,4 +1,5 @@
 import { Pool, PoolConfig, types } from "pg";
+import { logger } from "../logger";
 
 const {
   POSTGRES_HOST: host = "localhost",
@@ -52,4 +53,18 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
   await pool.end();
   process.exit(0);
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled promise rejection", {}, reason instanceof Error ? reason : new Error(String(reason)));
+});
+
+process.on("uncaughtException", async (error) => {
+  logger.error("Uncaught exception", {}, error);
+  try {
+    await pool.end();
+  } catch (e) {
+    // ignore pool shutdown errors during crash
+  }
+  process.exit(1);
 });

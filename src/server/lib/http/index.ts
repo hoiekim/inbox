@@ -6,6 +6,7 @@ import path from "path";
 import { getDomain, PostgresSessionStore } from "server";
 import apiRouter from "./routes";
 import { startCleanupScheduler } from "./rate-limit";
+import { logger } from "../logger";
 
 export const initializeHttp = async () => {
   const app = express();
@@ -91,12 +92,12 @@ export const initializeHttp = async () => {
   const domain = getDomain();
   const port = process.env.PORT || 3004;
 
-  const httpServer = await new Promise<import("http").Server>((resolve) => {
-    const server = app.listen(port, () => {
-      console.info(`${domain} mail server is listening`);
-      resolve(server);
-    });
-  });
+  await new Promise((res) =>
+    app.listen(port, () => {
+      logger.info(`${domain} mail server is listening`);
+      res(undefined);
+    })
+  );
 
   // Start cleanup scheduler for rate limit data
   startCleanupScheduler();

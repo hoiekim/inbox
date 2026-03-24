@@ -1,4 +1,4 @@
-import { Router, RequestHandler, Request, Response, NextFunction } from "express";
+import { Router, RequestHandler, Request, Response } from "express";
 import { logger } from "../../logger";
 import { sendAlarm } from "../../alarm";
 
