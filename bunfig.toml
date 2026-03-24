@@ -1,0 +1,8 @@
+[test]
+# Exclude test files themselves from the coverage report
+coverageSkipTestFiles = true
+
+# Conservative baseline thresholds — enforce CI fails on coverage regression.
+# Current state (Mar 2026): ~53% lines, ~31% functions.
+# Thresholds set a few points below current levels; ratchet up as coverage improves.
+coverageThreshold = { lines = 0.50, functions = 0.28 }
