@@ -1,5 +1,4 @@
 import { Store } from "express-session";
-import { pool } from "../client";
 import {
   SessionModel,
   sessionsTable,
@@ -100,13 +99,9 @@ export const deleteSession = async (session_id: string): Promise<boolean> => {
 export const purgeSessions = async (): Promise<number> => {
   try {
     const now = new Date().toISOString();
-    const sql = `
-      DELETE FROM sessions 
-      WHERE cookie_expires IS NOT NULL AND cookie_expires <= $1
-      RETURNING session_id
-    `;
-    const result = await pool.query(sql, [now]);
-    return result.rowCount ?? 0;
+    return await sessionsTable.deleteWhere({
+      [COOKIE_EXPIRES]: { op: "<=", value: now, notNull: true },
+    });
   } catch (error) {
     console.error("Failed to purge sessions:", error);
     return 0;
