@@ -71,6 +71,7 @@ const throttler = new Throttler();
 export class ImapSession {
   public selectedMailbox: string | null = null;
   private selectedMailboxMessageCount: number = 0;
+  public mailboxReadOnly: boolean = false;
   private store: Store | null = null;
   private authenticated: boolean = false;
   private isIdling: boolean = false;
@@ -173,8 +174,7 @@ export class ImapSession {
   };
 
   examineMailbox = async (tag: string, name: string) => {
-    // EXAMINE is like SELECT but read-only - for now, treat the same
-    return this.selectMailbox(tag, name);
+    return this.selectMailbox(tag, name, true);
   };
 
   fetchMessagesTyped = async (
@@ -972,6 +972,10 @@ export class ImapSession {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
 
+    if (this.mailboxReadOnly) {
+      return this.write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
+    }
+
     // Determine if we're working with UIDs or sequence numbers
     const isUidStore = storeRequest.sequenceSet.type === "uid" || isUidCommand;
 
@@ -1241,7 +1245,7 @@ export class ImapSession {
     }
   };
 
-  selectMailbox = async (tag: string, name: string) => {
+  selectMailbox = async (tag: string, name: string, readOnly: boolean = false) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
@@ -1263,6 +1267,7 @@ export class ImapSession {
 
     try {
       this.selectedMailbox = cleanName;
+      this.mailboxReadOnly = readOnly;
       
       // Build sequence number mapping for this mailbox
       await this.buildSequenceMapping();
@@ -1296,7 +1301,9 @@ export class ImapSession {
       this.write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
       this.write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
       this.write(`* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`);
-      this.write(`${tag} OK [READ-WRITE] SELECT completed\r\n`);
+      const mode = readOnly ? "READ-ONLY" : "READ-WRITE";
+      const command = readOnly ? "EXAMINE" : "SELECT";
+      this.write(`${tag} OK [${mode}] ${command} completed\r\n`);
     } catch (error) {
       logger.error("Error selecting mailbox", { component: "imap", name }, error);
       this.write(`${tag} NO SELECT failed\r\n`);
@@ -1310,6 +1317,10 @@ export class ImapSession {
 
     if (!this.selectedMailbox) {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+
+    if (this.mailboxReadOnly) {
+      return this.write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
     }
 
     try {
