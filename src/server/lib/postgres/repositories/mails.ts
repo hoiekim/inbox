@@ -1140,7 +1140,7 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
   try {
     const sql = `
       SELECT * FROM mails 
-      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE AND expunged = FALSE
       ORDER BY date DESC
     `;
     const result = await pool.query(sql, [user_id]);
