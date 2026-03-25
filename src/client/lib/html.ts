@@ -1,3 +1,41 @@
+/**
+ * Strip dangerous elements and attributes from an HTML string using
+ * DOMParser — no external library required.
+ *
+ * The email viewer already runs inside a sandboxed iframe without
+ * `allow-scripts`, so JS cannot execute regardless. This function is
+ * defense-in-depth: it removes script tags, event handlers, and
+ * dangerous URI schemes before the HTML is injected into the iframe.
+ */
+const sanitizeEmailHtml = (html: string): string => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+
+  // Remove elements that can execute code or load external resources silently
+  const dangerous = ["script", "iframe", "object", "embed", "applet", "base"];
+  dangerous.forEach((tag) => {
+    doc.querySelectorAll(tag).forEach((el) => el.remove());
+  });
+
+  // Strip dangerous attributes on every element
+  const DANGEROUS_ATTR = /^on/i; // onclick, onerror, onload, ...
+  const DANGEROUS_URI = /^\s*(javascript|vbscript|data):/i;
+  doc.querySelectorAll("*").forEach((el) => {
+    Array.from(el.attributes).forEach((attr) => {
+      if (DANGEROUS_ATTR.test(attr.name)) {
+        el.removeAttribute(attr.name);
+      } else if (
+        (attr.name === "href" || attr.name === "src" || attr.name === "action") &&
+        DANGEROUS_URI.test(attr.value)
+      ) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return doc.documentElement.outerHTML;
+};
+
 export const processHtmlToSendMail = (html: string) => {
   const div = window.document.createElement("div");
   div.innerHTML = html;
@@ -49,6 +87,11 @@ export const processHtmlToSendMail = (html: string) => {
 };
 
 export const processHtmlForViewer = (html: string) => {
+  // Sanitize HTML as defense-in-depth before rendering in iframe.
+  // The iframe already has sandbox="allow-same-origin allow-popups" to block
+  // script execution, but this stripping adds an extra layer against script
+  // tags, event handlers, and dangerous URI schemes.
+  const sanitized = sanitizeEmailHtml(html);
   return `
 <style>
   body {
@@ -64,6 +107,6 @@ export const processHtmlForViewer = (html: string) => {
       color: rgb(70,70,70);
   }
 </style>
-${html}
+${sanitized}
 `;
 };
