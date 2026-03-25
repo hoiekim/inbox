@@ -54,6 +54,12 @@ import { idleManager } from "./idle-manager";
 import { getCapabilities } from "./capabilities";
 import { ImapRequestHandler } from "./handler";
 
+// Dummy hash used to prevent username enumeration via timing attacks.
+// When a user is not found, we still run bcrypt.compare so response time
+// is indistinguishable from a real failed-password attempt.
+const DUMMY_HASH =
+  "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
 type FetchResponsePart =
   | {
       type: "simple";
@@ -721,16 +727,13 @@ export class ImapSession {
       const user = await getUser(inputUser);
       const signedUser = user?.getSigned();
 
-      if (!password || !user || !signedUser) {
-        this.authenticated = false;
-        return this.write(
-          `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
-        );
-      }
+      // Always run bcrypt to prevent username enumeration via timing
+      const pwMatches = await bcrypt.compare(
+        password,
+        user?.password ?? DUMMY_HASH
+      );
 
-      const pwMatches = await bcrypt.compare(password, user.password as string);
-
-      if (!pwMatches) {
+      if (!password || !user || !signedUser || !pwMatches) {
         this.authenticated = false;
         return this.write(
           `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
@@ -1165,18 +1168,13 @@ export class ImapSession {
     const user = await getUser(inputUser);
     const signedUser = user?.getSigned();
 
-    if (!inputUser.password || !user || !signedUser) {
-      return this.write(
-        `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
-      );
-    }
-
+    // Always run bcrypt to prevent username enumeration via timing
     const pwMatches = await bcrypt.compare(
-      inputUser.password,
-      user.password as string
+      cleanPassword,
+      user?.password ?? DUMMY_HASH
     );
 
-    if (!pwMatches) {
+    if (!cleanPassword || !user || !signedUser || !pwMatches) {
       return this.write(
         `${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`
       );
