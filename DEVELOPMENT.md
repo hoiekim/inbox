@@ -315,6 +315,34 @@ Prefer **soft-delete** over hard-delete for user-facing data:
 
 This pattern is used in the IMAP EXPUNGE implementation where deleted messages retain their data until explicitly purged.
 
+**Every mail query must include `AND expunged = FALSE`.** This has been a recurring bug source — when adding new queries or modifying existing ones, always filter out soft-deleted records:
+
+```sql
+-- ✅ Correct - always filter expunged
+WHERE user_id = $1 AND expunged = FALSE
+  AND search_vector @@ plainto_tsquery('english', $2)
+
+-- ❌ Bug - expunged emails appear in results
+WHERE user_id = $1
+  AND search_vector @@ plainto_tsquery('english', $2)
+```
+
+Affected queries: header listings, IMAP search, UID range queries, unread counts, full-text search, account stats. See PRs #195, #198 for examples of this bug.
+
+### Sent Mail Detection
+
+Detect sent mail by matching `from_address` against the user's configured addresses, not by relying on IMAP `\Sent` flags or folder names:
+
+```typescript
+// ✅ Correct - reliable across all IMAP clients
+const isSent = userAddresses.includes(mail.from_address);
+
+// ❌ Unreliable - flag/folder naming varies by client
+const isSent = mail.flags?.includes("\\Sent");
+```
+
+See PR #199 for the rationale — IMAP clients use different conventions for sent folders and flags.
+
 ### IMAP Security
 
 - Password comparison uses constant-time comparison
