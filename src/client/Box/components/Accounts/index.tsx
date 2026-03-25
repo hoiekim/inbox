@@ -351,6 +351,18 @@ const Accounts = ({
         "/api/users/login"
       );
       if (response.status !== "success") return;
+      // Clear compose draft data so it doesn't leak to the next user on this browser
+      [
+        "name",
+        "to",
+        "cc",
+        "bcc",
+        "subject",
+        "sender",
+        "initialContent",
+        "originalMessage",
+        "isCcOpen"
+      ].forEach((key) => localStorage.removeItem(key));
       setUserInfo(undefined);
       setSelectedAccount("");
     };
