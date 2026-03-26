@@ -40,6 +40,7 @@ export const createLimiter = (maxAttempts: number, message: string) => {
     const ip =
       (typeof xRealIp === "string" ? xRealIp : undefined) ??
       forwarded ??
+      req.ip ??
       "unknown";
     const now = Date.now();
     const record = attempts.get(ip);
