@@ -28,8 +28,10 @@ export const createLimiter = (maxAttempts: number, message: string) => {
   allAttemptMaps.push(attempts);
 
   return (req: Request, res: Response, next: NextFunction) => {
-    // Prefer X-Real-IP (set by nginx from $remote_addr, can't be client-spoofed).
-    // Fall back to the leftmost X-Forwarded-For entry, then the socket address.
+    // Prefer X-Real-IP (set by nginx from $remote_addr, cannot be spoofed by client).
+    // Fall back to the leftmost X-Forwarded-For entry for other proxy setups.
+    // Do NOT fall back to req.socket.remoteAddress — behind a reverse proxy that
+    // is always the Docker bridge gateway, never the real client.
     const xRealIp = req.headers["x-real-ip"];
     const xForwardedFor = req.headers["x-forwarded-for"];
     const forwarded = Array.isArray(xForwardedFor)
@@ -38,7 +40,6 @@ export const createLimiter = (maxAttempts: number, message: string) => {
     const ip =
       (typeof xRealIp === "string" ? xRealIp : undefined) ??
       forwarded ??
-      req.socket.remoteAddress ??
       "unknown";
     const now = Date.now();
     const record = attempts.get(ip);
