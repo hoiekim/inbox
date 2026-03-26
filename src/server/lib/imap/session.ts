@@ -72,13 +72,12 @@ type FetchResponsePart =
       length: number;
     };
 
-const throttler = new Throttler();
-
 export class ImapSession {
   public selectedMailbox: string | null = null;
   private selectedMailboxMessageCount: number = 0;
   public mailboxReadOnly: boolean = false;
   private store: Store | null = null;
+  private throttler: Throttler = new Throttler();
   private authenticated: boolean = false;
   private isIdling: boolean = false;
   private idleTag: string | null = null;
@@ -165,7 +164,7 @@ export class ImapSession {
   };
 
   isThrottled(): boolean {
-    return throttler.isThrottled();
+    return this.throttler.isThrottled();
   }
 
   // New typed command handlers

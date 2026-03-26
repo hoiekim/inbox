@@ -92,9 +92,9 @@ export const getNotifications = async (
   return notifications;
 };
 
-export const notifyNewMails = async (usernames: string[]) => {
+export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) => {
   // Notify IDLE IMAP sessions immediately (works without VAPID)
-  idleManager.notifyNewMail(usernames);
+  idleManager.notifyNewMail(usernames, mailboxes);
 
   // Skip web push if VAPID not configured
   if (!vapidConfigured) return;

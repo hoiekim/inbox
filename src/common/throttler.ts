@@ -11,12 +11,7 @@ export class Throttler {
   isThrottled(): boolean {
     const now = Date.now();
     this.requests = this.requests.filter((time) => now - time < this.windowMs);
-
-    if (this.requests.length >= this.maxRequests) {
-      this.requests.push(now);
-      return true;
-    }
-
-    return false;
+    this.requests.push(now);
+    return this.requests.length > this.maxRequests;
   }
 }

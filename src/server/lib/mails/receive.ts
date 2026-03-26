@@ -27,6 +27,7 @@ import {
   getAttachmentId,
 } from "./util";
 import { notifyNewMails } from "../push";
+import { accountToBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 
 export interface SaveMailHandlerOptions {
@@ -59,7 +60,10 @@ export const saveMailHandler = async (
   );
   console.info("Successfully saved an email");
 
-  await notifyNewMails(usernames);
+  // Build mailbox list from envelopeTo so IDLE sessions only get notified
+  // if their selected mailbox actually received this mail (fixes #364).
+  const mailboxes = getMailboxesFromIncomingMail(validData);
+  await notifyNewMails(usernames, mailboxes);
   console.info(`Sent push notifications to users: [${usernames.toString()}]`);
 };
 
@@ -342,6 +346,23 @@ const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
   return array
     .filter((e) => e.address && isValidAddress(e.address, domain))
     .map((e) => addressToUsername(e.address as string));
+};
+
+/**
+ * Returns the IMAP mailbox paths that received this incoming mail.
+ * Used to filter IDLE notifications so only sessions watching the
+ * relevant mailbox are notified (fixes #364).
+ */
+const getMailboxesFromIncomingMail = (data: IncomingMail): string[] => {
+  const { envelopeTo } = data;
+  if (!envelopeTo) return [];
+  const array: MailAddressValueType[] = [];
+  if (Array.isArray(envelopeTo)) array.push(...envelopeTo);
+  else array.push(envelopeTo);
+  const domain = getDomain();
+  return array
+    .filter((e) => e.address && isValidAddress(e.address, domain))
+    .map((e) => accountToBox(e.address as string));
 };
 
 const isValidAddress = (address: string, domain: string) => {
