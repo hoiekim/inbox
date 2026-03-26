@@ -10,13 +10,21 @@ import healthRouter from "./health";
 const apiRouter = Router();
 
 apiRouter.use((req, _res, next) => {
+  // Skip logging for health check requests (e.g. from reverse proxy)
+  if (req.url === "/health") {
+    next();
+    return;
+  }
+
   console.info(`<${req.method}> /api${req.url}`);
   console.group();
   const date = new Date();
   const offset = date.getTimezoneOffset() / -60;
   const offsetString = (offset > 0 ? "+" : "") + offset + "H";
   console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
-  console.info(`from: ${req.ip}`);
+  console.info(`ip: ${req.ip}`);
+  console.info(`x-forwarded-for: ${req.headers["x-forwarded-for"] ?? "(none)"}`);
+  console.info(`x-real-ip: ${req.headers["x-real-ip"] ?? "(none)"}`);
   console.groupEnd();
   next();
 });
