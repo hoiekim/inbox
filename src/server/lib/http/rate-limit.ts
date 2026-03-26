@@ -28,7 +28,18 @@ export const createLimiter = (maxAttempts: number, message: string) => {
   allAttemptMaps.push(attempts);
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    // Prefer X-Real-IP (set by nginx from $remote_addr, can't be client-spoofed).
+    // Fall back to the leftmost X-Forwarded-For entry, then the socket address.
+    const xRealIp = req.headers["x-real-ip"];
+    const xForwardedFor = req.headers["x-forwarded-for"];
+    const forwarded = Array.isArray(xForwardedFor)
+      ? xForwardedFor[0]
+      : xForwardedFor?.split(",")[0]?.trim();
+    const ip =
+      (typeof xRealIp === "string" ? xRealIp : undefined) ??
+      forwarded ??
+      req.socket.remoteAddress ??
+      "unknown";
     const now = Date.now();
     const record = attempts.get(ip);
 
