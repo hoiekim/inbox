@@ -10,7 +10,8 @@ import { startCleanupScheduler } from "./rate-limit";
 export const initializeHttp = async () => {
   const app = express();
 
-  // Trust first proxy for secure cookie detection behind reverse proxy
+  // Trust first proxy for secure cookie detection behind reverse proxy.
+  // (Rate limiting reads X-Real-IP directly and does not rely on req.ip.)
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);
   }
@@ -104,3 +105,4 @@ export const initializeHttp = async () => {
 };
 
 export * from "./routes";
+export * from "./rate-limit";

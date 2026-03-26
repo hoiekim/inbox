@@ -7,6 +7,7 @@ const mockNext = mock(() => {});
 const makeReq = (ip: string) =>
   ({
     ip,
+    headers: {},
     socket: { remoteAddress: ip },
   }) as unknown as import("express").Request;
 

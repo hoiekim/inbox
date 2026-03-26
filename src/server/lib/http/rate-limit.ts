@@ -1,5 +1,24 @@
 import { Request, Response, NextFunction } from "express";
 
+/**
+ * Resolve the real client IP from the request.
+ * Prefers X-Real-IP (set by nginx from $remote_addr, cannot be spoofed by the
+ * client), then the leftmost X-Forwarded-For entry, then Express's req.ip.
+ */
+export const getClientIp = (req: Request): string => {
+  const xRealIp = req.headers["x-real-ip"];
+  const xForwardedFor = req.headers["x-forwarded-for"];
+  const forwarded = Array.isArray(xForwardedFor)
+    ? xForwardedFor[0]
+    : xForwardedFor?.split(",")[0]?.trim();
+  return (
+    (typeof xRealIp === "string" ? xRealIp : undefined) ??
+    forwarded ??
+    req.ip ??
+    "unknown"
+  );
+};
+
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -28,7 +47,7 @@ export const createLimiter = (maxAttempts: number, message: string) => {
   allAttemptMaps.push(attempts);
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const ip = getClientIp(req);
     const now = Date.now();
     const record = attempts.get(ip);
 

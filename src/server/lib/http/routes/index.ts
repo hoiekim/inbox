@@ -6,6 +6,7 @@ import usersRouter from "./users";
 import mailsRouter from "./mails";
 import pushRouter from "./push";
 import healthRouter from "./health";
+import { getClientIp } from "server";
 
 const apiRouter = Router();
 
@@ -22,9 +23,7 @@ apiRouter.use((req, _res, next) => {
   const offset = date.getTimezoneOffset() / -60;
   const offsetString = (offset > 0 ? "+" : "") + offset + "H";
   console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
-  console.info(`ip: ${req.ip}`);
-  console.info(`x-forwarded-for: ${req.headers["x-forwarded-for"] ?? "(none)"}`);
-  console.info(`x-real-ip: ${req.headers["x-real-ip"] ?? "(none)"}`);
+  console.info(`from: ${getClientIp(req)}`);
   console.groupEnd();
   next();
 });
