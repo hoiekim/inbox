@@ -10,9 +10,19 @@ import { startCleanupScheduler } from "./rate-limit";
 export const initializeHttp = async () => {
   const app = express();
 
-  // Trust first proxy for secure cookie detection behind reverse proxy
+  // Trust the reverse proxy (nginx) so req.ip resolves to the real client IP.
+  //
+  // With "trust proxy 1" (hop count), Express strips the rightmost XFF entry
+  // as the proxy hop. But nginx sets X-Forwarded-For to the client IP only —
+  // it does not append itself — so Express strips the only entry and falls back
+  // to the Docker bridge gateway IP (e.g. 172.20.0.2), breaking rate limiting.
+  //
+  // Using a subnet instead tells Express to trust any connection arriving from
+  // the Docker bridge network as a proxy, so it reads req.ip from the header.
+  // "loopback" covers 127.0.0.1 for local dev; the RFC-1918 range covers the
+  // Docker bridge (172.x.x.x, 10.x.x.x, 192.168.x.x).
   if (process.env.NODE_ENV === "production") {
-    app.set("trust proxy", 1);
+    app.set("trust proxy", "loopback, uniquelocal");
   }
 
   // Security headers
