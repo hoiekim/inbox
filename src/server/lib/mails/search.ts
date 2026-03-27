@@ -1,4 +1,4 @@
-import { MailHeaderData, SignedUser, MailAddressValueType } from "common";
+import { MailHeaderData, SignedUser, MailAddressValueType, Insight } from "common";
 import {
   searchMails,
   SearchMailModel,
@@ -29,6 +29,14 @@ export const searchMail = async (
         ? { value: m.to_address as MailAddressValueType[], text: m.to_text || "" }
         : undefined,
       read: m.read,
+      saved: m.saved,
+      insight: m.insight as Insight | undefined,
+      cc: m.cc_address
+        ? { value: m.cc_address as MailAddressValueType[], text: m.cc_text || "" }
+        : undefined,
+      bcc: m.bcc_address
+        ? { value: m.bcc_address as MailAddressValueType[], text: m.bcc_text || "" }
+        : undefined,
       highlight: m.highlight,
     });
   });
