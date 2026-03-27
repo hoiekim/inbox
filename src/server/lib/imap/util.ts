@@ -281,9 +281,12 @@ export const isSentMessagesAccountsFolder = (box: string): boolean => {
 export const boxToAccount = (username: string, box: string): string => {
   const domain = getUserDomain(username);
   // Strip Sent Messages/accounts/ or accounts/ prefix to extract the local part
-  const localPart = box
-    .replace(new RegExp(`^${SENT_MESSAGES_ACCOUNTS_FOLDER}/`), "")
-    .replace(new RegExp(`^${ACCOUNTS_FOLDER}/`), "");
+  let localPart = box;
+  if (localPart.startsWith(SENT_MESSAGES_ACCOUNTS_FOLDER + "/")) {
+    localPart = localPart.slice(SENT_MESSAGES_ACCOUNTS_FOLDER.length + 1);
+  } else if (localPart.startsWith(ACCOUNTS_FOLDER + "/")) {
+    localPart = localPart.slice(ACCOUNTS_FOLDER.length + 1);
+  }
   return `${localPart}@${domain}`;
 };
 

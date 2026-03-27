@@ -125,7 +125,7 @@ export const buildFullMessage = (
 
     // Add text/html parts
     if (hasText && hasHtml) {
-      const altBoundary = "alt_" + Date.now();
+      const altBoundary = "alt_" + (docId || mail.messageId || "default").replace(/[^a-zA-Z0-9_]/g, "_");
       body += `--${boundary}\r\n`;
       body += `Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`;
       body += `--${altBoundary}\r\n`;
@@ -157,7 +157,7 @@ export const buildFullMessage = (
       body += `Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`;
       const attachmentData =
         getAttachment(att.content.data) ||
-        Buffer.from("Attachement data not found");
+        Buffer.from("Attachment data not found");
       body += `${attachmentData.toString("base64")}\r\n`;
     });
 
