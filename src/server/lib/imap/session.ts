@@ -581,16 +581,6 @@ export class ImapSession {
         fields.add("html");
         fields.add("attachments");
         break;
-
-      case "HEADER_FIELDS":
-        fields.add("subject");
-        fields.add("from");
-        fields.add("to");
-        fields.add("cc");
-        fields.add("bcc");
-        fields.add("date");
-        fields.add("messageId");
-        break;
     }
   }
 
@@ -662,31 +652,6 @@ export class ImapSession {
 
       case "MIME_PART":
         return getBodyPart(mail, section.partNumber);
-
-      case "HEADER_FIELDS": {
-        // Return only the requested (or excluded) headers followed by blank line
-        const allHeaders = formatHeaders(mail, docId);
-        const fieldSet = new Set(section.fields.map((f) => f.toUpperCase()));
-        const lines = allHeaders.split("\r\n");
-        const filtered: string[] = [];
-        let include = false;
-
-        for (const line of lines) {
-          // Continuation lines (start with whitespace) inherit the previous header's decision
-          if (line.length > 0 && (line[0] === " " || line[0] === "\t")) {
-            if (include) filtered.push(line);
-            continue;
-          }
-          const colonIdx = line.indexOf(":");
-          if (colonIdx > 0) {
-            const headerName = line.substring(0, colonIdx).toUpperCase();
-            include = section.not ? !fieldSet.has(headerName) : fieldSet.has(headerName);
-            if (include) filtered.push(line);
-          }
-        }
-
-        return filtered.join("\r\n") + "\r\n";
-      }
 
       default:
         return null;
