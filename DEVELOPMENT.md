@@ -274,6 +274,31 @@ This pattern ensures consistent transaction handling, logging, and type safety.
 
 Schema migrations run automatically on startup via `src/server/lib/postgres/migrate.ts`.
 
+### Data Integrity Constraints
+
+**Add UNIQUE constraints for natural keys** to prevent duplicate data at the database level, not just the application level. Application-level dedup is insufficient — race conditions, retries, and concurrent connections can all create duplicates.
+
+```sql
+-- Add unique constraint with conflict handling for existing data
+ALTER TABLE mails ADD CONSTRAINT mails_user_message_unique
+  UNIQUE (user_id, message_id);
+```
+
+When inserting data that may conflict, use `ON CONFLICT`:
+
+```typescript
+// ✅ Good — upsert handles duplicates gracefully
+await pool.query(
+  `INSERT INTO mails (...) VALUES (...)
+   ON CONFLICT (user_id, message_id) DO UPDATE SET ...`,
+  values
+);
+```
+
+For manual migration scripts (DDL changes the automatic migration system can't handle), place them in `migrations/` with a numbered prefix. See `migrations/001_unique_user_message_id.sql` for a complete example that safely deduplicates existing data before adding the constraint.
+
+**Rule:** If a combination of columns should be unique (e.g., user + email message ID), enforce it at the database level, not just in code.
+
 ## Security Considerations
 
 ### Authentication
@@ -300,6 +325,18 @@ The `sandbox` attribute restricts:
 - ✅ `allow-same-origin` enables CSS styling
 
 **Never add `allow-scripts` to email iframes** - this would enable XSS attacks via malicious emails.
+
+When rendering search highlights from `ts_headline`, **sanitize the output** before using `dangerouslySetInnerHTML`. PostgreSQL's `ts_headline` strips most tags by default but can pass through crafted content:
+
+```typescript
+// ✅ Good — sanitize ts_headline output
+const sanitize = (html: string) =>
+  html.replace(/<(?!\/?b>)[^>]*>/gi, ""); // allow only <b> tags
+
+<div dangerouslySetInnerHTML={{ __html: sanitize(highlight) }} />
+```
+
+See `src/client/Box/components/Mails/index.tsx` for the implementation (PR #174).
 
 Additional defense layers:
 - HTML sanitization (planned: #124)
