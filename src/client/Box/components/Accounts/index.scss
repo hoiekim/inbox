@@ -1,62 +1,34 @@
 @use "sass:color";
 @use "../../../variables" as *;
 
-@media (prefers-color-scheme: light) {
-  .tab-holder {
-    .categories {
-      background-color: color.adjust($color-light, $lightness: -10%);
+.tab-holder {
+  .categories {
+    background-color: color.adjust($color-dark, $lightness: -6%);
 
-      div.clicked {
-        background-color: color.adjust($color-light, $lightness: -5%);
-      }
-    }
-
-    .accounts {
-      background-color: color.adjust($color-light, $lightness: -5%);
-
-      .sort_icon {
-        > div > svg {
-          color: color.adjust($color-dark, $alpha: -0.75);
-        }
-      }
-
-      .sort_box {
-        background-color: color.adjust($color-light, $lightness: 5%);
-      }
+    div.clicked {
+      background-color: color.adjust($color-dark, $lightness: -2%);
     }
   }
-}
 
-@media (prefers-color-scheme: dark) {
-  .tab-holder {
-    .categories {
-      background-color: color.adjust($color-dark, $lightness: -6%);
+  .accounts {
+    background-color: color.adjust($color-dark, $lightness: -2%);
 
-      div.clicked {
-        background-color: color.adjust($color-dark, $lightness: -2%);
+    .sort_icon {
+      > div > svg {
+        color: color.adjust($color-light, $alpha: -0.75);
       }
     }
 
-    .accounts {
-      background-color: color.adjust($color-dark, $lightness: -2%);
+    .sort_box {
+      background-color: color.adjust($color-dark, $lightness: 2%);
+    }
 
-      .sort_icon {
-        > div > svg {
-          color: color.adjust($color-light, $alpha: -0.75);
-        }
-      }
+    .sort_select {
+      background-color: color.adjust($color-dark, $lightness: 0%);
+    }
 
-      .sort_box {
-        background-color: color.adjust($color-dark, $lightness: 2%);
-      }
-
-      .sort_select {
-        background-color: color.adjust($color-dark, $lightness: 0%);
-      }
-
-      .sort_option:hover {
-        background-color: color.adjust($color-dark, $lightness: 3%);
-      }
+    .sort_option:hover {
+      background-color: color.adjust($color-dark, $lightness: 3%);
     }
   }
 }

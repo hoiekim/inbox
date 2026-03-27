@@ -19,13 +19,7 @@
 
   h1 {
     font-weight: 500;
-
-    @media (prefers-color-scheme: dark) {
-      color: $color-point;
-    }
-    @media (prefers-color-scheme: light) {
-      color: color.adjust($color-point, $lightness: -10%);
-    }
+    color: $color-point;
   }
 
   h1,
@@ -137,16 +131,10 @@
       padding: 5px 0;
       border-radius: 3px;
 
-      @media (prefers-color-scheme: dark) {
-        background-color: color.adjust($color-dark, $lightness: 2%);
-        box-shadow:
-          1px 1px 2px color.adjust($color-dark, $lightness: -5%) inset,
-          -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
-      }
-
-      @media (prefers-color-scheme: light) {
-        background-color: $color-light;
-      }
+      background-color: color.adjust($color-dark, $lightness: 2%);
+      box-shadow:
+        1px 1px 2px color.adjust($color-dark, $lightness: -5%) inset,
+        -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
 
       ul {
         margin: 0;
@@ -224,24 +212,12 @@
         }
       }
 
-      @media (prefers-color-scheme: dark) {
-        div {
-          color: color.adjust($color-light, $lightness: -10%);
+      div {
+        color: color.adjust($color-light, $lightness: -10%);
 
-          em {
-            color: $color-point;
-            background-color: rgba(255, 255, 255, 0.1);
-          }
-        }
-      }
-      @media (prefers-color-scheme: light) {
-        div {
-          color: color.adjust($color-dark, $lightness: 10%);
-
-          em {
-            color: color.adjust($color-point, $lightness: -10%);
-            background-color: rgba(0, 0, 0, 0.05);
-          }
+        em {
+          color: $color-point;
+          background-color: rgba(255, 255, 255, 0.1);
         }
       }
     }
