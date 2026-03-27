@@ -25,7 +25,7 @@ interface SetInfoResponse extends SetInfoPostResponse {
 const SignUp = () => {
   const { setUserInfo } = useContext(Context);
 
-  const { email } = useParams<{ email?: string }>();
+  const { email } = useParams<{ email: string }>();
   const query = new URLSearchParams(useLocation().search);
   const token = query.get("t");
   const username = query.get("u");
