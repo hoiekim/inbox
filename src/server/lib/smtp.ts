@@ -9,6 +9,7 @@ import {
 import { simpleParser } from "mailparser";
 import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
+import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 
 const registerListeners = (
   server: SMTPServer,
@@ -28,12 +29,29 @@ const registerListeners = (
 
 export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   if (session.user) return cb(null, { user: session.user });
+
+  const ip = session.remoteAddress ?? "unknown";
+
+  if (isAuthRateLimited(ip)) {
+    return cb(new Error("Too many failed authentication attempts"));
+  }
+
   const { username, password } = auth;
   const user = await getUser({ username });
   const signedUser = user?.getSigned();
-  if (!password || !user || !signedUser) return cb(null, { user: undefined });
+
+  if (!password || !user || !signedUser) {
+    await recordAuthFailure(ip);
+    return cb(null, { user: undefined });
+  }
+
   const pwMatches = await bcrypt.compare(password, user.password!);
-  if (!pwMatches) return cb(null, { user: undefined });
+  if (!pwMatches) {
+    await recordAuthFailure(ip);
+    return cb(null, { user: undefined });
+  }
+
+  resetAuthFailures(ip);
   cb(null, { user: username });
 };
 
