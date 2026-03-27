@@ -8,7 +8,7 @@ services:
       - ./.env.local
     ports:
       - "3004:3004"
-      - "25:25"
+      - "25:2525"
     links:
       - postgres
     depends_on:
@@ -28,6 +28,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=inbox
       - POSTGRES_DATABASE=inbox
+      - SMTP_PORT=2525
 
   postgres:
     image: postgres:16-alpine

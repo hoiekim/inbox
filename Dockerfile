@@ -18,8 +18,10 @@ FROM node:22-slim
 
 WORKDIR /app
 
-COPY --from=builder /app/build ./build
-COPY healthcheck.js ./healthcheck.js
+COPY --chown=node:node --from=builder /app/build ./build
+COPY --chown=node:node healthcheck.js ./healthcheck.js
+
+USER node
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
   CMD node ./healthcheck.js
