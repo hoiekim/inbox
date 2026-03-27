@@ -1,4 +1,5 @@
 import { Router, RequestHandler, Request, Response, NextFunction } from "express";
+import { logger } from "../../logger";
 
 export type Method = "GET" | "POST" | "DELETE";
 
@@ -57,8 +58,13 @@ export class Route<T> {
         else res.end();
         return;
       } catch (error: unknown) {
-        console.error(error);
-        const message = error instanceof Error ? error.message : String(error);
+        logger.error("Route handler error", { method: this.method, path: this.path }, error);
+        const message =
+          process.env.NODE_ENV === "production"
+            ? "Internal server error"
+            : error instanceof Error
+              ? error.message
+              : String(error);
         res.status(500).json({ status: "error", message });
       }
     }
