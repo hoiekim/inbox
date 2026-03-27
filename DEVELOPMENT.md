@@ -386,6 +386,38 @@ See PR #199 for the rationale — IMAP clients use different conventions for sen
 - Session IDs are cryptographically random
 - Per-user UIDVALIDITY tracking prevents cross-user data leaks
 
+### Timer and Resource Cleanup
+
+Server-side timers and resource references must be cleaned up when they expire or are replaced:
+
+```typescript
+// BAD: stale references accumulate
+const timers: Record<string, Timeout> = {};
+const startTimer = (id: string) => {
+  timers[id] = setTimeout(() => { /* ... */ }, DURATION);
+  // ← old timer for same id still fires, reference leaks
+};
+
+// GOOD: clear previous timer, clean up reference
+const startTimer = (id: string) => {
+  if (timers[id]) clearTimeout(timers[id]);
+  timers[id] = setTimeout(() => {
+    delete timers[id]; // clean up reference after firing
+    // ...
+  }, DURATION);
+};
+```
+
+### Process Lifecycle Handlers
+
+Process-level handlers (`SIGINT`, `SIGTERM`, `unhandledRejection`, `uncaughtException`) belong in the application entry point (`start.ts`), not in library modules. Shutdown should drain resources in order:
+
+1. Stop accepting new connections (close HTTP/IMAP/SMTP servers)
+2. Close database pool
+3. Exit process
+
+Library modules should not register global process handlers as side effects of import.
+
 ## Query Optimization
 
 ### Select Only Needed Columns
