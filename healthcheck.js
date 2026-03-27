@@ -1,6 +1,12 @@
-// Docker healthcheck: verifies both the API and the static frontend are reachable.
-// The API check catches database/server failures; the root check catches missing
-// static file serving (e.g. NODE_ENV guard not firing, build output missing).
+// Docker healthcheck for inbox.
+// Checks:
+//   - HTTP API health endpoint (covers DB + all IMAP/SMTP ports via /api/health)
+//   - HTTP frontend (catches missing static file serving)
+//
+// The /api/health endpoint internally verifies TCP connectivity on all ports:
+//   SMTP: 25, 465, 587 | IMAP: 143, 993
+// so a single fetch to /api/health is sufficient to detect mail server failures.
+
 const BASE = "http://localhost:" + (process.env.PORT || 3004);
 
 async function check(path, opts = {}) {
@@ -11,10 +17,19 @@ async function check(path, opts = {}) {
     if (!ct.includes(opts.contentType))
       throw new Error(path + " content-type was " + ct);
   }
+  if (opts.allHealthy) {
+    const body = await res.json();
+    const checks = body?.body?.checks || {};
+    const failed = Object.entries(checks)
+      .filter(([, v]) => v !== "ok")
+      .map(([k]) => k);
+    if (failed.length > 0)
+      throw new Error("Unhealthy services: " + failed.join(", "));
+  }
 }
 
 try {
-  await check("/api/health");
+  await check("/api/health", { allHealthy: true });
   await check("/", { contentType: "text/html" });
   process.exit(0);
 } catch (e) {

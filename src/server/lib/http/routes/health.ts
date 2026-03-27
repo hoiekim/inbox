@@ -34,15 +34,30 @@ healthRouter.get("/", async (_req, res) => {
   // HTTP — always ok; this request proves the server is up
   checks.http = "ok";
 
-  // SMTP (port 25)
+  // SMTP (port 25 — plain)
   const smtpOk = await checkPort(25);
-  checks.smtp = smtpOk ? "ok" : "unhealthy";
+  checks["smtp:25"] = smtpOk ? "ok" : "unhealthy";
   if (!smtpOk) allHealthy = false;
 
-  // IMAP (port 143)
+  // SMTP TLS (port 465 — implicit TLS)
+  const smtpTlsOk = await checkPort(465);
+  checks["smtp:465"] = smtpTlsOk ? "ok" : "unhealthy";
+  if (!smtpTlsOk) allHealthy = false;
+
+  // SMTP STARTTLS (port 587)
+  const smtpStarttlsOk = await checkPort(587);
+  checks["smtp:587"] = smtpStarttlsOk ? "ok" : "unhealthy";
+  if (!smtpStarttlsOk) allHealthy = false;
+
+  // IMAP (port 143 — plain/STARTTLS)
   const imapOk = await checkPort(143);
-  checks.imap = imapOk ? "ok" : "unhealthy";
+  checks["imap:143"] = imapOk ? "ok" : "unhealthy";
   if (!imapOk) allHealthy = false;
+
+  // IMAP TLS (port 993 — implicit TLS)
+  const imapTlsOk = await checkPort(993);
+  checks["imap:993"] = imapTlsOk ? "ok" : "unhealthy";
+  if (!imapTlsOk) allHealthy = false;
 
   const statusCode = allHealthy ? 200 : 503;
   res.status(statusCode).json({
