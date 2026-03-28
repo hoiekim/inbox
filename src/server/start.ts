@@ -9,14 +9,28 @@ import {
   initializeHttp,
 } from "server";
 import { pool } from "server";
+import { sendAlarm } from "./lib/alarm";
 
 // Process-level error handlers (centralised here alongside SIGTERM/SIGINT)
+// Note: These fire before IMAP/SMTP servers are shut down. The alarm call is
+// fire-and-forget (.catch(() => undefined)) to avoid interfering with the
+// crash/exit sequence.
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled promise rejection:", reason);
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const stack = reason instanceof Error ? (reason.stack ?? "") : "";
+  sendAlarm(
+    "Unhandled Promise Rejection",
+    `**Message:** ${message}\n\`\`\`\n${stack.slice(0, 1000)}\n\`\`\``,
+  ).catch(() => undefined);
 });
 
 process.on("uncaughtException", async (error) => {
   console.error("Uncaught exception:", error);
+  sendAlarm(
+    "Uncaught Exception",
+    `**Message:** ${error.message}\n\`\`\`\n${(error.stack ?? "").slice(0, 1000)}\n\`\`\``,
+  ).catch(() => undefined);
   try {
     await pool.end();
   } catch (e) {
