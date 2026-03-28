@@ -85,6 +85,10 @@ export const initializeHttp = async () => {
   // https://wiki.mozilla.org/Thunderbird:Autoconfiguration:ConfigFileFormat
   app.get("/.well-known/autoconfig/mail/config-v1.1.xml", (_req, res) => {
     const emailDomain = getDomain();
+    // APP_HOSTNAME is the actual server hostname clients connect to for IMAP/SMTP.
+    // EMAIL_DOMAIN is the MX-record domain used for routing — not always the same as
+    // the server's hostname (e.g. MX record may use non-TLS delivery paths).
+    const serverHostname = process.env.APP_HOSTNAME || emailDomain;
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <clientConfig version="1.1">
   <emailProvider id="${emailDomain}">
@@ -92,14 +96,14 @@ export const initializeHttp = async () => {
     <displayName>${emailDomain} Mail</displayName>
     <displayShortName>${emailDomain}</displayShortName>
     <incomingServer type="imap">
-      <hostname>${emailDomain}</hostname>
+      <hostname>${serverHostname}</hostname>
       <port>143</port>
       <socketType>STARTTLS</socketType>
       <authentication>password-cleartext</authentication>
       <username>%EMAILADDRESS%</username>
     </incomingServer>
     <outgoingServer type="smtp">
-      <hostname>${emailDomain}</hostname>
+      <hostname>${serverHostname}</hostname>
       <port>587</port>
       <socketType>STARTTLS</socketType>
       <authentication>password-cleartext</authentication>
