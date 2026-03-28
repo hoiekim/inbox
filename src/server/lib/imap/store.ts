@@ -363,7 +363,7 @@ export class Store {
             }
             break;
           }
-          case "UID":
+          case "UID": {
             // Handle UID ranges
             const uidCriterion = criterion as UidCriterion;
             for (const range of uidCriterion.sequenceSet.ranges) {
