@@ -18,6 +18,11 @@ const checkPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
     });
   });
 
+// Use SMTP_PORT env var so health check matches the actual bound port.
+// When running in Docker with port mapping (host:25 -> container:2525),
+// SMTP_PORT=2525 is set via environment, and the container binds to 2525.
+const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 25;
+
 healthRouter.get("/", async (_req, res) => {
   const checks: Record<string, "ok" | "unhealthy"> = {};
   let allHealthy = true;
@@ -34,9 +39,9 @@ healthRouter.get("/", async (_req, res) => {
   // HTTP — always ok; this request proves the server is up
   checks.http = "ok";
 
-  // SMTP (port 25 — plain)
-  const smtpOk = await checkPort(25);
-  checks["smtp:25"] = smtpOk ? "ok" : "unhealthy";
+  // SMTP (use SMTP_PORT env var; defaults to 25)
+  const smtpOk = await checkPort(smtpPort);
+  checks[`smtp:${smtpPort}`] = smtpOk ? "ok" : "unhealthy";
   if (!smtpOk) allHealthy = false;
 
   // SMTP TLS (port 465 — implicit TLS)
