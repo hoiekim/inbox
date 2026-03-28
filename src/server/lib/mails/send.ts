@@ -62,6 +62,8 @@ export const sendMail = async (
       message = "Too many requests. Please try again later.";
     } else if (err?.code === "ENOTFOUND" || err?.code === "ECONNREFUSED") {
       message = "Unable to reach email service. Please try again later.";
+    } else if (err?.code === "ECONNRESET" || (error as { details?: string })?.details === "socket hang up") {
+      message = err?.message || "Failed to send email. Please try again.";
     }
 
     throw new MailSendingError(message);

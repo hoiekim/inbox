@@ -55,7 +55,8 @@ export const sendMailgunMail = async (
   const mailgun = new Mailgun(FormData);
   const mg = mailgun.client({
     username: "api",
-    key: MAILGUN_KEY
+    key: MAILGUN_KEY,
+    timeout: 30000
   });
 
   const mailgunMessage: MailgunMessageData = {
