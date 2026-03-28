@@ -30,8 +30,10 @@ const checkTlsPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
     const socket = tlsConnect(
       { port, host, rejectUnauthorized: false },
       () => {
-        socket.destroy();
-        resolve(true);
+        // socket.end() sends TLS close_notify — a clean shutdown.
+        // socket.destroy() aborts the connection, which makes smtp-server
+        // fire an error event ("Socket closed while initiating TLS").
+        socket.end(() => resolve(true));
       }
     );
     socket.setTimeout(3000);
