@@ -1,7 +1,6 @@
 import crypto from "crypto";
 import { logger } from "../../logger";
 import { pool } from "../client";
-import { logger } from "../../logger";
 import { ParamValue } from "../database";
 import {
   MailModel,
@@ -502,7 +501,7 @@ export const countMessages = async (
     };
   } catch (error) {
     logger.error("Failed to count messages", {}, error);
-    return { total: 0, unread: 0 };
+    return { total: 0, unread: 0, maxUid: 0 };
   }
 };
 

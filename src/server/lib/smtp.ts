@@ -12,6 +12,7 @@ import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
+import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 
 const registerListeners = (
   server: SMTPServer,
@@ -183,28 +184,28 @@ export const initializeSmtp = async () => {
     logger.warn("SMTP: SSL certificate not found.");
   }
 
-  const smtpServer = await new Promise<SMTPServer>((res) => {
+  const smtpServer = await new Promise<SMTPServer>((res, _rej) => {
     const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 25;
     const server = new SMTPServer({ ...options, secure: false });
     registerListeners(server, port, () => {
       logger.info(`SMTP server listening on port ${port}`);
-      res();
+      res(server);
     });
   });
   servers.push(smtpServer);
 
   if (isSslAvailable) {
-    const smtpsServer = await new Promise<SMTPServer>((res) => {
+    const smtpsServer = await new Promise<SMTPServer>((res, _rej) => {
       const port = 465;
       const server = new SMTPServer({ ...options, secure: true });
       registerListeners(server, port, () => {
         logger.info(`SMTP server listening on port ${port}`);
-        res();
+        res(server);
       });
     });
     servers.push(smtpsServer);
 
-    const submissionServer = await new Promise<SMTPServer>((res) => {
+    const submissionServer = await new Promise<SMTPServer>((res, _rej) => {
       const port = 587;
       const server = new SMTPServer({
         ...options,
@@ -213,7 +214,7 @@ export const initializeSmtp = async () => {
       });
       registerListeners(server, port, () => {
         logger.info(`SMTP server listening on port ${port}`);
-        res();
+        res(server);
       });
     });
     servers.push(submissionServer);
