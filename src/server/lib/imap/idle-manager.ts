@@ -62,7 +62,7 @@ class IdleManager {
    * Notify all IDLE sessions for specific users about new mail.
    * Queries the actual mailbox message count before sending EXISTS per RFC 3501 §7.3.1.
    */
-  async notifyNewMail(usernames: string[]) {
+  async notifyNewMail(usernames: string[], mailboxes?: string[]) {
     const usernameSet = new Set(usernames);
     const mailboxSet = mailboxes ? new Set(mailboxes) : null;
 
