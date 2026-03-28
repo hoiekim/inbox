@@ -17,6 +17,10 @@ const registerListeners = (
   callback: () => void
 ) => {
   server.on("error", (err) => {
+    // "Socket closed while initiating TLS" is logged when a client connects
+    // and immediately closes without completing the handshake (e.g. port
+    // scanners, healthcheck TCP probes). This is not actionable — suppress it.
+    if (err.message?.includes("Socket closed")) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
   });
 
