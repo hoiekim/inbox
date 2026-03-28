@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import fs from "fs";
 import { UploadedFile } from "express-fileupload";
 import {
   AttachmentType,
@@ -121,12 +122,16 @@ const getAttachmentsToSave = async (files?: UploadedFileDynamicArray) => {
 
   const attachmentsToSave: AttachmentType[] = [];
 
-  const parseFile = async ({ name, data, mimetype, size }: UploadedFile) => {
+  const parseFile = async (file: UploadedFile) => {
+    // With useTempFiles:true, file.data is an empty Buffer — read from tempFilePath.
+    const buffer = file.tempFilePath
+      ? fs.readFileSync(file.tempFilePath)
+      : file.data;
     attachmentsToSave.push({
-      content: { data: await saveBuffer(data) },
-      filename: name,
-      contentType: mimetype,
-      size
+      content: { data: await saveBuffer(buffer) },
+      filename: file.name,
+      contentType: file.mimetype,
+      size: file.size
     });
   };
 
