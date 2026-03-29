@@ -14,7 +14,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.DISCORD_ALARM_WEBHOOK;
-  delete process.env.ERROR_THRESHOLD;
 });
 
 describe("sendAlarm", () => {

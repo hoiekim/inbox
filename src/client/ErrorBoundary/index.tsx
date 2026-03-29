@@ -27,6 +27,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("React error boundary caught an error:", error, errorInfo);
+    const body = JSON.stringify({
+      message: error.message,
+      stack: error.stack ?? "",
+      url: window.location.href,
+    });
+    navigator.sendBeacon("/api/client-error", new Blob([body], { type: "application/json" }));
   }
 
   handleReload = () => {
