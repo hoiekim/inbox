@@ -1,5 +1,6 @@
 import { Router, RequestHandler, Request, Response, NextFunction } from "express";
 import { logger } from "../../logger";
+import { sendAlarm } from "../../alarm";
 
 export type Method = "GET" | "POST" | "DELETE";
 
@@ -59,6 +60,10 @@ export class Route<T> {
         return;
       } catch (error: unknown) {
         logger.error("Route handler error", { method: this.method, path: this.path }, error);
+        sendAlarm(
+          `Route Error: ${this.method} ${this.path}`,
+          `**Error:** ${error instanceof Error ? error.message : String(error)}`
+        ).catch(() => undefined);
         const message =
           process.env.NODE_ENV === "production"
             ? "Internal server error"

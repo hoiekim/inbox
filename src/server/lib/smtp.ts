@@ -10,6 +10,7 @@ import { simpleParser } from "mailparser";
 import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
+import { sendAlarm } from "./alarm";
 
 const registerListeners = (
   server: SMTPServer,
@@ -17,7 +18,15 @@ const registerListeners = (
   callback: () => void
 ) => {
   server.on("error", (err) => {
+    // "Socket closed while initiating TLS" is logged when a client connects
+    // and immediately closes without completing the handshake (e.g. port
+    // scanners, healthcheck TCP probes). This is not actionable — suppress it.
+    if (err.message?.includes("Socket closed")) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
+    sendAlarm(
+      "SMTP Server Error",
+      `**Port:** ${port}\n**Error:** ${String(err)}`
+    ).catch(() => undefined);
   });
 
   server.on("close", () => {

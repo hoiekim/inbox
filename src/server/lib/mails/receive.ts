@@ -29,6 +29,7 @@ import {
 import { notifyNewMails } from "../push";
 import { accountToBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
+import { sendAlarm } from "../alarm";
 
 export interface SaveMailHandlerOptions {
   remoteAddress?: string;
@@ -190,6 +191,10 @@ export const saveMail = async (
     return await pgSaveMail(input);
   } catch (error) {
     console.error("Error saving mail:", error);
+    sendAlarm(
+      "Mail Receive Failed",
+      `**Error:** ${error instanceof Error ? error.message : String(error)}`
+    ).catch(() => undefined);
     const errorFilePath = `./error/${Date.now()}`;
     const errorContent = JSON.stringify({ ...mail, error });
     if (!fs.existsSync("./error")) fs.mkdirSync("./error");
