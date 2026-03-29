@@ -18,10 +18,17 @@ const registerListeners = (
   callback: () => void
 ) => {
   server.on("error", (err) => {
-    // "Socket closed while initiating TLS" is logged when a client connects
-    // and immediately closes without completing the handshake (e.g. port
-    // scanners, healthcheck TCP probes). This is not actionable — suppress it.
-    if (err.message?.includes("Socket closed")) return;
+    // Suppress noise from external port scanners and misconfigured clients.
+    // These errors originate from the remote side failing TLS negotiation —
+    // they do not indicate a server-side problem.
+    if (
+      err.message?.includes("Socket closed") ||       // client disconnected before TLS handshake
+      err.message?.includes("no shared cipher") ||    // client cipher suites incompatible with server
+      err.message?.includes("http request") ||        // plain HTTP sent to TLS-only port
+      err.message?.includes("wrong version number") || // old/incompatible TLS version
+      err.message?.includes("packet length too long") || // malformed TLS record
+      err.message?.includes("Failed to establish TLS session") // generic handshake failure
+    ) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
     sendAlarm(
       "SMTP Server Error",
