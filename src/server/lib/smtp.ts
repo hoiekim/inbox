@@ -12,7 +12,6 @@ import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
-import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 
 const registerListeners = (
   server: SMTPServer,
