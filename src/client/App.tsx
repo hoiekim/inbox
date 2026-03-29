@@ -8,7 +8,7 @@ import {
   SetStateAction
 } from "react";
 import { QueryClientProvider } from "react-query";
-import { BrowserRouter, Switch, Route, Redirect } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import { Account, SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
@@ -210,17 +210,24 @@ const App = ({ user: session }: Props) => {
           <BrowserRouter>
             <ErrorBoundary>
               <Header />
-              <Switch>
-                <Route exact path="/">
-                  {userInfo ? <Box /> : <Redirect to="/sign-in" />}
-                </Route>
-                <Route exact path="/sign-in">
-                  {userInfo ? <Redirect to="/" /> : <SignIn />}
-                </Route>
-                <Route exact path={["/set-info", "/set-info/:email"]}>
-                  {userInfo ? <Redirect to="/" /> : <SignUp />}
-                </Route>
-              </Switch>
+              <Routes>
+                <Route
+                  path="/"
+                  element={userInfo ? <Box /> : <Navigate to="/sign-in" replace />}
+                />
+                <Route
+                  path="/sign-in"
+                  element={userInfo ? <Navigate to="/" replace /> : <SignIn />}
+                />
+                <Route
+                  path="/set-info"
+                  element={userInfo ? <Navigate to="/" replace /> : <SignUp />}
+                />
+                <Route
+                  path="/set-info/:email"
+                  element={userInfo ? <Navigate to="/" replace /> : <SignUp />}
+                />
+              </Routes>
             </ErrorBoundary>
           </BrowserRouter>
         </Context.Provider>
