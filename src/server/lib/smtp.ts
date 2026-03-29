@@ -178,6 +178,11 @@ export const initializeSmtp = async () => {
   if (isSslAvailable) {
     options.key = readFileSync(SSL_CERTIFICATE_KEY);
     options.cert = readFileSync(SSL_CERTIFICATE);
+    // Broaden TLS compatibility for external MTAs (e.g. Postfix, Exchange) that
+    // may offer cipher suites excluded from OpenSSL 3's stricter defaults.
+    // TLSv1.2 minimum is maintained; known-weak ciphers remain disabled.
+    options.minVersion = "TLSv1.2";
+    options.ciphers = "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
   } else {
     console.warn("SMTP: SSL certificate not found.");
   }
