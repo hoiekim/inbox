@@ -5,6 +5,8 @@ import { getCapabilities } from "./capabilities";
 import { readFileSync } from "fs";
 import { logger } from "server";
 
+export { idleManager } from "./idle-manager";
+
 export const getImapListener = (port: number) => {
   return (socket: Socket) => {
     const handler = new ImapRequestHandler(port);
