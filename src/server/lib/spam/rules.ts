@@ -6,6 +6,7 @@
  */
 
 import { SpamRule, EmailContext } from "./types";
+import { logger } from "../logger";
 
 /**
  * URL shortener domains commonly used in spam.
@@ -193,7 +194,7 @@ export function evaluateRules(
       }
     } catch (error) {
       // Rule threw an error - log but don't crash
-      console.warn(`[SpamFilter] Rule '${rule.id}' threw error:`, error);
+      logger.warn(`[SpamFilter] Rule '${rule.id}' threw error`, {}, error);
     }
   }
 

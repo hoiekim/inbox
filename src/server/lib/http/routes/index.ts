@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "../../logger";
 
 export * from "./route";
 
@@ -14,20 +15,13 @@ import { sendAlarm } from "../../alarm";
 const apiRouter = Router();
 
 apiRouter.use((req, _res, next) => {
-  // Skip logging for health check requests (e.g. from reverse proxy)
-  if (req.url === "/health") {
-    next();
-    return;
-  }
-
-  console.info(`<${req.method}> /api${req.url}`);
-  console.group();
   const date = new Date();
   const offset = date.getTimezoneOffset() / -60;
   const offsetString = (offset > 0 ? "+" : "") + offset + "H";
-  console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
-  console.info(`from: ${getClientIp(req)}`);
-  console.groupEnd();
+  logger.info(`<${req.method}> /api${req.url}`, {
+    at: `${date.toLocaleString()}, ${offsetString}`,
+    from: req.ip,
+  });
   next();
 });
 
