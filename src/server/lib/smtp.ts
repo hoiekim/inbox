@@ -29,6 +29,16 @@ const registerListeners = (
       err.message?.includes("packet length too long") || // malformed TLS record
       err.message?.includes("Failed to establish TLS session") // generic handshake failure
     ) return;
+
+    // Log unsupported protocol errors (TLS version too old) with remote IP for diagnosis.
+    // These are client-side failures so no alarm is sent, but capturing the IP helps identify
+    // senders that need outreach or protocol downgrade exceptions.
+    if (err.message?.includes("unsupported protocol")) {
+      const remoteAddr = (err as NodeJS.ErrnoException & { remoteAddress?: string }).remoteAddress ?? "unknown";
+      console.warn(`SMTP(${port}) TLS unsupported protocol from ${remoteAddr}: ${err.message}`);
+      return;
+    }
+
     console.error(`SMTP Server(${port}) Error: ${err}`);
     sendAlarm(
       "SMTP Server Error",
