@@ -215,6 +215,53 @@ This is especially important in background tasks where failures need to be track
 - IDLE manager handles long-lived connections with 29-minute refresh
 - Parser functions return structured results or throw on invalid input
 
+### Mailbox Hierarchy
+
+After the accounts/ restructure (PR #317), the IMAP mailbox tree is:
+
+```
+INBOX                          ← unified inbox (all accounts aggregated)
+INBOX/accounts/                ← non-selectable parent (\HasChildren \Noselect)
+INBOX/accounts/{username}      ← per-account received mail (e.g. INBOX/accounts/alice)
+Sent Messages                  ← unified sent (all accounts aggregated)
+Sent Messages/accounts/        ← non-selectable parent (\HasChildren \Noselect)
+Sent Messages/accounts/{name}  ← per-account sent mail
+Drafts                         ← user-created mailbox (if present)
+Trash                          ← user-created mailbox (if present)
+```
+
+**Unified INBOX** (`INBOX`) aggregates mail from all accounts belonging to the user. Selecting it returns messages regardless of which account received them.
+
+**Per-account sub-folders** (`INBOX/accounts/{name}`) are generated dynamically from `accountToBox()` in `src/server/lib/imap/util.ts`:
+
+```typescript
+export const accountToBox = (accountName: string): string => {
+  const localPart = accountName.split("@")[0]; // strip domain
+  return `INBOX/accounts/${localPart}`;
+};
+```
+
+Only accounts with existing mail appear in `LIST` output — `listMailboxes()` in `store.ts` queries `getAccountStats()` and adds sub-folders only for addresses with data.
+
+**NAMESPACE advertisement** — the server responds per RFC 2342 with a single personal namespace using `/` as delimiter and empty prefix:
+
+```
+* NAMESPACE (("" "/")) NIL NIL
+```
+
+This means mailbox paths use `/` as the hierarchy separator with no prefix, matching the tree above.
+
+**Supported IMAP extensions** (as of PR #322):
+
+| Extension | RFC | Behavior |
+|-----------|-----|----------|
+| `NAMESPACE` | RFC 2342 | Returns single personal namespace |
+| `ENABLE` | RFC 5161 | Acknowledged but no extensions activated |
+| `UNSELECT` | RFC 3691 | Deselects current mailbox without expunging |
+| `GETQUOTAROOT` | RFC 2087 | Returns `NO Quota not supported` |
+
+Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN` (plus `STARTTLS` on port 143).
+
 ### Sent Mail Detection
 
 Sent mail is detected by **address matching**, not a boolean `sent` flag:
