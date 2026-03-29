@@ -258,12 +258,16 @@ export const getMailHeaders = async (
 ): Promise<MailHeaderResult[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
-    // Detect sent/received by address matching, not the `sent` flag.
-    // For sent mails, check from_address only.
-    // For received mails, check to_address, cc_address, and bcc_address.
-    // This ensures self-emails appear in both Sent and Inbox views correctly.
+    // Detect sent/received by address matching plus a flag guard.
+    // For sent mails: check from_address AND sent = TRUE.
+    //   Adding sent = TRUE prevents a received email from another same-domain user
+    //   (whose from_address happens to be an @inbox.app address) from appearing
+    //   in the Sent view as a false positive.
+    // For received mails: check to/cc/bcc address only (no sent=FALSE filter).
+    //   Self-emails (from == to, sent = TRUE) must still appear in the inbox;
+    //   filtering by sent = FALSE would exclude them.
     const addressCondition = options.sent
-      ? `${FROM_ADDRESS} @> $2::jsonb`
+      ? `${FROM_ADDRESS} @> $2::jsonb AND sent = TRUE`
       : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
@@ -438,8 +442,12 @@ export const getAccountStats = async (
       ? `from_address IS NOT NULL`
       : `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL)`;
 
-    // Use address matching (from_address for sent, to/cc/bcc for received) rather
-    // than the `sent` boolean flag, so self-emails appear in both views correctly.
+    // For the sent accounts list, also filter by sent = TRUE to prevent inbound emails
+    // from other same-domain users (whose from_address matches @domain) from appearing
+    // as false positives in the Sent sidebar.
+    // For the received accounts list, no sent-flag filter is needed — self-emails
+    // (sent = TRUE, from = to) must still appear in the inbox.
+    const sentFlagCondition = sent ? `AND sent = TRUE` : "";
     const domainCondition = domainFilter
       ? `AND address ILIKE '%@' || $2`
       : "";
@@ -452,6 +460,7 @@ export const getAccountStats = async (
         FROM mails 
         WHERE user_id = $1
           AND expunged = FALSE
+          ${sentFlagCondition}
           AND ${addressNotNull}
       )
       SELECT 
