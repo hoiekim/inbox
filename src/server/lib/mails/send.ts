@@ -96,6 +96,13 @@ const getSentMail = async (
 
   const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
 
+  const parseAddresses = (str: string) =>
+    str
+      .split(",")
+      .map((addr) => addr.trim())
+      .filter(Boolean)
+      .map((address) => ({ address }));
+
   return new Mail({
     subject,
     text,
@@ -107,11 +114,11 @@ const getSentMail = async (
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: senderFullName ? `${senderFullName} <${fromEmail}>` : fromEmail
     },
-    to: { value: [{ address: to }], text: to },
-    cc: !cc ? undefined : { value: [{ address: cc }], text: cc },
-    bcc: !bcc ? undefined : { value: [{ address: bcc }], text: bcc },
+    to: { value: parseAddresses(to), text: to },
+    cc: !cc ? undefined : { value: parseAddresses(cc), text: cc },
+    bcc: !bcc ? undefined : { value: parseAddresses(bcc), text: bcc },
     envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],
-    envelopeTo: [{ address: to }],
+    envelopeTo: parseAddresses(to),
     replyTo: {
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: fromEmail
