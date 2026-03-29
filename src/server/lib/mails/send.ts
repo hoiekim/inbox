@@ -18,6 +18,7 @@ import {
 } from "server";
 import { sendMailgunMail } from "./mailgun";
 import { validateMailData, MailValidationError } from "./validation";
+import { sendAlarm } from "../alarm";
 
 export class MailSendingError extends Error {
   constructor(message: string) {
@@ -49,6 +50,10 @@ export const sendMail = async (
     return response;
   } catch (error: unknown) {
     console.error("Email sending request failed", error);
+    sendAlarm(
+      "Mail Send Failed",
+      `**Error:** ${error instanceof Error ? error.message : String(error)}`
+    ).catch(() => undefined);
 
     // Provide user-friendly error messages for common Mailgun errors
     let message = "Failed to send email. Please try again.";
