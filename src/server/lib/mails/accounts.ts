@@ -31,6 +31,8 @@ export const getAccounts = async (
     return new Account({
       key: stat.address,
       doc_count: stat.count,
+      unread_doc_count: stat.unread,
+      saved_doc_count: stat.saved,
       updated: stat.latest,
     });
   });
