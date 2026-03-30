@@ -58,7 +58,10 @@ export const saveMailHandler = async (
   );
   logger.info("Successfully saved an email");
 
-  await notifyNewMails(usernames);
+  // Build mailbox list from envelopeTo so IDLE sessions only get notified
+  // if their selected mailbox actually received this mail (fixes #364).
+  const mailboxes = getMailboxesFromIncomingMail(validData);
+  await notifyNewMails(usernames, mailboxes);
   logger.info(`Sent push notifications to users: [${usernames.toString()}]`);
 };
 

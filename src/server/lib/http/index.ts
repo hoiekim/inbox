@@ -92,11 +92,12 @@ export const initializeHttp = async () => {
   const domain = getDomain();
   const port = process.env.PORT || 3004;
 
-  const httpServer = await new Promise<ReturnType<typeof app.listen>>((res) =>
-    res(app.listen(port, () => {
+  const httpServer = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
+    const server = app.listen(port, () => {
       logger.info(`${domain} mail server is listening`);
-    }))
-  );
+      resolve(server);
+    });
+  });
 
   // Start cleanup scheduler for rate limit data
   startCleanupScheduler();

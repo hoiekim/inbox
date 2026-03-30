@@ -114,6 +114,24 @@ export const initializePostgres = async (): Promise<void> => {
         FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
     `);
 
+    // Reindex existing rows so that the corrected trigger is applied retroactively.
+    // This is idempotent — a no-op when search_vector is already up to date.
+    await pool.query(`
+      UPDATE mails
+      SET search_vector = to_tsvector('english',
+        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(text, '') || ' ' ||
+        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
+      )
+      WHERE search_vector IS DISTINCT FROM to_tsvector('english',
+        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(text, '') || ' ' ||
+        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
+        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
+      )
+    `);
+
     logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);
@@ -135,4 +153,15 @@ export const initializeAdminUser = async (): Promise<void> => {
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
 
   logger.info("Successfully initialized PostgreSQL database and setup admin user.");
+
+  // Warn if EMAIL_DOMAIN is not explicitly configured.
+  // Without a correct domain, getAccountStats() filters all emails out (domain condition)
+  // causing the inbox to appear empty even when emails exist.
+  if (!process.env.EMAIL_DOMAIN) {
+    logger.warn(
+      "[CONFIG WARNING] EMAIL_DOMAIN is not set. Defaulting to 'mydomain'.\n" +
+        "  The inbox will appear empty if your emails are addressed to a different domain.\n" +
+        "  Set EMAIL_DOMAIN=yourdomain.com in your .env file to see incoming emails."
+    );
+  }
 };

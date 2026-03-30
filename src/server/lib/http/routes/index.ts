@@ -15,12 +15,18 @@ import { sendAlarm } from "../../alarm";
 const apiRouter = Router();
 
 apiRouter.use((req, _res, next) => {
+  // Skip logging for health check requests (e.g. from reverse proxy)
+  if (req.url === "/health") {
+    next();
+    return;
+  }
+
   const date = new Date();
   const offset = date.getTimezoneOffset() / -60;
   const offsetString = (offset > 0 ? "+" : "") + offset + "H";
   logger.info(`<${req.method}> /api${req.url}`, {
     at: `${date.toLocaleString()}, ${offsetString}`,
-    from: req.ip,
+    from: getClientIp(req),
   });
   next();
 });
