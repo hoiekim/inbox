@@ -27,7 +27,10 @@ const registerListeners = (
       err.message?.includes("http request") ||        // plain HTTP sent to TLS-only port
       err.message?.includes("wrong version number") || // old/incompatible TLS version
       err.message?.includes("packet length too long") || // malformed TLS record
-      err.message?.includes("Failed to establish TLS session") // generic handshake failure
+      err.message?.includes("Failed to establish TLS session") || // generic handshake failure
+      err.message?.includes("read ECONNRESET") ||     // client dropped connection mid-handshake
+      err.message?.includes("unsupported protocol") || // client TLS version too old (TLS 1.0/1.1/SSLv3)
+      err.message?.includes("bad key share")          // client TLS 1.3 key exchange incompatible
     ) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
     sendAlarm(
