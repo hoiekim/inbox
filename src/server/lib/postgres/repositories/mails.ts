@@ -280,6 +280,7 @@ export const getMailHeaders = async (
       WHERE user_id = $1 
         AND ${addressCondition}
         AND expunged = FALSE
+        AND draft = FALSE
     `;
     const values: ParamValue[] = [user_id, addressJson];
     let paramIdx = 3;
