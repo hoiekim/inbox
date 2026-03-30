@@ -11,6 +11,7 @@ import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 import { sendAlarm } from "./alarm";
+import { logger } from "./logger";
 
 const registerListeners = (
   server: SMTPServer,
@@ -46,7 +47,7 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT")                          // client connected but stopped responding (scanner idle timeout)
     ) return;
-    console.error(`SMTP Server(${port}) Error: ${err}`);
+    logger.error(`SMTP Server(${port}) Error`, {}, err);
     sendAlarm(
       "SMTP Server Error",
       `**Port:** ${port}\n**Error:** ${String(err)}`
@@ -54,7 +55,7 @@ const registerListeners = (
   });
 
   server.on("close", () => {
-    console.log(`SMTP Server(${port}) closed`);
+    logger.info(`SMTP Server(${port}) closed`);
   });
 
   server.listen(port, callback);
@@ -95,7 +96,7 @@ export const onData = (
 ) => {
   const { EMAIL_DOMAIN } = process.env;
   if (!EMAIL_DOMAIN) {
-    console.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
+    logger.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
     return cb(new Error("Email service not configured"));
   }
 
@@ -147,7 +148,7 @@ const onDataIncoming = (
       cb();
     })
     .catch((err) => {
-      console.error("Error parsing email:", err);
+      logger.error("Error parsing email", {}, err);
       cb(err);
     });
 };
@@ -162,7 +163,7 @@ const onDataOutgoing = async (
     const user = username && (await getUser({ username }));
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
-      console.warn("SMTP: Unauthenticated user attempted to send email.");
+      logger.warn("SMTP: Unauthenticated user attempted to send email.");
       return cb(new Error("User not authenticated"));
     }
 
@@ -208,14 +209,14 @@ export const initializeSmtp = async () => {
     options.minVersion = "TLSv1.2";
     options.ciphers = "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
   } else {
-    console.warn("SMTP: SSL certificate not found.");
+    logger.warn("SMTP: SSL certificate not found.");
   }
 
   const smtpServer = await new Promise<SMTPServer>((res) => {
     const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 25;
     const server = new SMTPServer({ ...options, secure: false });
     registerListeners(server, port, () => {
-      console.log(`SMTP server listening on port ${port}`);
+      logger.info(`SMTP server listening on port ${port}`);
       res(server);
     });
   });
@@ -226,7 +227,7 @@ export const initializeSmtp = async () => {
       const port = 465;
       const server = new SMTPServer({ ...options, secure: true });
       registerListeners(server, port, () => {
-        console.log(`SMTP server listening on port ${port}`);
+        logger.info(`SMTP server listening on port ${port}`);
         res(server);
       });
     });
@@ -240,7 +241,7 @@ export const initializeSmtp = async () => {
         allowInsecureAuth: true
       });
       registerListeners(server, port, () => {
-        console.log(`SMTP server listening on port ${port}`);
+        logger.info(`SMTP server listening on port ${port}`);
         res(server);
       });
     });

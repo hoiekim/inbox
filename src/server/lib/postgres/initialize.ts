@@ -2,6 +2,7 @@ import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
 import { runMigrations } from "./migration";
+import { logger } from "../logger";
 import {
   Table,
   Schema,
@@ -33,12 +34,12 @@ export const postgresIsAvailable = async (): Promise<void> => {
     try {
       const client = await pool.connect();
       client.release();
-      console.info("PostgreSQL connection established.");
+      logger.info("PostgreSQL connection established.");
       return;
     } catch (error: unknown) {
       retries++;
       const message = error instanceof Error ? error.message : String(error);
-      console.info(`PostgreSQL connection attempt ${retries}/${maxRetries} failed: ${message}`);
+      logger.info(`PostgreSQL connection attempt ${retries}/${maxRetries} failed: ${message}`);
       
       if (retries >= maxRetries) {
         throw new Error("Failed to connect to PostgreSQL after maximum retries");
@@ -50,7 +51,7 @@ export const postgresIsAvailable = async (): Promise<void> => {
 };
 
 export const initializePostgres = async (): Promise<void> => {
-  console.info("PostgreSQL initialization started.");
+  logger.info("PostgreSQL initialization started.");
 
   await postgresIsAvailable();
 
@@ -131,9 +132,9 @@ export const initializePostgres = async (): Promise<void> => {
       )
     `);
 
-    console.info("Database tables created/verified successfully.");
+    logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
-    console.error("Failed to create tables:", error);
+    logger.error("Failed to create tables", {}, error);
     throw new Error("Failed to setup PostgreSQL tables.");
   }
 };
@@ -151,13 +152,13 @@ export const initializeAdminUser = async (): Promise<void> => {
   const createdAdminUserId = indexingAdminUserResult?._id;
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
 
-  console.info("Successfully initialized PostgreSQL database and setup admin user.");
+  logger.info("Successfully initialized PostgreSQL database and setup admin user.");
 
   // Warn if EMAIL_DOMAIN is not explicitly configured.
   // Without a correct domain, getAccountStats() filters all emails out (domain condition)
   // causing the inbox to appear empty even when emails exist.
   if (!process.env.EMAIL_DOMAIN) {
-    console.warn(
+    logger.warn(
       "[CONFIG WARNING] EMAIL_DOMAIN is not set. Defaulting to 'mydomain'.\n" +
         "  The inbox will appear empty if your emails are addressed to a different domain.\n" +
         "  Set EMAIL_DOMAIN=yourdomain.com in your .env file to see incoming emails."

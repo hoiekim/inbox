@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { PushSubscription } from "web-push";
+import { logger } from "../../logger";
 import {
   pushSubscriptionsTable,
   PUSH_SUBSCRIPTION_ID,
@@ -38,7 +39,7 @@ export const storeSubscription = async (
     if (result) return { _id: result.push_subscription_id as string };
     return undefined;
   } catch (error) {
-    console.error("Failed to store push subscription:", error);
+    logger.error("Failed to store push subscription", {}, error);
     return undefined;
   }
 };
@@ -54,7 +55,7 @@ export const deleteSubscription = async (
   try {
     return await pushSubscriptionsTable.hardDelete(push_subscription_id);
   } catch (error) {
-    console.error("Failed to delete push subscription:", error);
+    logger.error("Failed to delete push subscription", {}, error);
     return false;
   }
 };
@@ -67,7 +68,7 @@ export const cleanSubscriptions = async (): Promise<number> => {
     const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     return await pushSubscriptionsTable.deleteOlderThan(cutoffDate);
   } catch (error) {
-    console.error("Failed to clean push subscriptions:", error);
+    logger.error("Failed to clean push subscriptions", {}, error);
     return 0;
   }
 };
@@ -106,7 +107,7 @@ export const getSubscriptions = async (
       })
       .filter((s): s is ComputedPushSubscription => s !== null);
   } catch (error) {
-    console.error("Failed to get push subscriptions:", error);
+    logger.error("Failed to get push subscriptions", {}, error);
     return [];
   }
 };
@@ -123,7 +124,7 @@ export const refreshSubscription = async (
     const result = await pushSubscriptionsTable.update(push_subscription_id, {});
     return result !== null;
   } catch (error) {
-    console.error("Failed to refresh push subscription:", error);
+    logger.error("Failed to refresh push subscription", {}, error);
     return false;
   }
 };
@@ -142,7 +143,7 @@ export const updateLastNotified = async (
     });
     return result !== null;
   } catch (error) {
-    console.error("Failed to update last notified:", error);
+    logger.error("Failed to update last notified", {}, error);
     return false;
   }
 };

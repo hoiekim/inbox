@@ -10,6 +10,7 @@
 
 import { SpamCheckResult, SpamFilterConfig, EmailContext } from "./types";
 import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
+import { logger } from "../logger";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
 import { isAllowlisted } from "../postgres/repositories/spam_allowlists";
 
@@ -55,7 +56,7 @@ export async function checkSpam(
         };
       }
     } catch (error) {
-      console.warn("[SpamFilter] Allowlist check failed:", error);
+      logger.warn("[SpamFilter] Allowlist check failed", {}, error);
       // Continue with other checks
     }
   }
@@ -70,7 +71,7 @@ export async function checkSpam(
         if (!flaggedBy) flaggedBy = "dnsbl";
       }
     } catch (error) {
-      console.warn("[SpamFilter] DNSBL check failed:", error);
+      logger.warn("[SpamFilter] DNSBL check failed", {}, error);
       // Continue with other checks
     }
   }
@@ -110,7 +111,7 @@ export async function isSenderAllowlisted(
   try {
     return await isAllowlisted(userId, fromAddress);
   } catch (error) {
-    console.warn("[SpamFilter] Allowlist lookup failed:", error);
+    logger.warn("[SpamFilter] Allowlist lookup failed", {}, error);
     return false;
   }
 }

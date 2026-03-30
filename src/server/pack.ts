@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs";
+import { logger } from "./lib/logger";
 
 const root = path.resolve(import.meta.dir, "..");
 
@@ -12,9 +13,9 @@ async function bundle() {
   });
 
   if (!result.success) {
-    console.error("Build failed:");
+    logger.error("Build failed:");
     for (const log of result.logs) {
-      console.error(log);
+      logger.error(String(log));
     }
     process.exit(1);
   }
@@ -30,7 +31,7 @@ async function bundle() {
     );
   }
 
-  console.info("Bun build succeeded to compile server.");
+  logger.info("Bun build succeeded to compile server.");
 }
 
 bundle();

@@ -5,6 +5,7 @@ import {
   markSaved
 } from "server";
 import { Route } from "../route";
+import { logger } from "../../../logger";
 
 export type MarkMailPostResponse = undefined;
 
@@ -33,7 +34,7 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
     }
 
     if (read === true) {
-      decrementBadgeCount([user]).catch(console.error);
+      decrementBadgeCount([user]).catch((error) => logger.error("Failed to decrement badge count", {}, error));
       await markRead(user.id, mail_id);
     }
 

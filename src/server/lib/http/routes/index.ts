@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
+import { logger } from "../../logger";
 
 export * from "./route";
 
@@ -20,14 +21,13 @@ apiRouter.use((req, _res, next) => {
     return;
   }
 
-  console.info(`<${req.method}> /api${req.url}`);
-  console.group();
   const date = new Date();
   const offset = date.getTimezoneOffset() / -60;
   const offsetString = (offset > 0 ? "+" : "") + offset + "H";
-  console.info(`at: ${date.toLocaleString()}, ${offsetString}`);
-  console.info(`from: ${getClientIp(req)}`);
-  console.groupEnd();
+  logger.info(`<${req.method}> /api${req.url}`, {
+    at: `${date.toLocaleString()}, ${offsetString}`,
+    from: getClientIp(req),
+  });
   next();
 });
 

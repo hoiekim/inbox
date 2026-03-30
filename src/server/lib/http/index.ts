@@ -6,6 +6,7 @@ import path from "path";
 import { getDomain, PostgresSessionStore } from "server";
 import apiRouter from "./routes";
 import { startCleanupScheduler } from "./rate-limit";
+import { logger } from "../logger";
 
 export const initializeHttp = async () => {
   const app = express();
@@ -127,7 +128,7 @@ export const initializeHttp = async () => {
 
   const httpServer = await new Promise<import("http").Server>((resolve) => {
     const server = app.listen(port, () => {
-      console.info(`${domain} mail server is listening`);
+      logger.info(`${domain} mail server is listening`);
       resolve(server);
     });
   });

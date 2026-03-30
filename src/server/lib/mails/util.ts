@@ -1,6 +1,7 @@
 import fs from "fs";
 import { htmlToText } from "html-to-text";
 import { v4 as uuid } from "uuid";
+import { logger } from "../logger";
 
 export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
 export const FROM_ADDRESS_FIELD = "mail.from.value.address";
@@ -14,8 +15,8 @@ export const getAttachmentId = (): string => {
   let id = uuid();
   let filePath = getAttachmentFilePath(id);
   while (fs.existsSync(filePath)) {
-    console.warn(`Duplicate uuid is found: ${filePath}`);
-    console.log("Proceeding to regenerate uuid");
+    logger.warn(`Duplicate uuid is found: ${filePath}`);
+    logger.info("Proceeding to regenerate uuid");
     id = uuid();
     filePath = getAttachmentFilePath(id);
   }

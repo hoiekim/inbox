@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { User, SignedUser } from "common";
 import { searchUser as pgSearchUser } from "./postgres/repositories/users";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
+import { logger } from "./logger";
 
 const { APP_HOSTNAME } = process.env;
 
@@ -63,7 +64,7 @@ const deleteUser = async (id: string): Promise<boolean> => {
   try {
     return await usersTable.hardDelete(id);
   } catch (error) {
-    console.error("Failed to delete user:", error);
+    logger.error("Failed to delete user", {}, error);
     return false;
   }
 };
@@ -124,7 +125,7 @@ export const startTimer = (userId: string) => {
     const expiryDate = expiry && new Date(expiry);
     if (expiryDate && expiryDate.getTime() < Date.now()) {
       await deleteUser(userId);
-      console.info("Deleted user with expired token.", `User: ${userId}`);
+      logger.info("Deleted user with expired token.", { userId });
     }
   }, TOKEN_DURATION);
 };
