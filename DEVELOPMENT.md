@@ -301,6 +301,36 @@ Key implementation details (see `src/server/lib/imap/util.ts`):
 - Mailboxes are filtered by user domain — only addresses belonging to the server's domain are exposed
 - NAMESPACE response declares `("" "/")` as the personal namespace
 
+### IMAP Parser-to-Consumer Contract
+
+**Parsers produce self-contained criterion objects.** Each parsed criterion has its value embedded as a property — never rely on adjacent array indices.
+
+```typescript
+// Parser output for "SEARCH FROM user@example.com UNSEEN":
+[
+  { type: "FROM", value: "user@example.com" },  // value is a property
+  { type: "UNSEEN" }                              // no value needed
+]
+
+// ✅ Correct — read from the criterion object
+for (const criterion of criteria) {
+  switch (criterion.type) {
+    case "FROM":
+      filter.from = criterion.value;  // value is on the object
+      break;
+  }
+}
+
+// ❌ Wrong — don't index into the array for values
+for (let i = 0; i < criteria.length; i++) {
+  if (criteria[i].type === "FROM") {
+    value = criteria[++i];  // BUG: next element is a separate criterion
+  }
+}
+```
+
+This pattern also applies to FETCH data items and STORE operations — each parsed item is self-contained.
+
 ### IMAP Client Compatibility
 
 The IMAP server targets compatibility with standard mail clients (Apple Mail, iOS Mail, Thunderbird). Key patterns learned from client testing:
@@ -311,6 +341,14 @@ The IMAP server targets compatibility with standard mail clients (Apple Mail, iO
 - **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
 - **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
 - **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them
+
+Per-client known quirks:
+
+- **iOS Mail**: Expects `BODY[1]` to return decoded content, uses `BODY.PEEK[HEADER.FIELDS (...)]`, requires accurate `RFC822.SIZE` for display
+- **Thunderbird**: Uses `UID FETCH ... (FLAGS BODY.PEEK[HEADER.FIELDS (Date From Subject ...)])` in batches
+- **Apple Mail (macOS)**: Similar to iOS but also uses `NAMESPACE` and `GETQUOTAROOT`
+
+When fixing IMAP bugs, always test with the affected client and document which client triggered the issue in the PR description.
 
 ## Database
 
