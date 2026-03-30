@@ -6,7 +6,7 @@ Here's how Inbox works, assuming domain name is `domain.com`.
 
 * Users will receive emails through `*@username.domain.com`
 * Exceptionally, `admin` user will receive emails through `*@domain.com`
-* Sending email is not supported for non-admin users(for now).
+* All users can send emails using Mailgun (requires `MAILGUN_KEY` env var).
 
 Following is an example of running Inbox as a web service.
 * https://mail.hoie.kim

@@ -126,13 +126,6 @@ Security-critical parsers have dedicated test coverage:
 - APPEND parser (message upload)
 - Mailbox parsers (SELECT, EXAMINE, STATUS, etc.)
 
-### Test Requirements
-
-**Always write unit tests for new code files.** When adding a new utility, helper, or module:
-- Create `<filename>.test.ts` alongside the source file
-- Test the public interface and edge cases
-- PRs adding new code without tests will require justification
-
 ### Bun `mock.module` — Global Scope Warning
 
 **`mock.module()` replaces modules globally for the entire test run**, not just the current test file. This has caused repeated CI failures.
