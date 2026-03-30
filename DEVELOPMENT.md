@@ -282,7 +282,7 @@ Key functions:
 - `getMailHeaders()` — filters by `from_address` or `to_address` based on view
 - `getAccountStats()` — counts using address matching (not `sent` flag)
 
-**Self-email:** When a user sends mail to themselves, mailgun's `receive.ts` excludes the sender from external delivery and instead saves a sent-mail copy directly to the DB. This copy has the sender as recipient, so it appears in both Sent and Received views via address matching — no special-casing required.
+**Self-email:** When a user sends mail to themselves, the sent-mail copy is saved to the DB with `sent: true` and `envelopeTo` pointing to the destination address (which equals the sender's address). It appears in the Sent view via the `sent` flag and in the Received view because the `to_address` matches the user's address — no special-casing required.
 
 ### IMAP Parser-to-Consumer Contract
 
