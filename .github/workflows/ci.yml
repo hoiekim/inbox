@@ -28,7 +28,7 @@ jobs:
 
           # Check for private key content patterns in staged diff
           KEY_PATTERNS=$(git diff origin/${{ github.base_ref }}...HEAD -- . \
-            ':!*.md' ':!*.txt' ':!*.lock' ':!bun.lockb' \
+            ':!*.md' ':!*.txt' ':!*.lock' ':!bun.lockb' ':!.github/workflows/**' \
             | grep -E '^\+.*(BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY|BEGIN CERTIFICATE)' || true)
           if [ -n "$KEY_PATTERNS" ]; then
             echo "ERROR: Private key or certificate content detected in diff:"
