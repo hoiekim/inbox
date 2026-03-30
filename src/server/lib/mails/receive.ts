@@ -30,6 +30,7 @@ import { notifyNewMails } from "../push";
 import { accountToBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 import { sendAlarm } from "../alarm";
+import { logger } from "../logger";
 
 export interface SaveMailHandlerOptions {
   remoteAddress?: string;
@@ -40,18 +41,14 @@ export const saveMailHandler = async (
   data: IncomingMail,
   options: SaveMailHandlerOptions = {}
 ) => {
-  console.info("Received an email at", new Date());
-  console.group();
   const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));
-  console.log("envelopeTo:", envelopeTo);
   const from = JSON.stringify(convertMailAddress(data.from)?.value);
-  console.log("from:", from);
-  console.groupEnd();
+  logger.info("Received an email", { timestamp: new Date().toISOString(), envelopeTo, from });
 
   const domain = getDomain();
   const validData = validateIncomingMail(data, domain);
   if (!validData) {
-    console.warn("Recipient is not valid. Mails is not saved.");
+    logger.warn("Recipient is not valid. Mails is not saved.");
     return;
   }
 
@@ -59,13 +56,10 @@ export const saveMailHandler = async (
   await Promise.all(
     usernames.map((u) => saveIncomingMail(u, validData, { remoteAddress: options.remoteAddress }))
   );
-  console.info("Successfully saved an email");
+  logger.info("Successfully saved an email");
 
-  // Build mailbox list from envelopeTo so IDLE sessions only get notified
-  // if their selected mailbox actually received this mail (fixes #364).
-  const mailboxes = getMailboxesFromIncomingMail(validData);
-  await notifyNewMails(usernames, mailboxes);
-  console.info(`Sent push notifications to users: [${usernames.toString()}]`);
+  await notifyNewMails(usernames);
+  logger.info(`Sent push notifications to users: [${usernames.toString()}]`);
 };
 
 interface SaveIncomingMailOptions {
@@ -79,8 +73,8 @@ const saveIncomingMail = async (
 ) => {
   const user = await getUser({ username });
   if (!user) {
-    console.warn(`User not found for username: ${username}`);
-    console.warn("Skipping saving mail:", incoming);
+    logger.warn(`User not found for username: ${username}`);
+    logger.warn("Skipping saving mail", { incoming });
     return;
   }
 
@@ -138,10 +132,10 @@ const saveIncomingMail = async (
       spamResult = await checkSpam(user.id, emailContext);
       
       if (spamResult.isSpam) {
-        console.info(`[SpamFilter] Email marked as spam for user ${username}: score=${spamResult.score}, reasons=[${spamResult.reasons.join(", ")}]`);
+        logger.info(`[SpamFilter] Email marked as spam for user ${username}`, { score: spamResult.score, reasons: spamResult.reasons });
       }
     } catch (error) {
-      console.warn("[SpamFilter] Spam check failed, proceeding without spam filtering:", error);
+      logger.warn("[SpamFilter] Spam check failed, proceeding without spam filtering", {}, error);
     }
   }
 
@@ -190,7 +184,7 @@ export const saveMail = async (
   try {
     return await pgSaveMail(input);
   } catch (error) {
-    console.error("Error saving mail:", error);
+    logger.error("Error saving mail", {}, error);
     sendAlarm(
       "Mail Receive Failed",
       `**Error:** ${error instanceof Error ? error.message : String(error)}`

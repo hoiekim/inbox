@@ -5,8 +5,10 @@
  * All queries are delegated to SpamAllowlistTable methods.
  */
 
-import { SpamAllowlistModel } from "../models/spam_allowlist";
-import { spamAllowlistTable } from "../models";
+import { pool } from "../client";
+import { SPAM_ALLOWLIST, USER_ID } from "../models/common";
+import { logger } from "../../logger";
+import { PATTERN, SpamAllowlistModel, SpamAllowlistJSON, spamAllowlistTable } from "../models/spam_allowlist";
 
 /**
  * Get all allowlist entries for a user.
@@ -34,7 +36,7 @@ export async function addAllowlistEntry(
   try {
     return await spamAllowlistTable.addEntry(userId, pattern);
   } catch (error) {
-    console.error("Error adding allowlist entry:", error);
+    logger.error("Error adding allowlist entry", {}, error);
     throw error;
   }
 }
