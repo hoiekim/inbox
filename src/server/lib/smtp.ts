@@ -21,18 +21,29 @@ const registerListeners = (
     // Suppress noise from external port scanners and misconfigured clients.
     // These errors originate from the remote side failing TLS negotiation —
     // they do not indicate a server-side problem.
+    //
+    // Strategy: suppress by OpenSSL function name in the error string.
+    // - tls_early_post_process_client_hello: all errors at the TLS ClientHello stage
+    //   (unsupported protocol, version too low, no suitable signature algorithm, etc.)
+    //   These all mean the client's TLS capabilities are incompatible with the server.
+    // - extract_keyshares: TLS 1.3 key exchange failures (bad key share, etc.)
+    // - Plus a few smtp-server-level strings for connection-drop cases.
+    const msg = err.message ?? "";
     if (
-      err.message?.includes("Socket closed") ||       // client disconnected before TLS handshake
-      err.message?.includes("no shared cipher") ||    // client cipher suites incompatible with server
-      err.message?.includes("http request") ||        // plain HTTP sent to TLS-only port
-      err.message?.includes("wrong version number") || // old/incompatible TLS version
-      err.message?.includes("packet length too long") || // malformed TLS record
-      err.message?.includes("Failed to establish TLS session") || // generic handshake failure
-      err.message?.includes("read ECONNRESET") ||     // client dropped connection mid-handshake
-      err.message?.includes("unsupported protocol") || // client TLS version too old (TLS 1.0/1.1/SSLv3)
-      err.message?.includes("bad key share") ||       // client TLS 1.3 key exchange incompatible
-      err.message?.includes("version too low") ||     // client TLS version below server minimum
-      err.message?.includes("no suitable signature algorithm") // server/client signature algorithm mismatch
+      // All errors from TLS handshake/negotiation OpenSSL functions — these are
+      // client-side incompatibilities, not server bugs. Matching by function name
+      // covers all variants (unsupported protocol, version too low, no shared cipher,
+      // no suitable signature algorithm, etc.) without enumerating each string.
+      msg.includes("tls_early_post_process_client_hello") || // ClientHello stage rejections
+      msg.includes("tls_post_process_client_hello") ||       // post-ClientHello cipher/extension failures
+      msg.includes("tls_validate_record_header") ||          // malformed/wrong-protocol record header
+      msg.includes("extract_keyshares") ||                   // TLS 1.3 key exchange failure
+      msg.includes("tls_choose_sigalg") ||                   // signature algorithm negotiation failure
+      msg.includes("tls_get_more_records") ||                // oversized/malformed TLS record
+      // smtp-server-level strings for connection-drop cases
+      msg.includes("Socket closed") ||                       // client disconnected before TLS handshake
+      msg.includes("Failed to establish TLS session") ||     // smtp-server generic TLS failure wrapper
+      msg.includes("read ECONNRESET")                        // client dropped connection mid-handshake
     ) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
     sendAlarm(
