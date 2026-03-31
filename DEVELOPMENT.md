@@ -282,7 +282,7 @@ Key functions:
 - `getMailHeaders()` — filters by `from_address` or `to_address` based on view
 - `getAccountStats()` — counts using address matching (not `sent` flag)
 
-**Self-email:** When a user sends mail to themselves, the sent-mail copy is saved to the DB with `sent: true` and `envelopeTo` pointing to the destination address (which equals the sender's address). It appears in the Sent view via the `sent` flag and in the Received view because the `to_address` matches the user's address — no special-casing required.
+**Self-email:** When a user sends mail to themselves, the sent-mail copy is saved with the sender's address as `from_address` and the recipient's address (same address) as `to_address`. It appears in the Sent view because `from_address` matches the user, and in the Received view because `to_address` matches the user — no special-casing required.
 
 ### IMAP Parser-to-Consumer Contract
 
