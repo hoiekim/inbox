@@ -162,18 +162,20 @@ const RenderedMail = ({
 
         const newData = { ...oldData };
 
-        Object.values(newData).forEach((e) => {
-          e.find((account) => {
-            const { key, unread_doc_count } = account;
-            const found = key === selectedAccount;
-            if (found) {
-              if (!mail.read && unread_doc_count) {
-                account.unread_doc_count -= 1;
-              }
-              account.doc_count -= 1;
+        // Only update the array that matches the current view (received vs sent),
+        // so an address present in both arrays isn't double-decremented.
+        const arrayKey =
+          selectedCategory === Category.SentMails ? "sent" : "received";
+        newData[arrayKey].find((account) => {
+          const { key, unread_doc_count } = account;
+          const found = key === selectedAccount;
+          if (found) {
+            if (!mail.read && unread_doc_count) {
+              account.unread_doc_count -= 1;
             }
-            return found;
-          });
+            account.doc_count -= 1;
+          }
+          return found;
         });
 
         return newData;
@@ -459,13 +461,15 @@ const RenderedMails = ({ page }: { page: number }) => {
 
       const newData = { ...oldData };
 
-      Object.values(newData).forEach((e) => {
-        e.find((account) => {
-          const { key, unread_doc_count } = account;
-          const found = key === selectedAccount;
-          if (found && unread_doc_count) account.unread_doc_count -= 1;
-          return found;
-        });
+      // Only update the array that matches the current view (received vs sent),
+      // so an address present in both arrays isn't double-decremented.
+      const arrayKey =
+        selectedCategory === Category.SentMails ? "sent" : "received";
+      newData[arrayKey].find((account) => {
+        const { key, unread_doc_count } = account;
+        const found = key === selectedAccount;
+        if (found && unread_doc_count) account.unread_doc_count -= 1;
+        return found;
       });
 
       return newData;
@@ -477,13 +481,14 @@ const RenderedMails = ({ page }: { page: number }) => {
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
       const newData = { ...oldData };
-      Object.values(newData).forEach((e) => {
-        const found = e.find((f) => f.key === selectedAccount);
-        if (found) {
-          if (save) found.saved_doc_count++;
-          else found.saved_doc_count--;
-        }
-      });
+      // Only update the array that matches the current view (received vs sent).
+      const arrayKey =
+        selectedCategory === Category.SentMails ? "sent" : "received";
+      const found = newData[arrayKey].find((f) => f.key === selectedAccount);
+      if (found) {
+        if (save) found.saved_doc_count++;
+        else found.saved_doc_count--;
+      }
       return newData;
     });
 
