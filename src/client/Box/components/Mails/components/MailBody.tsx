@@ -235,7 +235,7 @@ const MailBody = ({ mailId }: Props) => {
           srcDoc={processHtmlForViewer(data.html)}
           onLoad={onLoadIframe}
           ref={iframeElement}
-          sandbox="allow-same-origin allow-popups"
+          sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         />
       </div>
     );
