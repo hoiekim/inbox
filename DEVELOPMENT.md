@@ -284,6 +284,23 @@ Key functions:
 
 **Note:** The IMAP layer still uses the legacy `sent` column for mailbox routing. A future refactor should align IMAP with the address-based approach.
 
+### IMAP Mailbox Hierarchy
+
+Mailboxes are organized under a flat namespace with `/` as delimiter:
+
+```
+INBOX                              ← Unified inbox (all accounts)
+accounts/user@example.com          ← Per-account received mail
+Sent Messages                     ← Unified sent mail
+Sent Messages/accounts/user@...   ← Per-account sent mail
+```
+
+Key implementation details (see `src/server/lib/imap/util.ts`):
+- `accountToBox()` / `boxToAccount()` map between email addresses and IMAP mailbox names
+- `isSentBox()` detects sent-mail mailboxes at any level
+- Mailboxes are filtered by user domain — only addresses belonging to the server's domain are exposed
+- NAMESPACE response declares `("" "/")` as the personal namespace
+
 ### IMAP Parser-to-Consumer Contract
 
 **Parsers produce self-contained criterion objects.** Each parsed criterion has its value embedded as a property — never rely on adjacent array indices.
@@ -316,7 +333,16 @@ This pattern also applies to FETCH data items and STORE operations — each pars
 
 ### IMAP Client Compatibility
 
-Different mail clients send different IMAP commands. Known quirks:
+The IMAP server targets compatibility with standard mail clients (Apple Mail, iOS Mail, Thunderbird). Key patterns learned from client testing:
+
+- **BODYSTRUCTURE must match BODY[] encoding**: If BODYSTRUCTURE declares `base64`, the corresponding `BODY[n]` fetch must return base64-encoded content (not raw UTF-8)
+- **RFC822.SIZE must account for encoding**: Size should reflect the encoded (wire-format) message size
+- **CAPABILITY response must match port**: Port 993 (implicit TLS) must NOT advertise STARTTLS; port 143 must advertise it
+- **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
+- **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
+- **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them
+
+Per-client known quirks:
 
 - **iOS Mail**: Expects `BODY[1]` to return decoded content, uses `BODY.PEEK[HEADER.FIELDS (...)]`, requires accurate `RFC822.SIZE` for display
 - **Thunderbird**: Uses `UID FETCH ... (FLAGS BODY.PEEK[HEADER.FIELDS (Date From Subject ...)])` in batches
