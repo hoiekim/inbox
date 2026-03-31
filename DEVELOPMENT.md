@@ -48,10 +48,11 @@ Inbox runs multiple services:
 | Service | Port | Description |
 |---------|------|-------------|
 | HTTP/API | 3000 | Web UI + REST API |
-| IMAP | 143 | IMAP server (non-TLS) |
-| IMAP/TLS | 993 | IMAP server (TLS) |
-| SMTP | 25 | SMTP server (submission) |
-| SMTP/TLS | 587 | SMTP server (STARTTLS) |
+| IMAP | 143 | IMAP server (STARTTLS) |
+| IMAP/TLS | 993 | IMAP server (Implicit TLS) |
+| SMTP | 25 | SMTP server (plain) |
+| SMTP/TLS | 465 | SMTP server (Implicit TLS) |
+| SMTP/STARTTLS | 587 | SMTP server (STARTTLS) |
 
 ## API Patterns
 
@@ -104,11 +105,13 @@ Check coverage with `bun test --coverage`.
 ### Running Tests
 
 ```bash
-bun test                    # All tests
+bun run test               # All tests (use this — not bare `bun test`)
 bun test --watch           # Watch mode
 bun test src/path/file.test.ts  # Single file
-bun test --coverage        # With coverage report
+bun run test:coverage      # With coverage report
 ```
+
+> **Always use `bun run test`, not bare `bun test`.** The `test` npm script runs client and server tests in separate passes with correct preload setup. Bare `bun test` mixes client and server contexts and can cause spurious failures from mock leakage.
 
 ### Test Location
 
