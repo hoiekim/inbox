@@ -350,6 +350,26 @@ Per-client known quirks:
 
 When fixing IMAP bugs, always test with the affected client and document which client triggered the issue in the PR description.
 
+### Graceful Shutdown Order
+
+Shutdown must follow this order to avoid connection errors:
+
+1. Stop accepting new connections (HTTP, IMAP, SMTP servers)
+2. Close idle IMAP connections via `idleManager.shutdown()`
+3. Wait for in-flight requests to complete
+4. Close database pool
+
+```typescript
+// Correct order (see start.ts)
+httpServer.close();
+imapServer.close();
+smtpServer.close();
+await idleManager.shutdown();
+await pool.end();
+```
+
+Closing DB before servers causes "connection terminated" errors on active requests.
+
 ## Database
 
 ### PostgreSQL Setup
