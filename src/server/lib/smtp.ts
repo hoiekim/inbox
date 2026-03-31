@@ -43,7 +43,8 @@ const registerListeners = (
       // smtp-server-level strings for connection-drop cases
       msg.includes("Socket closed") ||                       // client disconnected before TLS handshake
       msg.includes("Failed to establish TLS session") ||     // smtp-server generic TLS failure wrapper
-      msg.includes("read ECONNRESET")                        // client dropped connection mid-handshake
+      msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
+      msg.includes("read ETIMEDOUT")                          // client connected but stopped responding (scanner idle timeout)
     ) return;
     console.error(`SMTP Server(${port}) Error: ${err}`);
     sendAlarm(
