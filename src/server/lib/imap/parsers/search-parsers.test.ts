@@ -344,7 +344,7 @@ describe("parseSearch", () => {
     const result = parseSearch(c);
     expect(result.success).toBe(true);
     expect(result.value?.type).toBe("SEARCH");
-    expect((result.value as any)?.data?.criteria).toEqual([{ type: "ALL" }]);
+    expect((result.value as { type: "SEARCH"; data: { criteria: unknown[] } })?.data?.criteria).toEqual([{ type: "ALL" }]);
   });
 
   it("parses SEARCH UNSEEN FLAGGED", () => {
@@ -352,7 +352,7 @@ describe("parseSearch", () => {
     const result = parseSearch(c);
     expect(result.success).toBe(true);
     expect(result.value?.type).toBe("SEARCH");
-    const criteria = (result.value as any)?.data?.criteria;
+    const criteria = (result.value as { type: "SEARCH"; data: { criteria: unknown[] } })?.data?.criteria;
     expect(criteria?.length).toBe(2);
     expect(criteria?.[0]).toEqual({ type: "UNSEEN" });
     expect(criteria?.[1]).toEqual({ type: "FLAGGED" });
@@ -363,7 +363,7 @@ describe("parseSearch", () => {
     const result = parseSearch(c);
     expect(result.success).toBe(true);
     expect(result.value?.type).toBe("SEARCH");
-    const criteria = (result.value as any)?.data?.criteria;
+    const criteria = (result.value as { type: "SEARCH"; data: { criteria: unknown[] } })?.data?.criteria;
     expect(criteria?.[0]).toEqual({ type: "FROM", value: "alice" });
   });
 
