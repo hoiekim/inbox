@@ -88,7 +88,7 @@ export const processHtmlToSendMail = (html: string) => {
 
 export const processHtmlForViewer = (html: string) => {
   // Sanitize HTML as defense-in-depth before rendering in iframe.
-  // The iframe already has sandbox="allow-same-origin allow-popups" to block
+  // The iframe already has sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" to block
   // script execution, but this stripping adds an extra layer against script
   // tags, event handlers, and dangerous URI schemes.
   const sanitized = sanitizeEmailHtml(html);
