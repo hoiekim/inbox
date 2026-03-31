@@ -42,7 +42,7 @@ apiRouter.use("/push", pushRouter);
 apiRouter.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const message = err instanceof Error ? err.message : String(err);
   const stack = err instanceof Error ? (err.stack ?? "") : "";
-  console.error("Unhandled route error:", message);
+  logger.error("Unhandled route error", { message });
   sendAlarm(
     "Unhandled Route Error",
     `**Message:** ${message}\n\`\`\`\n${stack.slice(0, 1000)}\n\`\`\``,

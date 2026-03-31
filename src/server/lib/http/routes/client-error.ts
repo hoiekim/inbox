@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { sendAlarm } from "../../alarm";
+import { logger } from "../../../logger";
 
 const clientErrorRouter = Router();
 
@@ -22,7 +23,7 @@ clientErrorRouter.post("/", async (req, res) => {
   const stack = typeof body.stack === "string" ? body.stack : "";
   const url = typeof body.url === "string" ? body.url : "";
 
-  console.error("Client error reported:", { url, message });
+  logger.error("Client error reported", { url, message });
 
   const detail = [
     url ? `**URL:** ${url}` : null,

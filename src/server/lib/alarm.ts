@@ -5,6 +5,8 @@
  * A 1-minute cooldown prevents noise bursts.
  */
 
+import { logger } from "./logger";
+
 const COOLDOWN_MS = 60_000; // 1 minute
 
 let lastAlarmAt = 0;
@@ -37,7 +39,7 @@ export const sendAlarm = async (title: string, detail: string): Promise<void> =>
     });
   } catch (err) {
     // Don't throw — alarm failure should never crash the server or IMAP/SMTP
-    console.error("Failed to send Discord alarm:", err);
+    logger.error("Failed to send Discord alarm", {}, err instanceof Error ? err : new Error(String(err)));
   }
 };
 

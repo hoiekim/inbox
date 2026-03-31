@@ -11,13 +11,14 @@ import {
 } from "server";
 import { pool } from "server";
 import { sendAlarm } from "./lib/alarm";
+import { logger } from "./lib/logger";
 
 // Process-level error handlers (centralised here alongside SIGTERM/SIGINT)
 // Note: These fire before IMAP/SMTP servers are shut down. The alarm call is
 // fire-and-forget (.catch(() => undefined)) to avoid interfering with the
 // crash/exit sequence.
 process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled promise rejection:", reason);
+  logger.error("Unhandled promise rejection", {}, reason instanceof Error ? reason : new Error(String(reason)));
   const message = reason instanceof Error ? reason.message : String(reason);
   const stack = reason instanceof Error ? (reason.stack ?? "") : "";
   sendAlarm(
@@ -27,7 +28,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 process.on("uncaughtException", async (error) => {
-  console.error("Uncaught exception:", error);
+  logger.error("Uncaught exception", {}, error);
   sendAlarm(
     "Uncaught Exception",
     `**Message:** ${error.message}\n\`\`\`\n${(error.stack ?? "").slice(0, 1000)}\n\`\`\``,
@@ -49,15 +50,15 @@ const start = async () => {
   cleanSubscriptions();
 
   const shutdown = async (signal: string) => {
-    console.info(`${signal} received — shutting down gracefully`);
+    logger.info(`${signal} received — shutting down gracefully`);
 
     // Stop accepting new HTTP connections; finish in-flight requests
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    console.info("HTTP server closed");
+    logger.info("HTTP server closed");
 
     // Notify IDLE clients and stop heartbeat timer before closing sockets
     idleManager.shutdown();
-    console.info("IDLE sessions cleaned up");
+    logger.info("IDLE sessions cleaned up");
 
     // Close IMAP servers (send BYE to active sessions handled by socket destroy)
     await Promise.all(
@@ -65,7 +66,7 @@ const start = async () => {
         (s) => new Promise<void>((resolve) => s.close(() => resolve()))
       )
     );
-    console.info("IMAP servers closed");
+    logger.info("IMAP servers closed");
 
     // Close SMTP servers (finish active transactions)
     await Promise.all(
@@ -73,11 +74,11 @@ const start = async () => {
         (s) => new Promise<void>((resolve) => s.close(() => resolve()))
       )
     );
-    console.info("SMTP servers closed");
+    logger.info("SMTP servers closed");
 
     // Close the database connection pool
     await pool.end();
-    console.info("Database pool closed");
+    logger.info("Database pool closed");
 
     process.exit(0);
   };
