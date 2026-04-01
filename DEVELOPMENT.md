@@ -100,7 +100,7 @@ const { status, body } = await call.post<ResponseType, BodyType>("/api/endpoint"
 - Bug fixes: Add regression tests that would have caught the bug
 - Security-critical code: Must have tests (auth, parsers, validation)
 
-Check coverage with `bun test --coverage`.
+Check coverage with `bun test --coverage`. Coverage thresholds are enforced by `bunfig.toml` — CI fails if coverage drops below the configured minimum. When adding significant new code, update the thresholds upward as coverage improves.
 
 ### Running Tests
 
@@ -282,7 +282,7 @@ Key functions:
 - `getMailHeaders()` — filters by `from_address` or `to_address` based on view
 - `getAccountStats()` — counts using address matching (not `sent` flag)
 
-**Note:** The IMAP layer still uses the legacy `sent` column for mailbox routing. A future refactor should align IMAP with the address-based approach.
+**Self-email:** When a user sends mail to themselves, the sent-mail copy is saved with the sender's address as `from_address` and the recipient's address (same address) as `to_address`. It appears in the Sent view because `from_address` matches the user, and in the Received view because `to_address` matches the user — no special-casing required.
 
 ### IMAP Mailbox Hierarchy
 
@@ -682,6 +682,21 @@ a003 FETCH 1:* FLAGS
 ```
 
 ## IMAP Implementation Patterns
+
+### Mailbox Layout
+
+The IMAP mailbox hierarchy is:
+
+| Mailbox | Selectable | Description |
+|---------|-----------|-------------|
+| `INBOX` | ✅ | Unified inbox — all received mail across accounts |
+| `Sent Messages` | ✅ | Unified sent box — all sent mail across accounts |
+| `accounts/` | ❌ (parent) | Non-selectable container for per-account inboxes |
+| `accounts/<name>` | ✅ | Per-account received mail |
+| `Sent Messages/accounts/` | ❌ (parent) | Non-selectable container for per-account sent boxes |
+| `Sent Messages/accounts/<name>` | ✅ | Per-account sent mail |
+
+IMAP clients typically see `INBOX` as the primary mailbox. The `accounts/<name>` subfolders allow per-account filtering within clients that support subfolder navigation (e.g., iOS Mail sidebar).
 
 ### RFC Compliance
 
