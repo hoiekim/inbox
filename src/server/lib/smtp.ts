@@ -45,7 +45,8 @@ const registerListeners = (
       msg.includes("Socket closed") ||                       // client disconnected before TLS handshake
       msg.includes("Failed to establish TLS session") ||     // smtp-server generic TLS failure wrapper
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
-      msg.includes("read ETIMEDOUT")                          // client connected but stopped responding (scanner idle timeout)
+      msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
+      msg.includes("write EPROTO")                            // protocol error writing to socket — client aborted during TLS
     ) return;
     logger.error(`SMTP Server(${port}) Error`, {}, err);
     sendAlarm(
