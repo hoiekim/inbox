@@ -5,6 +5,39 @@ on:
     branches: ["main"]
 
 jobs:
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Block committed private keys and cert files
+        run: |
+          # Check for private key/cert file extensions in the diff
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          BLOCKED_EXTENSIONS=$(echo "$CHANGED_FILES" | grep -E '\.(key|pem|p12|pfx|crt|cer)$' || true)
+          if [ -n "$BLOCKED_EXTENSIONS" ]; then
+            echo "ERROR: Committed key/cert files detected:"
+            echo "$BLOCKED_EXTENSIONS"
+            exit 1
+          fi
+
+          # Check for private key content patterns in staged diff
+          KEY_PATTERNS=$(git diff origin/${{ github.base_ref }}...HEAD -- . \
+            ':!*.md' ':!*.txt' ':!*.lock' ':!bun.lockb' ':!.github/workflows/**' \
+            | grep -E '^\+.*(BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY|BEGIN CERTIFICATE)' || true)
+          if [ -n "$KEY_PATTERNS" ]; then
+            echo "ERROR: Private key or certificate content detected in diff:"
+            echo "$KEY_PATTERNS"
+            exit 1
+          fi
+
+          echo "No private keys or cert files detected."
+
   test:
     runs-on: ubuntu-latest
     steps:
