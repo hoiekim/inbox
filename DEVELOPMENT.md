@@ -54,6 +54,30 @@ Inbox runs multiple services:
 | SMTP/TLS | 465 | SMTP server (Implicit TLS) |
 | SMTP/STARTTLS | 587 | SMTP server (STARTTLS) |
 
+## Key Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `APP_HOSTNAME` | Recommended | The hostname mail clients use to connect to IMAP/SMTP. Must match the TLS certificate CN/SAN. Used in autoconfig XML and IMAP/SMTP TLS greetings. |
+| `EMAIL_DOMAIN` | Yes | The domain used for email addresses (`*@EMAIL_DOMAIN`). MX records should point to this domain's mail server. |
+| `MAILGUN_KEY` | For sending | Mailgun API key. Required to send outgoing mail. |
+| `DISCORD_ALARM_WEBHOOK` | Optional | Discord webhook URL for server error alarms (unhandled exceptions, 5xx errors). |
+
+### `APP_HOSTNAME` vs `EMAIL_DOMAIN`
+
+These two env vars serve different purposes and are **not always the same**:
+
+- `EMAIL_DOMAIN` — the domain portion of email addresses (`user@example.com`). MX records direct inbound mail here. Non-TLS delivery paths use this domain.
+- `APP_HOSTNAME` — the actual server hostname that TLS-enabled clients connect to for IMAP/SMTP. This must match the server's TLS certificate. Thunderbird, iOS Mail, and autoconfig XML all use this name.
+
+**Example:** If your cert is for `mail.example.com` but your email domain is `example.com`:
+- Set `EMAIL_DOMAIN=example.com` (addresses are `user@example.com`)
+- Set `APP_HOSTNAME=mail.example.com` (IMAP/SMTP clients connect to `mail.example.com`)
+
+If `APP_HOSTNAME` is not set, it falls back to `EMAIL_DOMAIN`. This works when both names are the same, but IMAP/SMTP TLS handshakes will fail if the cert doesn't match the domain.
+
+See PR #374 (autoconfig XML) for the implementation in `src/server/lib/http/index.ts`.
+
 ## API Patterns
 
 ### Route Definition
