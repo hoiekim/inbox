@@ -6,3 +6,4 @@ export * from "./mailbox";
 export * from "./session";
 export * from "./push_subscription";
 export * from "./spam_allowlist";
+export * from "./spam_training";
