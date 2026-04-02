@@ -341,6 +341,7 @@ This was the root cause of all SEARCH criteria with arguments silently failing (
 
 **Rule:** After parsing a keyword, always call `skipWhitespace(context)` before parsing its argument.
 
+
 ### IMAP Parser-to-Consumer Contract
 
 **Parsers produce self-contained criterion objects.** Each parsed criterion has its value embedded as a property — never rely on adjacent array indices.
@@ -445,6 +446,24 @@ await pool.query("DELETE FROM sessions WHERE ...");
 ```
 
 This pattern ensures consistent transaction handling, logging, and type safety.
+
+**Exception — use direct SQL when table methods are inefficient:**
+
+When the generic table method would require fetching all rows and filtering in JavaScript (e.g., fetching all user mailboxes to find one by name), use a targeted SQL query or a specialized repository method instead. Fetching N rows to find 1 is unacceptable at scale.
+
+```typescript
+// ❌ Bad - fetches everything, filters in JS
+const boxes = await mailboxesTable.findAll({ user_id });
+const target = boxes.find(b => b.name === name);
+
+// ✅ Good - single targeted query
+const result = await pool.query(
+  "SELECT * FROM mailboxes WHERE user_id = $1 AND name = $2",
+  [userId, name]
+);
+```
+
+Alternatively, add a specialized method to the Table class for the pattern and reuse it.
 
 ### Migrations
 
@@ -682,13 +701,14 @@ Rate limit counters should be shared across HTTP/IMAP/SMTP to prevent protocol-s
 
 ### Pull Request Checks
 
-- TypeScript type checking
 - ESLint linting
 - Unit tests
 
+> **TypeScript type checking runs in the Dockerfile builder stage**, not in CI. This prevents accidentally bypassing type checks via a PR that skips the Docker build. Do **not** add a separate `typecheck` step to GitHub Actions workflows.
+
 ### Deployment
 
-Merges to `main` trigger Docker build and deployment.
+Merges to `main` trigger Docker image build and deployment. The Dockerfile builder stage runs `bun run typecheck`, `bun run test`, and `bun run build` — the deployment fails if any of these fail. CD does not require a passing CI run for the same reason (redundant checks).
 
 ## Common Tasks
 
