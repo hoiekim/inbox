@@ -9,3 +9,4 @@ export * from "./types";
 export * from "./service";
 export * from "./rules";
 export * from "./dnsbl";
+export * from "./classifier";

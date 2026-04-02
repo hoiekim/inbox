@@ -4,6 +4,7 @@ export const MAILS = "mails";
 export const SESSIONS = "sessions";
 export const PUSH_SUBSCRIPTIONS = "push_subscriptions";
 export const SPAM_ALLOWLIST = "spam_allowlist";
+export const SPAM_TRAINING = "spam_training";
 
 // Common column names
 export const UPDATED = "updated";
