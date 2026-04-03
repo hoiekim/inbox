@@ -294,6 +294,29 @@ Key implementation details (see `src/server/lib/imap/util.ts`):
 - Mailboxes are filtered by user domain — only addresses belonging to the server's domain are exposed
 - NAMESPACE response declares `("" "/")` as the personal namespace
 
+### IMAP Parser Implementation Rules
+
+**Always call `skipWhitespace(context)` before parsing an argument.** After parsing a keyword atom (e.g., `FROM`), the context cursor is positioned at the space separator. Argument parsers (`parseAtom`, `parseDate`, `parseNumber`, etc.) do not skip leading whitespace themselves — calling them without first skipping the space causes them to return empty/fail immediately.
+
+```typescript
+// ❌ Bug — cursor is at " user@example.com" (space before value)
+case "FROM": {
+  const value = parseAtom(context); // returns "" — space not skipped
+  return { type: "FROM", value };
+}
+
+// ✅ Correct — skip the separator first
+case "FROM": {
+  skipWhitespace(context);           // cursor now at "user@example.com"
+  const value = parseAtom(context);  // returns "user@example.com"
+  return { type: "FROM", value };
+}
+```
+
+This was the root cause of all SEARCH criteria with arguments silently failing (PR #416). Applies to every argument-taking case in `search-parsers.ts`, `fetch-parsers.ts`, and any future parser.
+
+**Rule:** After parsing a keyword, always call `skipWhitespace(context)` before parsing its argument.
+
 ### IMAP Parser-to-Consumer Contract
 
 **Parsers produce self-contained criterion objects.** Each parsed criterion has its value embedded as a property — never rely on adjacent array indices.
