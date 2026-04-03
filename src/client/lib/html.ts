@@ -6,6 +6,8 @@
  * `allow-scripts`, so JS cannot execute regardless. This function is
  * defense-in-depth: it removes script tags, event handlers, and
  * dangerous URI schemes before the HTML is injected into the iframe.
+ * The iframe uses `allow-popups allow-popups-to-escape-sandbox` so that
+ * links opened in new tabs escape the sandbox and render normally.
  */
 const sanitizeEmailHtml = (html: string): string => {
   const parser = new DOMParser();
@@ -88,9 +90,10 @@ export const processHtmlToSendMail = (html: string) => {
 
 export const processHtmlForViewer = (html: string) => {
   // Sanitize HTML as defense-in-depth before rendering in iframe.
-  // The iframe already has sandbox="allow-same-origin allow-popups" to block
-  // script execution, but this stripping adds an extra layer against script
-  // tags, event handlers, and dangerous URI schemes.
+  // The iframe has sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+  // to block script execution while allowing links to open in new tabs normally.
+  // This stripping adds an extra layer against script tags, event handlers,
+  // and dangerous URI schemes.
   const sanitized = sanitizeEmailHtml(html);
   return `
 <style>
