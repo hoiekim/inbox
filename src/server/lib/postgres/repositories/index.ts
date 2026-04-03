@@ -4,3 +4,4 @@ export * from "./mailboxes";
 export * from "./sessions";
 export * from "./push_subscriptions";
 export * from "./spam_allowlists";
+export * from "./spam_training";
