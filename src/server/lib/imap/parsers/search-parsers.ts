@@ -47,6 +47,7 @@ export const parseSearchCriteria = (
 
   while (context.position < context.length) {
     skipWhitespace(context);
+    if (context.position >= context.length) break;
     const { position } = context;
     // Try to parse as sequence set first
     const sequenceSet = parseSequenceSet(context);
@@ -104,6 +105,7 @@ export const parseSearchCriteria = (
           criteria.push({ type: "UNDRAFT" });
           break;
         case "KEYWORD":
+          skipWhitespace(context);
           const keywordFlag = parseAtom(context);
           if (keywordFlag.success) {
             criteria.push({ type: "KEYWORD", flag: keywordFlag.value! });
@@ -116,6 +118,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "UNKEYWORD":
+          skipWhitespace(context);
           const unkeywordFlag = parseAtom(context);
           if (unkeywordFlag.success) {
             criteria.push({
@@ -131,6 +134,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "BEFORE":
+          skipWhitespace(context);
           const beforeDate = parseDate(context);
           if (beforeDate.success) {
             criteria.push({
@@ -146,6 +150,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "ON":
+          skipWhitespace(context);
           const onDate = parseDate(context);
           if (onDate.success) {
             criteria.push({
@@ -161,6 +166,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SINCE":
+          skipWhitespace(context);
           const sinceDate = parseDate(context);
           if (sinceDate.success) {
             criteria.push({
@@ -176,6 +182,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SENTBEFORE":
+          skipWhitespace(context);
           const sentBeforeDate = parseDate(context);
           if (sentBeforeDate.success) {
             criteria.push({
@@ -191,6 +198,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SENTON":
+          skipWhitespace(context);
           const sentOnDate = parseDate(context);
           if (sentOnDate.success) {
             criteria.push({
@@ -206,6 +214,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SENTSINCE":
+          skipWhitespace(context);
           const sentSinceDate = parseDate(context);
           if (sentSinceDate.success) {
             criteria.push({
@@ -221,6 +230,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "FROM":
+          skipWhitespace(context);
           const fromValue = parseAtom(context);
           if (fromValue.success) {
             criteria.push({
@@ -236,6 +246,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "TO":
+          skipWhitespace(context);
           const toValue = parseAtom(context);
           if (toValue.success) {
             criteria.push({
@@ -251,6 +262,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "CC":
+          skipWhitespace(context);
           const ccValue = parseAtom(context);
           if (ccValue.success) {
             criteria.push({
@@ -266,6 +278,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "BCC":
+          skipWhitespace(context);
           const bccValue = parseAtom(context);
           if (bccValue.success) {
             criteria.push({
@@ -281,6 +294,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SUBJECT":
+          skipWhitespace(context);
           const subjectValue = parseAtom(context);
           if (subjectValue.success) {
             criteria.push({
@@ -296,6 +310,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "BODY":
+          skipWhitespace(context);
           const bodyValue = parseAtom(context);
           if (bodyValue.success) {
             criteria.push({
@@ -311,6 +326,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "TEXT":
+          skipWhitespace(context);
           const textValue = parseAtom(context);
           if (textValue.success) {
             criteria.push({
@@ -326,7 +342,9 @@ export const parseSearchCriteria = (
           }
           break;
         case "HEADER":
+          skipWhitespace(context);
           const headerField = parseAtom(context);
+          skipWhitespace(context);
           const headerValue = parseAtom(context);
           if (headerField.success && headerValue.success) {
             criteria.push({
@@ -343,6 +361,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "UID":
+          skipWhitespace(context);
           const uidSequenceSet = parseSequenceSet(context);
           if (uidSequenceSet.success) {
             criteria.push({
@@ -358,6 +377,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "LARGER":
+          skipWhitespace(context);
           const largerSize = parseNumber(context);
           if (largerSize.success) {
             criteria.push({
@@ -373,6 +393,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "SMALLER":
+          skipWhitespace(context);
           const smallerSize = parseNumber(context);
           if (smallerSize.success) {
             criteria.push({
@@ -388,6 +409,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "NOT":
+          skipWhitespace(context);
           const notCriteria = parseSearchCriteria(context);
           if (notCriteria.success && notCriteria.value?.length === 1) {
             criteria.push({
@@ -403,6 +425,7 @@ export const parseSearchCriteria = (
           }
           break;
         case "OR":
+          skipWhitespace(context);
           const orCriteria = parseSearchCriteria(context);
           if (orCriteria.success && orCriteria.value?.length === 2) {
             const orCriteriaLeft = orCriteria.value![0];
