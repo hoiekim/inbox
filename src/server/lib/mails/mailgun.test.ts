@@ -74,14 +74,14 @@ describe("sendMailgunMail", () => {
   });
 
   it("should send when recipients include external addresses", async () => {
-    const mail = { ...baseMail, to: "external@gmail.com" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, to: "external@gmail.com" });
+    await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalled();
   });
 
   it("should pass the envelope to as an array of trimmed addresses", async () => {
-    const mail = { ...baseMail, to: "a@gmail.com, b@yahoo.com" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, to: "a@gmail.com, b@yahoo.com" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     const toList: string[] = Array.isArray(msgData.to) ? msgData.to : [msgData.to];
     expect(toList).toContain("a@gmail.com");
@@ -90,16 +90,16 @@ describe("sendMailgunMail", () => {
 
   it("should always include the original h:To header", async () => {
     const toValue = "a@gmail.com, b@yahoo.com";
-    const mail = { ...baseMail, to: toValue };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, to: toValue });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData["h:To"]).toBe(toValue);
   });
 
   it("should include the original To header for all recipients", async () => {
     const toValue = "external@gmail.com, internal@mydomain";
-    const mail = { ...baseMail, to: toValue };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, to: toValue });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData["h:To"]).toBe(toValue);
   });
@@ -107,24 +107,24 @@ describe("sendMailgunMail", () => {
   it("should format from address with senderFullName when provided", async () => {
     // EMAIL_DOMAIN is frozen at module load time ("mydomain")
     // getUserDomain mock returns "example.com" for admin
-    const mail = { ...baseMail, senderFullName: "Admin User" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, senderFullName: "Admin User" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.from).toContain("Admin User");
     expect(msgData.from).toContain("admin@");
   });
 
   it("should format from address without senderFullName when not provided", async () => {
-    const mail = { ...baseMail, senderFullName: "" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, senderFullName: "" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.from).toContain("admin@");
     expect(msgData.from).not.toContain(" <"); // no name part
   });
 
   it("should include subject, html, and text in message", async () => {
-    const mail = { ...baseMail, subject: "My Test Subject", html: "<p>Hello World</p>" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, subject: "My Test Subject", html: "<p>Hello World</p>" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.subject).toBe("My Test Subject");
     expect(msgData.html).toBe("<p>Hello World</p>");
@@ -132,16 +132,16 @@ describe("sendMailgunMail", () => {
   });
 
   it("should include cc and bcc when provided", async () => {
-    const mail = { ...baseMail, cc: "cc@external.com", bcc: "bcc@external.com" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, cc: "cc@external.com", bcc: "bcc@external.com" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.cc).toBe("cc@external.com");
     expect(msgData.bcc).toBe("bcc@external.com");
   });
 
   it("should include inReplyTo header when provided", async () => {
-    const mail = { ...baseMail, inReplyTo: "<original-msg@example.com>" };
-    await sendMailgunMail("admin", new MailDataToSend({ ...baseMail }));
+    const mail = new MailDataToSend({ ...baseMail, inReplyTo: "<original-msg@example.com>" });
+    await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData["h:In-Reply-To"]).toBe("<original-msg@example.com>");
   });
@@ -195,7 +195,7 @@ describe("sendMailgunMail", () => {
 
   it("should propagate errors from mailgun API", async () => {
     mockMessagesCreate.mockRejectedValue(new Error("Mailgun API error"));
-    const mail = { ...baseMail };
-    await expect(sendMailgunMail("admin", new MailDataToSend({ ...baseMail }))).rejects.toThrow("Mailgun API error");
+    const mail = new MailDataToSend({ ...baseMail });
+    await expect(sendMailgunMail("admin", mail)).rejects.toThrow("Mailgun API error");
   });
 });
