@@ -41,12 +41,11 @@ mock.module("../logger", () => ({
   },
 }));
 
-// Mock server exports
+// Mock server exports — only getUserDomain is mocked; getText uses real implementation
+// to avoid contaminating util.test.ts via bun's shared module registry
 mock.module("server", () => ({
-  getText: (html: string) => html.replace(/<[^>]*>/g, ""),
   getUserDomain: (username: string) =>
     username === "admin" ? "example.com" : `${username}.example.com`,
-  getDomain: () => "example.com",
 }));
 
 import { sendMailgunMail } from "./mailgun";
