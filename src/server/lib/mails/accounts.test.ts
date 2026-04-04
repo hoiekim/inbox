@@ -6,11 +6,10 @@ mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
 }));
 
-// Mock getUserDomain from "server"
+// Mock getUserDomain from "server" — only mock what accounts.ts actually imports
 mock.module("server", () => ({
   getUserDomain: (username: string) =>
     username === "admin" ? "example.com" : `${username}.example.com`,
-  getDomain: () => "example.com",
 }));
 
 import { getAccounts } from "./accounts";
