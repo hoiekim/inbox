@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
-import { Pagination } from "common";
+import { Pagination, SignedUser, MaskedUser } from "common";
 
 const mockGetMailHeaders = mock(() => Promise.resolve([]));
 
@@ -9,15 +9,15 @@ mock.module("../postgres/repositories/mails", () => ({
 
 import { getMailHeaders } from "./headers";
 
-const makeUser = (overrides: object = {}) => ({
+const makeUser = (overrides: Partial<SignedUser> = {}) => new SignedUser({
   id: "user-123",
   username: "testuser",
   email: "test@example.com",
   ...overrides,
 });
 
-const makeMaskedUser = (overrides: object = {}) => ({
-  user_id: "user-456",
+const makeMaskedUser = (overrides: Partial<MaskedUser> = {}) => new MaskedUser({
+  id: "user-456",
   username: "maskeduser",
   ...overrides,
 });
@@ -36,14 +36,14 @@ describe("getMailHeaders", () => {
 
   it("should return empty array when user has no id", async () => {
     const user = { username: "noId" };
-    const result = await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    const result = await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(result).toEqual([]);
     expect(mockGetMailHeaders).not.toHaveBeenCalled();
   });
 
   it("should call pgGetMailHeaders with correct parameters for SignedUser", async () => {
     const user = makeUser();
-    await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(mockGetMailHeaders).toHaveBeenCalledWith(
       "user-123",
       "inbox@example.com",
@@ -53,7 +53,7 @@ describe("getMailHeaders", () => {
 
   it("should call pgGetMailHeaders with user_id for MaskedUser", async () => {
     const user = makeMaskedUser();
-    await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(mockGetMailHeaders).toHaveBeenCalledWith(
       "user-456",
       "inbox@example.com",
@@ -63,7 +63,7 @@ describe("getMailHeaders", () => {
 
   it("should use default pagination when not provided", async () => {
     const user = makeUser();
-    await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    await getMailHeaders(user, "inbox@example.com", defaultOptions);
     const defaultPagination = new Pagination();
     expect(mockGetMailHeaders).toHaveBeenCalledWith(
       "user-123",
@@ -81,7 +81,7 @@ describe("getMailHeaders", () => {
     pagination.from = 20;
     pagination.size = 10;
 
-    await getMailHeaders(user as any, "inbox@example.com", {
+    await getMailHeaders(user, "inbox@example.com", {
       ...defaultOptions,
       pagination,
     });
@@ -114,7 +114,7 @@ describe("getMailHeaders", () => {
     mockGetMailHeaders.mockResolvedValue([mailModel]);
 
     const user = makeUser();
-    const results = await getMailHeaders(user as any, "recv@example.com", defaultOptions);
+    const results = await getMailHeaders(user, "recv@example.com", defaultOptions);
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe("mail-abc");
     expect(results[0].subject).toBe("Test Email");
@@ -144,7 +144,7 @@ describe("getMailHeaders", () => {
     mockGetMailHeaders.mockResolvedValue([mailModel]);
 
     const user = makeUser();
-    const results = await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    const results = await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(results[0].from).toBeUndefined();
     expect(results[0].to).toBeUndefined();
     expect(results[0].cc).toBeUndefined();
@@ -172,14 +172,14 @@ describe("getMailHeaders", () => {
     mockGetMailHeaders.mockResolvedValue([mailModel]);
 
     const user = makeUser();
-    const results = await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    const results = await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(results[0].cc).toBeDefined();
     expect(results[0].bcc).toBeDefined();
   });
 
   it("should pass sent=true option", async () => {
     const user = makeUser();
-    await getMailHeaders(user as any, "sent@example.com", { ...defaultOptions, sent: true });
+    await getMailHeaders(user, "sent@example.com", { ...defaultOptions, sent: true });
     expect(mockGetMailHeaders).toHaveBeenCalledWith(
       "user-123",
       "sent@example.com",
@@ -189,7 +189,7 @@ describe("getMailHeaders", () => {
 
   it("should pass saved=true option", async () => {
     const user = makeUser();
-    await getMailHeaders(user as any, "inbox@example.com", { ...defaultOptions, saved: true });
+    await getMailHeaders(user, "inbox@example.com", { ...defaultOptions, saved: true });
     expect(mockGetMailHeaders).toHaveBeenCalledWith(
       "user-123",
       "inbox@example.com",
@@ -205,7 +205,7 @@ describe("getMailHeaders", () => {
     mockGetMailHeaders.mockResolvedValue(models);
 
     const user = makeUser();
-    const results = await getMailHeaders(user as any, "inbox@example.com", defaultOptions);
+    const results = await getMailHeaders(user, "inbox@example.com", defaultOptions);
     expect(results).toHaveLength(2);
     expect(results[0].id).toBe("m1");
     expect(results[1].id).toBe("m2");

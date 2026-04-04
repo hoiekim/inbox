@@ -1,4 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { SignedUser } from "common";
 
 const mockGetUnreadNotifications = mock(() => Promise.resolve(new Map()));
 
@@ -8,7 +9,7 @@ mock.module("../postgres/repositories/mails", () => ({
 
 import { getNotifications } from "./notifications";
 
-const makeUser = (id: string, username: string) => ({ id, username });
+const makeUser = (id: string, username: string) => new SignedUser({ id, username, email: id + "@example.com" });
 
 describe("getNotifications", () => {
   beforeEach(() => {
@@ -18,14 +19,14 @@ describe("getNotifications", () => {
 
   it("should return a Map with all users initialized to count=0", async () => {
     const users = [makeUser("u1", "alice"), makeUser("u2", "bob")];
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result.get("alice")).toEqual({ count: 0 });
     expect(result.get("bob")).toEqual({ count: 0 });
   });
 
   it("should call getUnreadNotifications with all user IDs", async () => {
     const users = [makeUser("u1", "alice"), makeUser("u2", "bob")];
-    await getNotifications(users as any);
+    await getNotifications(users);
     expect(mockGetUnreadNotifications).toHaveBeenCalledWith(["u1", "u2"]);
   });
 
@@ -36,7 +37,7 @@ describe("getNotifications", () => {
     ]);
     mockGetUnreadNotifications.mockResolvedValue(rawNotifications);
 
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result.get("alice")).toEqual({ count: 5, latest: new Date("2024-01-15") });
   });
 
@@ -47,7 +48,7 @@ describe("getNotifications", () => {
     ]);
     mockGetUnreadNotifications.mockResolvedValue(rawNotifications);
 
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result.get("alice")).toEqual({ count: 3 });
     expect(result.get("bob")).toEqual({ count: 0 }); // default
   });
@@ -65,7 +66,7 @@ describe("getNotifications", () => {
     ]);
     mockGetUnreadNotifications.mockResolvedValue(rawNotifications);
 
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result.size).toBe(1);
     expect(result.get("charlie")).toEqual({ count: 2, latest: new Date("2024-01-10") });
   });
@@ -82,7 +83,7 @@ describe("getNotifications", () => {
     ]);
     mockGetUnreadNotifications.mockResolvedValue(rawNotifications);
 
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result.get("alice")?.count).toBe(10);
     expect(result.get("bob")?.count).toBe(2);
     expect(result.get("charlie")).toEqual({ count: 0 }); // no notifications
@@ -90,7 +91,7 @@ describe("getNotifications", () => {
 
   it("should return a Notifications Map type", async () => {
     const users = [makeUser("u1", "alice")];
-    const result = await getNotifications(users as any);
+    const result = await getNotifications(users);
     expect(result instanceof Map).toBe(true);
   });
 });

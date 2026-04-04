@@ -9,8 +9,9 @@ mock.module("../postgres/repositories/mails", () => ({
 }));
 
 import { getSpamHeaders, markSpam } from "./spam";
+import { MaskedUser } from "common";
 
-const mockUser = { id: "user-123", username: "testuser" };
+const mockUser = new MaskedUser({ id: "user-123", username: "testuser" });
 
 describe("getSpamHeaders", () => {
   beforeEach(() => {
@@ -19,18 +20,18 @@ describe("getSpamHeaders", () => {
   });
 
   it("should return empty array when user has no id", async () => {
-    const result = await getSpamHeaders({ username: "noId" } as any);
+    const result = await getSpamHeaders(new MaskedUser({ username: "noId" }));
     expect(result).toEqual([]);
     expect(mockGetSpamMails).not.toHaveBeenCalled();
   });
 
   it("should call getSpamMails with user id", async () => {
-    await getSpamHeaders(mockUser as any);
+    await getSpamHeaders(mockUser);
     expect(mockGetSpamMails).toHaveBeenCalledWith("user-123");
   });
 
   it("should return empty array when no spam mails found", async () => {
-    const result = await getSpamHeaders(mockUser as any);
+    const result = await getSpamHeaders(mockUser);
     expect(result).toEqual([]);
   });
 
@@ -53,7 +54,7 @@ describe("getSpamHeaders", () => {
     };
     mockGetSpamMails.mockResolvedValue([spamModel]);
 
-    const results = await getSpamHeaders(mockUser as any);
+    const results = await getSpamHeaders(mockUser);
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe("spam-001");
     expect(results[0].subject).toBe("You won a million dollars!");
@@ -80,7 +81,7 @@ describe("getSpamHeaders", () => {
     };
     mockGetSpamMails.mockResolvedValue([spamModel]);
 
-    const results = await getSpamHeaders(mockUser as any);
+    const results = await getSpamHeaders(mockUser);
     expect(results[0].from).toBeUndefined();
     expect(results[0].to).toBeUndefined();
   });
@@ -104,7 +105,7 @@ describe("getSpamHeaders", () => {
     };
     mockGetSpamMails.mockResolvedValue([spamModel]);
 
-    const results = await getSpamHeaders(mockUser as any);
+    const results = await getSpamHeaders(mockUser);
     expect(results[0].cc).toBeDefined();
     expect(results[0].bcc).toBeDefined();
   });
@@ -129,7 +130,7 @@ describe("getSpamHeaders", () => {
     };
     mockGetSpamMails.mockResolvedValue([spamModel]);
 
-    const results = await getSpamHeaders(mockUser as any);
+    const results = await getSpamHeaders(mockUser);
     expect(results[0].insight).toEqual(insight);
   });
 
@@ -140,7 +141,7 @@ describe("getSpamHeaders", () => {
     ];
     mockGetSpamMails.mockResolvedValue(models);
 
-    const results = await getSpamHeaders(mockUser as any);
+    const results = await getSpamHeaders(mockUser);
     expect(results).toHaveLength(2);
     expect(results[0].id).toBe("s1");
     expect(results[1].id).toBe("s2");

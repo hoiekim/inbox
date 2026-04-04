@@ -1,4 +1,5 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
 
@@ -14,17 +15,17 @@ mock.module("server", () => ({
 
 import { getAccounts } from "./accounts";
 
-const mockUser = {
+const mockUser = new SignedUser({
   id: "user-123",
   username: "testuser",
   email: "testuser@testuser.example.com",
-};
+});
 
-const adminUser = {
+const adminUser = new SignedUser({
   id: "admin-1",
   username: "admin",
   email: "admin@example.com",
-};
+});
 
 describe("getAccounts", () => {
   beforeEach(() => {
@@ -33,18 +34,18 @@ describe("getAccounts", () => {
   });
 
   it("should call getAccountStats twice (received and sent)", async () => {
-    await getAccounts(mockUser as any);
+    await getAccounts(mockUser);
     expect(mockGetAccountStats).toHaveBeenCalledTimes(2);
   });
 
   it("should call getAccountStats with correct userId and sent flags", async () => {
-    await getAccounts(mockUser as any);
+    await getAccounts(mockUser);
     expect(mockGetAccountStats).toHaveBeenCalledWith("user-123", false, "testuser.example.com");
     expect(mockGetAccountStats).toHaveBeenCalledWith("user-123", true, "testuser.example.com");
   });
 
   it("should return empty received and sent arrays when no stats", async () => {
-    const result = await getAccounts(mockUser as any);
+    const result = await getAccounts(mockUser);
     expect(result.received).toEqual([]);
     expect(result.sent).toEqual([]);
   });
@@ -53,13 +54,13 @@ describe("getAccounts", () => {
     const receivedStats = [
       { address: "inbox@testuser.example.com", count: 10, unread: 3, saved: 1, latest: "2024-01-15" },
     ];
-    const sentStats: any[] = [];
+    const sentStats: never[] = [];
 
     mockGetAccountStats
       .mockResolvedValueOnce(receivedStats)
       .mockResolvedValueOnce(sentStats);
 
-    const result = await getAccounts(mockUser as any);
+    const result = await getAccounts(mockUser);
     expect(result.received).toHaveLength(1);
     expect(result.received[0].key).toBe("inbox@testuser.example.com");
     expect(result.received[0].doc_count).toBe(10);
@@ -69,7 +70,7 @@ describe("getAccounts", () => {
   });
 
   it("should map sent stats to Account objects", async () => {
-    const receivedStats: any[] = [];
+    const receivedStats: never[] = [];
     const sentStats = [
       { address: "sent@testuser.example.com", count: 5, unread: 0, saved: 2, latest: "2024-01-10" },
     ];
@@ -78,7 +79,7 @@ describe("getAccounts", () => {
       .mockResolvedValueOnce(receivedStats)
       .mockResolvedValueOnce(sentStats);
 
-    const result = await getAccounts(mockUser as any);
+    const result = await getAccounts(mockUser);
     expect(result.sent).toHaveLength(1);
     expect(result.sent[0].key).toBe("sent@testuser.example.com");
     expect(result.sent[0].doc_count).toBe(5);
@@ -94,14 +95,14 @@ describe("getAccounts", () => {
       .mockResolvedValueOnce(receivedStats)
       .mockResolvedValueOnce([]);
 
-    const result = await getAccounts(mockUser as any);
+    const result = await getAccounts(mockUser);
     expect(result.received).toHaveLength(2);
     expect(result.received[0].key).toBe("a@testuser.example.com");
     expect(result.received[1].key).toBe("b@testuser.example.com");
   });
 
   it("should use base domain for admin user", async () => {
-    await getAccounts(adminUser as any);
+    await getAccounts(adminUser);
     expect(mockGetAccountStats).toHaveBeenCalledWith("admin-1", false, "example.com");
     expect(mockGetAccountStats).toHaveBeenCalledWith("admin-1", true, "example.com");
   });
@@ -118,7 +119,7 @@ describe("getAccounts", () => {
       .mockResolvedValueOnce(receivedStats)
       .mockResolvedValueOnce(sentStats);
 
-    const result = await getAccounts(mockUser as any);
+    const result = await getAccounts(mockUser);
     expect(result.received).toHaveLength(1);
     expect(result.sent).toHaveLength(1);
     expect(result.received[0].key).toBe("recv@example.com");

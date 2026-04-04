@@ -22,12 +22,13 @@ mock.module("../logger", () => ({
 }));
 
 import { searchMail, getDomainUidNext, getAccountUidNext } from "./search";
+import { SignedUser } from "common";
 
-const mockUser = {
+const mockUser = new SignedUser({
   id: "user-123",
   username: "testuser",
   email: "test@example.com",
-};
+});
 
 describe("searchMail", () => {
   beforeEach(() => {
@@ -36,24 +37,24 @@ describe("searchMail", () => {
   });
 
   it("should return empty array for empty search value", async () => {
-    const result = await searchMail(mockUser as any, "");
+    const result = await searchMail(mockUser, "");
     expect(result).toEqual([]);
     expect(mockSearchMails).not.toHaveBeenCalled();
   });
 
   it("should return empty array for whitespace-only search value", async () => {
-    const result = await searchMail(mockUser as any, "   ");
+    const result = await searchMail(mockUser, "   ");
     expect(result).toEqual([]);
     expect(mockSearchMails).not.toHaveBeenCalled();
   });
 
   it("should call searchMails with trimmed value", async () => {
-    await searchMail(mockUser as any, "  hello  ");
+    await searchMail(mockUser, "  hello  ");
     expect(mockSearchMails).toHaveBeenCalledWith("user-123", "hello", undefined);
   });
 
   it("should call searchMails with field when provided", async () => {
-    await searchMail(mockUser as any, "test", "subject");
+    await searchMail(mockUser, "test", "subject");
     expect(mockSearchMails).toHaveBeenCalledWith("user-123", "test", "subject");
   });
 
@@ -77,7 +78,7 @@ describe("searchMail", () => {
     };
     mockSearchMails.mockResolvedValue([mockMailModel]);
 
-    const results = await searchMail(mockUser as any, "subject");
+    const results = await searchMail(mockUser, "subject");
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe("mail-abc");
     expect(results[0].subject).toBe("Test Subject");
@@ -106,7 +107,7 @@ describe("searchMail", () => {
     };
     mockSearchMails.mockResolvedValue([mockMailModel]);
 
-    const results = await searchMail(mockUser as any, "test");
+    const results = await searchMail(mockUser, "test");
     expect(results).toHaveLength(1);
     expect(results[0].from).toBeUndefined();
     expect(results[0].to).toBeUndefined();
@@ -132,7 +133,7 @@ describe("searchMail", () => {
     };
     mockSearchMails.mockResolvedValue([mockMailModel]);
 
-    const results = await searchMail(mockUser as any, "cc");
+    const results = await searchMail(mockUser, "cc");
     expect(results[0].cc).toBeDefined();
     expect(results[0].bcc).toBeDefined();
   });
@@ -158,7 +159,7 @@ describe("searchMail", () => {
     };
     mockSearchMails.mockResolvedValue([mockMailModel]);
 
-    const results = await searchMail(mockUser as any, "newsletter");
+    const results = await searchMail(mockUser, "newsletter");
     expect(results[0].insight).toEqual(insight);
   });
 
@@ -169,7 +170,7 @@ describe("searchMail", () => {
     ];
     mockSearchMails.mockResolvedValue(models);
 
-    const results = await searchMail(mockUser as any, "query");
+    const results = await searchMail(mockUser, "query");
     expect(results).toHaveLength(2);
     expect(results[0].id).toBe("m1");
     expect(results[1].id).toBe("m2");
