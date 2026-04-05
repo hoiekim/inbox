@@ -43,13 +43,7 @@ pool.on("error", (err) => {
   console.error("Unexpected database pool error:", err);
 });
 
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await pool.end();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  await pool.end();
-  process.exit(0);
-});
+// Graceful shutdown is handled centrally in start.ts (SIGTERM/SIGINT → shutdown()).
+// Do not register pool.end() handlers here — duplicate handlers cause a race condition
+// where pool.end() is called twice: once from client.ts and once from shutdown(),
+// resulting in "Cannot use a pool after calling end on the pool" errors during startup.
