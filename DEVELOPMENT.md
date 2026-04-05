@@ -721,10 +721,23 @@ Merges to `main` trigger Docker image build and deployment. The Dockerfile build
 
 ### Adding IMAP Commands
 
+After PR #424, `session.ts` was decomposed into focused modules. The correct module depends on the command type:
+
+| Command type | Module |
+|---|---|
+| Mailbox ops (CREATE, DELETE, RENAME, SELECT, LIST, etc.) | `src/server/lib/imap/mailbox-ops.ts` |
+| Message ops (FETCH, SEARCH, STORE, COPY, APPEND, EXPUNGE) | `src/server/lib/imap/message-ops.ts` |
+| Auth / capability / state transitions | `src/server/lib/imap/session.ts` |
+| Shared utilities (e.g. `shouldMarkAsRead`) | `src/server/lib/imap/session-utils.ts` |
+| Request dispatch | `src/server/lib/imap/handler.ts` |
+
+Steps to add a new IMAP command:
+
 1. Add parser in `src/server/lib/imap/parsers/`
-2. Add handler in `src/server/lib/imap/session.ts`
-3. Add tests for parser
-4. Update capabilities if needed
+2. Add handler in the appropriate module above
+3. Wire dispatch in `src/server/lib/imap/handler.ts`
+4. Add tests for parser and handler
+5. Update capabilities if needed
 
 ### Testing IMAP Locally
 
