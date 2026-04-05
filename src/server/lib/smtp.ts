@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import {
   SMTPServer,
   SMTPServerOptions,
@@ -199,7 +199,16 @@ export const initializeSmtp = async () => {
   const options: SMTPServerOptions = { authOptional: true, onAuth, onData, maxClients: SMTP_MAX_CLIENTS };
 
   const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-  const isSslAvailable = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
+  const sslConfigured = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
+  const sslFilesExist = sslConfigured && existsSync(SSL_CERTIFICATE_KEY) && existsSync(SSL_CERTIFICATE);
+  const isSslAvailable = sslFilesExist;
+
+  if (sslConfigured && !sslFilesExist) {
+    logger.warn("SMTP: SSL certificate files not found — starting without TLS", {
+      cert: SSL_CERTIFICATE,
+      key: SSL_CERTIFICATE_KEY,
+    });
+  }
 
   if (isSslAvailable) {
     options.key = readFileSync(SSL_CERTIFICATE_KEY);
@@ -209,8 +218,8 @@ export const initializeSmtp = async () => {
     // TLSv1.2 minimum is maintained; known-weak ciphers remain disabled.
     options.minVersion = "TLSv1.2";
     options.ciphers = "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
-  } else {
-    logger.warn("SMTP: SSL certificate not found.");
+  } else if (!sslConfigured) {
+    logger.warn("SMTP: SSL certificate not configured.");
   }
 
   const smtpServer = await new Promise<SMTPServer>((res) => {
