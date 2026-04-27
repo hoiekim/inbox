@@ -56,9 +56,13 @@ export class Store {
 
   listMailboxes = async (): Promise<string[]> => {
     try {
+      // Match HTTP /api/mails/accounts: filter by user's domain so we only
+      // expose addresses that belong to this server, not every external
+      // CC/BCC/recipient address found on stored mails.
+      const userDomain = getUserDomain(this.user.username);
       const [receivedStats, sentStats, userMailboxes] = await Promise.all([
-        getAccountStats(this.user.id, false),
-        getAccountStats(this.user.id, true),
+        getAccountStats(this.user.id, false, userDomain),
+        getAccountStats(this.user.id, true, userDomain),
         getMailboxesByUser(this.user.id),
       ]);
 
