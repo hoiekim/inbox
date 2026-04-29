@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { Context } from "client";
+import { Context, onKeyboardActivate } from "client";
 import HamburgerIcon from "./components/HamburgerIcon";
 
 const LeftMenu = () => {
@@ -19,7 +19,15 @@ const LeftMenu = () => {
   };
 
   return (
-    <div className="menu left cursor" onClick={onClickHamburger}>
+    <div
+      className="menu left cursor"
+      role="button"
+      tabIndex={0}
+      aria-label="Toggle accounts panel"
+      aria-expanded={isAccountsOpen}
+      onClick={onClickHamburger}
+      onKeyDown={onKeyboardActivate(onClickHamburger)}
+    >
       <div id="hamburger" className="iconBox">
         <div>
           <HamburgerIcon />

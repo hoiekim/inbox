@@ -1,10 +1,11 @@
 import { ComponentProps, useContext } from "react";
-import { Context, getDateForMailHeader } from "client";
+import { Context, getDateForMailHeader, onKeyboardActivate } from "client";
 import { MailAddressValueType, MailHeaderData } from "common";
 
-export interface MailHeaderProps extends ComponentProps<"div"> {
+export interface MailHeaderProps extends Omit<ComponentProps<"div">, "onClick"> {
   mail: MailHeaderData;
   isActive: boolean;
+  onClick?: () => void;
 }
 
 const MailHeader = (props: MailHeaderProps) => {
@@ -27,7 +28,10 @@ const MailHeader = (props: MailHeaderProps) => {
   return (
     <div
       className="header cursor"
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={onClick ? onKeyboardActivate(onClick) : undefined}
       onMouseLeave={onMouseLeave}
     >
       <div className="mailcard-small content">{duration}</div>
