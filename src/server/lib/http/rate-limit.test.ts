@@ -106,3 +106,16 @@ describe("cleanupExpiredAttempts", () => {
     expect(() => cleanupExpiredAttempts()).not.toThrow();
   });
 });
+
+describe("startCleanupScheduler / stopCleanupScheduler", () => {
+  it("starts and stops without throwing", async () => {
+    const { startCleanupScheduler, stopCleanupScheduler } = await import("./rate-limit");
+
+    expect(() => startCleanupScheduler()).not.toThrow();
+    // Calling again while running should be a no-op (idempotent).
+    expect(() => startCleanupScheduler()).not.toThrow();
+    expect(() => stopCleanupScheduler()).not.toThrow();
+    // Stopping again when already stopped should be a no-op.
+    expect(() => stopCleanupScheduler()).not.toThrow();
+  });
+});
