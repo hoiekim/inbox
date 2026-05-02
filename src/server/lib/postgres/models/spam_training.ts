@@ -108,6 +108,11 @@ class SpamTrainingTable extends Table<SpamTrainingJSON, SpamTrainingSchema, Spam
    * Trains the classifier with a set of words from a document.
    * isSpam=true trains as spam; isSpam=false trains as ham.
    * Also increments the total document count sentinel row.
+   *
+   * Issues all word upserts plus the __total__ sentinel as a single batched
+   * INSERT ... VALUES (...), (...), ... ON CONFLICT statement to avoid the
+   * N+1 round-trip pattern. De-duplicates input words first since the multi-row
+   * VALUES form cannot upsert two rows with the same conflict key in one statement.
    */
   async train(userId: string, words: string[], isSpam: boolean): Promise<void> {
     if (words.length === 0) return;
@@ -115,22 +120,24 @@ class SpamTrainingTable extends Table<SpamTrainingJSON, SpamTrainingSchema, Spam
     const spamIncrement = isSpam ? 1 : 0;
     const hamIncrement = isSpam ? 0 : 1;
 
-    // Upsert each word
-    const wordSql = `
+    const uniqueWords = Array.from(new Set(words));
+    const allWords = [...uniqueWords, "__total__"];
+
+    const params: unknown[] = [userId, spamIncrement, hamIncrement];
+    const valuesSql = allWords.map((w) => {
+      params.push(w);
+      return `($1, $${params.length}, $2, $3)`;
+    });
+
+    const sql = `
       INSERT INTO ${this.name} (${USER_ID}, ${WORD}, ${SPAM_COUNT}, ${HAM_COUNT})
-      VALUES ($1, $2, $3, $4)
+      VALUES ${valuesSql.join(", ")}
       ON CONFLICT (${USER_ID}, ${WORD})
       DO UPDATE SET
         ${SPAM_COUNT} = ${this.name}.${SPAM_COUNT} + EXCLUDED.${SPAM_COUNT},
         ${HAM_COUNT} = ${this.name}.${HAM_COUNT} + EXCLUDED.${HAM_COUNT}
     `;
-
-    for (const word of words) {
-      await pool.query(wordSql, [userId, word, spamIncrement, hamIncrement]);
-    }
-
-    // Update the total doc count sentinel
-    await pool.query(wordSql, [userId, "__total__", spamIncrement, hamIncrement]);
+    await pool.query(sql, params);
   }
 
   /**
