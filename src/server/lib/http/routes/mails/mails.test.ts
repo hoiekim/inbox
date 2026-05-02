@@ -76,7 +76,7 @@ mock.module("server", () => ({
 
 // Mock logger used directly in post-mark
 mock.module("../../../logger", () => ({
-  logger: { error: mock(() => {}), info: mock(() => {}), warn: mock(() => {}) },
+  logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
 }));
 
 // ── Helper factories ──────────────────────────────────────────────────────────
