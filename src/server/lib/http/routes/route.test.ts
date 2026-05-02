@@ -1,7 +1,7 @@
 import { describe, it, expect, mock } from "bun:test";
 
 mock.module("../../logger", () => ({
-  logger: { error: mock(() => {}), info: mock(() => {}), warn: mock(() => {}) },
+  logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
 }));
 mock.module("../../alarm", () => ({
   sendAlarm: mock(async () => {}),

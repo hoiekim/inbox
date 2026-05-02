@@ -29,7 +29,7 @@ mock.module("server", () => ({
 }));
 
 mock.module("../../../logger", () => ({
-  logger: { error: mock(() => {}), info: mock(() => {}), warn: mock(() => {}) },
+  logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
 }));
 
 // bcrypt is a real module but we mock it to keep tests fast + deterministic
