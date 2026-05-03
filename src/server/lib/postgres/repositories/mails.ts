@@ -444,17 +444,20 @@ export const getAccountStats = async (
       ? `AND address ILIKE '%@' || $2`
       : "";
 
+    // DISTINCT collapses rows where the same address appears more than once in
+    // a single mail's recipient/sender list (e.g. LinkedIn duplicates the To
+    // header), so each mail contributes once per address it actually involves.
     const sql = `
       WITH expanded_mails AS (
-        SELECT 
+        SELECT DISTINCT
           mail_id, read, saved, date,
           ${addressExpansion}
-        FROM mails 
+        FROM mails
         WHERE user_id = $1
           AND expunged = FALSE
           AND ${addressNotNull}
       )
-      SELECT 
+      SELECT
         address,
         COUNT(*) as count,
         SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
