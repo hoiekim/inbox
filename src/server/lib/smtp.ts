@@ -38,7 +38,8 @@ const registerListeners = (
       msg.includes("tls_early_post_process_client_hello") || // ClientHello stage rejections
       msg.includes("tls_post_process_client_hello") ||       // post-ClientHello cipher/extension failures
       msg.includes("tls_validate_record_header") ||          // malformed/wrong-protocol record header
-      msg.includes("extract_keyshares") ||                   // TLS 1.3 key exchange failure
+      msg.includes("extract_keyshares") ||                   // TLS 1.3 key exchange failure (bad key share)
+      msg.includes("final_key_share") ||                     // TLS 1.3 key exchange failure (no suitable key share)
       msg.includes("tls_choose_sigalg") ||                   // signature algorithm negotiation failure
       msg.includes("tls_get_more_records") ||                // oversized/malformed TLS record
       // smtp-server-level strings for connection-drop cases
