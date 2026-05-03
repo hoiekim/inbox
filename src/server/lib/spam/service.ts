@@ -13,6 +13,7 @@ import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
 import { logger } from "../logger";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
 import { isAllowlisted } from "../postgres/repositories/spam_allowlists";
+import { classifyEmail } from "./classifier";
 
 /**
  * Default spam filter configuration.
@@ -87,8 +88,18 @@ export async function checkSpam(
     }
   }
 
-  // Layer 3: ML classifier (placeholder for future implementation)
-  // TODO: Add ML-based classification in Phase 2
+  // Layer 3: Naive Bayes classifier (user-trained, per-user model)
+  try {
+    const { score: classifierScore, reason: classifierReason } = await classifyEmail(userId, email);
+    if (classifierScore > 0) {
+      totalScore += classifierScore;
+      if (classifierReason) reasons.push(classifierReason);
+      if (!flaggedBy) flaggedBy = "classifier";
+    }
+  } catch (error) {
+    logger.warn("[SpamFilter] Classifier check failed", {}, error);
+    // Continue — classifier failure is non-fatal
+  }
 
   const isSpam = totalScore >= cfg.spamThreshold;
 
