@@ -22,7 +22,14 @@ import {
 
 import { Account } from "common";
 import { AccountsGetResponse, LoginDeleteResponse } from "server";
-import { Context, Category, useLocalStorage, QueryCache, call } from "client";
+import {
+  Context,
+  Category,
+  useLocalStorage,
+  QueryCache,
+  call,
+  onKeyboardActivate
+} from "client";
 import { MailsSynchronizer } from "client/Box";
 
 import "./index.scss";
@@ -196,7 +203,13 @@ const Accounts = ({
 
       return (
         <div key={i}>
-          <div className={classes.join(" ")} onClick={onClickAccount}>
+          <div
+            className={classes.join(" ")}
+            role="button"
+            tabIndex={0}
+            onClick={onClickAccount}
+            onKeyDown={onKeyboardActivate(onClickAccount)}
+          >
             <span>{accountName?.split("@")[0] || "Unknown"}</span>
             {unreadNo && selectedCategory !== Category.SavedMails ? (
               <div className="numberBall">{unreadNo}</div>
@@ -276,7 +289,15 @@ const Accounts = ({
       if (e === Category.Search) classes.push("flex");
 
       return (
-        <div key={i} className={classes.join(" ")} onClick={onClickCategory}>
+        <div
+          key={i}
+          className={classes.join(" ")}
+          role="tab"
+          tabIndex={0}
+          aria-selected={selectedCategory === e}
+          onClick={onClickCategory}
+          onKeyDown={onKeyboardActivate(onClickCategory)}
+        >
           {e === Category.Search ? (
             <SearchIcon />
           ) : (
