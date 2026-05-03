@@ -31,14 +31,14 @@ bun test
 If a module requires secrets at import time, refactor to lazy initialization:
 
 ```typescript
-// ❌ Bad: Fails if VAPID_KEY is missing
-const vapidKey = process.env.VAPID_KEY!;
+// ❌ Bad: Fails if PUSH_VAPID_PRIVATE_KEY is missing
+const vapidKey = process.env.PUSH_VAPID_PRIVATE_KEY!;
 export const push = webpush.setVapidDetails(...);
 
 // ✅ Good: Only fails when actually used
 export const getPushService = () => {
-  const vapidKey = process.env.VAPID_KEY;
-  if (!vapidKey) throw new Error("VAPID_KEY required for push notifications");
+  const vapidKey = process.env.PUSH_VAPID_PRIVATE_KEY;
+  if (!vapidKey) throw new Error("PUSH_VAPID_PRIVATE_KEY required for push notifications");
   return webpush.setVapidDetails(...);
 };
 ```
@@ -53,7 +53,7 @@ const mockApiKey = "test_key_not_real_do_not_use";
 const mockToken = "fake-jwt-token-for-testing";
 
 // ✅ Use test utilities
-const mockEnv = { VAPID_KEY: "TEST_VAPID_KEY_PLACEHOLDER" };
+const mockEnv = { PUSH_VAPID_PRIVATE_KEY: "TEST_VAPID_KEY_PLACEHOLDER" };
 ```
 
 ### Pre-Commit Checklist
@@ -69,7 +69,7 @@ Before committing, verify:
 
 - TypeScript for all new code
 - Use existing patterns in the codebase
-- Run `bun run build` to verify no type errors
+- Run `bun run typecheck` to verify no type errors
 
 ## Pull Requests
 
@@ -81,11 +81,14 @@ Before committing, verify:
 ## Environment Variables
 
 Required for full functionality:
-- `DATABASE_URL` — PostgreSQL connection string
-- `SESSION_SECRET` — Express session secret
+- `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` — PostgreSQL connection
+- `SECRET` — Express session secret
+- `EMAIL_DOMAIN` — Domain used for `*@EMAIL_DOMAIN` mail addresses
+- `ADMIN_PASSWORD` — Password for the built-in `admin` user
 
 Optional:
-- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` — For push notifications
-- `MAILGUN_API_KEY`, `MAILGUN_DOMAIN` — For outbound email
+- `APP_HOSTNAME` — Server hostname for IMAP/SMTP TLS (falls back to `EMAIL_DOMAIN`)
+- `PUSH_VAPID_PUBLIC_KEY`, `PUSH_VAPID_PRIVATE_KEY` — For push notifications
+- `MAILGUN_KEY` — For outbound email via Mailgun
 
 See `.env.example` for the full list.

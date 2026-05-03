@@ -15,7 +15,7 @@ For detailed instruction, please keep reading this document.
 
 1. Clone this git repository
    ```
-   git clone https://github.com/garageScript/inbox.git
+   git clone https://github.com/hoiekim/inbox.git
    ```
 2. Copy `.env.example` file and name it `.env.local` then determine environment variables in `.env.local` file as following.
 
@@ -24,7 +24,7 @@ For detailed instruction, please keep reading this document.
    APP_HOSTNAME             // Domain name that hosts inbox web app.
 
    SECRET                   // Encoding secret for session data. Any value works.
-   ADMIN_PW                 // Password to login to Inbox as admin user.
+   ADMIN_PASSWORD           // Password to login to Inbox as admin user.
 
    MAILGUN_KEY              // (optional) API key issued by Mailgun. Used to send emails.
 
@@ -81,8 +81,8 @@ If you want to use this app only for receiving mails, skip this step.
    Then run app using this command
 
    ```
-   npm i
-   npm run dev
+   bun install
+   bun run dev
    ```
 
 ### Environment Variables
@@ -95,4 +95,4 @@ Default port number is 3004. So you can connect to Inbox at http://(your-server-
 
 For development mode, use port number 3000 instead.
 
-Admin username is `admin`, password is equal to the value of environment variable called `ADMIN_PW`
+Admin username is `admin`, password is equal to the value of environment variable called `ADMIN_PASSWORD`
