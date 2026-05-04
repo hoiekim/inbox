@@ -33,9 +33,10 @@ src/
 │   │   ├── http/     # Express server + API routes
 │   │   │   └── routes/ # API endpoints
 │   │   ├── imap/     # IMAP server implementation
-│   │   ├── smtp/     # SMTP server implementation
 │   │   ├── mails/    # Mail processing utilities
-│   │   └── postgres/ # Database layer
+│   │   ├── postgres/ # Database layer
+│   │   ├── spam/     # Spam classification (rules + Naive Bayes)
+│   │   └── smtp.ts   # SMTP server (single file)
 │   └── start.ts      # Server entry point
 └── common/           # Shared code
     └── models/       # Data models
@@ -420,7 +421,7 @@ Configure via environment variables:
 - `POSTGRES_PORT` (default: 5432)
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
-- `POSTGRES_DB`
+- `POSTGRES_DATABASE`
 
 ### Repository Pattern
 
