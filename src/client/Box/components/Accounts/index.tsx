@@ -28,6 +28,7 @@ import {
   useLocalStorage,
   QueryCache,
   call,
+  idbClear,
   onKeyboardActivate
 } from "client";
 import { MailsSynchronizer } from "client/Box";
@@ -387,6 +388,8 @@ const Accounts = ({
         "originalMessage",
         "isCcOpen"
       ].forEach((key) => localStorage.removeItem(key));
+      // Same reason: drop the persisted IDB query cache (mail headers, accounts list).
+      void idbClear();
       setUserInfo(undefined);
       setSelectedAccount("");
     };

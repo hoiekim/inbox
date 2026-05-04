@@ -1,6 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App, callUser } from "client";
+import {
+  App,
+  attachIDBPersistence,
+  callUser,
+  hydrateQueryClient,
+  queryClient
+} from "client";
 
 import "./index.scss";
 
@@ -27,7 +33,8 @@ window.addEventListener("unhandledrejection", (event) => {
 const root = createRoot(document.getElementById("root") as HTMLElement);
 
 const mountApp = async () => {
-  const user = await callUser();
+  const [user] = await Promise.all([callUser(), hydrateQueryClient(queryClient)]);
+  attachIDBPersistence(queryClient);
   root.render(
     <StrictMode>
       <App user={user} />
