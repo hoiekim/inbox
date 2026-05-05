@@ -91,9 +91,14 @@ export async function checkSpam(
   // Layer 3: Naive Bayes classifier (user-trained, per-user model)
   try {
     const { score: classifierScore, reason: classifierReason } = await classifyEmail(userId, email);
-    if (classifierScore > 0) {
+    // classifyEmail returns P(spam) * 100 in [0, 100], where < 50 is a HAM verdict
+    // and >= 50 is a SPAM verdict (the classifier sets reason to non-null only at >= 50).
+    // Only contribute to totalScore when the verdict leans spam — otherwise a
+    // ham-leaning score (e.g. 49) would still inflate totalScore past spamThreshold
+    // when combined with other layers, flipping legitimate mail to spam.
+    if (classifierReason !== null) {
       totalScore += classifierScore;
-      if (classifierReason) reasons.push(classifierReason);
+      reasons.push(classifierReason);
       if (!flaggedBy) flaggedBy = "classifier";
     }
   } catch (error) {
