@@ -2,11 +2,19 @@ import { describe, it, expect, mock, beforeEach, beforeAll } from "bun:test";
 import type { PushSubscription } from "web-push";
 import type { SignedUser, ComputedPushSubscription } from "common";
 
+// ── Env setup (must run before push.ts evaluates) ────────────────────────────
+// vapidConfigured is computed at module-init time in push.ts. Setting these
+// here (top-level, before mock.module) guarantees they are present whenever
+// push.ts is first evaluated within this Bun test run — including when another
+// test file's transitive imports trigger the load before our beforeAll runs.
+process.env.PUSH_VAPID_PUBLIC_KEY = "test-public-key";
+process.env.PUSH_VAPID_PRIVATE_KEY = "test-private-key";
+process.env.EMAIL_DOMAIN = "test.com";
+
 // ── Mocks ────────────────────────────────────────────────────────────────────
 //
 // Bun's mock.module is hoisted, so these stubs are visible to push.ts at
-// import time. The env vars below are NOT hoisted, so push.ts is imported
-// dynamically after this file's top-level executes — see beforeAll.
+// import time. push.ts is still loaded dynamically in beforeAll for clarity.
 
 const mockSetVapidDetails = mock(() => {});
 const mockSendNotification = mock(async () => ({ statusCode: 201 }));
@@ -163,20 +171,14 @@ mock.module("server", () => ({
   refreshSubscription: mock(async () => null),
 }));
 
-// VAPID env must be set BEFORE importing push.ts because vapidConfigured is
-// computed at module-init time. Static imports are hoisted above plain top-
-// level code, so push.ts is imported dynamically in beforeAll instead. The
-// VAPID-unconfigured early-return in notifyNewMails / decrementBadgeCount is
-// just `if (!vapidConfigured) return;` and is not covered here on purpose —
+// The VAPID-unconfigured early-return in notifyNewMails / decrementBadgeCount
+// is just `if (!vapidConfigured) return;` and is not covered here on purpose —
 // re-mocking module-init state for one branch is more brittle than it's worth.
 
 type PushModule = typeof import("./push");
 let push: PushModule;
 
 beforeAll(async () => {
-  process.env.PUSH_VAPID_PUBLIC_KEY = "test-public-key";
-  process.env.PUSH_VAPID_PRIVATE_KEY = "test-private-key";
-  process.env.EMAIL_DOMAIN = "test.com";
   push = await import("./push");
 });
 
