@@ -180,6 +180,13 @@ let push: PushModule;
 
 beforeAll(async () => {
   push = await import("./push");
+  // initPush() is now invoked from start.ts at boot rather than as a
+  // module-load side effect, so the test must call it explicitly. This
+  // also sidesteps the prior test-isolation issue where push.ts was loaded
+  // by a transitive import from another test file before mock.module()
+  // had registered — by the time we get here, the web-push mock is bound
+  // and initPush() drives setVapidDetails() through the stub.
+  push.initPush();
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

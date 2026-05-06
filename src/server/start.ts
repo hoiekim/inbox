@@ -4,6 +4,7 @@ import {
   initializePostgres,
   initializeAdminUser,
   cleanSubscriptions,
+  initPush,
   initializeImap,
   initializeSmtp,
   initializeHttp,
@@ -43,6 +44,7 @@ process.on("uncaughtException", async (error) => {
 const start = async () => {
   await initializePostgres();
   await initializeAdminUser();
+  initPush();
   const httpServer = await initializeHttp();
   const smtpServers = await initializeSmtp();
   const imapServers = await initializeImap();

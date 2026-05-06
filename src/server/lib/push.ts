@@ -17,24 +17,35 @@ import { idleManager } from "./imap/idle-manager";
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
-const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
+let vapidPublicKey: string | undefined;
+let vapidConfigured = false;
 
-const vapidConfigured = !!(PUSH_VAPID_PUBLIC_KEY && PUSH_VAPID_PRIVATE_KEY);
+/**
+ * Wires VAPID details into web-push from current environment. Called from
+ * start.ts at boot. Kept out of module-load so test files can register
+ * mock.module("web-push", …) and stub out the push deps before any code
+ * runs against a captured top-level binding.
+ */
+export const initPush = (): void => {
+  const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
+  vapidPublicKey = PUSH_VAPID_PUBLIC_KEY;
+  vapidConfigured = !!(PUSH_VAPID_PUBLIC_KEY && PUSH_VAPID_PRIVATE_KEY);
 
-if (vapidConfigured) {
-  webPush.setVapidDetails(
-    `mailto:admin@${domainName}`,
-    PUSH_VAPID_PUBLIC_KEY,
-    PUSH_VAPID_PRIVATE_KEY
-  );
-} else {
-  logger.warn("VAPID keys not configured - push notifications disabled", {
-    component: "push",
-    hint: "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable"
-  });
-}
+  if (vapidConfigured) {
+    webPush.setVapidDetails(
+      `mailto:admin@${domainName}`,
+      PUSH_VAPID_PUBLIC_KEY!,
+      PUSH_VAPID_PRIVATE_KEY!,
+    );
+  } else {
+    logger.warn("VAPID keys not configured - push notifications disabled", {
+      component: "push",
+      hint: "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable",
+    });
+  }
+};
 
-export const getPushPublicKey = () => PUSH_VAPID_PUBLIC_KEY;
+export const getPushPublicKey = () => vapidPublicKey;
 
 export const isPushEnabled = () => vapidConfigured;
 

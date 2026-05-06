@@ -13,6 +13,7 @@ export * from "./postgres";
 // Push notifications (uses postgres internally)
 export {
   getPushPublicKey,
+  initPush,
   storeSubscription,
   deleteSubscription,
   cleanSubscriptions,
