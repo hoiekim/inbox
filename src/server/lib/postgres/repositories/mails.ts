@@ -447,6 +447,9 @@ export const getAccountStats = async (
     // DISTINCT collapses rows where the same address appears more than once in
     // a single mail's recipient/sender list (e.g. LinkedIn duplicates the To
     // header), so each mail contributes once per address it actually involves.
+    // The draft filter mirrors getMailHeaders so per-account badge counts match
+    // the headers list view (drafts belong to the IMAP Drafts folder, not to
+    // the per-account inbox view).
     const sql = `
       WITH expanded_mails AS (
         SELECT DISTINCT
@@ -455,6 +458,7 @@ export const getAccountStats = async (
         FROM mails
         WHERE user_id = $1
           AND expunged = FALSE
+          AND draft = FALSE
           AND ${addressNotNull}
       )
       SELECT
