@@ -85,6 +85,7 @@ beforeAll(async () => {
     logger: mockLogger as never,
     sendNotification: mockSendNotification as never,
     setVapidDetails: mockSetVapidDetails as never,
+    updateLastNotified: mockUpdateLastNotified as never,
   });
   // initPush() is invoked from start.ts at boot rather than at module load,
   // so the test must call it explicitly. This also sidesteps the prior
