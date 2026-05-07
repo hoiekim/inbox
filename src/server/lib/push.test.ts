@@ -43,70 +43,16 @@ mock.module("./postgres/repositories/push_subscriptions", () => ({
   updateLastNotified: mockUpdateLastNotified,
 }));
 
+// Per-test mocks for the deps push.ts pulls from shared modules (mails repo,
+// users helpers, "server" logger). These are *not* bound via mock.module —
+// mock.module is hoisted globally across the entire `bun test` run and clashes
+// with the per-file mocks declared in mails/*.test.ts, users.test.ts, and any
+// file that imports from "server". Instead push.ts exposes
+// `setPushDependencies(...)` which we wire up in beforeAll below.
 const mockGetUnreadNotifications = mock(
-  async (): Promise<Map<string, { count: number; latest?: Date }>> => new Map()
+  async (): Promise<Map<string, { count: number; latest?: Date }>> => new Map(),
 );
-
-// push.ts only needs getUnreadNotifications. Other entries are noop stubs to
-// keep this mock from stripping exports that downstream test files rely on
-// (e.g., mails.test.ts), since Bun's mock.module is global within a run.
-mock.module("./postgres/repositories/mails", () => ({
-  getUnreadNotifications: mockGetUnreadNotifications,
-  saveMail: mock(async () => null),
-  getMailByMessageId: mock(async () => null),
-  getMailById: mock(async () => null),
-  markMailRead: mock(async () => {}),
-  markMailSaved: mock(async () => {}),
-  deleteMail: mock(async () => {}),
-  getMailHeaders: mock(async () => []),
-  searchMails: mock(async () => []),
-  getDomainUidNext: mock(async () => 1),
-  getAccountUidNext: mock(async () => 1),
-  getAccountStats: mock(async () => ({})),
-  countMessages: mock(async () => 0),
-  getMailsByRange: mock(async () => []),
-  setMailFlags: mock(async () => null),
-  searchMailsByUid: mock(async () => []),
-  getAllUids: mock(async () => []),
-  expungeDeletedMails: mock(async () => 0),
-  getSpamMails: mock(async () => []),
-  markMailSpam: mock(async () => false),
-  copyMail: mock(async () => null),
-}));
-
 const mockGetActiveUsers = mock(async (): Promise<SignedUser[]> => []);
-
-// push.ts only needs getActiveUsers. Other entries are noop stubs so this
-// mock doesn't strip exports referenced by downstream test files.
-mock.module("./users", () => ({
-  getActiveUsers: mockGetActiveUsers,
-  getSignedUser: mock(() => undefined),
-  getUser: mock(async () => undefined),
-  getUsers: mock(async () => []),
-  expiryTimer: {},
-  createToken: mock(async () => ({ id: "u1", username: "u", token: "tok" })),
-  isValidEmail: (email: string) => {
-    const values = email.split("@");
-    if (values.length !== 2) return false;
-    const [local, domain] = values;
-    return (
-      /^[a-zA-Z0-9._%+-]+$/.test(local) &&
-      /^[a-zA-Z0-9.-]+$/.test(domain) &&
-      domain.includes(".")
-    );
-  },
-  startTimer: mock(() => {}),
-  encryptPassword: mock(() => "hashed"),
-  setUserInfo: mock(async () => null),
-  createAuthenticationMail: mock(() => ({})),
-}));
-
-const mockNotifyNewMail = mock(() => {});
-
-mock.module("./imap/idle-manager", () => ({
-  idleManager: { notifyNewMail: mockNotifyNewMail },
-}));
-
 const mockLogger = {
   debug: mock(() => {}),
   info: mock(() => {}),
@@ -114,61 +60,12 @@ const mockLogger = {
   error: mock(() => {}),
 };
 
-// push.ts only needs `logger` from "server". Other entries are included so
-// this mock doesn't strip exports that downstream test files import from
-// "server" — Bun's mock.module is global within a test run.
-mock.module("server", () => ({
-  logger: mockLogger,
-  getUser: mock(async () => null),
-  setUserInfo: mock(async () => null),
-  isValidEmail: (email: string) => {
-    const values = email.split("@");
-    if (values.length !== 2) return false;
-    const [local, domain] = values;
-    return (
-      /^[a-zA-Z0-9._%+-]+$/.test(local) &&
-      /^[a-zA-Z0-9.-]+$/.test(domain) &&
-      domain.includes(".")
-    );
-  },
-  createToken: mock(async () => ({ id: "u1", username: "u", token: "tok" })),
-  getSignedUser: mock(() => null),
-  createAuthenticationMail: mock(() => ({})),
-  saveMailHandler: mock(async () => {}),
-  sendMail: mock(async () => {}),
-  startTimer: mock(() => {}),
-  version: "0.0.0",
-  getMailHeaders: mock(async () => []),
-  getAccounts: mock(async () => ({ received: [], sent: [] })),
-  getMailBody: mock(async () => null),
-  deleteMail: mock(async () => {}),
-  markRead: mock(async () => {}),
-  markSaved: mock(async () => {}),
-  decrementBadgeCount: mock(async () => {}),
-  addressToUsername: mock((addr: string) => addr.split("@")[0]),
-  searchMail: mock(async () => []),
-  getSpamHeaders: mock(async () => []),
-  getDomain: mock(() => "example.com"),
-  getUserDomain: mock(() => "example.com"),
-  getText: mock(() => ""),
-  getClientIp: mock(() => "127.0.0.1"),
-  getDomainUidNext: mock(async () => 1),
-  getAccountUidNext: mock(async () => 1),
-  getAllowlistForUser: mock(async () => []),
-  addAllowlistEntry: mock(async () => null),
-  removeAllowlistEntry: mock(async () => false),
-  markSpam: mock(async () => false),
-  getAttachment: mock(() => undefined),
-  AUTH_ERROR_MESSAGE: "Authentication required",
-  MailValidationError: class extends Error {},
-  MailSendingError: class extends Error {},
-  mailsTable: { queryOne: mock(async () => null) },
-  SpamAllowlistModel: class {},
-  pool: { query: mock(async () => ({ rows: [] })) },
-  PostgresSessionStore: class {},
-  getPushPublicKey: mock(() => "test-public-key"),
-  storeSubscription: mock(async () => null),
-  refreshSubscription: mock(async () => null),
+const mockNotifyNewMail = mock(() => {});
+
+// idle-manager and push_subscriptions are only consumed by push.ts in tests,
+// so mock.module is safe for these (no other test file mocks them).
+mock.module("./imap/idle-manager", () => ({
+  idleManager: { notifyNewMail: mockNotifyNewMail },
 }));
 
 // The VAPID-unconfigured early-return in notifyNewMails / decrementBadgeCount
@@ -180,12 +77,17 @@ let push: PushModule;
 
 beforeAll(async () => {
   push = await import("./push");
-  // initPush() is now invoked from start.ts at boot rather than as a
-  // module-load side effect, so the test must call it explicitly. This
-  // also sidesteps the prior test-isolation issue where push.ts was loaded
-  // by a transitive import from another test file before mock.module()
-  // had registered — by the time we get here, the web-push mock is bound
-  // and initPush() drives setVapidDetails() through the stub.
+  // Override push.ts deps with our stubs (instead of mock.module on shared
+  // modules — see comment block above).
+  push.setPushDependencies({
+    getUnreadNotifications: mockGetUnreadNotifications as never,
+    getActiveUsers: mockGetActiveUsers as never,
+    logger: mockLogger as never,
+  });
+  // initPush() is invoked from start.ts at boot rather than at module load,
+  // so the test must call it explicitly. This also sidesteps the prior
+  // test-isolation issue where push.ts could be loaded by a transitive import
+  // from another test file before mock.module() registered.
   push.initPush();
 });
 
