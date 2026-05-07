@@ -57,6 +57,20 @@ function timeout<T>(ms: number, message: string): Promise<T> {
 }
 
 /**
+ * Decide whether a DNSBL response represents a real listing.
+ *
+ * Major DNSBLs (Spamhaus, SpamCop, Barracuda) encode genuine listings as
+ * `127.0.0.X` records. Anything in the `127.255.X.X` range is a warning that
+ * the query was rejected — most commonly Spamhaus's open/public-resolver
+ * response (returned when queries arrive via Google/Cloudflare/etc.). Treating
+ * those warnings as listings flags every incoming mail as spam.
+ *
+ * Reference: https://www.spamhaus.org/zen/ (Return Codes section)
+ */
+export const isRealListing = (addresses: string[]): boolean =>
+  addresses.some((addr) => addr.startsWith("127.0."));
+
+/**
  * Check if an IP is listed in a specific DNSBL.
  * Returns true if listed, false otherwise.
  * Times out after DNSBL_TIMEOUT_MS to prevent hanging.
@@ -66,15 +80,14 @@ async function checkDnsbl(ip: string, dnsbl: DnsBlocklist): Promise<boolean> {
   if (!reversed) return false;
 
   const query = `${reversed}.${dnsbl.hostname}`;
-  
+
   try {
     // Race DNS query against timeout to prevent hanging
     const result = await Promise.race([
       dns.resolve4(query),
       timeout<string[]>(DNSBL_TIMEOUT_MS, `DNSBL query timeout: ${dnsbl.name}`),
     ]);
-    // If we get any result, the IP is listed
-    return result.length > 0;
+    return isRealListing(result);
   } catch {
     // NXDOMAIN (not listed), timeout, or other DNS errors
     // Not listed = not spam indicator

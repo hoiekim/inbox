@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
+import { checkDnsbls, DEFAULT_DNSBLS, isRealListing } from "./dnsbl";
 
 describe("DNSBL Checker", () => {
   describe("checkDnsbls", () => {
@@ -77,6 +77,46 @@ describe("DNSBL Checker", () => {
       // Should not crash, just return 0 score
       expect(result.score).toBe(0);
       expect(result.listedIn).toEqual([]);
+    });
+  });
+
+  describe("isRealListing", () => {
+    it("treats 127.0.0.X addresses as real listings", () => {
+      expect(isRealListing(["127.0.0.2"])).toBe(true);  // Spamhaus SBL
+      expect(isRealListing(["127.0.0.4"])).toBe(true);  // Spamhaus CSS
+      expect(isRealListing(["127.0.0.10"])).toBe(true); // Spamhaus PBL
+      expect(isRealListing(["127.0.0.2", "127.0.0.10"])).toBe(true);
+    });
+
+    it("ignores 127.255.255.X open-resolver warnings", () => {
+      // Spamhaus returns these when the query arrives via a public resolver
+      // (Google, Cloudflare, etc.). They are *warnings*, not listings —
+      // treating them as listings flags every incoming mail as spam.
+      expect(isRealListing(["127.255.255.252"])).toBe(false);
+      expect(isRealListing(["127.255.255.253"])).toBe(false);
+      expect(isRealListing(["127.255.255.254"])).toBe(false);
+      expect(isRealListing(["127.255.255.255"])).toBe(false);
+    });
+
+    it("ignores mixed responses that contain only warnings", () => {
+      expect(isRealListing(["127.255.255.252", "127.255.255.254"])).toBe(false);
+    });
+
+    it("counts as a listing when at least one 127.0.X.X record is present", () => {
+      // Defensive: if a future Spamhaus response somehow returns both a real
+      // listing code AND a warning code, the real listing should win.
+      expect(isRealListing(["127.0.0.2", "127.255.255.254"])).toBe(true);
+    });
+
+    it("returns false on empty results", () => {
+      expect(isRealListing([])).toBe(false);
+    });
+
+    it("ignores non-127.0.X.X responses (e.g. ISP DNS hijack ad pages)", () => {
+      // Some ISPs / captive portals return a content IP for NXDOMAIN.
+      // Those must not be treated as DNSBL listings.
+      expect(isRealListing(["192.0.2.1"])).toBe(false);
+      expect(isRealListing(["10.0.0.1"])).toBe(false);
     });
   });
 
