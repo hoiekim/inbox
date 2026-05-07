@@ -23,11 +23,20 @@ import { idleManager } from "./imap/idle-manager";
 // "server"-named exports referenced by other tests (MailValidationError
 // instance.name, SpamAllowlistModel construction, etc.) and cause those
 // tests to fail in CI.
+//
+// `sendNotification` and `setVapidDetails` are also routed through deps so
+// push.test.ts can stub them without `mock.module("web-push", …)`. That
+// matters because Bun caches module loads: if push.ts is imported by any
+// other test file before push.test.ts's mock.module hoists into effect, the
+// `webPush` binding here points at the real package and the test's mock
+// never gets called. Routing through `deps` makes the swap order-independent.
 const deps = {
   getUnreadNotifications: pgGetUnreadNotifications,
   getActiveUsers: realGetActiveUsers,
   updateLastNotified: pgUpdateLastNotified,
   logger: realLogger,
+  sendNotification: webPush.sendNotification.bind(webPush),
+  setVapidDetails: webPush.setVapidDetails.bind(webPush),
 };
 
 export type PushDependencies = typeof deps;
@@ -41,6 +50,8 @@ export const resetPushDependencies = (): void => {
   deps.getActiveUsers = realGetActiveUsers;
   deps.updateLastNotified = pgUpdateLastNotified;
   deps.logger = realLogger;
+  deps.sendNotification = webPush.sendNotification.bind(webPush);
+  deps.setVapidDetails = webPush.setVapidDetails.bind(webPush);
 };
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
@@ -60,7 +71,7 @@ export const initPush = (): void => {
   vapidConfigured = !!(PUSH_VAPID_PUBLIC_KEY && PUSH_VAPID_PRIVATE_KEY);
 
   if (vapidConfigured) {
-    webPush.setVapidDetails(
+    deps.setVapidDetails(
       `mailto:admin@${domainName}`,
       PUSH_VAPID_PUBLIC_KEY!,
       PUSH_VAPID_PRIVATE_KEY!,
@@ -171,7 +182,7 @@ export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) 
 
       let isFailed = false;
 
-      await webPush
+      await deps
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch(async (error) => {
           isFailed = true;
@@ -215,7 +226,7 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
         push_subscription_id,
       };
 
-      return webPush
+      return deps
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch((error) => {
           if (error.statusCode === 410) {

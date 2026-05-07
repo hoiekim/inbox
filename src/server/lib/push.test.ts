@@ -13,19 +13,17 @@ process.env.EMAIL_DOMAIN = "test.com";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 //
-// Bun's mock.module is hoisted, so these stubs are visible to push.ts at
-// import time. push.ts is still loaded dynamically in beforeAll for clarity.
+// `web-push` is intentionally NOT mocked via `mock.module(…)`. Bun caches
+// module loads across the whole `bun test` run; if any other test file
+// (transitively) imports push.ts before this file's mock.module hoists into
+// effect, push.ts ends up holding a binding to the *real* `web-push` package
+// and our mocks never get called. That manifested as a CI-only failure in
+// PR #450 (notifyNewMails > sends a push, Expected 1, Received 0). Instead,
+// push.ts now exposes its web-push call surface via the same setter
+// (`setPushDependencies`) used for the other deps; we wire stubs in below.
 
 const mockSetVapidDetails = mock(() => {});
 const mockSendNotification = mock(async () => ({ statusCode: 201 }));
-
-mock.module("web-push", () => {
-  const stub = {
-    setVapidDetails: mockSetVapidDetails,
-    sendNotification: mockSendNotification,
-  };
-  return { __esModule: true, default: stub, ...stub };
-});
 
 const mockPgStoreSubscription = mock(async () => ({ _id: "sub-1" }));
 const mockPgDeleteSubscription = mock(async () => true);
@@ -78,11 +76,15 @@ let push: PushModule;
 beforeAll(async () => {
   push = await import("./push");
   // Override push.ts deps with our stubs (instead of mock.module on shared
-  // modules — see comment block above).
+  // modules — see comment block above). web-push call surface (sendNotification,
+  // setVapidDetails) is also routed through the deps object so the swap is
+  // immune to the test-file load order across `bun test`.
   push.setPushDependencies({
     getUnreadNotifications: mockGetUnreadNotifications as never,
     getActiveUsers: mockGetActiveUsers as never,
     logger: mockLogger as never,
+    sendNotification: mockSendNotification as never,
+    setVapidDetails: mockSetVapidDetails as never,
   });
   // initPush() is invoked from start.ts at boot rather than at module load,
   // so the test must call it explicitly. This also sidesteps the prior
