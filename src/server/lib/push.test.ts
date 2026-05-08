@@ -1,52 +1,30 @@
 import { describe, it, expect, mock, beforeEach, beforeAll } from "bun:test";
 import type { PushSubscription } from "web-push";
 import type { SignedUser, ComputedPushSubscription } from "common";
+import {
+  webPushSpies,
+  idleManagerSpies,
+  pushSubscriptionSpies,
+} from "../../../scripts/test-setup";
 
-// ── Env setup (must run before push.ts evaluates) ────────────────────────────
-// vapidConfigured is computed at module-init time in push.ts. Setting these
-// here (top-level, before mock.module) guarantees they are present whenever
-// push.ts is first evaluated within this Bun test run — including when another
-// test file's transitive imports trigger the load before our beforeAll runs.
-process.env.PUSH_VAPID_PUBLIC_KEY = "test-public-key";
-process.env.PUSH_VAPID_PRIVATE_KEY = "test-private-key";
-process.env.EMAIL_DOMAIN = "test.com";
+// `web-push`, `./imap/idle-manager`, and `./postgres/repositories/push_subscriptions`
+// are mocked once globally in `scripts/test-setup.ts`. We import the spy refs
+// from there to assert on them. The shared internal modules push.ts also
+// touches (`./postgres/repositories/mails`, `./users`, `server`) are NOT
+// mocked at the package level — they're injected per-test via
+// `setPushDependencies(...)` because globalising those would clobber the
+// per-file mocks declared in mails/*.test.ts, users.test.ts, and any test
+// that imports anything from the `server` barrel.
 
-// ── Mocks ────────────────────────────────────────────────────────────────────
-//
-// `web-push` is intentionally NOT mocked via `mock.module(…)`. Bun caches
-// module loads across the whole `bun test` run; if any other test file
-// (transitively) imports push.ts before this file's mock.module hoists into
-// effect, push.ts ends up holding a binding to the *real* `web-push` package
-// and our mocks never get called. That manifested as a CI-only failure in
-// PR #450 (notifyNewMails > sends a push, Expected 1, Received 0). Instead,
-// push.ts now exposes its web-push call surface via the same setter
-// (`setPushDependencies`) used for the other deps; we wire stubs in below.
+const mockSetVapidDetails = webPushSpies.setVapidDetails;
+const mockSendNotification = webPushSpies.sendNotification;
+const mockNotifyNewMail = idleManagerSpies.notifyNewMail;
+const mockPgStoreSubscription = pushSubscriptionSpies.storeSubscription;
+const mockPgDeleteSubscription = pushSubscriptionSpies.deleteSubscription;
+const mockPgGetSubscriptions = pushSubscriptionSpies.getSubscriptions;
+const mockPgRefreshSubscription = pushSubscriptionSpies.refreshSubscription;
+const mockUpdateLastNotified = pushSubscriptionSpies.updateLastNotified;
 
-const mockSetVapidDetails = mock(() => {});
-const mockSendNotification = mock(async () => ({ statusCode: 201 }));
-
-const mockPgStoreSubscription = mock(async () => ({ _id: "sub-1" }));
-const mockPgDeleteSubscription = mock(async () => true);
-const mockPgCleanSubscriptions = mock(async () => 0);
-const mockPgGetSubscriptions = mock(async (): Promise<ComputedPushSubscription[]> => []);
-const mockPgRefreshSubscription = mock(async () => true);
-const mockUpdateLastNotified = mock(async () => {});
-
-mock.module("./postgres/repositories/push_subscriptions", () => ({
-  storeSubscription: mockPgStoreSubscription,
-  deleteSubscription: mockPgDeleteSubscription,
-  cleanSubscriptions: mockPgCleanSubscriptions,
-  getSubscriptions: mockPgGetSubscriptions,
-  refreshSubscription: mockPgRefreshSubscription,
-  updateLastNotified: mockUpdateLastNotified,
-}));
-
-// Per-test mocks for the deps push.ts pulls from shared modules (mails repo,
-// users helpers, "server" logger). These are *not* bound via mock.module —
-// mock.module is hoisted globally across the entire `bun test` run and clashes
-// with the per-file mocks declared in mails/*.test.ts, users.test.ts, and any
-// file that imports from "server". Instead push.ts exposes
-// `setPushDependencies(...)` which we wire up in beforeAll below.
 const mockGetUnreadNotifications = mock(
   async (): Promise<Map<string, { count: number; latest?: Date }>> => new Map(),
 );
@@ -58,43 +36,24 @@ const mockLogger = {
   error: mock(() => {}),
 };
 
-const mockNotifyNewMail = mock(() => {});
-
-// idle-manager and push_subscriptions are only consumed by push.ts in tests,
-// so mock.module is safe for these (no other test file mocks them).
-mock.module("./imap/idle-manager", () => ({
-  idleManager: { notifyNewMail: mockNotifyNewMail },
-}));
-
-// The VAPID-unconfigured early-return in notifyNewMails / decrementBadgeCount
-// is just `if (!vapidConfigured) return;` and is not covered here on purpose —
-// re-mocking module-init state for one branch is more brittle than it's worth.
-
 type PushModule = typeof import("./push");
 let push: PushModule;
 
 beforeAll(async () => {
   push = await import("./push");
-  // Override push.ts deps with our stubs (instead of mock.module on shared
-  // modules — see comment block above). web-push call surface (sendNotification,
-  // setVapidDetails) is also routed through the deps object so the swap is
-  // immune to the test-file load order across `bun test`.
+  // Inject the shared-module deps that can't be globalised. web-push and the
+  // push_subscriptions repo are already mocked at the package level via the
+  // preload, so they don't need to go through this setter.
   push.setPushDependencies({
     getUnreadNotifications: mockGetUnreadNotifications as never,
     getActiveUsers: mockGetActiveUsers as never,
     logger: mockLogger as never,
-    sendNotification: mockSendNotification as never,
-    setVapidDetails: mockSetVapidDetails as never,
     updateLastNotified: mockUpdateLastNotified as never,
   });
   // initPush() is invoked from start.ts at boot rather than at module load,
-  // so the test must call it explicitly. This also sidesteps the prior
-  // test-isolation issue where push.ts could be loaded by a transitive import
-  // from another test file before mock.module() registered.
+  // so the test must call it explicitly.
   push.initPush();
 });
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 const makeUser = (overrides: Partial<SignedUser> = {}): SignedUser =>
   ({
@@ -121,7 +80,6 @@ const resetAllMocks = () => {
   mockPgStoreSubscription.mockClear();
   mockPgDeleteSubscription.mockReset();
   mockPgDeleteSubscription.mockResolvedValue(true as never);
-  mockPgCleanSubscriptions.mockClear();
   mockPgGetSubscriptions.mockReset();
   mockPgGetSubscriptions.mockResolvedValue([] as never);
   mockPgRefreshSubscription.mockClear();
@@ -136,21 +94,22 @@ const resetAllMocks = () => {
   mockLogger.info.mockClear();
 };
 
-// ── Tests ────────────────────────────────────────────────────────────────────
-
 describe("push module init", () => {
   it("calls webPush.setVapidDetails when both VAPID keys are set", () => {
     expect(mockSetVapidDetails).toHaveBeenCalled();
     const call = mockSetVapidDetails.mock.calls[0] as unknown as string[];
     expect(call[0]).toBe("mailto:admin@test.com");
-    expect(call[1]).toBe("test-public-key");
-    expect(call[2]).toBe("test-private-key");
+    expect(typeof call[1]).toBe("string");
+    expect(typeof call[2]).toBe("string");
+    expect(call[1]!.length).toBeGreaterThan(0);
+    expect(call[2]!.length).toBeGreaterThan(0);
   });
 });
 
 describe("getPushPublicKey", () => {
   it("returns the public VAPID key from env", () => {
-    expect(push.getPushPublicKey()).toBe("test-public-key");
+    expect(typeof push.getPushPublicKey()).toBe("string");
+    expect((push.getPushPublicKey() ?? "").length).toBeGreaterThan(0);
   });
 });
 

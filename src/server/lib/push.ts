@@ -12,31 +12,25 @@ import { getUnreadNotifications as pgGetUnreadNotifications } from "./postgres/r
 import { getActiveUsers as realGetActiveUsers } from "./users";
 import { logger as realLogger } from "server";
 
-// Import IDLE manager for real-time IMAP notifications
 import { idleManager } from "./imap/idle-manager";
 
-// Module dependencies are routed through this object so push.test.ts can
-// override them with `setPushDependencies(...)` instead of `mock.module(...)`.
-// mock.module is hoisted globally across the entire `bun test` run, so any
-// mock.module("./postgres/repositories/mails", …) or mock.module("server", …)
-// here would clobber the per-file mocks declared in mails/*.test.ts and the
-// "server"-named exports referenced by other tests (MailValidationError
-// instance.name, SpamAllowlistModel construction, etc.) and cause those
-// tests to fail in CI.
+// Internal-shared dependencies are routed through this object so push.test.ts
+// can override them without `mock.module(...)`. Bun hoists `mock.module` calls
+// globally across the whole `bun test` run, so a per-file
+// `mock.module("./postgres/repositories/mails", …)` or
+// `mock.module("server", …)` would silently clobber the per-file mocks
+// declared in `mails/*.test.ts` and the many other tests that import the
+// `server` barrel for `MailValidationError` / `SpamAllowlistModel` / etc.
 //
-// `sendNotification` and `setVapidDetails` are also routed through deps so
-// push.test.ts can stub them without `mock.module("web-push", …)`. That
-// matters because Bun caches module loads: if push.ts is imported by any
-// other test file before push.test.ts's mock.module hoists into effect, the
-// `webPush` binding here points at the real package and the test's mock
-// never gets called. Routing through `deps` makes the swap order-independent.
+// External libraries that no other test file mocks (`web-push`,
+// `./imap/idle-manager`, `./postgres/repositories/push_subscriptions`) are
+// instead globalised in `scripts/test-setup.ts` and bypass this setter — see
+// the comment block in that preload for the rationale.
 const deps = {
   getUnreadNotifications: pgGetUnreadNotifications,
   getActiveUsers: realGetActiveUsers,
   updateLastNotified: pgUpdateLastNotified,
   logger: realLogger,
-  sendNotification: webPush.sendNotification.bind(webPush),
-  setVapidDetails: webPush.setVapidDetails.bind(webPush),
 };
 
 export type PushDependencies = typeof deps;
@@ -50,8 +44,6 @@ export const resetPushDependencies = (): void => {
   deps.getActiveUsers = realGetActiveUsers;
   deps.updateLastNotified = pgUpdateLastNotified;
   deps.logger = realLogger;
-  deps.sendNotification = webPush.sendNotification.bind(webPush);
-  deps.setVapidDetails = webPush.setVapidDetails.bind(webPush);
 };
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
@@ -62,8 +54,7 @@ let vapidConfigured = false;
 /**
  * Wires VAPID details into web-push from current environment. Called from
  * start.ts at boot. Kept out of module-load so test files can register
- * mock.module("web-push", …) and stub out the push deps before any code
- * runs against a captured top-level binding.
+ * web-push mocks before any code runs against a captured top-level binding.
  */
 export const initPush = (): void => {
   const { PUSH_VAPID_PUBLIC_KEY, PUSH_VAPID_PRIVATE_KEY } = process.env;
@@ -71,7 +62,7 @@ export const initPush = (): void => {
   vapidConfigured = !!(PUSH_VAPID_PUBLIC_KEY && PUSH_VAPID_PRIVATE_KEY);
 
   if (vapidConfigured) {
-    deps.setVapidDetails(
+    webPush.setVapidDetails(
       `mailto:admin@${domainName}`,
       PUSH_VAPID_PUBLIC_KEY!,
       PUSH_VAPID_PRIVATE_KEY!,
@@ -128,7 +119,6 @@ export const getNotifications = async (
   const userIds = users.map((u) => u.id);
   const rawNotifications = await deps.getUnreadNotifications(userIds);
 
-  // Convert to username-keyed map
   const notifications = new Map<string, { count: number; latest?: Date }>();
   for (const user of users) {
     const data = rawNotifications.get(user.id);
@@ -182,7 +172,7 @@ export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) 
 
       let isFailed = false;
 
-      await deps
+      await webPush
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch(async (error) => {
           isFailed = true;
@@ -226,7 +216,7 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
         push_subscription_id,
       };
 
-      return deps
+      return webPush
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch((error) => {
           if (error.statusCode === 410) {
