@@ -106,6 +106,9 @@ const ORIGINAL_ENV = {
   SSL_CERTIFICATE_KEY: process.env.SSL_CERTIFICATE_KEY,
   SMTP_PORT: process.env.SMTP_PORT,
   IMAP_PORT: process.env.IMAP_PORT,
+  SMTPS_PORT: process.env.SMTPS_PORT,
+  SMTP_SUBMISSION_PORT: process.env.SMTP_SUBMISSION_PORT,
+  IMAP_TLS_PORT: process.env.IMAP_TLS_PORT,
 };
 
 const restoreEnv = () => {
@@ -128,6 +131,9 @@ describe("healthRouter GET /", () => {
     process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
     delete process.env.IMAP_PORT;
     delete process.env.SMTP_PORT;
+    delete process.env.SMTPS_PORT;
+    delete process.env.SMTP_SUBMISSION_PORT;
+    delete process.env.IMAP_TLS_PORT;
   });
 
   afterAll(() => {
@@ -256,5 +262,39 @@ describe("healthRouter GET /", () => {
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.body.checks["imap:21001"]).toBe("ok");
     expect(body.body.checks["imap:143"]).toBeUndefined();
+  });
+
+  it("uses SMTPS_PORT / SMTP_SUBMISSION_PORT / IMAP_TLS_PORT env vars when set", async () => {
+    process.env.SMTPS_PORT = "9465";
+    process.env.SMTP_SUBMISSION_PORT = "9587";
+    process.env.IMAP_TLS_PORT = "9993";
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    expect(res._code).toBe(200);
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.checks["smtp:9465"]).toBe("ok");
+    expect(body.body.checks["smtp:9587"]).toBe("ok");
+    expect(body.body.checks["imap:9993"]).toBe("ok");
+    // Hardcoded labels should no longer appear when overridden
+    expect(body.body.checks["smtp:465"]).toBeUndefined();
+    expect(body.body.checks["smtp:587"]).toBeUndefined();
+    expect(body.body.checks["imap:993"]).toBeUndefined();
+  });
+
+  it("uses configured TLS port labels in 'not_configured' state too", async () => {
+    delete process.env.SSL_CERTIFICATE;
+    delete process.env.SSL_CERTIFICATE_KEY;
+    process.env.SMTPS_PORT = "9465";
+    process.env.IMAP_TLS_PORT = "9993";
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    expect(res._code).toBe(200);
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.checks["smtp:9465"]).toBe("not_configured");
+    expect(body.body.checks["imap:9993"]).toBe("not_configured");
   });
 });

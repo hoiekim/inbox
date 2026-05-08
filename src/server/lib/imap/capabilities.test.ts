@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { getCapabilities } from "./capabilities";
-import { getImapPort } from "./index";
+import { getImapPort, getImapTlsPort } from "./index";
 
 describe("IMAP capabilities", () => {
   it("advertises STARTTLS on the plain port", () => {
@@ -36,5 +36,28 @@ describe("getImapPort", () => {
   it("falls back to 143 for non-numeric IMAP_PORT", () => {
     process.env.IMAP_PORT = "not-a-port";
     expect(getImapPort()).toBe(143);
+  });
+});
+
+describe("getImapTlsPort", () => {
+  const original = process.env.IMAP_TLS_PORT;
+  afterEach(() => {
+    if (original === undefined) delete process.env.IMAP_TLS_PORT;
+    else process.env.IMAP_TLS_PORT = original;
+  });
+
+  it("returns 993 when IMAP_TLS_PORT is unset", () => {
+    delete process.env.IMAP_TLS_PORT;
+    expect(getImapTlsPort()).toBe(993);
+  });
+
+  it("returns the configured port from IMAP_TLS_PORT", () => {
+    process.env.IMAP_TLS_PORT = "9993";
+    expect(getImapTlsPort()).toBe(9993);
+  });
+
+  it("falls back to 993 for non-numeric IMAP_TLS_PORT", () => {
+    process.env.IMAP_TLS_PORT = "not-a-port";
+    expect(getImapTlsPort()).toBe(993);
   });
 });

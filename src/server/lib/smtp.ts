@@ -235,7 +235,7 @@ export const initializeSmtp = async () => {
 
   if (isSslAvailable) {
     const smtpsServer = await new Promise<SMTPServer>((res) => {
-      const port = 465;
+      const port = process.env.SMTPS_PORT ? parseInt(process.env.SMTPS_PORT, 10) : 465;
       const server = new SMTPServer({ ...options, secure: true });
       registerListeners(server, port, () => {
         logger.info(`SMTP server listening on port ${port}`);
@@ -245,7 +245,7 @@ export const initializeSmtp = async () => {
     servers.push(smtpsServer);
 
     const submissionServer = await new Promise<SMTPServer>((res) => {
-      const port = 587;
+      const port = process.env.SMTP_SUBMISSION_PORT ? parseInt(process.env.SMTP_SUBMISSION_PORT, 10) : 587;
       const server = new SMTPServer({
         ...options,
         secure: false,

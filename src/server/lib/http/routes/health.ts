@@ -84,28 +84,33 @@ healthRouter.get("/", async (_req, res) => {
   checks[`imap:${imapPort}`] = imapOk ? "ok" : "unhealthy";
   if (!imapOk) allHealthy = false;
 
-  // TLS-dependent ports (smtp:465, smtp:587, imap:993) only run when SSL is
+  // TLS-dependent ports (SMTPS / submission / IMAPS) only run when SSL is
   // configured (see smtp.ts and imap/index.ts). If SSL is absent, mark
   // `not_configured` and exclude from the rollup. With SSL configured, treat
   // them as required and let an actual TLS-port failure fail the rollup.
+  // Each port reads from an env var (default to the IANA standard) so the
+  // healthcheck stays in sync with the listener configuration.
+  const smtpsPort = process.env.SMTPS_PORT ? parseInt(process.env.SMTPS_PORT, 10) : 465;
+  const smtpSubmissionPort = process.env.SMTP_SUBMISSION_PORT ? parseInt(process.env.SMTP_SUBMISSION_PORT, 10) : 587;
+  const imapTlsPort = process.env.IMAP_TLS_PORT ? parseInt(process.env.IMAP_TLS_PORT, 10) : 993;
   const sslConfigured = isSslConfigured();
 
   if (sslConfigured) {
-    const smtpTlsOk = await checkTlsPort(465);
-    checks["smtp:465"] = smtpTlsOk ? "ok" : "unhealthy";
+    const smtpTlsOk = await checkTlsPort(smtpsPort);
+    checks[`smtp:${smtpsPort}`] = smtpTlsOk ? "ok" : "unhealthy";
     if (!smtpTlsOk) allHealthy = false;
 
-    const smtpStarttlsOk = await checkPort(587);
-    checks["smtp:587"] = smtpStarttlsOk ? "ok" : "unhealthy";
+    const smtpStarttlsOk = await checkPort(smtpSubmissionPort);
+    checks[`smtp:${smtpSubmissionPort}`] = smtpStarttlsOk ? "ok" : "unhealthy";
     if (!smtpStarttlsOk) allHealthy = false;
 
-    const imapTlsOk = await checkTlsPort(993);
-    checks["imap:993"] = imapTlsOk ? "ok" : "unhealthy";
+    const imapTlsOk = await checkTlsPort(imapTlsPort);
+    checks[`imap:${imapTlsPort}`] = imapTlsOk ? "ok" : "unhealthy";
     if (!imapTlsOk) allHealthy = false;
   } else {
-    checks["smtp:465"] = "not_configured";
-    checks["smtp:587"] = "not_configured";
-    checks["imap:993"] = "not_configured";
+    checks[`smtp:${smtpsPort}`] = "not_configured";
+    checks[`smtp:${smtpSubmissionPort}`] = "not_configured";
+    checks[`imap:${imapTlsPort}`] = "not_configured";
   }
 
   const statusCode = allHealthy ? 200 : 503;
