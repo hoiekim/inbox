@@ -20,6 +20,7 @@ export const getImapListener = (isTls: boolean) => {
 const IMAP_MAX_CONNECTIONS = 100;
 
 export const getImapPort = () => Number(process.env.IMAP_PORT) || 143;
+export const getImapTlsPort = () => Number(process.env.IMAP_TLS_PORT) || 993;
 
 export const initializeImap = async () => {
   const servers: import("net").Server[] = [];
@@ -50,7 +51,7 @@ export const initializeImap = async () => {
 
   if (sslFilesExist) {
     const imapTlsServer = await new Promise<import("net").Server>((res) => {
-      const port = 993;
+      const port = getImapTlsPort();
       const imapListener = getImapListener(true);
 
       const tlsOptions = {
