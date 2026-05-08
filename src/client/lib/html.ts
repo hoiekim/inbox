@@ -21,18 +21,31 @@ const sanitizeEmailHtml = (html: string): string => {
 
   // Strip dangerous attributes on every element
   const DANGEROUS_ATTR = /^on/i; // onclick, onerror, onload, ...
-  const DANGEROUS_URI = /^\s*(javascript|vbscript|data):/i;
+  const SCRIPT_URI = /^\s*(javascript|vbscript):/i;
+  const HREF_DATA_URI = /^\s*data:/i; // dangerous in href/action (HTML data: can run JS); harmless as <img src>
   doc.querySelectorAll("*").forEach((el) => {
     Array.from(el.attributes).forEach((attr) => {
       if (DANGEROUS_ATTR.test(attr.name)) {
         el.removeAttribute(attr.name);
       } else if (
         (attr.name === "href" || attr.name === "src" || attr.name === "action") &&
-        DANGEROUS_URI.test(attr.value)
+        SCRIPT_URI.test(attr.value)
+      ) {
+        el.removeAttribute(attr.name);
+      } else if (
+        (attr.name === "href" || attr.name === "action") &&
+        HREF_DATA_URI.test(attr.value)
       ) {
         el.removeAttribute(attr.name);
       }
     });
+  });
+
+  // Add tracking-mitigation attributes to all <img> tags so external images load
+  // without leaking the inbox origin as referrer and only when scrolled into view.
+  doc.querySelectorAll("img").forEach((img) => {
+    img.setAttribute("referrerpolicy", "no-referrer");
+    if (!img.hasAttribute("loading")) img.setAttribute("loading", "lazy");
   });
 
   return doc.documentElement.outerHTML;

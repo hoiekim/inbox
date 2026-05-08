@@ -56,13 +56,16 @@ export const initializeHttp = async () => {
   app.use((_req, res, next) => {
     // Restrict resource origins. 'unsafe-inline' for styles is required by React.
     // 'blob:' in img-src allows inline email images loaded as object URLs.
+    // 'https:' in img-src allows external images in email bodies (the sanitizer
+    // adds referrerpolicy="no-referrer" + loading="lazy" to mitigate tracking).
+    // Plain http: is intentionally omitted to avoid mixed-content on prod.
     res.setHeader(
       "Content-Security-Policy",
       [
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
+        "img-src 'self' data: blob: https:",
         "connect-src 'self'",
         // sandbox attribute on email iframes restricts their content;
         // frame-src 'self' allows those sandboxed iframes to be embedded.
