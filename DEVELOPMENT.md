@@ -46,14 +46,16 @@ src/
 
 Inbox runs multiple services:
 
-| Service | Port | Description |
-|---------|------|-------------|
-| HTTP/API | 3000 | Web UI + REST API |
-| IMAP | 143 | IMAP server (STARTTLS) |
-| IMAP/TLS | 993 | IMAP server (Implicit TLS) |
-| SMTP | 25 | SMTP server (plain) |
-| SMTP/TLS | 465 | SMTP server (Implicit TLS) |
-| SMTP/STARTTLS | 587 | SMTP server (STARTTLS) |
+| Service | Default Port | Override Env | Description |
+|---------|--------------|--------------|-------------|
+| HTTP/API | 3000 | — | Web UI + REST API |
+| IMAP | 143 | `IMAP_PORT` | IMAP server (STARTTLS) |
+| IMAP/TLS | 993 | `IMAP_TLS_PORT` | IMAP server (Implicit TLS) |
+| SMTP | 25 | `SMTP_PORT` | SMTP server (plain) |
+| SMTP/TLS | 465 | `SMTPS_PORT` | SMTP server (Implicit TLS) |
+| SMTP/STARTTLS | 587 | `SMTP_SUBMISSION_PORT` | SMTP server (STARTTLS) |
+
+The IMAP/SMTP port env vars exist primarily to let non-root sandboxes bind high ports (143/25 require root). Production deployments typically leave them unset.
 
 ## Key Environment Variables
 
@@ -379,7 +381,7 @@ The IMAP server targets compatibility with standard mail clients (Apple Mail, iO
 
 - **BODYSTRUCTURE must match BODY[] encoding**: If BODYSTRUCTURE declares `base64`, the corresponding `BODY[n]` fetch must return base64-encoded content (not raw UTF-8)
 - **RFC822.SIZE must account for encoding**: Size should reflect the encoded (wire-format) message size
-- **CAPABILITY response must match port**: Port 993 (implicit TLS) must NOT advertise STARTTLS; port 143 must advertise it
+- **CAPABILITY response must match TLS mode**: Implicit-TLS connections must NOT advertise STARTTLS; plain connections must advertise it. (`getCapabilities(isTls)` in `src/server/lib/imap/capabilities.ts`.)
 - **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
 - **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
 - **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them
