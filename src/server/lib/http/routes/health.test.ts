@@ -1,6 +1,6 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 
-// ── Mock net, tls, and postgres BEFORE importing health router ───────────────
+// ── Mock net, tls, fs, and postgres BEFORE importing health router ───────────
 
 const makeSocketMock = () => {
   const socket: Record<string, unknown> = {};
@@ -51,6 +51,11 @@ const mockTlsConnect = mock((_opts: unknown, cb: () => void) => {
 mock.module("net", () => ({ createConnection: mockCreateConnection }));
 mock.module("tls", () => ({ connect: mockTlsConnect }));
 
+// fs.existsSync is consulted by isSslConfigured(). When the test sets
+// SSL_CERTIFICATE/_KEY env vars, the mock returns true so the SSL gate opens.
+let existsSyncResult = true;
+mock.module("fs", () => ({ existsSync: () => existsSyncResult }));
+
 const mockPoolQuery = mock(async () => [{ "?column?": 1 }]);
 mock.module("../../postgres/client", () => ({ pool: { query: mockPoolQuery } }));
 
@@ -96,6 +101,20 @@ const invokeHealthGet = async (router: Router): Promise<Response & { _code: numb
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+const ORIGINAL_ENV = {
+  SSL_CERTIFICATE: process.env.SSL_CERTIFICATE,
+  SSL_CERTIFICATE_KEY: process.env.SSL_CERTIFICATE_KEY,
+  SMTP_PORT: process.env.SMTP_PORT,
+  IMAP_PORT: process.env.IMAP_PORT,
+};
+
+const restoreEnv = () => {
+  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+};
+
 describe("healthRouter GET /", () => {
   beforeEach(() => {
     mockPoolQuery.mockClear();
@@ -103,18 +122,30 @@ describe("healthRouter GET /", () => {
     mockTlsConnect.mockClear();
     netBehavior = "connect";
     tlsBehavior = "connect";
+    existsSyncResult = true;
+    // Default: SSL configured so existing assertions about TLS ports apply.
+    process.env.SSL_CERTIFICATE = "/fake/cert.pem";
+    process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
+    delete process.env.IMAP_PORT;
+    delete process.env.SMTP_PORT;
   });
 
-  it("returns 200 with status:'success' when everything is healthy", async () => {
+  afterAll(() => {
+    restoreEnv();
+  });
+
+  it("returns 200 with status:'success' when everything is healthy (SSL configured)", async () => {
     const { default: healthRouter } = await import("./health");
     const res = await invokeHealthGet(healthRouter);
 
     expect(res._code).toBe(200);
-    const body = res._body as { status: string; body: { healthy: boolean; checks: { database: string; http: string }; timestamp: number } };
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.status).toBe("success");
     expect(body.body.healthy).toBe(true);
     expect(body.body.checks.database).toBe("ok");
     expect(body.body.checks.http).toBe("ok");
+    expect(body.body.checks["smtp:465"]).toBe("ok");
+    expect(body.body.checks["imap:993"]).toBe("ok");
   });
 
   it("returns 503 when DB is unhealthy", async () => {
@@ -124,7 +155,7 @@ describe("healthRouter GET /", () => {
     const res = await invokeHealthGet(healthRouter);
 
     expect(res._code).toBe(503);
-    const body = res._body as { status: string; body: { healthy: boolean; checks: { database: string; http: string }; timestamp: number } };
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.status).toBe("error");
     expect(body.body.healthy).toBe(false);
     expect(body.body.checks.database).toBe("unhealthy");
@@ -137,11 +168,11 @@ describe("healthRouter GET /", () => {
     const res = await invokeHealthGet(healthRouter);
 
     expect(res._code).toBe(503);
-    const body = res._body as { status: string; body: { healthy: boolean; checks: { database: string; http: string }; timestamp: number } };
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.body.healthy).toBe(false);
   });
 
-  it("returns 503 when a TLS port fails", async () => {
+  it("returns 503 when a TLS port fails (SSL configured)", async () => {
     tlsBehavior = "error";
 
     const { default: healthRouter } = await import("./health");
@@ -154,7 +185,7 @@ describe("healthRouter GET /", () => {
     const { default: healthRouter } = await import("./health");
     const res = await invokeHealthGet(healthRouter);
 
-    const body = res._body as { status: string; body: { healthy: boolean; checks: { database: string; http: string }; timestamp: number } };
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.body.checks.http).toBe("ok");
   });
 
@@ -162,8 +193,68 @@ describe("healthRouter GET /", () => {
     const { default: healthRouter } = await import("./health");
     const res = await invokeHealthGet(healthRouter);
 
-    const body = res._body as { status: string; body: { healthy: boolean; checks: { database: string; http: string }; timestamp: number } };
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(typeof body.body.timestamp).toBe("number");
     expect(body.body.timestamp).toBeGreaterThan(0);
+  });
+
+  // ── New: TLS-not-configured behavior (#466) ─────────────────────────────────
+
+  it("returns 200 and marks TLS ports 'not_configured' when SSL_CERTIFICATE is unset", async () => {
+    delete process.env.SSL_CERTIFICATE;
+    delete process.env.SSL_CERTIFICATE_KEY;
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    expect(res._code).toBe(200);
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.healthy).toBe(true);
+    expect(body.body.checks["smtp:465"]).toBe("not_configured");
+    expect(body.body.checks["smtp:587"]).toBe("not_configured");
+    expect(body.body.checks["imap:993"]).toBe("not_configured");
+    // Plain ports remain required
+    expect(body.body.checks["smtp:25"]).toBe("ok");
+    expect(body.body.checks["imap:143"]).toBe("ok");
+    // TLS probe never invoked when SSL not configured
+    expect(mockTlsConnect).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 and marks TLS ports 'not_configured' when cert files are missing", async () => {
+    process.env.SSL_CERTIFICATE = "/fake/cert.pem";
+    process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
+    existsSyncResult = false;
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    expect(res._code).toBe(200);
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.healthy).toBe(true);
+    expect(body.body.checks["imap:993"]).toBe("not_configured");
+    expect(mockTlsConnect).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 when SSL configured but TLS port fails (regression)", async () => {
+    tlsBehavior = "error";
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    expect(res._code).toBe(503);
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.healthy).toBe(false);
+    expect(body.body.checks["imap:993"]).toBe("unhealthy");
+  });
+
+  it("uses IMAP_PORT env when set", async () => {
+    process.env.IMAP_PORT = "21001";
+
+    const { default: healthRouter } = await import("./health");
+    const res = await invokeHealthGet(healthRouter);
+
+    const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
+    expect(body.body.checks["imap:21001"]).toBe("ok");
+    expect(body.body.checks["imap:143"]).toBeUndefined();
   });
 });
