@@ -12,7 +12,7 @@ export class ImapRequestHandler {
   private session: ImapSession | null = null;
   private _pendingSaslTag: string | null = null;
 
-  constructor(public port = 143) {}
+  constructor(public isTls = false) {}
 
   setPendingSaslTag = (tag: string) => {
     this._pendingSaslTag = tag;

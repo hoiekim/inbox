@@ -7,24 +7,26 @@ import { logger } from "server";
 
 export { idleManager } from "./idle-manager";
 
-export const getImapListener = (port: number) => {
+export const getImapListener = (isTls: boolean) => {
   return (socket: Socket) => {
-    const handler = new ImapRequestHandler(port);
+    const handler = new ImapRequestHandler(isTls);
     handler.setSocket(socket);
     socket.write(
-      `* OK [CAPABILITY ${getCapabilities(port)}] IMAP4rev1 Service Ready\r\n`
+      `* OK [CAPABILITY ${getCapabilities(isTls)}] IMAP4rev1 Service Ready\r\n`
     );
   };
 };
 
 const IMAP_MAX_CONNECTIONS = 100;
 
+export const getImapPort = () => Number(process.env.IMAP_PORT) || 143;
+
 export const initializeImap = async () => {
   const servers: import("net").Server[] = [];
 
   const imapServer = await new Promise<import("net").Server>((res) => {
-    const port = 143;
-    const imapListener = getImapListener(port);
+    const port = getImapPort();
+    const imapListener = getImapListener(false);
     const server = createServer(imapListener);
     server.maxConnections = IMAP_MAX_CONNECTIONS;
     server.listen(port, () => {
@@ -49,7 +51,7 @@ export const initializeImap = async () => {
   if (sslFilesExist) {
     const imapTlsServer = await new Promise<import("net").Server>((res) => {
       const port = 993;
-      const imapListener = getImapListener(port);
+      const imapListener = getImapListener(true);
 
       const tlsOptions = {
         key: readFileSync(SSL_CERTIFICATE_KEY),

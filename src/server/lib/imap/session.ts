@@ -69,7 +69,7 @@ export class ImapSession {
   }
 
   getCapabilities = () => {
-    return getCapabilities(this.handler.port);
+    return getCapabilities(this.handler.isTls);
   };
 
   /**

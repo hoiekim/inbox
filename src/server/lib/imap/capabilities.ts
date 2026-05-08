@@ -1,4 +1,4 @@
-export const getCapabilities = (port = 143) => {
+export const getCapabilities = (isTls = false) => {
   const capabilities = [
     "IMAP4rev1",
     "LITERAL+",
@@ -10,11 +10,11 @@ export const getCapabilities = (port = 143) => {
     "AUTH=PLAIN"
   ];
 
-  if (port === 143) {
-    // Advertise STARTTLS on plain port to allow upgrade
+  if (!isTls) {
+    // Plain port: advertise STARTTLS so clients can upgrade.
+    // TLS-wrapped port already has an encrypted channel, so it's omitted there.
     capabilities.push("STARTTLS");
   }
-  // Do NOT advertise STARTTLS on port 993 — connection is already TLS-wrapped
 
   return capabilities.join(" ");
 };
