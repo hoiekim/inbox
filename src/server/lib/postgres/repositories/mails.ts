@@ -1110,7 +1110,7 @@ export const expungeDeletedMails = async (
     if (account === null) {
       // Domain-wide expunge (soft-delete)
       sql = `
-        UPDATE mails SET expunged = TRUE
+        UPDATE mails SET expunged = TRUE, updated = NOW()
         WHERE user_id = $1 AND sent = $2 AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;
@@ -1122,7 +1122,7 @@ export const expungeDeletedMails = async (
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
       sql = `
-        UPDATE mails SET expunged = TRUE
+        UPDATE mails SET expunged = TRUE, updated = NOW()
         WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
         RETURNING ${uidField} as uid
       `;

@@ -1,9 +1,7 @@
 /**
  * Tests for mail repository functions
  */
-
-// Note: We can't import the actual functions as they require database connection,
-// but we can test the buildFlagSetClause logic by extracting it or testing behavior
+import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 
 describe("STORE operation types", () => {
   /**
@@ -165,5 +163,33 @@ describe("STORE operation types", () => {
       expect(result.deleted).toBe(false);
       expect(result.read).toBe(true); // Should preserve read status
     });
+  });
+});
+
+describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
+  // Static source check: the expunge SQL paths must include `updated = NOW()` so
+  // the framework's own auto-`updated` is not bypassed. Scanning the source as
+  // text is robust against module-mock interactions in the full suite — the
+  // alternative (mock pool.query) fails when other tests load mails.ts first.
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+  });
+
+  it("every `SET expunged = TRUE` also sets `updated = NOW()`", () => {
+    // Each `SET expunged = TRUE` clause should be paired with `updated = NOW()`
+    // on the same SET. Match the SET … (newline-or-end) span and require the
+    // refresh column inside it.
+    const setClauses = mailsSource.match(/SET\s+expunged\s*=\s*TRUE[^\n]*/g) ?? [];
+    expect(setClauses.length).toBeGreaterThanOrEqual(2); // domain-wide + account-specific
+    for (const clause of setClauses) {
+      expect(clause).toContain("updated = NOW()");
+    }
   });
 });
