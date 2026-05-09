@@ -8,13 +8,41 @@ import {
 } from "../../../scripts/test-setup";
 
 // `web-push`, `./imap/idle-manager`, and `./postgres/repositories/push_subscriptions`
-// are mocked once globally in `scripts/test-setup.ts`. We import the spy refs
-// from there to assert on them. The shared internal modules push.ts also
-// touches (`./postgres/repositories/mails`, `./users`, `server`) are NOT
-// mocked at the package level — they're injected per-test via
-// `setPushDependencies(...)` because globalising those would clobber the
-// per-file mocks declared in mails/*.test.ts, users.test.ts, and any test
-// that imports anything from the `server` barrel.
+// are mocked once globally in `scripts/test-setup.ts` (no per-file mock
+// conflicts on those paths). Spy refs are imported from the preload.
+//
+// `./logger`, `./users`, and `./mails/notifications` are mocked per-file
+// here. Per-file mocks are the standard bun-test pattern in this repo
+// (`mails/mailgun.test.ts` mocks `./logger`, `notifications.test.ts` mocks
+// `./postgres/repositories/mails`, etc.). We follow it here so push.test.ts's
+// expectations on these spies are guaranteed to be the active binding when
+// push.ts is imported. The per-file mock for `./logger` deliberately
+// shadows whatever global `./logger` mock other test files set; the shape
+// matches what those files use, so no test is left without a logger when
+// push.test.ts's mock leaks across the run.
+
+const mockLogger = {
+  debug: mock(() => {}),
+  info: mock(() => {}),
+  warn: mock(() => {}),
+  error: mock(() => {}),
+};
+
+const mockGetActiveUsers = mock(async () => [] as unknown[]);
+const mockGetNotifications = mock(
+  async () => new Map() as Map<string, { count: number; latest?: Date }>,
+);
+
+mock.module("./logger", () => ({ logger: mockLogger }));
+// push.ts imports getActiveUsers + getNotifications from `./push-deps` — a thin
+// re-export module owned by push.ts so this mock doesn't pollute the per-file
+// mocks declared in `mails/notifications.test.ts` or anywhere else that touches
+// `./users` / `./mails/notifications` directly. See `push-deps.ts` for the
+// rationale.
+mock.module("./push-deps", () => ({
+  getActiveUsers: mockGetActiveUsers,
+  getNotifications: mockGetNotifications,
+}));
 
 const mockSetVapidDetails = webPushSpies.setVapidDetails;
 const mockSendNotification = webPushSpies.sendNotification;
@@ -25,31 +53,11 @@ const mockPgGetSubscriptions = pushSubscriptionSpies.getSubscriptions;
 const mockPgRefreshSubscription = pushSubscriptionSpies.refreshSubscription;
 const mockUpdateLastNotified = pushSubscriptionSpies.updateLastNotified;
 
-const mockGetUnreadNotifications = mock(
-  async (): Promise<Map<string, { count: number; latest?: Date }>> => new Map(),
-);
-const mockGetActiveUsers = mock(async (): Promise<SignedUser[]> => []);
-const mockLogger = {
-  debug: mock(() => {}),
-  info: mock(() => {}),
-  warn: mock(() => {}),
-  error: mock(() => {}),
-};
-
 type PushModule = typeof import("./push");
 let push: PushModule;
 
 beforeAll(async () => {
   push = await import("./push");
-  // Inject the shared-module deps that can't be globalised. web-push and the
-  // push_subscriptions repo are already mocked at the package level via the
-  // preload, so they don't need to go through this setter.
-  push.setPushDependencies({
-    getUnreadNotifications: mockGetUnreadNotifications as never,
-    getActiveUsers: mockGetActiveUsers as never,
-    logger: mockLogger as never,
-    updateLastNotified: mockUpdateLastNotified as never,
-  });
   // initPush() is invoked from start.ts at boot rather than at module load,
   // so the test must call it explicitly.
   push.initPush();
@@ -85,10 +93,10 @@ const resetAllMocks = () => {
   mockPgRefreshSubscription.mockClear();
   mockUpdateLastNotified.mockReset();
   mockUpdateLastNotified.mockResolvedValue(undefined as never);
-  mockGetUnreadNotifications.mockReset();
-  mockGetUnreadNotifications.mockResolvedValue(new Map() as never);
   mockGetActiveUsers.mockReset();
   mockGetActiveUsers.mockResolvedValue([] as never);
+  mockGetNotifications.mockReset();
+  mockGetNotifications.mockResolvedValue(new Map() as never);
   mockNotifyNewMail.mockClear();
   mockLogger.error.mockClear();
   mockLogger.info.mockClear();
@@ -180,33 +188,6 @@ describe("refreshSubscription", () => {
   });
 });
 
-describe("getNotifications", () => {
-  beforeEach(resetAllMocks);
-
-  it("maps user-id keys to username-keyed entries", async () => {
-    const latest = new Date("2026-05-05T00:00:00Z");
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 3, latest }]]) as never
-    );
-    const users = [makeUser({ id: "u1", username: "alice" })];
-    const result = await push.getNotifications(users);
-    expect(result.get("alice")).toEqual({ count: 3, latest });
-    expect(mockGetUnreadNotifications).toHaveBeenCalledTimes(1);
-    expect(mockGetUnreadNotifications.mock.calls[0]).toEqual([["u1"]] as never);
-  });
-
-  it("returns count: 0 entry for users with no unread mail", async () => {
-    mockGetUnreadNotifications.mockResolvedValueOnce(new Map() as never);
-    const users = [
-      makeUser({ id: "u1", username: "alice" }),
-      makeUser({ id: "u2", username: "bob" }),
-    ];
-    const result = await push.getNotifications(users);
-    expect(result.get("alice")).toEqual({ count: 0 });
-    expect(result.get("bob")).toEqual({ count: 0 });
-  });
-});
-
 describe("notifyNewMails", () => {
   beforeEach(resetAllMocks);
 
@@ -224,10 +205,10 @@ describe("notifyNewMails", () => {
       lastNotified: new Date("2026-05-04T00:00:00Z"),
     });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(
+    mockGetNotifications.mockResolvedValueOnce(
       new Map([
-        ["u1", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
-      ]) as never
+        ["alice", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
+      ]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
@@ -248,10 +229,10 @@ describe("notifyNewMails", () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "alice" });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(
+    mockGetNotifications.mockResolvedValueOnce(
       new Map([
-        ["u1", { count: 4, latest: new Date("2026-05-05T00:00:00Z") }],
-      ]) as never
+        ["alice", { count: 4, latest: new Date("2026-05-05T00:00:00Z") }],
+      ]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
@@ -271,8 +252,8 @@ describe("notifyNewMails", () => {
       lastNotified: same,
     });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 1, latest: same }]]) as never
+    mockGetNotifications.mockResolvedValueOnce(
+      new Map([["alice", { count: 1, latest: same }]]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
@@ -286,7 +267,7 @@ describe("notifyNewMails", () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "ghost" });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(new Map() as never);
+    mockGetNotifications.mockResolvedValueOnce(new Map() as never);
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
     await push.notifyNewMails(["alice"]);
@@ -302,10 +283,10 @@ describe("notifyNewMails", () => {
       username: "alice",
     });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(
+    mockGetNotifications.mockResolvedValueOnce(
       new Map([
-        ["u1", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
-      ]) as never
+        ["alice", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
+      ]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
     const err = Object.assign(new Error("Gone"), { statusCode: 410 });
@@ -322,10 +303,10 @@ describe("notifyNewMails", () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "alice" });
     mockGetActiveUsers.mockResolvedValueOnce([user] as never);
-    mockGetUnreadNotifications.mockResolvedValueOnce(
+    mockGetNotifications.mockResolvedValueOnce(
       new Map([
-        ["u1", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
-      ]) as never
+        ["alice", { count: 1, latest: new Date("2026-05-05T00:00:00Z") }],
+      ]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
     const err = Object.assign(new Error("boom"), { statusCode: 500 });
@@ -348,8 +329,8 @@ describe("decrementBadgeCount", () => {
       push_subscription_id: "sub-1",
       username: "alice",
     });
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 5 }]]) as never
+    mockGetNotifications.mockResolvedValueOnce(
+      new Map([["alice", { count: 5 }]]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
@@ -365,8 +346,8 @@ describe("decrementBadgeCount", () => {
   it("clamps decremented count at 0", async () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "alice" });
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 0 }]]) as never
+    mockGetNotifications.mockResolvedValueOnce(
+      new Map([["alice", { count: 0 }]]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
@@ -380,7 +361,7 @@ describe("decrementBadgeCount", () => {
   it("skips subscriptions with no notification entry", async () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "ghost" });
-    mockGetUnreadNotifications.mockResolvedValueOnce(new Map() as never);
+    mockGetNotifications.mockResolvedValueOnce(new Map() as never);
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
 
     await push.decrementBadgeCount([user]);
@@ -394,8 +375,8 @@ describe("decrementBadgeCount", () => {
       push_subscription_id: "expired-2",
       username: "alice",
     });
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 2 }]]) as never
+    mockGetNotifications.mockResolvedValueOnce(
+      new Map([["alice", { count: 2 }]]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
     const err = Object.assign(new Error("Gone"), { statusCode: 410 });
@@ -410,8 +391,8 @@ describe("decrementBadgeCount", () => {
   it("logs (without deleting) on non-410 send failures", async () => {
     const user = makeUser({ id: "u1", username: "alice" });
     const subscription = makeSubscription({ username: "alice" });
-    mockGetUnreadNotifications.mockResolvedValueOnce(
-      new Map([["u1", { count: 2 }]]) as never
+    mockGetNotifications.mockResolvedValueOnce(
+      new Map([["alice", { count: 2 }]]) as never,
     );
     mockPgGetSubscriptions.mockResolvedValueOnce([subscription] as never);
     const err = Object.assign(new Error("boom"), { statusCode: 500 });

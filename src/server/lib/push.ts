@@ -8,43 +8,10 @@ import {
   refreshSubscription as pgRefreshSubscription,
   updateLastNotified as pgUpdateLastNotified,
 } from "./postgres/repositories/push_subscriptions";
-import { getUnreadNotifications as pgGetUnreadNotifications } from "./postgres/repositories/mails";
-import { getActiveUsers as realGetActiveUsers } from "./users";
-import { logger as realLogger } from "server";
+import { getActiveUsers, getNotifications } from "./push-deps";
+import { logger } from "./logger";
 
 import { idleManager } from "./imap/idle-manager";
-
-// Internal-shared dependencies are routed through this object so push.test.ts
-// can override them without `mock.module(...)`. Bun hoists `mock.module` calls
-// globally across the whole `bun test` run, so a per-file
-// `mock.module("./postgres/repositories/mails", …)` or
-// `mock.module("server", …)` would silently clobber the per-file mocks
-// declared in `mails/*.test.ts` and the many other tests that import the
-// `server` barrel for `MailValidationError` / `SpamAllowlistModel` / etc.
-//
-// External libraries that no other test file mocks (`web-push`,
-// `./imap/idle-manager`, `./postgres/repositories/push_subscriptions`) are
-// instead globalised in `scripts/test-setup.ts` and bypass this setter — see
-// the comment block in that preload for the rationale.
-const deps = {
-  getUnreadNotifications: pgGetUnreadNotifications,
-  getActiveUsers: realGetActiveUsers,
-  updateLastNotified: pgUpdateLastNotified,
-  logger: realLogger,
-};
-
-export type PushDependencies = typeof deps;
-
-export const setPushDependencies = (overrides: Partial<PushDependencies>): void => {
-  Object.assign(deps, overrides);
-};
-
-export const resetPushDependencies = (): void => {
-  deps.getUnreadNotifications = pgGetUnreadNotifications;
-  deps.getActiveUsers = realGetActiveUsers;
-  deps.updateLastNotified = pgUpdateLastNotified;
-  deps.logger = realLogger;
-};
 
 const domainName = process.env.EMAIL_DOMAIN || "mydomain";
 
@@ -68,7 +35,7 @@ export const initPush = (): void => {
       PUSH_VAPID_PRIVATE_KEY!,
     );
   } else {
-    deps.logger.warn("VAPID keys not configured - push notifications disabled", {
+    logger.warn("VAPID keys not configured - push notifications disabled", {
       component: "push",
       hint: "Set PUSH_VAPID_PUBLIC_KEY and PUSH_VAPID_PRIVATE_KEY to enable",
     });
@@ -88,7 +55,7 @@ export const storeSubscription = async (
 
 export const deleteSubscription = (push_subscription_id: string) => {
   return pgDeleteSubscription(push_subscription_id).catch((error) => {
-    deps.logger.error("Error deleting push subscription", { component: "push", push_subscription_id }, error);
+    logger.error("Error deleting push subscription", { component: "push", push_subscription_id }, error);
   });
 };
 
@@ -96,9 +63,9 @@ const ONE_DAY = 1000 * 60 * 60 * 24;
 
 export const cleanSubscriptions = () => {
   setTimeout(async () => {
-    deps.logger.info("Cleaning old push subscriptions", { component: "push" });
+    logger.info("Cleaning old push subscriptions", { component: "push" });
     const deleted = await pgCleanSubscriptions();
-    deps.logger.info("Deleted old subscriptions", { component: "push", count: deleted });
+    logger.info("Deleted old subscriptions", { component: "push", count: deleted });
     cleanSubscriptions();
   }, ONE_DAY);
 };
@@ -113,25 +80,6 @@ export const refreshSubscription = async (id: string) => {
   return pgRefreshSubscription(id);
 };
 
-export const getNotifications = async (
-  users: SignedUser[]
-): Promise<Map<string, { count: number; latest?: Date }>> => {
-  const userIds = users.map((u) => u.id);
-  const rawNotifications = await deps.getUnreadNotifications(userIds);
-
-  const notifications = new Map<string, { count: number; latest?: Date }>();
-  for (const user of users) {
-    const data = rawNotifications.get(user.id);
-    if (data) {
-      notifications.set(user.username, data);
-    } else {
-      notifications.set(user.username, { count: 0 });
-    }
-  }
-
-  return notifications;
-};
-
 export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) => {
   // Notify IDLE IMAP sessions immediately (works without VAPID)
   idleManager.notifyNewMail(usernames, mailboxes);
@@ -140,7 +88,7 @@ export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) 
   if (!vapidConfigured) return;
 
   const partialUsers = usernames.map((username) => ({ username }));
-  const users = await deps.getActiveUsers(partialUsers);
+  const users = await getActiveUsers(partialUsers);
   const [notifications, storedSubscriptions] = await Promise.all([
     getNotifications(users),
     getSubscriptions(users),
@@ -177,16 +125,16 @@ export const notifyNewMails = async (usernames: string[], mailboxes?: string[]) 
         .catch(async (error) => {
           isFailed = true;
           if (error.statusCode === 410) {
-            deps.logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
+            logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
             return deleteSubscription(push_subscription_id);
           } else {
-            deps.logger.error("Error sending push notification", { component: "push" }, error);
+            logger.error("Error sending push notification", { component: "push" }, error);
           }
         });
 
       if (isFailed) return;
 
-      await deps.updateLastNotified(push_subscription_id);
+      await pgUpdateLastNotified(push_subscription_id);
 
       return;
     })
@@ -220,10 +168,10 @@ export const decrementBadgeCount = async (users: SignedUser[]) => {
         .sendNotification(subscription, JSON.stringify(notificationPayload))
         .catch((error) => {
           if (error.statusCode === 410) {
-            deps.logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
+            logger.info("Subscription has expired, removing from database", { component: "push", push_subscription_id });
             deleteSubscription(push_subscription_id);
           } else {
-            deps.logger.error("Error sending push notification", { component: "push" }, error);
+            logger.error("Error sending push notification", { component: "push" }, error);
           }
         });
     })

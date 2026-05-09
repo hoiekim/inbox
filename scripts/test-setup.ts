@@ -7,19 +7,19 @@
 //      decode-length validation, even when push.ts loads before the
 //      test mocks register.
 //   2. Global module mocks for *external* libraries and *internal*
-//      modules that no other test file mocks. Registering these here
-//      sidesteps Bun's mock-load-order trap: `mock.module(...)` is
-//      hoisted globally across the whole test run, so per-file calls
+//      modules that no other test file mocks per-file. Registering
+//      these here sidesteps Bun's mock-load-order trap: `mock.module(...)`
+//      is hoisted globally across the whole test run, so per-file calls
 //      lose to whichever file's hoist happens last. The mocks below
 //      don't conflict with any per-file mock.module call (verified via
 //      grep across `src/**/*.test.ts`), so global registration is safe.
 //
-// Mocks for shared modules with legitimate per-test variation
-// (`./postgres/repositories/mails`, `./users`, `server`) deliberately
-// stay out of this file — those are still injected per-test through
-// `setPushDependencies(...)` because globalising them here would
-// silently override the per-file mocks declared in `mails/*.test.ts`,
-// `users.test.ts`, etc.
+// Modules that ARE mocked per-file in other test files (`./logger`,
+// `server` barrel, `./postgres/repositories/mails`) deliberately stay
+// out of this file. push.test.ts mocks `./logger` per-file with the
+// same shape mailgun.test.ts / search.test.ts / etc. use, so the
+// per-file mocks win in their own scope and the standard pattern is
+// preserved.
 
 import { mock } from "bun:test";
 import path from "path";
