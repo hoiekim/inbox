@@ -23,8 +23,6 @@ export {
   decrementBadgeCount,
 } from "./push";
 
-export { getNotifications } from "./mails/notifications";
-
 // Mails module (uses postgres internally)
 export {
   getMailHeaders,
