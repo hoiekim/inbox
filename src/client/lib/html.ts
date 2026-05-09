@@ -23,17 +23,33 @@ const sanitizeEmailHtml = (html: string): string => {
   const DANGEROUS_ATTR = /^on/i; // onclick, onerror, onload, ...
   const SCRIPT_URI = /^\s*(javascript|vbscript):/i;
   const HREF_DATA_URI = /^\s*data:/i; // dangerous in href/action (HTML data: can run JS); harmless as <img src>
+  // SVG <a xlink:href> is the XML-namespaced equivalent of HTML href, and
+  // <button formaction> is the action equivalent for form submission. Both
+  // accept the same URI schemes as href/action and need the same scrubbing.
+  const SCRIPT_URI_ATTRS = new Set([
+    "href",
+    "src",
+    "action",
+    "xlink:href",
+    "formaction",
+  ]);
+  const DATA_URI_ATTRS = new Set([
+    "href",
+    "action",
+    "xlink:href",
+    "formaction",
+  ]);
   doc.querySelectorAll("*").forEach((el) => {
     Array.from(el.attributes).forEach((attr) => {
       if (DANGEROUS_ATTR.test(attr.name)) {
         el.removeAttribute(attr.name);
       } else if (
-        (attr.name === "href" || attr.name === "src" || attr.name === "action") &&
+        SCRIPT_URI_ATTRS.has(attr.name) &&
         SCRIPT_URI.test(attr.value)
       ) {
         el.removeAttribute(attr.name);
       } else if (
-        (attr.name === "href" || attr.name === "action") &&
+        DATA_URI_ATTRS.has(attr.name) &&
         HREF_DATA_URI.test(attr.value)
       ) {
         el.removeAttribute(attr.name);
