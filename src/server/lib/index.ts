@@ -11,17 +11,7 @@ export * from "./util";
 export * from "./postgres";
 
 // Push notifications (uses postgres internally)
-export {
-  getPushPublicKey,
-  initPush,
-  storeSubscription,
-  deleteSubscription,
-  cleanSubscriptions,
-  getSubscriptions,
-  refreshSubscription,
-  notifyNewMails,
-  decrementBadgeCount,
-} from "./push";
+export { push } from "./push";
 
 // Mails module (uses postgres internally)
 export {

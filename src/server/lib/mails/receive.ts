@@ -26,7 +26,7 @@ import {
   getAttachmentFilePath,
   getAttachmentId,
 } from "./util";
-import { notifyNewMails } from "../push";
+import { push } from "../push";
 import { accountToBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 import { sendAlarm } from "../alarm";
@@ -59,7 +59,7 @@ export const saveMailHandler = async (
   logger.info("Successfully saved an email");
 
   const mailboxes = getMailboxesFromIncomingMail(validData);
-  await notifyNewMails(usernames, mailboxes);
+  await push.notifyNewMails(usernames, mailboxes);
   logger.info(`Sent push notifications to users: [${usernames.toString()}]`);
 };
 

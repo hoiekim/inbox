@@ -3,8 +3,7 @@ import "./config";
 import {
   initializePostgres,
   initializeAdminUser,
-  cleanSubscriptions,
-  initPush,
+  push,
   initializeImap,
   initializeSmtp,
   initializeHttp,
@@ -44,11 +43,11 @@ process.on("uncaughtException", async (error) => {
 const start = async () => {
   await initializePostgres();
   await initializeAdminUser();
-  initPush();
+  push.initPush();
   const httpServer = await initializeHttp();
   const smtpServers = await initializeSmtp();
   const imapServers = await initializeImap();
-  cleanSubscriptions();
+  push.cleanSubscriptions();
 
   const shutdown = async (signal: string) => {
     console.info(`${signal} received — shutting down gracefully`);

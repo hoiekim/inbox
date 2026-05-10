@@ -42,7 +42,15 @@ mock.module("server", () => ({
   deleteMail: mockDeleteMail,
   markRead: mockMarkRead,
   markSaved: mockMarkSaved,
-  decrementBadgeCount: mockDecrementBadgeCount,
+  push: {
+    decrementBadgeCount: mockDecrementBadgeCount,
+    // Other push.* methods are not exercised by mails routes; included so the
+    // shared barrel mock is shape-compatible for any test file that lands
+    // after this one in Bun's global mock.module hoist order.
+    getPushPublicKey: mock(() => "vapid-public-key"),
+    storeSubscription: mock(async () => null),
+    refreshSubscription: mock(async () => null),
+  },
   addressToUsername: mockAddressToUsername,
   getUser: mockGetUser,
   logger: { error: mock(() => {}), info: mock(() => {}), warn: mock(() => {}) },
@@ -60,10 +68,6 @@ mock.module("server", () => ({
   MailSendingError: MockMailSendingError,
   mailsTable: { queryOne: mockMailsTableQueryOne },
   SpamAllowlistModel: class {},
-  // Push route exports needed when this mock is active for push.test.ts
-  getPushPublicKey: mock(() => "vapid-public-key"),
-  storeSubscription: mock(async () => null),
-  refreshSubscription: mock(async () => null),
   // Users/token route exports
   setUserInfo: mock(async () => null),
   isValidEmail: mock(() => true),

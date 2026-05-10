@@ -1,5 +1,5 @@
 import {
-  decrementBadgeCount,
+  push,
   getMailBody,
   markRead,
   markSaved
@@ -34,7 +34,7 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
     }
 
     if (read === true) {
-      decrementBadgeCount([user]).catch((error) => logger.error("Failed to decrement badge count", {}, error));
+      push.decrementBadgeCount([user]).catch((error) => logger.error("Failed to decrement badge count", {}, error));
       await markRead(user.id, mail_id);
     }
 
