@@ -1,8 +1,4 @@
 [test]
-# Set env vars (e.g. VAPID keys) before any test file is parsed so module-init
-# code in src/server/lib/push.ts sees them regardless of test load order.
-preload = ["./scripts/test-setup.ts"]
-
 # Exclude test files themselves from the coverage report
 coverageSkipTestFiles = true
 
