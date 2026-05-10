@@ -1,5 +1,5 @@
 import { PushSubscription } from "web-push";
-import { storeSubscription } from "server";
+import { push } from "server";
 import { Route } from "../route";
 
 export type SubscribePostResponse = string;
@@ -17,7 +17,7 @@ export const postSubscribeRoute = new Route<SubscribePostResponse>(
     const { id: userId } = user;
     const body: SubscribePostBody = req.body;
     const { subscription } = body;
-    const result = await storeSubscription(userId, subscription);
+    const result = await push.storeSubscription(userId, subscription);
 
     if (!result) {
       return { status: "failed", message: "Failed to store subscription" };

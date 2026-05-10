@@ -10,9 +10,12 @@ const mockRefreshSubscription = mock(async () => null as unknown);
 // Include base set of server exports so this mock doesn't break test files
 // that run after this one (Bun's mock.module is global within a coverage run).
 mock.module("server", () => ({
-  getPushPublicKey: mockGetPushPublicKey,
-  storeSubscription: mockStoreSubscription,
-  refreshSubscription: mockRefreshSubscription,
+  push: {
+    getPushPublicKey: mockGetPushPublicKey,
+    storeSubscription: mockStoreSubscription,
+    refreshSubscription: mockRefreshSubscription,
+    decrementBadgeCount: mock(async () => {}),
+  },
   // Base exports needed by users/mails test files
   getUser: mock(async () => null),
   setUserInfo: mock(async () => null),
@@ -29,7 +32,6 @@ mock.module("server", () => ({
   deleteMail: mock(async () => {}),
   markRead: mock(async () => {}),
   markSaved: mock(async () => {}),
-  decrementBadgeCount: mock(async () => {}),
   addressToUsername: mock((addr: string) => addr.split("@")[0]),
   searchMail: mock(async () => []),
   getSpamHeaders: mock(async () => []),
