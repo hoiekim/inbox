@@ -167,10 +167,14 @@ describe("STORE operation types", () => {
 });
 
 describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
-  // Static source check: the expunge SQL paths must include `updated = NOW()` so
-  // the framework's own auto-`updated` is not bypassed. Scanning the source as
-  // text is robust against module-mock interactions in the full suite — the
-  // alternative (mock pool.query) fails when other tests load mails.ts first.
+  // Static source check: the expunge write paths must refresh `updated` so the
+  // framework's own auto-`updated` is not bypassed. Two paths exist:
+  //   - domain-wide: mailsTable.updateWhere(..., { ..., updated: new Date() })
+  //   - account-specific: raw SQL `UPDATE … SET expunged = TRUE, updated = NOW()`
+  //     (raw because the @> jsonb filter is not expressible in TypeSafeFilters)
+  // Source-text scanning is robust against module-mock interactions in the
+  // full suite — the alternative (mock pool.query) fails when other tests
+  // load mails.ts first.
   let mailsSource: string;
 
   beforeAll(async () => {
@@ -182,14 +186,25 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
     );
   });
 
-  it("every `SET expunged = TRUE` also sets `updated = NOW()`", () => {
-    // Each `SET expunged = TRUE` clause should be paired with `updated = NOW()`
-    // on the same SET. Match the SET … (newline-or-end) span and require the
-    // refresh column inside it.
+  it("every raw `SET expunged = TRUE` also sets `updated = NOW()`", () => {
     const setClauses = mailsSource.match(/SET\s+expunged\s*=\s*TRUE[^\n]*/g) ?? [];
-    expect(setClauses.length).toBeGreaterThanOrEqual(2); // domain-wide + account-specific
+    expect(setClauses.length).toBeGreaterThanOrEqual(1); // account-specific raw SQL
     for (const clause of setClauses) {
       expect(clause).toContain("updated = NOW()");
     }
+  });
+
+  it("domain-wide expunge uses mailsTable.updateWhere with `updated`", () => {
+    // The expungeDeletedMails domain-wide branch must call updateWhere and
+    // include `updated` in the data bag. Assert via source-text scan to keep
+    // the check decoupled from a live DB.
+    const fnMatch = mailsSource.match(
+      /export const expungeDeletedMails[\s\S]*?\n};/
+    );
+    expect(fnMatch).not.toBeNull();
+    const fnSource = fnMatch![0];
+    expect(fnSource).toContain("mailsTable.updateWhere(");
+    expect(fnSource).toMatch(/\[EXPUNGED\]:\s*true/);
+    expect(fnSource).toMatch(/updated:\s*new Date\(\)/);
   });
 });
