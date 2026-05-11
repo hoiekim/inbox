@@ -45,10 +45,22 @@ function hasExcessiveUppercase(text: string): boolean {
 
 /**
  * Check if text contains URL shorteners.
+ *
+ * Matches a shortener only when it appears as a complete host segment.
+ * Naive `includes()` on the raw text substring-matches `t.co` inside
+ * legitimate hosts like `wealthfront.com`, `marriott.com`, `att.com`,
+ * `scott.com` (any `<letter>t.co` sequence inside a domain trips it).
+ *
+ * Preceding char must not be a letter/digit/dot/hyphen (host continuation),
+ * and trailing char must not be a letter/digit/hyphen (subdomain continuation).
  */
 function containsUrlShortener(text: string): boolean {
-  const lowerText = text.toLowerCase();
-  return URL_SHORTENERS.some(domain => lowerText.includes(domain));
+  const lower = text.toLowerCase();
+  return URL_SHORTENERS.some(shortener => {
+    const escaped = shortener.replace(/\./g, "\\.");
+    const re = new RegExp(`(?:^|[^a-z0-9.-])${escaped}(?![a-z0-9-])`);
+    return re.test(lower);
+  });
 }
 
 /**
