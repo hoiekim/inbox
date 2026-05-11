@@ -167,15 +167,13 @@ describe("STORE operation types", () => {
 });
 
 describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
-  // Static source check: the expunge write paths must refresh `updated` so the
-  // framework's own auto-`updated` is not bypassed. Two paths exist:
-  //   - domain-wide: mailsTable.updateWhere(..., { ..., updated: new Date() })
-  //   - account-specific: raw SQL `UPDATE … SET expunged = TRUE, updated = NOW()`
-  //     (raw because the @> jsonb filter is not expressible in TypeSafeFilters)
-  // Source-text scanning is robust against module-mock interactions in the
-  // full suite — the alternative (mock pool.query) fails when other tests
-  // load mails.ts first.
+  // Static source check: the expunge write paths must go through
+  // mailsTable.updateWhere with `updated: new Date()` in the data bag so the
+  // framework's own auto-`updated` is not bypassed. Source-text scanning is
+  // robust against module-mock interactions in the full suite — the
+  // alternative (mock pool.query) fails when other tests load mails.ts first.
   let mailsSource: string;
+  let fnSource: string;
 
   beforeAll(async () => {
     const fs = await import("fs/promises");
@@ -184,27 +182,35 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
       path.join(import.meta.dir, "mails.ts"),
       "utf8"
     );
-  });
-
-  it("every raw `SET expunged = TRUE` also sets `updated = NOW()`", () => {
-    const setClauses = mailsSource.match(/SET\s+expunged\s*=\s*TRUE[^\n]*/g) ?? [];
-    expect(setClauses.length).toBeGreaterThanOrEqual(1); // account-specific raw SQL
-    for (const clause of setClauses) {
-      expect(clause).toContain("updated = NOW()");
-    }
-  });
-
-  it("domain-wide expunge uses mailsTable.updateWhere with `updated`", () => {
-    // The expungeDeletedMails domain-wide branch must call updateWhere and
-    // include `updated` in the data bag. Assert via source-text scan to keep
-    // the check decoupled from a live DB.
     const fnMatch = mailsSource.match(
       /export const expungeDeletedMails[\s\S]*?\n};/
     );
-    expect(fnMatch).not.toBeNull();
-    const fnSource = fnMatch![0];
+    if (!fnMatch) throw new Error("expungeDeletedMails not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("does not contain any raw `SET expunged` UPDATE statement", () => {
+    // Regression for #456: every write to `expunged` must go through the
+    // framework so `updated` is bumped via the data bag. Raw SQL UPDATEs are
+    // forbidden in this function.
+    expect(fnSource).not.toMatch(/SET\s+expunged/);
+  });
+
+  it("domain-wide branch uses mailsTable.updateWhere with `updated`", () => {
+    // The `account === null` branch must use updateWhere with equality filters.
     expect(fnSource).toContain("mailsTable.updateWhere(");
     expect(fnSource).toMatch(/\[EXPUNGED\]:\s*true/);
     expect(fnSource).toMatch(/updated:\s*new Date\(\)/);
+  });
+
+  it("account-specific branch uses mailsTable.updateWhere with IN filter", () => {
+    // The `account !== null` branch is 2-step: raw SELECT to resolve mail_ids,
+    // then framework updateWhere with op:"IN" so `updated` is bumped.
+    expect(fnSource).toMatch(/op:\s*"IN"/);
+    expect(fnSource).toMatch(/value:\s*mailIds/);
+    // Two updateWhere call sites — one per branch.
+    const updateWhereCount =
+      (fnSource.match(/mailsTable\.updateWhere\(/g) ?? []).length;
+    expect(updateWhereCount).toBe(2);
   });
 });

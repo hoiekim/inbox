@@ -97,23 +97,65 @@ export type TypeSafeFilters<TSchema extends Schema> = {
 
 /**
  * A filter condition with an explicit comparison operator.
- * Use with deleteWhere() to support range comparisons (e.g. <=, <, >, >=).
+ * Supports range comparisons (<, <=, >, >=), equality (=), and IN-list (value: ParamValue[]).
  * If notNull is true, an extra "col IS NOT NULL" clause is prepended.
  *
  * Example: deleteWhere({ cookie_expires: { op: '<=', value: now, notNull: true } })
+ * Example: updateWhere({ mail_id: { op: 'IN', value: ids } }, { expunged: true, updated: new Date() })
  */
 export interface FilterCondition {
-  op: "=" | "<" | "<=" | ">" | ">=";
-  value: ParamValue;
+  op: "=" | "<" | "<=" | ">" | ">=" | "IN";
+  value: ParamValue | ParamValue[];
   notNull?: boolean;
 }
 
-/** Accepts either a plain equality value or a FilterCondition for deleteWhere(). */
-export type DeleteWhereFilter = ParamValue | FilterCondition;
+/** Accepts either a plain equality value or a FilterCondition for deleteWhere()/updateWhere(). */
+export type WhereFilter = ParamValue | FilterCondition;
 
-export type DeleteWhereFilters<TSchema extends Schema> = {
-  [K in SchemaFilterKey<TSchema>]?: DeleteWhereFilter | unknown;
+export type WhereFilters<TSchema extends Schema> = {
+  [K in SchemaFilterKey<TSchema>]?: WhereFilter | unknown;
 };
+
+/** @deprecated Use WhereFilter / WhereFilters — kept for backwards compat. */
+export type DeleteWhereFilter = WhereFilter;
+export type DeleteWhereFilters<TSchema extends Schema> = WhereFilters<TSchema>;
+
+/**
+ * Builds a WHERE clause from filter entries, handling both plain-equality and
+ * FilterCondition entries (including IN-list). Returns the clause string plus
+ * the parameter values, with placeholders numbered starting at startParamIdx.
+ * Throws if an IN-list value is empty (postgres rejects `col IN ()`).
+ */
+function buildFilterClauses(
+  entries: [string, unknown][],
+  startParamIdx: number
+): { whereSql: string; values: ParamValue[] } {
+  const whereClauses: string[] = [];
+  const values: ParamValue[] = [];
+  let paramIdx = startParamIdx;
+  for (const [col, filter] of entries) {
+    if (filter !== null && typeof filter === "object" && "op" in (filter as object)) {
+      const cond = filter as FilterCondition;
+      if (cond.notNull) whereClauses.push(`${col} IS NOT NULL`);
+      if (cond.op === "IN") {
+        const arr = cond.value as ParamValue[];
+        if (!Array.isArray(arr) || arr.length === 0) {
+          throw new Error(`IN filter for ${col} requires a non-empty array`);
+        }
+        const placeholders = arr.map(() => `$${paramIdx++}`).join(", ");
+        whereClauses.push(`${col} IN (${placeholders})`);
+        values.push(...arr);
+      } else {
+        whereClauses.push(`${col} ${cond.op} $${paramIdx++}`);
+        values.push(cond.value as ParamValue);
+      }
+    } else {
+      whereClauses.push(`${col} = $${paramIdx++}`);
+      values.push(filter as ParamValue);
+    }
+  }
+  return { whereSql: whereClauses.join(" AND "), values };
+}
 
 export abstract class Table<
   TJSON,
@@ -207,33 +249,20 @@ export abstract class Table<
   }
 
   async deleteWhere(
-    filters: DeleteWhereFilters<TSchema>
+    filters: WhereFilters<TSchema>
   ): Promise<number> {
     const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
     if (entries.length === 0) {
       throw new Error("deleteWhere requires at least one filter");
     }
-    const whereClauses: string[] = [];
-    const values: ParamValue[] = [];
-    let paramIdx = 1;
-    for (const [col, filter] of entries) {
-      if (filter !== null && typeof filter === "object" && "op" in (filter as object)) {
-        const cond = filter as FilterCondition;
-        if (cond.notNull) whereClauses.push(`${col} IS NOT NULL`);
-        whereClauses.push(`${col} ${cond.op} $${paramIdx++}`);
-        values.push(cond.value);
-      } else {
-        whereClauses.push(`${col} = $${paramIdx++}`);
-        values.push(filter as ParamValue);
-      }
-    }
-    const sql = `DELETE FROM ${this.name} WHERE ${whereClauses.join(" AND ")} RETURNING ${this.primaryKey}`;
+    const { whereSql, values } = buildFilterClauses(entries, 1);
+    const sql = `DELETE FROM ${this.name} WHERE ${whereSql} RETURNING ${this.primaryKey}`;
     const result = await pool.query(sql, values);
     return result.rowCount ?? 0;
   }
 
   async updateWhere(
-    filters: TypeSafeFilters<TSchema>,
+    filters: WhereFilters<TSchema>,
     data: QueryData,
     returning?: string[]
   ): Promise<Record<string, unknown>[]> {
@@ -247,14 +276,11 @@ export abstract class Table<
     }
     let paramIdx = 1;
     const setClauses = dataEntries.map(([k]) => `${k} = $${paramIdx++}`);
-    const whereClauses = filterEntries.map(([k]) => `${k} = $${paramIdx++}`);
-    const values: ParamValue[] = [
-      ...dataEntries.map(([, v]) => v as ParamValue),
-      ...filterEntries.map(([, v]) => v as ParamValue),
-    ];
+    const dataValues = dataEntries.map(([, v]) => v as ParamValue);
+    const { whereSql, values: whereValues } = buildFilterClauses(filterEntries, paramIdx);
     const returningClause = returning?.length ? ` RETURNING ${returning.join(", ")}` : "";
-    const sql = `UPDATE ${this.name} SET ${setClauses.join(", ")} WHERE ${whereClauses.join(" AND ")}${returningClause}`;
-    const result = await pool.query(sql, values);
+    const sql = `UPDATE ${this.name} SET ${setClauses.join(", ")} WHERE ${whereSql}${returningClause}`;
+    const result = await pool.query(sql, [...dataValues, ...whereValues]);
     return result.rows;
   }
 
