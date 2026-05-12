@@ -90,6 +90,49 @@ describe("Spam Rules", () => {
       const result = evaluateRules(email);
       expect(result.matchedRules.some(r => r.id === "url-shortener")).toBe(false);
     });
+
+    it.each([
+      ["wealthfront.com (contains 't.co')", "https://email.wealthfront.com/ls/click?upn=abc"],
+      ["marriott.com (contains 't.co')", "https://www.marriott.com/hotels/reservation"],
+      ["att.com (contains 't.co')", "Sign in: https://www.att.com/myaccount"],
+      ["scott.com (contains 't.co')", "Check https://scott.com/orders"],
+      ["abbott.com (contains 't.co')", "https://abbott.com/labs"],
+      ["elliot.com (contains 't.co')", "https://elliot.com/products"],
+    ])("should NOT flag legit URL with shortener substring inside host: %s", (_label, text) => {
+      const email: EmailContext = {
+        fromAddress: "no-reply@em.wealthfront.com",
+        subject: "Account update",
+        text,
+      };
+      const result = evaluateRules(email);
+      expect(result.matchedRules.some(r => r.id === "url-shortener")).toBe(false);
+    });
+
+    it.each([
+      ["t.co", "https://t.co/abc123"],
+      ["goo.gl", "Map: https://goo.gl/maps/xyz"],
+      ["tinyurl.com", "https://tinyurl.com/foobar"],
+      ["bare bit.ly without protocol", "Click bit.ly/scam now"],
+      ["ow.ly with surrounding punctuation", "Link (https://ow.ly/abc)."],
+    ])("should flag actual shortener: %s", (_label, text) => {
+      const email: EmailContext = {
+        fromAddress: "test@example.com",
+        subject: "Check this out",
+        text,
+      };
+      const result = evaluateRules(email);
+      expect(result.matchedRules.some(r => r.id === "url-shortener")).toBe(true);
+    });
+
+    it("should flag when shortener and legit URL coexist", () => {
+      const email: EmailContext = {
+        fromAddress: "test@example.com",
+        subject: "Update",
+        text: "Visit https://wealthfront.com or https://bit.ly/foo",
+      };
+      const result = evaluateRules(email);
+      expect(result.matchedRules.some(r => r.id === "url-shortener")).toBe(true);
+    });
   });
 
   describe("marketing-no-unsubscribe rule", () => {
