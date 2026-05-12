@@ -25,6 +25,8 @@ import {
   SENT,
   INSIGHT,
   ENVELOPE_TO,
+  DELETED,
+  EXPUNGED,
 } from "../models";
 
 /**
@@ -1104,33 +1106,40 @@ export const expungeDeletedMails = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
-    let sql: string;
-    let values: ParamValue[];
-
     if (account === null) {
-      // Domain-wide expunge (soft-delete)
-      sql = `
-        UPDATE mails SET expunged = TRUE
-        WHERE user_id = $1 AND sent = $2 AND deleted = TRUE AND expunged = FALSE
-        RETURNING ${uidField} as uid
-      `;
-      values = [user_id, sent];
-    } else {
-      // Account-specific expunge (soft-delete)
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
-      sql = `
-        UPDATE mails SET expunged = TRUE
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
-        RETURNING ${uidField} as uid
-      `;
-      values = [user_id, sent, addressJson];
+      // Domain-wide expunge: simple equality filters → use the framework's
+      // updateWhere so `updated` is bumped via the standard data-bag pattern.
+      const rows = await mailsTable.updateWhere(
+        { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
+        { [EXPUNGED]: true, updated: new Date() },
+        [`${uidField} as uid`]
+      );
+      return rows.map((row: Record<string, unknown>) => row.uid as number);
     }
 
-    const result = await pool.query(sql, values);
-    return result.rows.map((row: Record<string, unknown>) => row.uid as number);
+    // Account-specific expunge: the address filter uses jsonb `@>` containment
+    // (with an OR across to/cc/bcc on the recv side), which WhereFilters cannot
+    // express. Two-step: raw SELECT to resolve mail_ids, then framework
+    // updateWhere with an IN filter so the data-bag pattern bumps `updated`.
+    const addressJson = JSON.stringify([{ address: account }]);
+    const addressCondition = sent
+      ? `${FROM_ADDRESS} @> $3::jsonb`
+      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+    const selectSql = `
+      SELECT ${MAIL_ID} as mail_id FROM mails
+      WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
+    `;
+    const selectValues: ParamValue[] = [user_id, sent, addressJson];
+    const selectResult = await pool.query(selectSql, selectValues);
+    const mailIds = selectResult.rows.map((row: Record<string, unknown>) => row.mail_id as string);
+    if (mailIds.length === 0) return [];
+
+    const rows = await mailsTable.updateWhere(
+      { [MAIL_ID]: { op: "IN", value: mailIds } },
+      { [EXPUNGED]: true, updated: new Date() },
+      [`${uidField} as uid`]
+    );
+    return rows.map((row: Record<string, unknown>) => row.uid as number);
   } catch (error) {
     logger.error("Failed to expunge deleted mails", {}, error);
     return [];

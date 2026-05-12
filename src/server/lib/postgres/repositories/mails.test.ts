@@ -1,9 +1,7 @@
 /**
  * Tests for mail repository functions
  */
-
-// Note: We can't import the actual functions as they require database connection,
-// but we can test the buildFlagSetClause logic by extracting it or testing behavior
+import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 
 describe("STORE operation types", () => {
   /**
@@ -165,5 +163,54 @@ describe("STORE operation types", () => {
       expect(result.deleted).toBe(false);
       expect(result.read).toBe(true); // Should preserve read status
     });
+  });
+});
+
+describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
+  // Static source check: the expunge write paths must go through
+  // mailsTable.updateWhere with `updated: new Date()` in the data bag so the
+  // framework's own auto-`updated` is not bypassed. Source-text scanning is
+  // robust against module-mock interactions in the full suite — the
+  // alternative (mock pool.query) fails when other tests load mails.ts first.
+  let mailsSource: string;
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const expungeDeletedMails[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("expungeDeletedMails not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("does not contain any raw `SET expunged` UPDATE statement", () => {
+    // Regression for #456: every write to `expunged` must go through the
+    // framework so `updated` is bumped via the data bag. Raw SQL UPDATEs are
+    // forbidden in this function.
+    expect(fnSource).not.toMatch(/SET\s+expunged/);
+  });
+
+  it("domain-wide branch uses mailsTable.updateWhere with `updated`", () => {
+    // The `account === null` branch must use updateWhere with equality filters.
+    expect(fnSource).toContain("mailsTable.updateWhere(");
+    expect(fnSource).toMatch(/\[EXPUNGED\]:\s*true/);
+    expect(fnSource).toMatch(/updated:\s*new Date\(\)/);
+  });
+
+  it("account-specific branch uses mailsTable.updateWhere with IN filter", () => {
+    // The `account !== null` branch is 2-step: raw SELECT to resolve mail_ids,
+    // then framework updateWhere with op:"IN" so `updated` is bumped.
+    expect(fnSource).toMatch(/op:\s*"IN"/);
+    expect(fnSource).toMatch(/value:\s*mailIds/);
+    // Two updateWhere call sites — one per branch.
+    const updateWhereCount =
+      (fnSource.match(/mailsTable\.updateWhere\(/g) ?? []).length;
+    expect(updateWhereCount).toBe(2);
   });
 });
