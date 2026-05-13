@@ -149,7 +149,13 @@ export const initializeAdminUser = async (): Promise<void> => {
     user_id: existingAdminUser?.user_id,
     username: "admin",
     password: ADMIN_PASSWORD || "inbox",
-    email: "admin@localhost",
+    // Pull the domain from EMAIL_DOMAIN so admin's identity stays consistent
+    // with `getDomain()` everywhere else. Hardcoding `admin@localhost` made the
+    // UI's default-account lookup miss every cloned mail in sandbox/dev
+    // environments where EMAIL_DOMAIN was set but admin's email kept the
+    // localhost fallback — `getAccountStats` filters by domain and returned 0
+    // matches, so the inbox rendered empty even though data was present.
+    email: `admin@${process.env.EMAIL_DOMAIN || "localhost"}`,
   });
   const createdAdminUserId = indexingAdminUserResult?._id;
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
