@@ -64,7 +64,7 @@ class SpamAllowlistTable extends Table<SpamAllowlistJSON, SpamAllowlistSchema, S
   readonly name = SPAM_ALLOWLIST;
   readonly primaryKey = ALLOWLIST_ID;
   readonly schema = spamAllowlistSchema;
-  readonly constraints: Constraints = [];
+  readonly constraints: Constraints = [`UNIQUE(${USER_ID}, ${PATTERN})`];
   readonly indexes = [{ column: USER_ID }];
   readonly ModelClass = SpamAllowlistModel;
   readonly supportsSoftDelete = false;
