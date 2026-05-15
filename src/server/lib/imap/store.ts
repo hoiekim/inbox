@@ -48,6 +48,21 @@ export class Store {
     return this.user;
   }
 
+  /**
+   * Resolve an IMAP mailbox name into the (accountName, isSent) pair used by
+   * the mail repository. `INBOX` and the unified `Sent Messages` folder both
+   * map to `accountName=null` (no account scoping); everything else maps to
+   * the per-account address derived from the box name.
+   */
+  private resolveBox(box: string): { accountName: string | null; isSent: boolean } {
+    const isDomainInbox = box === "INBOX";
+    const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
+    const isSent = isSentBox(box);
+    const accountName =
+      isDomainInbox || isUnifiedSent ? null : boxToAccount(this.user.username, box);
+    return { accountName, isSent };
+  }
+
   listMailboxes = async (): Promise<string[]> => {
     try {
       // Match HTTP /api/mails/accounts: filter by user's domain so we only
@@ -122,13 +137,7 @@ export class Store {
     box: string
   ): Promise<{ total: number; unread: number; maxUid: number } | null> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
-
+      const { accountName, isSent } = this.resolveBox(box);
       return await countMessages(this.user.id, accountName, isSent);
     } catch (error) {
       logger.error("Error counting messages", { component: "imap.store", box }, error);
@@ -142,13 +151,7 @@ export class Store {
    */
   getAllUids = async (box: string): Promise<number[]> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
-
+      const { accountName, isSent } = this.resolveBox(box);
       return await pgGetAllUids(this.user.id, accountName, isSent);
     } catch (error) {
       logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
@@ -164,13 +167,7 @@ export class Store {
     useUid: boolean = false
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
-
+      const { accountName, isSent } = this.resolveBox(box);
       const mailModels = await getMailsByRange(
         this.user.id,
         accountName,
@@ -276,13 +273,7 @@ export class Store {
     operation: StoreOperationType = "FLAGS"
   ): Promise<UpdatedMailFlags[]> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
-
+      const { accountName, isSent } = this.resolveBox(box);
       return await setMailFlags(
         this.user.id,
         accountName,
@@ -305,13 +296,7 @@ export class Store {
    */
   expunge = async (box: string): Promise<number[]> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
-
+      const { accountName, isSent } = this.resolveBox(box);
       return await expungeDeletedMails(this.user.id, accountName, isSent);
     } catch (error) {
       logger.error("Error expunging messages", { component: "imap.store", box }, error);
@@ -324,12 +309,7 @@ export class Store {
     criteria: SearchCriterion[]
   ): Promise<number[]> => {
     try {
-      const isDomainInbox = box === "INBOX";
-      const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-      const isSent = isSentBox(box);
-      const accountName = (isDomainInbox || isUnifiedSent)
-        ? null
-        : boxToAccount(this.user.username, box);
+      const { accountName, isSent } = this.resolveBox(box);
 
       // Convert criteria to a simpler flat format for searchMailsByUid
       const simplifiedCriteria: { type: string; value?: unknown }[] = [];
