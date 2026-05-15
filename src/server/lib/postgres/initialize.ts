@@ -75,28 +75,6 @@ export const initializePostgres = async (): Promise<void> => {
       tables.map((t) => ({ name: t.name, schema: t.schema }))
     );
 
-    // One-off constraint backfill: spam_allowlist (user_id, pattern) UNIQUE was
-    // declared after the table shipped, so `CREATE TABLE IF NOT EXISTS` is a
-    // no-op for pre-existing deployments. addEntry's ON CONFLICT depends on it.
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conrelid = 'spam_allowlist'::regclass
-            AND conname = 'spam_allowlist_user_id_pattern_key'
-        ) THEN
-          DELETE FROM spam_allowlist a
-          USING spam_allowlist b
-          WHERE a.ctid < b.ctid
-            AND a.user_id = b.user_id
-            AND a.pattern = b.pattern;
-          ALTER TABLE spam_allowlist
-            ADD CONSTRAINT spam_allowlist_user_id_pattern_key UNIQUE (user_id, pattern);
-        END IF;
-      END $$;
-    `);
-
     // Create indexes after migrations ensure all columns exist
     for (const table of tables) {
       for (const idx of table.indexes) {
