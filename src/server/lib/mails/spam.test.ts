@@ -1,7 +1,9 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 
 const mockGetSpamMails = mock(() => Promise.resolve([]));
-const mockMarkMailSpam = mock(() => Promise.resolve(true));
+const mockMarkMailSpam = mock(() =>
+  Promise.resolve({ found: true, changed: true })
+);
 
 mock.module("../postgres/repositories/mails", () => ({
   getSpamMails: mockGetSpamMails,
@@ -163,16 +165,22 @@ describe("markSpam", () => {
     expect(mockMarkMailSpam).toHaveBeenCalledWith("user-123", "mail-abc", false);
   });
 
-  it("should return true when successful", async () => {
-    mockMarkMailSpam.mockResolvedValue(true);
+  it("returns found+changed when the row's is_spam actually flipped", async () => {
+    mockMarkMailSpam.mockResolvedValue({ found: true, changed: true });
     const result = await markSpam("user-123", "mail-abc", true);
-    expect(result).toBe(true);
+    expect(result).toEqual({ found: true, changed: true });
   });
 
-  it("should return false when operation fails", async () => {
-    mockMarkMailSpam.mockResolvedValue(false);
+  it("returns found-without-change for an idempotent re-mark", async () => {
+    mockMarkMailSpam.mockResolvedValue({ found: true, changed: false });
     const result = await markSpam("user-123", "mail-abc", true);
-    expect(result).toBe(false);
+    expect(result).toEqual({ found: true, changed: false });
+  });
+
+  it("returns not-found when the (user, mail) pair does not exist", async () => {
+    mockMarkMailSpam.mockResolvedValue({ found: false, changed: false });
+    const result = await markSpam("user-123", "mail-abc", true);
+    expect(result).toEqual({ found: false, changed: false });
   });
 
   it("should propagate errors from markMailSpam", async () => {

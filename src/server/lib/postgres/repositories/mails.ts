@@ -1167,20 +1167,34 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
 
 /**
  * Mark or unmark a mail as spam.
+ *
+ * Returns:
+ *   - `found`: true if the (user, mail) pair exists, regardless of current is_spam value
+ *   - `changed`: true if the row's is_spam value was actually flipped
+ *
+ * Distinguishing "no change" from "not found" lets the caller skip classifier
+ * training on idempotent re-marks while still surfacing real auth failures.
  */
 export const markMailSpam = async (
   user_id: string,
   mail_id: string,
   is_spam: boolean
-): Promise<boolean> => {
+): Promise<{ found: boolean; changed: boolean }> => {
   try {
     const result = await pool.query(
-      `UPDATE mails SET is_spam = $1, updated = NOW() WHERE mail_id = $2 AND user_id = $3`,
+      `UPDATE mails SET is_spam = $1, updated = NOW()
+         WHERE mail_id = $2 AND user_id = $3 AND is_spam IS DISTINCT FROM $1
+         RETURNING mail_id`,
       [is_spam, mail_id, user_id]
     );
-    return (result.rowCount ?? 0) > 0;
+    if ((result.rowCount ?? 0) > 0) return { found: true, changed: true };
+    const exists = await pool.query(
+      `SELECT 1 FROM mails WHERE mail_id = $1 AND user_id = $2 LIMIT 1`,
+      [mail_id, user_id]
+    );
+    return { found: (exists.rowCount ?? 0) > 0, changed: false };
   } catch (error) {
     logger.error("Failed to mark mail as spam", {}, error);
-    return false;
+    return { found: false, changed: false };
   }
 };

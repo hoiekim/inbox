@@ -33,33 +33,36 @@ export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
       return { status: "failed", message: "is_spam must be a boolean" };
     }
 
-    const updated = await markSpam(user.id, mail_id, is_spam);
+    const { found, changed } = await markSpam(user.id, mail_id, is_spam);
 
-    if (!updated) {
+    if (!found) {
       return {
         status: "failed",
         message: "Mail not found or you don't have permission"
       };
     }
 
-    // Train the Naive Bayes classifier with this feedback.
-    // Fire-and-forget: classifier training failure must not break the user action.
-    getMailById(user.id, mail_id)
-      .then((mail) => {
-        if (!mail) return;
-        const emailContext = {
-          subject: mail.subject ?? undefined,
-          text: mail.text ?? undefined,
-          html: mail.html ?? undefined,
-          fromAddress: Array.isArray(mail.from_address) && mail.from_address.length > 0
-            ? (mail.from_address[0] as { address?: string }).address
-            : undefined,
-        };
-        return trainWithEmail(user.id, emailContext, is_spam);
-      })
-      .catch((error) => {
-        logger.warn("[SpamFilter] Classifier training failed for feedback", { mail_id }, error);
-      });
+    // Only train when is_spam actually flipped. Re-marking with the same value
+    // (idempotent click / retry / fat-finger toggle) must not re-train — one
+    // training sample per user action per mail, not one per HTTP call.
+    if (changed) {
+      getMailById(user.id, mail_id)
+        .then((mail) => {
+          if (!mail) return;
+          const emailContext = {
+            subject: mail.subject ?? undefined,
+            text: mail.text ?? undefined,
+            html: mail.html ?? undefined,
+            fromAddress: Array.isArray(mail.from_address) && mail.from_address.length > 0
+              ? (mail.from_address[0] as { address?: string }).address
+              : undefined,
+          };
+          return trainWithEmail(user.id, emailContext, is_spam);
+        })
+        .catch((error) => {
+          logger.warn("[SpamFilter] Classifier training failed for feedback", { mail_id }, error);
+        });
+    }
 
     return { status: "success" };
   }
