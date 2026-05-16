@@ -13,7 +13,17 @@ import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
 import { logger } from "../logger";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
 import { isAllowlisted } from "../postgres/repositories/spam_allowlists";
-import { classifyEmail } from "./classifier";
+import { classifyEmail as realClassifyEmail } from "./classifier";
+
+// Dependency injection seam. Don't `mock.module("./classifier", ...)` in tests —
+// it's hoisted process-wide and clobbers classifier.test.ts. Tests override
+// classifyEmail via setSpamServiceDependencies({ classifyEmail }) instead.
+const deps = {
+  classifyEmail: realClassifyEmail,
+};
+
+export const setSpamServiceDependencies = (overrides: Partial<typeof deps>) =>
+  Object.assign(deps, overrides);
 
 /**
  * Default spam filter configuration.
@@ -90,7 +100,7 @@ export async function checkSpam(
 
   // Layer 3: Naive Bayes classifier (user-trained, per-user model)
   try {
-    const { score: classifierScore, reason: classifierReason } = await classifyEmail(userId, email);
+    const { score: classifierScore, reason: classifierReason } = await deps.classifyEmail(userId, email);
     // classifyEmail returns P(spam) * 100 in [0, 100], where < 50 is a HAM verdict
     // and >= 50 is a SPAM verdict (the classifier sets reason to non-null only at >= 50).
     // Only contribute to totalScore when the verdict leans spam — otherwise a

@@ -6,12 +6,14 @@ const mockClassifyEmail = mock(async (_uid: string, _email: unknown) => ({
 }));
 const mockIsAllowlisted = mock(async (_uid: string, _addr: string) => false);
 
-mock.module("./classifier", () => ({ classifyEmail: mockClassifyEmail }));
+// Don't mock.module("./classifier", ...) — Bun's mock.module is process-wide
+// and would clobber classifier.test.ts. Use the service's DI seam instead.
 mock.module("../postgres/repositories/spam_allowlists", () => ({
   isAllowlisted: mockIsAllowlisted,
 }));
 
-const { checkSpam } = await import("./service");
+const { checkSpam, setSpamServiceDependencies } = await import("./service");
+setSpamServiceDependencies({ classifyEmail: mockClassifyEmail });
 
 // Email crafted so two minor rules fire (reply-to-mismatch + html-only-no-text = 20 pts).
 // remoteAddress is omitted so the DNSBL layer is skipped (no network calls in tests).
