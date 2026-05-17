@@ -114,16 +114,11 @@ export async function classifyEmail(
     getWordCounts?: GetWordCountsFn;
   } = {},
 ): Promise<{ score: number; reason: string | null }> {
-  // DIAGNOSTIC (Hoie 2026-05-17, remove before merge) — unconditional
-  // log so we can see what deps the function sees in CI.
-  // eslint-disable-next-line no-console
-  console.error("[classifyEmail enter]", {
-    userId,
-    hasDocCountsDep: typeof deps.getClassifierDocCounts,
-    hasWordCountsDep: typeof deps.getWordCounts,
-    depsKeys: Object.keys(deps),
-    realDocCountsType: typeof realGetClassifierDocCounts,
-  });
+  // DIAGNOSTIC (Hoie 2026-05-17, remove before merge) — write to stderr
+  // directly to bypass Bun's test-runner stdout buffering on passing tests.
+  process.stderr.write(
+    `[classifyEmail enter] userId=${userId} hasDocs=${typeof deps.getClassifierDocCounts} hasWords=${typeof deps.getWordCounts} depsKeys=${Object.keys(deps).join(",")}\n`,
+  );
   const getClassifierDocCounts = deps.getClassifierDocCounts ?? realGetClassifierDocCounts;
   const getWordCounts = deps.getWordCounts ?? realGetWordCounts;
   try {
