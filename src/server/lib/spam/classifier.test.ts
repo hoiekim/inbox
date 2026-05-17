@@ -205,14 +205,31 @@ describe("classifyEmail", () => {
       ["prize", { spamCount: 16, hamCount: 1 }],
       ["free", { spamCount: 15, hamCount: 1 }],
     ]);
+    let docCountsHits = 0;
+    let wordCountsHits = 0;
     const result = await classifyEmail(
       "user1",
       { subject: "Win a free prize today" },
       {
-        getClassifierDocCounts: stubDocCounts({ spamDocs: 20, hamDocs: 20 }),
-        getWordCounts: stubWordCounts(wordCounts),
+        getClassifierDocCounts: async () => {
+          docCountsHits++;
+          return { spamDocs: 20, hamDocs: 20 };
+        },
+        getWordCounts: async () => {
+          wordCountsHits++;
+          return wordCounts;
+        },
       },
     );
+    // Diagnostic — if CI ever fails this, the failure message tells us
+    // exactly which side of the math broke (DI plumbing vs. score calc).
+    if (result.score <= 50) {
+      // eslint-disable-next-line no-console
+      console.error("[diagnostic] result=", JSON.stringify(result), {
+        docCountsHits,
+        wordCountsHits,
+      });
+    }
     expect(result.score).toBeGreaterThan(50);
     expect(result.reason).not.toBeNull();
   });
