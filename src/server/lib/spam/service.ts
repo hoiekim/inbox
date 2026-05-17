@@ -12,8 +12,20 @@ import { SpamCheckResult, SpamFilterConfig, EmailContext } from "./types";
 import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
 import { logger } from "../logger";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
-import { isAllowlisted } from "../postgres/repositories/spam_allowlists";
-import { classifyEmail } from "./classifier";
+import { isAllowlisted as realIsAllowlisted } from "../postgres/repositories/spam_allowlists";
+import { classifyEmail as realClassifyEmail } from "./classifier";
+
+// DI seams — production callers pass nothing and get the real
+// implementations. Tests inject stubs through these args instead of
+// `mock.module`, which is process-wide in Bun and leaks across sibling
+// test files (root cause of the classifier.test.ts CD flake on
+// 2026-05-17; same DI factoring as backfill-snapshots.ts).
+type IsAllowlistedFn = typeof realIsAllowlisted;
+type ClassifyEmailFn = typeof realClassifyEmail;
+export interface CheckSpamDeps {
+  isAllowlisted?: IsAllowlistedFn;
+  classifyEmail?: ClassifyEmailFn;
+}
 
 /**
  * Default spam filter configuration.
@@ -37,8 +49,11 @@ const DEFAULT_CONFIG: SpamFilterConfig = {
 export async function checkSpam(
   userId: string,
   email: EmailContext,
-  config: Partial<SpamFilterConfig> = {}
+  config: Partial<SpamFilterConfig> = {},
+  deps: CheckSpamDeps = {},
 ): Promise<SpamCheckResult> {
+  const isAllowlisted = deps.isAllowlisted ?? realIsAllowlisted;
+  const classifyEmail = deps.classifyEmail ?? realClassifyEmail;
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const reasons: string[] = [];
   let totalScore = 0;
@@ -122,8 +137,10 @@ export async function checkSpam(
  */
 export async function isSenderAllowlisted(
   userId: string,
-  fromAddress: string
+  fromAddress: string,
+  deps: { isAllowlisted?: IsAllowlistedFn } = {},
 ): Promise<boolean> {
+  const isAllowlisted = deps.isAllowlisted ?? realIsAllowlisted;
   try {
     return await isAllowlisted(userId, fromAddress);
   } catch (error) {
