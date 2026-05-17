@@ -1,24 +1,38 @@
 /**
  * Unit tests for the Naive Bayes spam classifier.
  *
- * Uses mock implementations for the database layer so no real DB is needed.
+ * Uses dependency injection (positional `deps` arg on `trainWithEmail` /
+ * `classifyEmail`) instead of `mock.module`, which is process-wide in
+ * Bun and was the root cause of intermittent CI failures of the
+ * "high score to spam-like email" case (Hoie 2026-05-17). Same DI
+ * pattern as `backfill-snapshots.ts`.
  */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 
-// --- Mock the database repositories ---
-// We mock the entire module so the classifier never touches a real DB.
-const mockTrainClassifier = mock(async (_userId: string, _words: string[], _isSpam: boolean) => {});
-const mockGetClassifierDocCounts = mock(async (_userId: string) => ({ spamDocs: 0, hamDocs: 0 }));
-const mockGetWordCounts = mock(async (_userId: string, _words: string[]) => new Map<string, { spamCount: number; hamCount: number }>());
+import { tokenize, extractTokens, trainWithEmail, classifyEmail } from "./classifier";
 
-mock.module("../postgres/repositories/spam_training", () => ({
-  trainClassifier: mockTrainClassifier,
+const mockTrainClassifier = mock(
+  async (_userId: string, _words: string[], _isSpam: boolean): Promise<void> => {},
+);
+const mockGetClassifierDocCounts = mock(
+  async (_userId: string): Promise<{ spamDocs: number; hamDocs: number }> => ({
+    spamDocs: 0,
+    hamDocs: 0,
+  }),
+);
+const mockGetWordCounts = mock(
+  async (
+    _userId: string,
+    _words: string[],
+  ): Promise<Map<string, { spamCount: number; hamCount: number }>> => new Map(),
+);
+
+const trainDeps = { trainClassifier: mockTrainClassifier };
+const classifyDeps = {
   getClassifierDocCounts: mockGetClassifierDocCounts,
   getWordCounts: mockGetWordCounts,
-}));
-
-import { tokenize, extractTokens, trainWithEmail, classifyEmail } from "./classifier";
+};
 
 // --- tokenize() ---
 describe("tokenize", () => {
@@ -110,7 +124,7 @@ describe("trainWithEmail", () => {
   });
 
   it("calls trainClassifier with extracted tokens", async () => {
-    await trainWithEmail("user1", { subject: "Buy cheap meds", text: "Click here now" }, true);
+    await trainWithEmail("user1", { subject: "Buy cheap meds", text: "Click here now" }, true, trainDeps);
     expect(mockTrainClassifier).toHaveBeenCalledTimes(1);
     const [userId, words, isSpam] = mockTrainClassifier.mock.calls[0] as [string, string[], boolean];
     expect(userId).toBe("user1");
@@ -120,12 +134,12 @@ describe("trainWithEmail", () => {
   });
 
   it("skips training when no tokens can be extracted", async () => {
-    await trainWithEmail("user1", {}, false);
+    await trainWithEmail("user1", {}, false, trainDeps);
     expect(mockTrainClassifier).not.toHaveBeenCalled();
   });
 
   it("trains as ham when isSpam=false", async () => {
-    await trainWithEmail("user2", { subject: "Team standup tomorrow" }, false);
+    await trainWithEmail("user2", { subject: "Team standup tomorrow" }, false, trainDeps);
     const [, , isSpam] = mockTrainClassifier.mock.calls[0] as [string, string[], boolean];
     expect(isSpam).toBe(false);
   });
@@ -136,30 +150,34 @@ describe("classifyEmail", () => {
   beforeEach(() => {
     mockGetClassifierDocCounts.mockClear();
     mockGetWordCounts.mockClear();
+    // Reset to the default zero-docs implementation so prior tests'
+    // `mockResolvedValueOnce` queues don't bleed across cases.
+    mockGetClassifierDocCounts.mockImplementation(async () => ({ spamDocs: 0, hamDocs: 0 }));
+    mockGetWordCounts.mockImplementation(async () => new Map());
   });
 
   it("returns score=0 when not enough training data (below MIN_TRAINING_DOCS=5)", async () => {
     mockGetClassifierDocCounts.mockResolvedValueOnce({ spamDocs: 2, hamDocs: 1 });
-    const result = await classifyEmail("user1", { subject: "Win a prize" });
+    const result = await classifyEmail("user1", { subject: "Win a prize" }, classifyDeps);
     expect(result.score).toBe(0);
     expect(result.reason).toBeNull();
   });
 
   it("returns score=0 when no spam docs trained", async () => {
     mockGetClassifierDocCounts.mockResolvedValueOnce({ spamDocs: 0, hamDocs: 10 });
-    const result = await classifyEmail("user1", { subject: "Win a prize" });
+    const result = await classifyEmail("user1", { subject: "Win a prize" }, classifyDeps);
     expect(result.score).toBe(0);
   });
 
   it("returns score=0 when no ham docs trained", async () => {
     mockGetClassifierDocCounts.mockResolvedValueOnce({ spamDocs: 10, hamDocs: 0 });
-    const result = await classifyEmail("user1", { subject: "Hello team" });
+    const result = await classifyEmail("user1", { subject: "Hello team" }, classifyDeps);
     expect(result.score).toBe(0);
   });
 
   it("returns score=0 when email has no extractable tokens", async () => {
     mockGetClassifierDocCounts.mockResolvedValueOnce({ spamDocs: 10, hamDocs: 10 });
-    const result = await classifyEmail("user1", {});
+    const result = await classifyEmail("user1", {}, classifyDeps);
     expect(result.score).toBe(0);
   });
 
@@ -171,9 +189,13 @@ describe("classifyEmail", () => {
         ["win", { spamCount: 18, hamCount: 1 }],
         ["prize", { spamCount: 16, hamCount: 1 }],
         ["free", { spamCount: 15, hamCount: 1 }],
-      ])
+      ]),
     );
-    const result = await classifyEmail("user1", { subject: "Win a free prize today" });
+    const result = await classifyEmail(
+      "user1",
+      { subject: "Win a free prize today" },
+      classifyDeps,
+    );
     expect(result.score).toBeGreaterThan(50);
     expect(result.reason).not.toBeNull();
   });
@@ -186,16 +208,20 @@ describe("classifyEmail", () => {
         ["standup", { spamCount: 0, hamCount: 15 }],
         ["meeting", { spamCount: 1, hamCount: 18 }],
         ["tomorrow", { spamCount: 0, hamCount: 17 }],
-      ])
+      ]),
     );
-    const result = await classifyEmail("user1", { subject: "Team standup meeting tomorrow" });
+    const result = await classifyEmail(
+      "user1",
+      { subject: "Team standup meeting tomorrow" },
+      classifyDeps,
+    );
     expect(result.score).toBeLessThan(50);
     expect(result.reason).toBeNull();
   });
 
   it("returns score=0 and no error when DB throws", async () => {
     mockGetClassifierDocCounts.mockRejectedValueOnce(new Error("DB error"));
-    const result = await classifyEmail("user1", { subject: "Hello there" });
+    const result = await classifyEmail("user1", { subject: "Hello there" }, classifyDeps);
     expect(result.score).toBe(0);
     expect(result.reason).toBeNull();
   });
@@ -203,9 +229,9 @@ describe("classifyEmail", () => {
   it("returns a score in [0, 100]", async () => {
     mockGetClassifierDocCounts.mockResolvedValueOnce({ spamDocs: 10, hamDocs: 10 });
     mockGetWordCounts.mockResolvedValueOnce(
-      new Map([["click", { spamCount: 8, hamCount: 2 }]])
+      new Map([["click", { spamCount: 8, hamCount: 2 }]]),
     );
-    const result = await classifyEmail("user1", { subject: "Click here" });
+    const result = await classifyEmail("user1", { subject: "Click here" }, classifyDeps);
     expect(result.score).toBeGreaterThanOrEqual(0);
     expect(result.score).toBeLessThanOrEqual(100);
   });
