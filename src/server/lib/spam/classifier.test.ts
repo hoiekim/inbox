@@ -16,6 +16,8 @@
 
 import { describe, it, expect } from "bun:test";
 
+process.env.CLASSIFIER_DEBUG = "1";
+
 import { tokenize, extractTokens, trainWithEmail, classifyEmail } from "./classifier";
 
 type DocCounts = { spamDocs: number; hamDocs: number };

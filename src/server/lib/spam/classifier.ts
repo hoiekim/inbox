@@ -114,6 +114,17 @@ export async function classifyEmail(
     getWordCounts?: GetWordCountsFn;
   } = {},
 ): Promise<{ score: number; reason: string | null }> {
+  // DIAGNOSTIC (Hoie 2026-05-17): log deps signature so a CI failure of
+  // classifier.test.ts shows whether the DI plumbing is actually firing.
+  // eslint-disable-next-line no-console
+  if (process.env.CLASSIFIER_DEBUG === "1") {
+    console.error("[classifyEmail enter]", {
+      userId,
+      hasDocCountsDep: typeof deps.getClassifierDocCounts,
+      hasWordCountsDep: typeof deps.getWordCounts,
+      depsKeys: Object.keys(deps),
+    });
+  }
   const getClassifierDocCounts = deps.getClassifierDocCounts ?? realGetClassifierDocCounts;
   const getWordCounts = deps.getWordCounts ?? realGetWordCounts;
   try {
