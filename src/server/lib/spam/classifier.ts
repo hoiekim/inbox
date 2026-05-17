@@ -18,11 +18,19 @@
 
 import { logger } from "../logger";
 import {
-  trainClassifier,
-  getClassifierDocCounts,
-  getWordCounts,
+  trainClassifier as realTrainClassifier,
+  getClassifierDocCounts as realGetClassifierDocCounts,
+  getWordCounts as realGetWordCounts,
 } from "../postgres/repositories/spam_training";
 import { EmailContext } from "./types";
+
+// DI seams — production callers pass nothing and get the real DB
+// implementations. Tests pass mocks via positional args instead of
+// `mock.module`, which is process-wide in Bun and leaks across sibling
+// test files. Same factoring as `backfill-snapshots.ts` (Hoie 2026-05-14).
+type TrainClassifierFn = typeof realTrainClassifier;
+type GetClassifierDocCountsFn = typeof realGetClassifierDocCounts;
+type GetWordCountsFn = typeof realGetWordCounts;
 
 /** Minimum number of spam + ham documents before the classifier will score. */
 const MIN_TRAINING_DOCS = 5;
@@ -71,8 +79,10 @@ export function extractTokens(email: EmailContext): string[] {
 export async function trainWithEmail(
   userId: string,
   email: EmailContext,
-  isSpam: boolean
+  isSpam: boolean,
+  deps: { trainClassifier?: TrainClassifierFn } = {},
 ): Promise<void> {
+  const trainClassifier = deps.trainClassifier ?? realTrainClassifier;
   const words = extractTokens(email);
   if (words.length === 0) {
     logger.warn("[Classifier] No tokens extracted from email — skipping training", { userId });
@@ -98,8 +108,14 @@ export async function trainWithEmail(
  */
 export async function classifyEmail(
   userId: string,
-  email: EmailContext
+  email: EmailContext,
+  deps: {
+    getClassifierDocCounts?: GetClassifierDocCountsFn;
+    getWordCounts?: GetWordCountsFn;
+  } = {},
 ): Promise<{ score: number; reason: string | null }> {
+  const getClassifierDocCounts = deps.getClassifierDocCounts ?? realGetClassifierDocCounts;
+  const getWordCounts = deps.getWordCounts ?? realGetWordCounts;
   try {
     const { spamDocs, hamDocs } = await getClassifierDocCounts(userId);
     const totalDocs = spamDocs + hamDocs;
