@@ -163,6 +163,21 @@ describe("searchMail", () => {
     expect(results[0].insight).toEqual(insight);
   });
 
+  it("should preserve the sent field from the model (regression for #497)", async () => {
+    // Before the fix, searchMail dropped `sent` and the MailHeaderData
+    // constructor defaulted it to false — so every search hit looked received.
+    const models = [
+      { mail_id: "s1", subject: "Sent", date: "2024-01-01", from_address: null, from_text: null, to_address: null, to_text: null, cc_address: null, cc_text: null, bcc_address: null, bcc_text: null, read: true, saved: false, sent: true, insight: null, highlight: undefined },
+      { mail_id: "r1", subject: "Received", date: "2024-01-02", from_address: null, from_text: null, to_address: null, to_text: null, cc_address: null, cc_text: null, bcc_address: null, bcc_text: null, read: false, saved: false, sent: false, insight: null, highlight: undefined },
+    ];
+    mockSearchMails.mockResolvedValue(models);
+
+    const results = await searchMail(mockUser, "mixed");
+    expect(results).toHaveLength(2);
+    expect(results[0].sent).toBe(true);
+    expect(results[1].sent).toBe(false);
+  });
+
   it("should return multiple results", async () => {
     const models = [
       { mail_id: "m1", subject: "First", date: "2024-01-01", from_address: null, from_text: null, to_address: null, to_text: null, cc_address: null, cc_text: null, bcc_address: null, bcc_text: null, read: false, saved: false, insight: null, highlight: undefined },

@@ -31,6 +31,7 @@ export const searchMail = async (
         : undefined,
       read: m.read,
       saved: m.saved,
+      sent: m.sent,
       insight: m.insight as Insight | undefined,
       cc: m.cc_address
         ? { value: m.cc_address as MailAddressValueType[], text: m.cc_text || "" }
