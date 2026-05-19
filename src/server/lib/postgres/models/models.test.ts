@@ -413,6 +413,24 @@ describe("UserModel.toUser", () => {
     const u = new UserModel(makeUserData({ password: null }));
     expect(() => u.toUser()).toThrow("no password set");
   });
+
+  // #496: token/expiry must round-trip through toUser() so callers like
+  // setUserInfo / startTimer can validate them.
+  it("propagates token + expiry when present", () => {
+    const u = new UserModel(
+      makeUserData({ token: "tok-abc", expiry: "2026-12-31T00:00:00+00:00" }),
+    );
+    const user = u.toUser();
+    expect(user.token).toBe("tok-abc");
+    expect(user.expiry).toBe("2026-12-31T00:00:00+00:00");
+  });
+
+  it("propagates null token/expiry without coercing them away", () => {
+    const u = new UserModel(makeUserData({ token: null, expiry: null }));
+    const user = u.toUser();
+    expect(user.token).toBeNull();
+    expect(user.expiry).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

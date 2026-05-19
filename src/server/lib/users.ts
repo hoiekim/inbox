@@ -29,7 +29,9 @@ export const getUser = async (
     id: pgUser.user_id,
     username: pgUser.username,
     email: pgUser.email ?? undefined,
-    password: pgUser.password
+    password: pgUser.password,
+    token: pgUser.token ?? undefined,
+    expiry: pgUser.expiry ?? undefined
   });
 };
 
