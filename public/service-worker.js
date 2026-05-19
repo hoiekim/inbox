@@ -94,27 +94,48 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  if (!event.data) return;
+  // Gate the entire handler on the user actually being opted in. Since
+  // the SW is now registered for everyone (so the /assets/* cache tier
+  // can help users who never enabled push), a push that arrives for a
+  // user who has revoked notification permission or whose
+  // pushManager.subscription was unsubscribed would otherwise throw on
+  // showNotification (permission denied) and on the /api/push/refresh
+  // call with a stale subscription_id (server 4xx). Bail out cleanly
+  // when there's no active subscription or no notification permission.
+  const handler = async () => {
+    if (!event.data) return;
+    if (self.Notification && self.Notification.permission !== "granted") return;
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!sub) return;
 
-  const notification = event.data.json();
-  if (!notification) return;
+    let notification;
+    try {
+      notification = event.data.json();
+    } catch {
+      return;
+    }
+    if (!notification) return;
 
-  const { push_subscription_id, title, icon, badge_count } = notification;
+    const { push_subscription_id, title, icon, badge_count } = notification;
 
-  const showNotification = async () => {
-    if (!title) return;
-    return self.registration.showNotification(title, { icon });
+    const jobs = [];
+    if (title) {
+      jobs.push(self.registration.showNotification(title, { icon }).catch(() => {}));
+    }
+    if (badge_count !== undefined && self.navigator) {
+      if (badge_count === 0 && self.navigator.clearAppBadge) {
+        jobs.push(self.navigator.clearAppBadge().catch(() => {}));
+      } else if (self.navigator.setAppBadge) {
+        jobs.push(self.navigator.setAppBadge(badge_count).catch(() => {}));
+      }
+    }
+    if (push_subscription_id) {
+      jobs.push(
+        fetch("/api/push/refresh/" + push_subscription_id).catch(() => {}),
+      );
+    }
+    await Promise.all(jobs);
   };
 
-  const setBadge = async () => {
-    if (badge_count === undefined) return;
-    if (badge_count === 0) return self.navigator.clearAppBadge();
-    else return self.navigator.setAppBadge(badge_count);
-  };
-
-  const refresh = () => fetch("/api/push/refresh/" + push_subscription_id);
-
-  const jobs = Promise.all([showNotification(), setBadge(), refresh()]);
-
-  event.waitUntil(jobs);
+  event.waitUntil(handler());
 });
