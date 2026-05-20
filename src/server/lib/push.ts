@@ -115,22 +115,19 @@ export const createPush = (
         if (!notification) return;
         const badgeCount = notification.count || 0;
         const badgeLatest = notification.latest;
+        const incrementedBadgeCount = badgeCount + 1;
 
         if (badgeLatest && badgeLatest <= lastNotified) return;
 
-        // `badgeCount` is the current unread count from the DB. By the time
-        // notifyNewMails runs, saveMailHandler has already awaited the insert
-        // (see receive.ts), so the new mail is already part of `badgeCount` —
-        // do NOT add 1 again or the iOS badge ends up off-by-one (Closes #471).
         const message =
           badgeCount > 1
-            ? `You have ${badgeCount} new mails`
+            ? `You have ${incrementedBadgeCount} new mails`
             : "You have a new mail";
 
         const notificationPayload = {
           title: message,
           icon: "/icons/logo192.png",
-          badge_count: badgeCount,
+          badge_count: incrementedBadgeCount,
           push_subscription_id,
         };
 

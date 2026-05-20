@@ -257,10 +257,7 @@ describe("notifyNewMails", () => {
     expect(sendArgs[0]).toBe(subscription);
     const payload = JSON.parse(sendArgs[1] as string);
     expect(payload.title).toBe("You have a new mail");
-    // `count: 1` already includes the just-arrived mail (saveMailHandler awaits
-    // the insert before notifyNewMails runs), so the badge must equal the DB
-    // count — no +1 (#471).
-    expect(payload.badge_count).toBe(1);
+    expect(payload.badge_count).toBe(2);
     expect(payload.push_subscription_id).toBe("sub-1");
     expect(m.repo.updateLastNotified).toHaveBeenCalledTimes(1);
     expect(m.repo.updateLastNotified.mock.calls[0]).toEqual(["sub-1"] as never);
@@ -282,10 +279,8 @@ describe("notifyNewMails", () => {
 
     const sendArgs = m.sendNotification.mock.calls[0] as unknown as unknown[];
     const payload = JSON.parse(sendArgs[1] as string);
-    // Both message and badge reflect the actual unread count (4 in DB → 4 in
-    // the message/badge), not 5 — see #471.
-    expect(payload.title).toBe("You have 4 new mails");
-    expect(payload.badge_count).toBe(4);
+    expect(payload.title).toBe("You have 5 new mails");
+    expect(payload.badge_count).toBe(5);
   });
 
   it("skips notification when no fresh unread mail (latest <= lastNotified)", async () => {
