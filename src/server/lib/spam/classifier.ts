@@ -27,7 +27,7 @@ import { EmailContext } from "./types";
 // DI seams — production callers pass nothing and get the real DB
 // implementations. Tests pass mocks via positional args instead of
 // `mock.module`, which is process-wide in Bun and leaks across sibling
-// test files. Same factoring as `backfill-snapshots.ts` (Hoie 2026-05-14).
+// test files.
 type TrainClassifierFn = typeof realTrainClassifier;
 type GetClassifierDocCountsFn = typeof realGetClassifierDocCounts;
 type GetWordCountsFn = typeof realGetWordCounts;

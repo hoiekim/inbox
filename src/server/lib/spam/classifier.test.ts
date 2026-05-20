@@ -4,8 +4,7 @@
  * Uses dependency injection (positional `deps` arg on `trainWithEmail` /
  * `classifyEmail`) instead of `mock.module`, which is process-wide in
  * Bun and was the root cause of intermittent CI failures of the
- * "high score to spam-like email" case (Hoie 2026-05-17). Same DI
- * pattern as `backfill-snapshots.ts`.
+ * "high score to spam-like email" case.
  *
  * Test stubs are plain async functions rather than `mock()` instances
  * + `mockResolvedValueOnce` queues — the queue-based pattern proved
