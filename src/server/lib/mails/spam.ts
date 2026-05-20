@@ -47,6 +47,6 @@ export const markSpam = async (
   user_id: string,
   mail_id: string,
   is_spam: boolean
-): Promise<boolean> => {
+): Promise<{ found: boolean; changed: boolean }> => {
   return markMailSpam(user_id, mail_id, is_spam);
 };

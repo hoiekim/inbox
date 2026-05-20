@@ -27,7 +27,7 @@ const mockGetAllowlistForUser = mock(async () => []);
 const mockAddAllowlistEntry = mock(async () => null as unknown);
 const mockRemoveAllowlistEntry = mock(async () => false as unknown);
 const mockSendMail = mock(async () => {});
-const mockMarkSpam = mock(async () => false as unknown);
+const mockMarkSpam = mock(async () => ({ found: false, changed: false }) as unknown);
 const mockGetAttachment = mock(() => undefined as unknown);
 const mockMailsTableQueryOne = mock(async () => null as unknown);
 const AUTH_ERROR_MESSAGE = "Authentication required";
@@ -620,7 +620,7 @@ describe("postMarkSpamMailRoute", () => {
 
   it("returns failed when mail not found or no permission", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
-    mockMarkSpam.mockResolvedValueOnce(null);
+    mockMarkSpam.mockResolvedValueOnce({ found: false, changed: false });
     const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
@@ -629,7 +629,7 @@ describe("postMarkSpamMailRoute", () => {
 
   it("returns success when spam marked", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
-    mockMarkSpam.mockResolvedValueOnce({ id: "m1" });
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
     const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
@@ -637,8 +637,16 @@ describe("postMarkSpamMailRoute", () => {
 
   it("returns success when spam unmarked (is_spam false)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
-    mockMarkSpam.mockResolvedValueOnce({ id: "m1" });
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
     const req = makeReq({ body: { mail_id: "m1", is_spam: false } });
+    const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+  });
+
+  it("returns success but skips training when re-marking with the same value", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: false });
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
   });

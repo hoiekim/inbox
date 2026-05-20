@@ -39,7 +39,7 @@ mock.module("server", () => ({
   getAllowlistForUser: mock(async () => []),
   addAllowlistEntry: mock(async () => null),
   removeAllowlistEntry: mock(async () => false),
-  markSpam: mock(async () => false),
+  markSpam: mock(async () => ({ found: false, changed: false })),
   getAttachment: mock(() => undefined),
   AUTH_ERROR_MESSAGE: "Authentication required",
   MailValidationError: class extends Error {},
