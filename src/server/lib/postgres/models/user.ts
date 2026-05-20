@@ -27,7 +27,13 @@ export interface MaskedUser {
   email?: string | null;
 }
 
-export type User = MaskedUser & { password: string };
+export type User = MaskedUser & {
+  password: string;
+  // token/expiry are required to round-trip through `toUser()` so callers like
+  // `setUserInfo` can validate them. `null` when no in-flight signup token.
+  token?: string | null;
+  expiry?: string | null;
+};
 
 const userSchema = {
   [USER_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
@@ -85,6 +91,8 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
       username: this.username,
       password: this.password,
       email: this.email,
+      token: this.token,
+      expiry: this.expiry,
     };
   }
 }
