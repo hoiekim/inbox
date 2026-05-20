@@ -19,8 +19,8 @@ const postOnly =
   };
 
 // Apply rate limiters only to POST requests (not GET/DELETE)
-usersRouter.use(postLoginRoute.path, postOnly(loginLimiter));
-usersRouter.use(postTokenRoute.path, postOnly(tokenLimiter));
+usersRouter.use(postLoginRoute.path, postOnly(loginLimiter.middleware));
+usersRouter.use(postTokenRoute.path, postOnly(tokenLimiter.middleware));
 
 const routes = [
   getLoginRoute,
