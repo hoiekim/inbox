@@ -85,6 +85,12 @@ export interface MailType {
   messageId: string;
   read: boolean;
   saved: boolean;
+  /**
+   * @deprecated Do not consume. Sent/received state is derived from the
+   * sender address against the user's domain — the `sent` column on the
+   * `mails` table is going away (#430). New code MUST NOT branch on this
+   * field.
+   */
   sent: boolean;
   deleted: boolean;
   draft: boolean;
