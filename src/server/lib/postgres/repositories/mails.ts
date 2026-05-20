@@ -1020,13 +1020,23 @@ export const getUnreadNotifications = async (
     if (user_ids.length === 0) return new Map();
 
     const placeholders = user_ids.map((_, i) => `$${i + 1}`).join(", ");
+    // Mirror getAccountStats' exclusions (draft + expunged): drafts have
+    // `draft=TRUE AND read=FALSE` in the Drafts folder, which the FE
+    // polling (getAccountStats) excludes via `draft = FALSE`. Without
+    // the same filter here, the push-payload badge_count would include
+    // drafts while the FE-driven badge_count wouldn't — drift caused
+    // the symptom Hoie reported 2026-05-20 ("badge says 15 even though
+    // 0 unread; +1 on new mail").
     const sql = `
-      SELECT 
+      SELECT
         user_id,
         COUNT(*) FILTER (WHERE read = FALSE) as unread_count,
         MAX(date) as latest
-      FROM mails 
-      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE
+      FROM mails
+      WHERE user_id IN (${placeholders})
+        AND sent = FALSE
+        AND expunged = FALSE
+        AND draft = FALSE
       GROUP BY user_id
     `;
 

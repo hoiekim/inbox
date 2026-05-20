@@ -214,3 +214,39 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
     expect(updateWhereCount).toBe(2);
   });
 });
+
+// Source-text scan for #507: getUnreadNotifications must exclude drafts
+// so the push-payload badge_count matches the FE-polling badge count
+// (getAccountStats excludes draft = FALSE via its expanded_mails CTE).
+// Drift between the two queries inflated the iOS badge above the
+// FE-shown unread count and produced a +1-per-new-mail symptom.
+describe("getUnreadNotifications SQL filter", () => {
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const getUnreadNotifications[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getUnreadNotifications not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("excludes drafts (draft = FALSE) so badge matches FE polling (#507)", () => {
+    expect(fnSource).toMatch(/draft\s*=\s*FALSE/);
+  });
+
+  it("preserves existing exclusions for sent + expunged", () => {
+    expect(fnSource).toMatch(/sent\s*=\s*FALSE/);
+    expect(fnSource).toMatch(/expunged\s*=\s*FALSE/);
+  });
+
+  it("counts only unread rows (read = FALSE) in the FILTER", () => {
+    expect(fnSource).toMatch(/COUNT\(\*\)\s+FILTER\s*\(WHERE\s+read\s*=\s*FALSE\)/);
+  });
+});
