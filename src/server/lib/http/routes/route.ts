@@ -46,38 +46,38 @@ export class Route<T> {
     this.callback = callback;
   }
 
-  handler: RequestHandler = async (req, res, next) => {
-    if (req.method === this.method) {
-      try {
-        const stream: Stream<T> = (response) => {
-          if (Buffer.isBuffer(response)) res.write(response);
-          else res.write(JSON.stringify(response) + "\n");
-        };
-        const result = await this.callback(req, res, stream);
-        if (Buffer.isBuffer(result)) res.send(result);
-        else if (result) res.json(result);
-        else res.end();
-        return;
-      } catch (error: unknown) {
-        logger.error("Route handler error", { method: this.method, path: this.path }, error);
-        sendAlarm(
-          `Route Error: ${this.method} ${this.path}`,
-          `**Error:** ${error instanceof Error ? error.message : String(error)}`
-        ).catch(() => undefined);
-        const message =
-          process.env.NODE_ENV === "production"
-            ? "Internal server error"
-            : error instanceof Error
-              ? error.message
-              : String(error);
-        res.status(500).json({ status: "error", message });
-      }
+  handler: RequestHandler = async (req, res, _next) => {
+    try {
+      const stream: Stream<T> = (response) => {
+        if (Buffer.isBuffer(response)) res.write(response);
+        else res.write(JSON.stringify(response) + "\n");
+      };
+      const result = await this.callback(req, res, stream);
+      if (Buffer.isBuffer(result)) res.send(result);
+      else if (result) res.json(result);
+      else res.end();
+    } catch (error: unknown) {
+      logger.error("Route handler error", { method: this.method, path: this.path }, error);
+      sendAlarm(
+        `Route Error: ${this.method} ${this.path}`,
+        `**Error:** ${error instanceof Error ? error.message : String(error)}`
+      ).catch(() => undefined);
+      const message =
+        process.env.NODE_ENV === "production"
+          ? "Internal server error"
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      res.status(500).json({ status: "error", message });
     }
-    next();
   };
 
   register = (router: Router) => {
-    router.use(this.path, this.handler);
+    // Bind to the exact method + path. Using `router.use(path, handler)` would
+    // mount-match (prefix match) and let a wildcard like `/:id` shadow more
+    // specific paths registered after it (#505).
+    const method = this.method.toLowerCase() as "get" | "post" | "delete";
+    router[method](this.path, this.handler);
   };
 }
 
