@@ -262,11 +262,17 @@ export const getMailHeaders = async (
     const addressJson = JSON.stringify([{ address }]);
     // Detect sent/received by address matching, not the `sent` flag.
     // For sent mails, check from_address only.
-    // For received mails, check to_address, cc_address, and bcc_address.
-    // This ensures self-emails appear in both Sent and Inbox views correctly.
+    // For received mails, check to_address, cc_address, bcc_address AND
+    // envelope_to. `envelope_to` is the SMTP-level delivery address that
+    // can differ from MIME to/cc/bcc when a sender uses listserv-style
+    // routing (e.g. GitHub notifications: MIME `to` = list address,
+    // envelope_to = the actual recipient sub-address). Mirrors the
+    // received-branch address expansion in `getAccountStats` (PR #525)
+    // so that an account row surfaced by envelope_to still resolves to
+    // its mails when the user clicks through.
     const addressCondition = options.sent
       ? `${FROM_ADDRESS} @> $2::jsonb`
-      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
+      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
     const headerColumns = [

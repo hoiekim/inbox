@@ -284,3 +284,54 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
     expect(sentSql).not.toContain("envelope_from");
   });
 });
+
+describe("getMailHeaders — envelope_to in received-branch address condition", () => {
+  // Companion to the getAccountStats change in PR #525. That PR surfaced
+  // the per-account row keyed on envelope_to in the accounts list, but
+  // clicking through still rendered an empty mail list because this
+  // function — which backs the per-account mail list view — only
+  // matched on MIME to/cc/bcc. Hoie 2026-05-23 on PR #525 sandbox:
+  // "the github emails are not included in mail list".
+  let mailsSource: string;
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const getMailHeaders[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeaders not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("received branch's addressCondition unions envelope_to with to/cc/bcc", () => {
+    // Source uses `${TO_ADDRESS}` template-literal substitution that
+    // expands to "to_address" at runtime; the static text contains the
+    // token, so the test asserts on the template tokens directly.
+    const exprMatch = fnSource.match(
+      /addressCondition\s*=\s*options\.sent\s*\?\s*`[^`]*`\s*:\s*`([^`]*)`\s*;/
+    );
+    if (!exprMatch) throw new Error("addressCondition ternary not found");
+    const receivedSql = exprMatch[1];
+    expect(receivedSql).toContain("${TO_ADDRESS}");
+    expect(receivedSql).toContain("cc_address @>");
+    expect(receivedSql).toContain("bcc_address @>");
+    expect(receivedSql).toContain("envelope_to @>");
+  });
+
+  it("sent branch's addressCondition remains from_address only", () => {
+    const exprMatch = fnSource.match(
+      /addressCondition\s*=\s*options\.sent\s*\?\s*`([^`]*)`/
+    );
+    if (!exprMatch) throw new Error("sent branch not found");
+    const sentSql = exprMatch[1];
+    expect(sentSql).toContain("${FROM_ADDRESS}");
+    expect(sentSql).not.toContain("envelope_to");
+    expect(sentSql).not.toContain("envelope_from");
+  });
+});
