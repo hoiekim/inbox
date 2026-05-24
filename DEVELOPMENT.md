@@ -289,18 +289,19 @@ Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENA
 
 Sent mail is detected by **address matching**, not a boolean `sent` flag:
 
-- A mail appears in "Received" if the recipient's address matches the account
+- A mail appears in "Received" if any of `to_address`, `cc_address`, `bcc_address`, or `envelope_to` matches the account
 - A mail appears in "Sent" if the sender's `from_address` matches the account
 - Self-sent emails (same from and to) appear in **both** views correctly
 
 This was changed in PR #199 from the previous `sent` column approach. The address-based method handles edge cases better:
 - Self-email: one DB row, visible in both views
-- Multi-recipient: each user's copy is scoped correctly
+- Multi-recipient: each user's copy is scoped correctly (CC and BCC recipients land in the received view)
+- Listserv / sub-addressed delivery: `envelope_to` (the SMTP-level RCPT TO) often differs from MIME `to_address` for GitHub notifications and mailing-list relays — including it ensures the actual delivery target surfaces (PRs #525, #526)
 - No ambiguity about what "sent" means for forwarded or relayed mail
 
 Key functions:
-- `getMailHeaders()` — filters by `from_address` or `to_address` based on view
-- `getAccountStats()` — counts using address matching (not `sent` flag)
+- `getMailHeaders()` — for received view, filters on `to_address`, `cc_address`, `bcc_address`, and `envelope_to`; for sent view, filters on `from_address`
+- `getAccountStats()` — counts using the same address-column set (not `sent` flag)
 
 **Self-email:** When a user sends mail to themselves, the sent-mail copy is saved with the sender's address as `from_address` and the recipient's address (same address) as `to_address`. It appears in the Sent view because `from_address` matches the user, and in the Received view because `to_address` matches the user — no special-casing required.
 
