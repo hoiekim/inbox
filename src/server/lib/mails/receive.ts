@@ -85,51 +85,20 @@ const saveIncomingMail = async (
   let spamResult: SpamCheckResult | undefined;
   if (user.id) {
     try {
-      // Extract from address handling both single and array formats
-      let fromAddress: string | undefined;
-      let fromName: string | undefined;
-      if (incoming.from) {
-        if (Array.isArray(incoming.from)) {
-          const firstFrom = incoming.from[0];
-          if (firstFrom?.value) {
-            const valueArray = Array.isArray(firstFrom.value) ? firstFrom.value : [firstFrom.value];
-            fromAddress = valueArray[0]?.address;
-          }
-          fromName = incoming.from[0]?.text;
-        } else {
-          const fromValue = incoming.from.value;
-          const valueArray = Array.isArray(fromValue) ? fromValue : [fromValue];
-          fromAddress = valueArray[0]?.address;
-          fromName = incoming.from.text;
-        }
-      }
-      
-      // Extract reply-to address handling both single and array formats
-      let replyToAddress: string | undefined;
-      if (incoming.replyTo) {
-        if (Array.isArray(incoming.replyTo)) {
-          const firstReplyTo = incoming.replyTo[0];
-          if (firstReplyTo?.value) {
-            const valueArray = Array.isArray(firstReplyTo.value) ? firstReplyTo.value : [firstReplyTo.value];
-            replyToAddress = valueArray[0]?.address;
-          }
-        } else {
-          const replyToValue = incoming.replyTo.value;
-          const valueArray = Array.isArray(replyToValue) ? replyToValue : [replyToValue];
-          replyToAddress = valueArray[0]?.address;
-        }
-      }
-      
+      // `mail` was already normalized by convertMail above, which routes every
+      // AddressObject through convertMailAddress / convertAddressValue. Reuse
+      // those normalized fields instead of re-implementing the
+      // single-vs-array unwrap inline (#518).
       const emailContext: EmailContext = {
-        fromAddress,
-        fromName,
-        replyToAddress,
+        fromAddress: mail.from?.value?.[0]?.address,
+        fromName: mail.from?.text,
+        replyToAddress: mail.replyTo?.value?.[0]?.address,
         subject: incoming.subject,
         text: incoming.text,
         html: incoming.html,
         remoteAddress: options.remoteAddress,
       };
-      
+
       spamResult = await checkSpam(user.id, emailContext);
       
       if (spamResult.isSpam) {
