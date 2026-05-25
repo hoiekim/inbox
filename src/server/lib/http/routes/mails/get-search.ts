@@ -10,7 +10,7 @@ export const getSearchRoute = new Route<SearchGetResponse>(
   async (req) => {
     const user = req.session.user!;
 
-    const value = decodeURIComponent(req.params.value);
+    const value = req.params.value;
     const field = req.query.field as unknown as string | undefined;
     const result = await searchMail(user, value, field);
 
