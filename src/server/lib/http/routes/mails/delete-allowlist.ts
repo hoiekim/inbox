@@ -12,7 +12,7 @@ export const deleteSpamAllowlistRoute = new Route<AllowlistDeleteResponse>(
   async (req) => {
     const user = req.session.user!;
 
-    const pattern = decodeURIComponent(req.params.pattern);
+    const pattern = req.params.pattern;
     const removed = await removeAllowlistEntry(user.id, pattern);
 
     if (!removed) {

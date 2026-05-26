@@ -622,7 +622,7 @@ describe("deleteSpamAllowlistRoute", () => {
   it("returns failed when entry not found", async () => {
     const { deleteSpamAllowlistRoute } = await import("./delete-allowlist");
     mockRemoveAllowlistEntry.mockResolvedValueOnce(false);
-    const req = makeReq({ params: { pattern: "*%40spam.com" } });
+    const req = makeReq({ params: { pattern: "*@spam.com" } });
     const result = await deleteSpamAllowlistRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/not found/i);
@@ -631,7 +631,15 @@ describe("deleteSpamAllowlistRoute", () => {
   it("returns success when entry removed", async () => {
     const { deleteSpamAllowlistRoute } = await import("./delete-allowlist");
     mockRemoveAllowlistEntry.mockResolvedValueOnce(true);
-    const req = makeReq({ params: { pattern: "*%40spam.com" } });
+    const req = makeReq({ params: { pattern: "*@spam.com" } });
+    const result = await deleteSpamAllowlistRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+  });
+
+  it("handles patterns containing percent chars without throwing", async () => {
+    const { deleteSpamAllowlistRoute } = await import("./delete-allowlist");
+    mockRemoveAllowlistEntry.mockResolvedValueOnce(true);
+    const req = makeReq({ params: { pattern: "100%match@spam.com" } });
     const result = await deleteSpamAllowlistRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
   });
