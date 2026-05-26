@@ -855,26 +855,24 @@ export const searchMailsByUid = async (
         case "UNFLAGGED":
           conditions.push("saved = FALSE");
           break;
-        // ANSWERED / UNANSWERED: not tracked in schema; treat as ALL/NONE
-        // to avoid incorrect filtering. ANSWERED = match all, UNANSWERED = match none.
         case "ANSWERED":
-          break; // assume no answered-flag tracking → match all
-        case "UNANSWERED":
-          conditions.push("FALSE"); // no messages satisfy this
+          conditions.push("answered = TRUE");
           break;
-        // DELETED / UNDELETED: our schema uses expunged for physical removal; there is no
-        // separate \Deleted flag. Non-expunged messages are always "UNDELETED" in IMAP terms.
+        case "UNANSWERED":
+          conditions.push("answered = FALSE");
+          break;
         case "DELETED":
-          conditions.push("FALSE"); // no messages are flagged \Deleted without being expunged
+          conditions.push("deleted = TRUE");
           break;
         case "UNDELETED":
-          break; // all visible (non-expunged) messages qualify
-        // DRAFT / UNDRAFT: not tracked; treat conservatively
+          conditions.push("deleted = FALSE");
+          break;
         case "DRAFT":
-          conditions.push("FALSE");
+          conditions.push("draft = TRUE");
           break;
         case "UNDRAFT":
-          break; // all messages are non-draft
+          conditions.push("draft = FALSE");
+          break;
         // NEW = RECENT + UNSEEN; RECENT / OLD: not tracked, treat as ALL
         case "NEW":
           conditions.push("read = FALSE");
