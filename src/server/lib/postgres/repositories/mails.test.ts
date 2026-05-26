@@ -286,12 +286,10 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
 });
 
 describe("getMailHeaders — envelope_to in received-branch address condition", () => {
-  // Companion to the getAccountStats change in PR #525. That PR surfaced
-  // the per-account row keyed on envelope_to in the accounts list, but
-  // clicking through still rendered an empty mail list because this
-  // function — which backs the per-account mail list view — only
-  // matched on MIME to/cc/bcc. Hoie 2026-05-23 on PR #525 sandbox:
-  // "the github emails are not included in mail list".
+  // Mails addressed via envelope_to (e.g. GitHub notification routing,
+  // listserv sub-addressing) must appear in per-account mail lists, not
+  // only in account-stats counts. The received-branch filter must include
+  // envelope_to alongside MIME to/cc/bcc.
   let mailsSource: string;
   let fnSource: string;
 
