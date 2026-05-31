@@ -78,9 +78,23 @@ mock.module("server", () => ({
   version: "0.0.0",
 }));
 
-// Mock logger used directly in post-mark
+// Mock logger used directly in post-mark / post-spam-mark
+const mockLoggerError = mock(() => {});
+const mockLoggerWarn = mock(() => {});
 mock.module("../../../logger", () => ({
-  logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
+  logger: { debug: mock(() => {}), info: mock(() => {}), warn: mockLoggerWarn, error: mockLoggerError },
+}));
+
+// Mock deep imports used by post-spam-mark.ts (its trainWithEmail + getMailById
+// reach into specific server submodules, not the "server" barrel).
+const mockGetMailById = mock(async () => null as unknown);
+mock.module("server/lib/postgres/repositories/mails", () => ({
+  getMailById: mockGetMailById,
+}));
+
+const mockTrainWithEmail = mock(async () => undefined);
+mock.module("server/lib/spam/classifier", () => ({
+  trainWithEmail: mockTrainWithEmail,
 }));
 
 // ── Helper factories ──────────────────────────────────────────────────────────
@@ -385,6 +399,51 @@ describe("postMarkMailRoute", () => {
     await postMarkMailRoute.callback(req, res, noopStream);
     expect(mockMarkRead).not.toHaveBeenCalled();
   });
+
+  it("fires push.decrementBadgeCount for the session user when read=true (#511)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+
+    const req = makeReq({
+      method: "POST",
+      body: { mail_id: "m1", read: true },
+    });
+
+    await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+    expect(mockDecrementBadgeCount).toHaveBeenCalledTimes(1);
+    expect(mockDecrementBadgeCount).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "u1" }),
+    ]);
+  });
+
+  it("swallows push.decrementBadgeCount rejection — still marks read + succeeds (#511)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockLoggerError.mockClear();
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    mockDecrementBadgeCount.mockRejectedValueOnce(new Error("push transient"));
+
+    const req = makeReq({
+      method: "POST",
+      body: { mail_id: "m1", read: true },
+    });
+
+    const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+    // markRead still ran — the badge-decrement rejection is logged, not propagated.
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).toHaveBeenCalledWith("u1", "m1");
+
+    // Give the .catch(logger.error) microtask a chance to run.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+
+    // Reset for the next iteration.
+    mockDecrementBadgeCount.mockReset();
+    mockDecrementBadgeCount.mockResolvedValue(undefined);
+  });
 });
 
 // ── get-search route ──────────────────────────────────────────────────────────
@@ -608,7 +667,12 @@ describe("postSendMailRoute", () => {
 // ── post-spam-mark route ──────────────────────────────────────────────────────
 
 describe("postMarkSpamMailRoute", () => {
-  beforeEach(() => mockMarkSpam.mockClear());
+  beforeEach(() => {
+    mockMarkSpam.mockClear();
+    mockGetMailById.mockClear();
+    mockTrainWithEmail.mockClear();
+    mockLoggerWarn.mockClear();
+  });
 
   it("rejects when is_spam is not boolean", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
@@ -616,39 +680,156 @@ describe("postMarkSpamMailRoute", () => {
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/boolean/i);
+    expect(mockMarkSpam).not.toHaveBeenCalled();
   });
 
-  it("returns failed when mail not found or no permission", async () => {
+  it("returns failed when mail not found or no permission (cross-user gate)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: false, changed: false });
     const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/not found/i);
+    // markSpam was reached with the session user_id — the ownership gate is at
+    // the repo layer; assert it was passed.
+    expect(mockMarkSpam).toHaveBeenCalledWith("u1", "m1", true);
+    expect(mockGetMailById).not.toHaveBeenCalled();
+    expect(mockTrainWithEmail).not.toHaveBeenCalled();
   });
 
-  it("returns success when spam marked", async () => {
+  it("returns success when spam marked + fires trainWithEmail (#511)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    mockGetMailById.mockResolvedValueOnce({
+      subject: "Win cash now",
+      text: "Click here",
+      html: "<p>Click here</p>",
+      from_address: [{ address: "spammer@evil.example" }],
+    });
     const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    // Wait for the fire-and-forget training pipeline.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockGetMailById).toHaveBeenCalledWith("u1", "m1");
+    expect(mockTrainWithEmail).toHaveBeenCalledTimes(1);
+    expect(mockTrainWithEmail).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({
+        subject: "Win cash now",
+        fromAddress: "spammer@evil.example",
+      }),
+      true,
+    );
   });
 
-  it("returns success when spam unmarked (is_spam false)", async () => {
+  it("returns success when spam unmarked (is_spam false) + train with false (#511)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    mockGetMailById.mockResolvedValueOnce({
+      subject: "Newsletter",
+      text: "Updates",
+      html: "<p>Updates</p>",
+      from_address: [{ address: "news@legit.example" }],
+    });
     const req = makeReq({ body: { mail_id: "m1", is_spam: false } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockTrainWithEmail).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ fromAddress: "news@legit.example" }),
+      false,
+    );
   });
 
-  it("returns success but skips training when re-marking with the same value", async () => {
+  it("returns success but skips training when re-marking with the same value (#491)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: true, changed: false });
     const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockGetMailById).not.toHaveBeenCalled();
+    expect(mockTrainWithEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not fire trainWithEmail when getMailById returns null (race) (#511)", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    mockGetMailById.mockResolvedValueOnce(null);
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockGetMailById).toHaveBeenCalledTimes(1);
+    expect(mockTrainWithEmail).not.toHaveBeenCalled();
+  });
+
+  it("swallows trainWithEmail rejection — response still success, logger.warn fired (#511)", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    mockGetMailById.mockResolvedValueOnce({
+      subject: "x",
+      text: "y",
+      html: "<p>y</p>",
+      from_address: [{ address: "a@b.example" }],
+    });
+    mockTrainWithEmail.mockRejectedValueOnce(new Error("classifier offline"));
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles non-array from_address shape safely (#511)", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    // Some mail rows store from_address as null or an object, not always array.
+    mockGetMailById.mockResolvedValueOnce({
+      subject: "x",
+      text: "y",
+      html: "<p>y</p>",
+      from_address: null,
+    });
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockTrainWithEmail).toHaveBeenCalledTimes(1);
+    expect(mockTrainWithEmail).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ fromAddress: undefined }),
+      true,
+    );
+  });
+
+  it("handles empty from_address array safely (#511)", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
+    mockGetMailById.mockResolvedValueOnce({
+      subject: "x",
+      text: "y",
+      html: "<p>y</p>",
+      from_address: [],
+    });
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(mockTrainWithEmail).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ fromAddress: undefined }),
+      true,
+    );
   });
 });
 
