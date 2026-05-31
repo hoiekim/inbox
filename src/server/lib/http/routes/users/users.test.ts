@@ -60,6 +60,8 @@ const makeReq = (overrides: Record<string, unknown> = {}) => {
     body: {},
     params: {},
     query: {},
+    headers: {},
+    ip: "127.0.0.1",
     ...overrides,
   } as unknown as import("express").Request;
 };
@@ -351,5 +353,113 @@ describe("postTokenRoute", () => {
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect(mockSendMail).toHaveBeenCalledTimes(1);
     expect(mockStartTimer).toHaveBeenCalledWith("u1");
+  });
+});
+
+// ── rate-limit integration with login/token routes (#504) ─────────────────────
+
+describe("postLoginRoute + loginLimiter integration (#504)", () => {
+  beforeEach(() => {
+    mockGetUser.mockClear();
+    mockBcryptCompare.mockClear();
+  });
+
+  it("records a failure on bad credentials but not on success", async () => {
+    const { postLoginRoute } = await import("./post-login");
+    const rateLimit = await import("../../rate-limit");
+    // Fresh limiter for this IP — reset first.
+    rateLimit.loginLimiter.reset("198.51.100.10");
+
+    const req = (body: Record<string, unknown>) =>
+      makeReq({ body, headers: { "x-real-ip": "198.51.100.10" } });
+
+    // Five consecutive bad-password attempts should all reach the handler
+    // (middleware lets them through; recordFailure bumps the counter).
+    mockGetUser.mockResolvedValue(makeUser("alice"));
+    mockBcryptCompare.mockResolvedValue(false);
+    for (let i = 0; i < 5; i++) {
+      const r = await postLoginRoute.callback(req({ username: "alice", password: "wrong" }), makeRes(), noopStream);
+      expect((r as ApiResponse<unknown>).status).toBe("failed");
+    }
+
+    // Now the middleware should block.
+    const blockRes = makeRes();
+    const next = mock(() => {});
+    rateLimit.loginLimiter.middleware(
+      req({ username: "alice", password: "wrong" }),
+      blockRes,
+      next
+    );
+    expect((blockRes as unknown as { _code: number })._code).toBe(429);
+    expect(next).not.toHaveBeenCalled();
+
+    // A successful login (different IP, fresh counter) resets the counter and
+    // does NOT consume a slot.
+    rateLimit.loginLimiter.reset("198.51.100.11");
+    const successReq = makeReq({
+      body: { username: "alice", password: "right" },
+      headers: { "x-real-ip": "198.51.100.11" }
+    });
+    mockGetUser.mockResolvedValueOnce(makeUser("alice"));
+    mockBcryptCompare.mockResolvedValueOnce(true);
+    const ok = await postLoginRoute.callback(successReq, makeRes(), noopStream);
+    expect((ok as ApiResponse<unknown>).status).toBe("success");
+
+    // Now run 10 more successful logins from the same IP — none should
+    // burn a slot (the bug was that successes counted).
+    for (let i = 0; i < 10; i++) {
+      mockGetUser.mockResolvedValueOnce(makeUser("alice"));
+      mockBcryptCompare.mockResolvedValueOnce(true);
+      const r = await postLoginRoute.callback(successReq, makeRes(), noopStream);
+      expect((r as ApiResponse<unknown>).status).toBe("success");
+    }
+
+    // The 11th success-path middleware check still passes.
+    const finalRes = makeRes();
+    const finalNext = mock(() => {});
+    rateLimit.loginLimiter.middleware(successReq, finalRes, finalNext);
+    expect(finalNext).toHaveBeenCalledTimes(1);
+    expect(finalRes.status).not.toHaveBeenCalled();
+  });
+});
+
+describe("postTokenRoute + tokenLimiter integration (#504)", () => {
+  beforeEach(() => {
+    mockIsValidEmail.mockReset();
+    mockIsValidEmail.mockReturnValue(true);
+    mockCreateToken.mockClear();
+    mockGetUser.mockClear();
+    mockSendMail.mockClear();
+    mockStartTimer.mockClear();
+  });
+
+  it("does not count thrown server errors against the IP quota", async () => {
+    const { postTokenRoute } = await import("./post-token");
+    const rateLimit = await import("../../rate-limit");
+    rateLimit.tokenLimiter.reset("198.51.100.20");
+
+    const req = makeReq({
+      body: { email: "user@example.com" },
+      headers: { "x-real-ip": "198.51.100.20" }
+    });
+
+    // sendMail rejects → callback throws → recordFailure should NOT run.
+    mockGetUser.mockResolvedValue({ id: "admin1", username: "admin" });
+    mockGetSignedUser.mockReturnValue({ id: "admin1", username: "admin" });
+    mockSendMail.mockRejectedValue(new Error("smtp transient"));
+
+    for (let i = 0; i < 5; i++) {
+      await expect(
+        postTokenRoute.callback(req, makeRes(), noopStream)
+      ).rejects.toThrow();
+    }
+
+    // Middleware should still let requests through — server errors did not
+    // burn quota.
+    const res = makeRes();
+    const next = mock(() => {});
+    rateLimit.tokenLimiter.middleware(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
   });
 });

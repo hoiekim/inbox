@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { MaskedUser } from "common";
 import { getUser } from "server";
 import { Route } from "../route";
+import { getClientIp, loginLimiter } from "../../rate-limit";
 
 export type LoginPostResponse = MaskedUser;
 
@@ -42,7 +43,10 @@ export const postLoginRoute = new Route<LoginPostResponse>(
       ? await bcrypt.compare(password, user.password as string)
       : await bcrypt.compare(password, DUMMY_HASH).then(() => false);
 
+    const ip = getClientIp(req);
+
     if (!pwMatches || !signedUser) {
+      loginLimiter.recordFailure(ip);
       return { status: "failed", message: "Invalid credentials." };
     }
 
@@ -54,6 +58,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     });
     req.session.user = signedUser;
 
+    loginLimiter.reset(ip);
     return { status: "success", body: signedUser };
   }
 );

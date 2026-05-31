@@ -31,38 +31,63 @@ interface AttemptRecord {
 // Tracks all per-limiter attempt Maps so the scheduler can clean them all.
 const allAttemptMaps: Map<string, AttemptRecord>[] = [];
 
+export interface RateLimiter {
+  middleware: (req: Request, res: Response, next: NextFunction) => void;
+  recordFailure: (ip: string) => void;
+  reset: (ip: string) => void;
+}
+
 /**
- * Create a rate limiter middleware.
+ * Create a rate limiter with read-only middleware + explicit record/reset hooks.
+ *
+ * The middleware only checks the limit; route handlers decide which outcomes
+ * count by calling `recordFailure(ip)` on real failures or `reset(ip)` on
+ * success. Mirrors the `auth-rate-limit.ts` shape used by IMAP/SMTP so that
+ * successful logins don't pin the counter and transient 500s don't burn the
+ * per-IP quota.
  *
  * Each call to createLimiter gets its own isolated attempt Map so that
  * separate limiters (e.g. loginLimiter and tokenLimiter) do not share
- * counters. Previously a single shared Map caused token requests to
- * consume login quota and vice versa.
+ * counters.
  *
  * @param maxAttempts Maximum attempts allowed within the window
  * @param message Error message to return when limit is exceeded
  */
-export const createLimiter = (maxAttempts: number, message: string) => {
-  // Per-limiter isolated storage — not shared with any other limiter.
+export const createLimiter = (
+  maxAttempts: number,
+  message: string
+): RateLimiter => {
   const attempts = new Map<string, AttemptRecord>();
   allAttemptMaps.push(attempts);
 
-  return (req: Request, res: Response, next: NextFunction) => {
-    const ip = getClientIp(req);
-    const now = Date.now();
+  const isLimited = (ip: string): boolean => {
     const record = attempts.get(ip);
+    return (
+      !!record && Date.now() < record.resetAt && record.count >= maxAttempts
+    );
+  };
 
-    if (record && now < record.resetAt) {
-      if (record.count >= maxAttempts) {
+  return {
+    middleware: (req: Request, res: Response, next: NextFunction) => {
+      const ip = getClientIp(req);
+      if (isLimited(ip)) {
         res.status(429).json({ status: "failed", message });
         return;
       }
-      record.count++;
-    } else {
-      attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+      next();
+    },
+    recordFailure: (ip: string) => {
+      const now = Date.now();
+      const record = attempts.get(ip);
+      if (record && now < record.resetAt) {
+        record.count++;
+      } else {
+        attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+      }
+    },
+    reset: (ip: string) => {
+      attempts.delete(ip);
     }
-
-    next();
   };
 };
 
