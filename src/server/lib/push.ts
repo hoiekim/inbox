@@ -74,6 +74,36 @@ export const createPush = (
     });
   };
 
+  // Send one notification and absorb the "subscription expired" (HTTP 410)
+  // case by deleting the dead subscription. Returns whether the send
+  // succeeded so callers can gate follow-up writes (e.g. updateLastNotified)
+  // without threading a mutable flag out of a .catch.
+  const sendNotificationSafely = async (
+    subscription: ComputedPushSubscription,
+    payload: object,
+    push_subscription_id: string,
+  ): Promise<boolean> => {
+    try {
+      await webPushImpl.sendNotification(subscription, JSON.stringify(payload));
+      return true;
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode === 410) {
+        logger.info("Subscription has expired, removing from database", {
+          component: "push",
+          push_subscription_id,
+        });
+        await deleteSubscription(push_subscription_id);
+      } else {
+        logger.error(
+          "Error sending push notification",
+          { component: "push" },
+          error,
+        );
+      }
+      return false;
+    }
+  };
+
   const ONE_DAY = 1000 * 60 * 60 * 24;
 
   const cleanSubscriptions = () => {
@@ -131,28 +161,12 @@ export const createPush = (
           push_subscription_id,
         };
 
-        let isFailed = false;
-
-        await webPushImpl
-          .sendNotification(subscription, JSON.stringify(notificationPayload))
-          .catch(async (error) => {
-            isFailed = true;
-            if (error.statusCode === 410) {
-              logger.info("Subscription has expired, removing from database", {
-                component: "push",
-                push_subscription_id,
-              });
-              return deleteSubscription(push_subscription_id);
-            } else {
-              logger.error(
-                "Error sending push notification",
-                { component: "push" },
-                error,
-              );
-            }
-          });
-
-        if (isFailed) return;
+        const success = await sendNotificationSafely(
+          subscription,
+          notificationPayload,
+          push_subscription_id,
+        );
+        if (!success) return;
 
         await repo.updateLastNotified(push_subscription_id);
 
@@ -183,23 +197,11 @@ export const createPush = (
           push_subscription_id,
         };
 
-        return webPushImpl
-          .sendNotification(subscription, JSON.stringify(notificationPayload))
-          .catch((error) => {
-            if (error.statusCode === 410) {
-              logger.info("Subscription has expired, removing from database", {
-                component: "push",
-                push_subscription_id,
-              });
-              deleteSubscription(push_subscription_id);
-            } else {
-              logger.error(
-                "Error sending push notification",
-                { component: "push" },
-                error,
-              );
-            }
-          });
+        return sendNotificationSafely(
+          subscription,
+          notificationPayload,
+          push_subscription_id,
+        );
       }),
     );
   };
