@@ -399,11 +399,9 @@ export const getAccountUidNext = async (
 ): Promise<number> => {
   try {
     const addressJson = JSON.stringify([{ address: account }]);
-    // For sent mails, check from_address only
-    // For received mails, check to_address, cc_address, and bcc_address
     const addressCondition = sent
       ? `${FROM_ADDRESS} @> $2::jsonb`
-      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb)`;
+      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
     const sql = `
       SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 AS next_uid FROM mails
       WHERE user_id = $1
@@ -530,17 +528,15 @@ export const countMessages = async (
       values = [user_id, sent];
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
-      // For sent mails, check from_address only
-      // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
       sql = `
-        SELECT 
+        SELECT
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
           COALESCE(MAX(${uidField}), 0) as max_uid
-        FROM mails 
+        FROM mails
         WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
       `;
       values = [user_id, sent, addressJson];
@@ -619,14 +615,12 @@ export const getMailsByRange = async (
     } else {
       // Account-specific query (exclude expunged messages)
       const addressJson = JSON.stringify([{ address: account }]);
-      // For sent mails, check from_address only
-      // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
       if (useUid) {
         sql = `
-          SELECT ${fieldList} FROM mails 
+          SELECT ${fieldList} FROM mails
           WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
             AND ${uidField} >= $4 AND ${uidField} <= $5 AND expunged = FALSE
           ORDER BY ${uidField} ASC
@@ -774,14 +768,12 @@ export const setMailFlags = async (
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
-      // For sent mails, check from_address only
-      // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
       if (useUid) {
         sql = `
-          UPDATE mails 
+          UPDATE mails
           SET ${setClause}, updated = CURRENT_TIMESTAMP
           WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
             AND ${uidField} >= $4 AND ${uidField} <= $5
@@ -835,11 +827,9 @@ export const searchMailsByUid = async (
 
     if (account !== null) {
       const addressJson = JSON.stringify([{ address: account }]);
-      // For sent mails, check from_address only
-      // For received mails, check to_address, cc_address, and bcc_address
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $${paramIdx}::jsonb`
-        : `(${TO_ADDRESS} @> $${paramIdx}::jsonb OR cc_address @> $${paramIdx}::jsonb OR bcc_address @> $${paramIdx}::jsonb)`;
+        : `(${TO_ADDRESS} @> $${paramIdx}::jsonb OR cc_address @> $${paramIdx}::jsonb OR bcc_address @> $${paramIdx}::jsonb OR envelope_to @> $${paramIdx}::jsonb)`;
       conditions.push(addressCondition);
       values.push(addressJson);
       paramIdx++;
@@ -1091,9 +1081,9 @@ export const getAllUids = async (
       const addressJson = JSON.stringify([{ address: account }]);
       const addressCondition = sent
         ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
       sql = `
-        SELECT ${uidField} as uid FROM mails 
+        SELECT ${uidField} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
         ORDER BY ${uidField} ASC
       `;
@@ -1139,7 +1129,7 @@ export const expungeDeletedMails = async (
     const addressJson = JSON.stringify([{ address: account }]);
     const addressCondition = sent
       ? `${FROM_ADDRESS} @> $3::jsonb`
-      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb)`;
+      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
     const selectSql = `
       SELECT ${MAIL_ID} as mail_id FROM mails
       WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
