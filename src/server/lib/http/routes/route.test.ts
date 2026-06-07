@@ -59,20 +59,6 @@ describe("StreamingStatus", () => {
 // ── Route.handler ─────────────────────────────────────────────────────────────
 
 describe("Route.handler", () => {
-  it("calls next() when method does not match", async () => {
-    const cb = mock(async () => ({ status: "success" as const }));
-    const route = new Route("POST", "/test", cb);
-
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
-
-    await route.handler(req, res, next);
-
-    expect(cb).not.toHaveBeenCalled();
-    expect(next).toHaveBeenCalled();
-  });
-
   it("responds with json result when method matches", async () => {
     const route = new Route("GET", "/test", async () => ({ status: "success" as const, body: { hello: "world" } }));
 
@@ -174,6 +160,47 @@ describe("Route.handler", () => {
 
     expect((res as unknown as { _body: unknown })._body).toMatchObject({ status: "error", message: "Internal server error" });
     process.env.NODE_ENV = origEnv;
+  });
+});
+
+// ── Route.register ────────────────────────────────────────────────────────────
+
+describe("Route.register", () => {
+  it("binds to the verb-specific router method (not router.use)", () => {
+    const calls: Array<[string, string]> = [];
+    const fakeRouter = {
+      get: (p: string) => calls.push(["get", p]),
+      post: (p: string) => calls.push(["post", p]),
+      delete: (p: string) => calls.push(["delete", p]),
+      use: (p: string) => calls.push(["use", p]),
+    } as unknown as import("express").Router;
+
+    new Route("GET", "/g", async () => undefined).register(fakeRouter);
+    new Route("POST", "/p", async () => undefined).register(fakeRouter);
+    new Route("DELETE", "/d", async () => undefined).register(fakeRouter);
+
+    expect(calls).toEqual([
+      ["get", "/g"],
+      ["post", "/p"],
+      ["delete", "/d"],
+    ]);
+  });
+
+  it("does not fall back to router.use (which would mount-match — the #505 cause)", () => {
+    const useCalls: string[] = [];
+    const verbCalls: string[] = [];
+    const fakeRouter = {
+      get: (p: string) => verbCalls.push(`get ${p}`),
+      post: (p: string) => verbCalls.push(`post ${p}`),
+      delete: (p: string) => verbCalls.push(`delete ${p}`),
+      use: (p: string) => useCalls.push(`use ${p}`),
+    } as unknown as import("express").Router;
+
+    new Route("DELETE", "/:id", async () => undefined).register(fakeRouter);
+    new Route("DELETE", "/spam-allowlist/:pattern", async () => undefined).register(fakeRouter);
+
+    expect(useCalls).toEqual([]);
+    expect(verbCalls).toEqual(["delete /:id", "delete /spam-allowlist/:pattern"]);
   });
 });
 
