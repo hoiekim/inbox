@@ -5,7 +5,9 @@ WORKDIR /app
 COPY package.json bun.lockb* ./
 COPY tsconfig.json tsconfig.node.json ./
 COPY vite.config.ts ./
+COPY bunfig.toml ./
 COPY src src
+COPY scripts scripts
 COPY public public
 COPY index.html ./
 
