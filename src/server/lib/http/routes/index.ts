@@ -37,6 +37,15 @@ apiRouter.use("/users", usersRouter);
 apiRouter.use("/mails", mailsRouter);
 apiRouter.use("/push", pushRouter);
 
+// Unmatched /api/* requests get a JSON 404 rather than falling through to the
+// SPA index.html catch-all in http/index.ts. Without this, an authenticated
+// GET to e.g. /api/mails/unknown-route returns 200 + text/html, which silently
+// breaks any client that parses the body as JSON.
+apiRouter.use((_req, res) => {
+  if (res.headersSent) return;
+  res.status(404).json({ status: "failed", message: "Not found" });
+});
+
 // Global 5xx error handler — catches unhandled errors thrown inside route handlers
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 apiRouter.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
