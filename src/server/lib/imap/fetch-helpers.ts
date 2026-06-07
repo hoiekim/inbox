@@ -139,6 +139,7 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
         fields.add("saved");
         fields.add("deleted");
         fields.add("draft");
+        fields.add("answered");
         break;
 
       case "BODYSTRUCTURE":
