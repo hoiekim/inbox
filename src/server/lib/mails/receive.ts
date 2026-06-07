@@ -361,8 +361,9 @@ const getMailboxesFromIncomingMail = (data: IncomingMail): string[] => {
 
 const isValidAddress = (address: string, domain: string) => {
   const parsedAddress = address.split("@");
-  const domainInData = parsedAddress[parsedAddress.length - 1];
-  return domainInData.toLowerCase().includes(domain.toLowerCase());
+  const domainInData = parsedAddress[parsedAddress.length - 1].toLowerCase();
+  const target = domain.toLowerCase();
+  return domainInData === target || domainInData.endsWith(`.${target}`);
 };
 
 export const validateIncomingMail = (
