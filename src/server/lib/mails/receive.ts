@@ -227,7 +227,7 @@ export const convertMail = async (
   });
 };
 
-const convertMailAddress = (
+export const convertMailAddress = (
   incoming?: IncomingMailAddress | IncomingMailAddress[]
 ): MailAddressType | undefined => {
   if (!incoming) return undefined;
