@@ -120,7 +120,10 @@ const MailBody = ({ mailId }: Props) => {
   const data = query.data;
 
   if (query.isSuccess && data) {
-    const attachments: JSX.Element[] | undefined = data.attachments?.map(
+    const attachmentList = Array.isArray(data.attachments)
+      ? data.attachments
+      : [];
+    const attachments: JSX.Element[] = attachmentList.map(
       (attachment: AttachmentType, i: number) => {
         const onClickAttachment = () => {
           call
@@ -225,7 +228,7 @@ const MailBody = ({ mailId }: Props) => {
         <div className="loading_message">
           {isLoadingIframe ? loadingMessage : null}
         </div>
-        {attachments && attachments.length ? (
+        {attachments.length ? (
           <div className="attachmentBox">{attachments}</div>
         ) : (
           <></>
