@@ -293,31 +293,33 @@ export async function storeFlagsTyped(
         baseOperation
       );
 
+      // RFC 3501 §6.4.6: STORE on a UID/sequence range that matches no
+      // messages is NOT an error — the server simply emits zero untagged
+      // FETCH responses and the command still completes OK. The old code
+      // wrote a tagged NO here and then threw, which (a) violated the RFC by
+      // failing a valid command and (b) caused the catch block below to write
+      // a SECOND tagged NO — two tagged responses for one command, which
+      // desynchronizes the client. Skip empty ranges instead.
       if (updatedMails.length === 0) {
-        write(`${tag} NO STORE failed\r\n`);
-        throw new Error(
-          `STORE failed for range ${start}-${end} in mailbox ${selectedMailbox}`
-        );
-      } else {
-        if (!silent && !operation.includes("SILENT")) {
-          for (const mail of updatedMails) {
-            const seq = uidToSeqNumber(
-              seqState.seqToUid,
-              seqState.uidToSeq,
-              mail.uid
-            );
-            if (seq !== undefined) {
-              const currentFlags: string[] = [];
-              if (mail.read) currentFlags.push("\\Seen");
-              if (mail.saved) currentFlags.push("\\Flagged");
-              if (mail.deleted) currentFlags.push("\\Deleted");
-              if (mail.draft) currentFlags.push("\\Draft");
-              if (mail.answered) currentFlags.push("\\Answered");
+        continue;
+      }
 
-              write(
-                `* ${seq} FETCH (FLAGS (${currentFlags.join(" ")}))\r\n`
-              );
-            }
+      if (!silent && !operation.includes("SILENT")) {
+        for (const mail of updatedMails) {
+          const seq = uidToSeqNumber(
+            seqState.seqToUid,
+            seqState.uidToSeq,
+            mail.uid
+          );
+          if (seq !== undefined) {
+            const currentFlags: string[] = [];
+            if (mail.read) currentFlags.push("\\Seen");
+            if (mail.saved) currentFlags.push("\\Flagged");
+            if (mail.deleted) currentFlags.push("\\Deleted");
+            if (mail.draft) currentFlags.push("\\Draft");
+            if (mail.answered) currentFlags.push("\\Answered");
+
+            write(`* ${seq} FETCH (FLAGS (${currentFlags.join(" ")}))\r\n`);
           }
         }
       }
