@@ -11,19 +11,13 @@
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 
-// Mock the "server" barrel before importing message-ops.
-mock.module("server", () => ({
-  markRead: mock(() => Promise.resolve()),
-  getDomainUidNext: mock(() => Promise.resolve(1)),
-  getAccountUidNext: mock(() => Promise.resolve(1)),
-  logger: {
-    warn: mock(() => {}),
-    error: mock(() => {}),
-    info: mock(() => {}),
-    debug: mock(() => {}),
-  },
-}));
-
+// NOTE: do NOT mock.module("server") here. bun's mock.module is global for the
+// whole test run, and the "server" barrel re-exports markRead/getDomainUidNext/
+// getAccountUidNext — stubbing them on the barrel bleeds into those symbols'
+// own dedicated tests (update.test.ts, search.test.ts) and fails them. The
+// storeFlagsTyped paths under test never reach those functions (markRead lives
+// in the FETCH path), and importing the real barrel is side-effect-free in the
+// test env (the pg pool is lazy), so the real module imports cleanly.
 import { storeFlagsTyped } from "./message-ops";
 import type { Store } from "./store";
 import type { StoreRequest } from "./types";
