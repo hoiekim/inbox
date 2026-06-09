@@ -102,9 +102,16 @@ export class ImapRequestHandler {
           }
 
           if (line.trim()) {
-            // When session is in IDLE mode, skip normal command processing —
-            // the IDLE data handler on session.ts handles DONE exclusively.
+            // The only valid client input during IDLE is "DONE". This line
+            // buffer already reassembles split TCP chunks and pipelined input,
+            // so handle DONE here: terminate IDLE and fall through so any
+            // command pipelined after DONE (e.g. "DONE\r\nA4 NOOP\r\n") is
+            // processed on the next loop iteration. Non-DONE input during IDLE
+            // is ignored per RFC 2177.
             if (session.isInIdleMode()) {
+              if (line.trim().toUpperCase() === "DONE") {
+                session.endIdle();
+              }
               continue;
             }
 

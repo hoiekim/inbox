@@ -431,24 +431,18 @@ export class ImapSession {
     );
 
     this.write("+ idling\r\n");
-    this.socket.on("data", this.handleIdleData);
+    // DONE is detected by the handler's main line buffer (handler.ts), which
+    // reassembles split TCP chunks and \r\n-delimited lines. A separate raw
+    // socket "data" listener here used to miss split ("DO" + "NE\r\n") and
+    // pipelined ("DONE\r\nA4 NOOP\r\n") DONEs, stranding the session in IDLE.
   };
 
-  private handleIdleData = (data: Buffer) => {
-    if (!this.isIdling) return;
-    const command = data.toString().trim().toUpperCase();
-    if (command === "DONE") {
-      this.endIdle();
-    }
-  };
-
-  private endIdle = () => {
+  endIdle = () => {
     if (!this.isIdling || !this.idleTag) return;
     this.isIdling = false;
     const tag = this.idleTag;
     this.idleTag = null;
     idleManager.removeIdleSession(this.sessionId);
-    this.socket.off("data", this.handleIdleData);
     this.write(`${tag} OK IDLE terminated\r\n`);
   };
 
@@ -463,7 +457,6 @@ export class ImapSession {
   cleanup = () => {
     if (this.isIdling) {
       idleManager.removeIdleSession(this.sessionId);
-      this.socket.off("data", this.handleIdleData);
       this.isIdling = false;
       this.idleTag = null;
       logger.debug("IDLE session cleaned up on socket close", {
