@@ -1,27 +1,164 @@
 /**
  * Tests for message-ops.ts — IMAP message operations.
  *
- * Regression coverage for inbox #543: STORE on a UID/sequence range that
- * matches no messages must send exactly ONE tagged response (OK, not NO).
- * The old code wrote a tagged NO and threw on an empty result, and the
- * surrounding catch block then wrote a SECOND tagged NO — two tagged
- * responses for a single command, which desynchronizes IMAP clients
- * (RFC 3501 §2.2.1 requires exactly one tagged response per command).
+ * Covers two regressions:
+ *  - inbox #543: STORE on a UID/sequence range that matches no messages must
+ *    send exactly ONE tagged response (OK, not NO). The old code wrote a
+ *    tagged NO and threw on an empty result, and the surrounding catch block
+ *    then wrote a SECOND tagged NO — two tagged responses for a single
+ *    command, which desynchronizes IMAP clients (RFC 3501 §2.2.1 requires
+ *    exactly one tagged response per command). [storeFlagsTyped]
+ *  - #544: the APPENDUID response code must carry the user's stored
+ *    UIDVALIDITY (the same stable value SELECT returns), not a fresh
+ *    `Date.now()` timestamp. RFC 4315 requires the APPENDUID's UIDVALIDITY to
+ *    match the destination mailbox's UIDVALIDITY so UIDPLUS clients can
+ *    correlate the appended message without a full re-sync. [appendMessage]
+ *
+ * Isolation mirrors users.test.ts: mock `pg` so the lazy pool in
+ * postgres/client.ts instantiates a FakePool, then run the REAL
+ * getDomainUidNext / getAccountUidNext / getImapUidValidity against it.
+ * mockQuery is the single seam every DB call funnels through. No DI, and no
+ * mock of the `server` barrel (which would bleed across files via Bun's
+ * process-global mock.module — see search.test.ts / update.test.ts).
+ * `afterAll(restoreLeaves)` + resetPool re-mocks pg back to real.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
-
-// NOTE: do NOT mock.module("server") here. bun's mock.module is global for the
-// whole test run, and the "server" barrel re-exports markRead/getDomainUidNext/
-// getAccountUidNext — stubbing them on the barrel bleeds into those symbols'
-// own dedicated tests (update.test.ts, search.test.ts) and fails them. The
-// storeFlagsTyped paths under test never reach those functions (markRead lives
-// in the FETCH path), and importing the real barrel is side-effect-free in the
-// test env (the pg pool is lazy), so the real module imports cleanly.
-import { storeFlagsTyped } from "./message-ops";
+import {
+  describe,
+  it,
+  expect,
+  mock,
+  beforeAll,
+  beforeEach,
+  afterAll,
+} from "bun:test";
+import { restoreLeaves } from "test-helpers";
 import type { Store } from "./store";
 import type { StoreRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
+
+const STORED_UIDVALIDITY = 1716512400;
+const DOMAIN_UID = 100;
+
+// A full, schema-valid users row so usersTable.queryOne's `new UserModel(row)`
+// validates. imap_uid_validity is pre-set, so getImapUidValidity returns it
+// directly without an update.
+const USER_ROW = {
+  user_id: "user-123",
+  username: "admin",
+  password: null,
+  email: null,
+  expiry: null,
+  token: null,
+  updated: null,
+  is_deleted: null,
+  imap_uid_validity: STORED_UIDVALIDITY,
+};
+
+const mockQuery = mock(async (sql: string) => {
+  // getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails
+  if (typeof sql === "string" && sql.includes("next_uid")) {
+    return { rows: [{ next_uid: String(DOMAIN_UID) }], rowCount: 1 };
+  }
+  // usersTable.queryOne(...) for getImapUidValidity
+  return { rows: [USER_ROW], rowCount: 1 };
+});
+
+class FakePool {
+  query = mockQuery;
+  end = async () => {};
+  connect = async () => ({ query: mockQuery, release: () => {} });
+  on() {}
+}
+
+const pgMock = () => ({
+  Pool: FakePool,
+  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
+  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
+});
+
+mock.module("pg", pgMock);
+
+const { appendMessage, storeFlagsTyped } = await import("./message-ops");
+const { resetPool } = await import("../postgres/client");
+
+beforeAll(() => {
+  mock.module("pg", pgMock);
+  resetPool();
+});
+
+afterAll(() => {
+  restoreLeaves();
+  resetPool();
+});
+
+beforeEach(() => {
+  mockQuery.mockClear();
+});
+
+// ---------------------------------------------------------------------------
+// appendMessage — APPENDUID (#544)
+// ---------------------------------------------------------------------------
+
+type FakeStore = {
+  getUser: () => { id: string; username: string };
+  storeMail: (mail: unknown) => Promise<unknown>;
+};
+
+const makeAppendStore = (storeResult: unknown = { _id: "stored" }): FakeStore => ({
+  getUser: () => ({ id: "user-123", username: "admin" }),
+  storeMail: async () => storeResult,
+});
+
+const runAppend = async (
+  tag: string,
+  store: FakeStore,
+  selectedMailbox: string | null = null
+) => {
+  const writes: string[] = [];
+  await appendMessage(
+    tag,
+    { mailbox: "INBOX", message: "Subject: test\r\n\r\nHello" },
+    store as never,
+    selectedMailbox,
+    (data: string) => {
+      writes.push(data);
+      return true;
+    },
+    async () => {}
+  );
+  return writes.join("");
+};
+
+describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
+  it("uses the stored UIDVALIDITY, not Date.now(), in the APPENDUID response", async () => {
+    const response = await runAppend("A002", makeAppendStore());
+    expect(response).toBe(
+      `A002 OK [APPENDUID ${STORED_UIDVALIDITY} ${DOMAIN_UID}] APPEND completed\r\n`
+    );
+  });
+
+  it("does not embed a millisecond wall-clock timestamp as UIDVALIDITY", async () => {
+    const response = await runAppend("A003", makeAppendStore());
+    const match = response.match(/\[APPENDUID (\d+) /);
+    expect(match).not.toBeNull();
+    const reported = Number(match![1]);
+    // A Date.now() value is a 13-digit ms timestamp (~1.7e12); the stored
+    // UIDVALIDITY is the stable, far-smaller seconds value.
+    expect(reported).toBe(STORED_UIDVALIDITY);
+    expect(reported).toBeLessThan(1e12);
+  });
+
+  it("returns NO when the message fails to store (no APPENDUID emitted)", async () => {
+    const response = await runAppend("A004", makeAppendStore(null));
+    expect(response).toContain("A004 NO APPEND failed to store message");
+    expect(response).not.toContain("APPENDUID");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storeFlagsTyped — empty result (inbox #543)
+// ---------------------------------------------------------------------------
 
 const emptySeqState = (): SequenceState => ({
   seqToUid: [],
@@ -29,7 +166,7 @@ const emptySeqState = (): SequenceState => ({
 });
 
 // A store whose setFlags resolves to `result` and records its calls.
-const makeStore = (result: { uid: number; read?: boolean }[]) => {
+const makeFlagStore = (result: { uid: number; read?: boolean }[]) => {
   const setFlags = mock(() => Promise.resolve(result));
   return { store: { setFlags } as unknown as Store, setFlags };
 };
@@ -54,10 +191,8 @@ const taggedResponses = (lines: string[], tag: string) =>
   lines.filter((l) => l.startsWith(`${tag} `));
 
 describe("storeFlagsTyped — empty result (inbox #543)", () => {
-  beforeEach(() => {});
-
   it("sends exactly one tagged response (OK) when no messages match", async () => {
-    const { store } = makeStore([]); // setFlags returns no updated mails
+    const { store } = makeFlagStore([]); // setFlags returns no updated mails
     const { write, lines } = makeWriter();
 
     await storeFlagsTyped(
@@ -79,7 +214,7 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
   });
 
   it("emits no untagged FETCH responses for an empty range", async () => {
-    const { store } = makeStore([]);
+    const { store } = makeFlagStore([]);
     const { write, lines } = makeWriter();
 
     await storeFlagsTyped(
@@ -100,7 +235,7 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
   });
 
   it("still completes OK and emits FETCH when messages do match", async () => {
-    const { store } = makeStore([{ uid: 5, read: true }]);
+    const { store } = makeFlagStore([{ uid: 5, read: true }]);
     const seqState: SequenceState = {
       seqToUid: [5],
       uidToSeq: new Map([[5, 1]]),
@@ -125,7 +260,7 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
   });
 
   it("rejects writes on a read-only mailbox with a single NO", async () => {
-    const { store, setFlags } = makeStore([]);
+    const { store, setFlags } = makeFlagStore([]);
     const { write, lines } = makeWriter();
 
     await storeFlagsTyped(

@@ -3,7 +3,12 @@
  */
 
 import { MailType } from "common";
-import { markRead, getDomainUidNext, getAccountUidNext } from "server";
+import {
+  markRead,
+  getDomainUidNext,
+  getAccountUidNext,
+  getImapUidValidity,
+} from "server";
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
@@ -419,8 +424,9 @@ export async function appendMessage(
       if (selectedMailbox === appendRequest.mailbox) {
         await onAppended();
       }
+      const uidValidity = await getImapUidValidity(user.id);
       write(
-        `${tag} OK [APPENDUID ${Date.now()} ${uid}] APPEND completed\r\n`
+        `${tag} OK [APPENDUID ${uidValidity} ${uid}] APPEND completed\r\n`
       );
     } else {
       write(`${tag} NO APPEND failed to store message\r\n`);
