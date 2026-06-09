@@ -31,7 +31,7 @@ import {
   RobotIcon
 } from "./components";
 
-import { Context, Category, QueryCache, call } from "client";
+import { Context, Category, QueryCache, call, isSentMail } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 
 import "./index.scss";
@@ -88,6 +88,7 @@ interface RenderedMailProps {
   setReplyData: Dispatch<SetStateAction<ReplyData>>;
   requestDeleteMail: (mail: MailHeaderData) => Promise<ApiResponse<MailDeleteResponse>>;
   selectedAccount: string;
+  domainName: string;
   accountsCache: AccountsCache;
   selectedCategory: Category;
   removeAccountFromQueryData: () => void;
@@ -108,6 +109,7 @@ const RenderedMail = ({
   setReplyData,
   requestDeleteMail,
   selectedAccount,
+  domainName,
   accountsCache,
   selectedCategory,
   removeAccountFromQueryData,
@@ -142,7 +144,17 @@ const RenderedMail = ({
       const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
       setActiveMailId(clonedActiveMailId);
     }
-    setReplyData({ ...mail, to: { address: selectedAccount } });
+    // The Writer derives the composer's "From" from `replyData.to.address`
+    // and the composer's "To" from `replyData.from.value[0].address`. For
+    // received mail that lines up naturally; for sent mail surfaced via
+    // search (or Sent Mails), we swap `from`/`to` so Reply addresses the
+    // original recipient — not the user themselves. See #510.
+    if (isSentMail(mail, domainName)) {
+      const ownAddress = mail.from?.value?.[0]?.address || selectedAccount;
+      setReplyData({ ...mail, from: mail.to, to: { address: ownAddress } });
+    } else {
+      setReplyData({ ...mail, to: { address: selectedAccount } });
+    }
   };
 
   const onClickShare = () => {
@@ -356,7 +368,8 @@ const RenderedMails = ({ page }: { page: number }) => {
     isWriterOpen,
     setReplyData,
     selectedAccount,
-    selectedCategory
+    selectedCategory,
+    domainName
   } = useContext(Context);
 
   const [activeMailId, setActiveMailId] = useState<ActiveMailMap>({});
@@ -538,6 +551,7 @@ const RenderedMails = ({ page }: { page: number }) => {
           setReplyData={setReplyData}
           requestDeleteMail={requestDeleteMail}
           selectedAccount={selectedAccount}
+          domainName={domainName}
           accountsCache={accountsCache}
           selectedCategory={selectedCategory}
           removeAccountFromQueryData={removeAccountFromQueryData}
