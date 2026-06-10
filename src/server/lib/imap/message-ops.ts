@@ -386,7 +386,7 @@ export async function appendMessage(
       ? messageIdMatch[1].trim().replace(/[<>]/g, "")
       : mail.messageId;
 
-    mail.draft = appendRequest.flags?.includes("\\Draft") ?? true;
+    mail.draft = appendRequest.flags?.includes("\\Draft") || false;
     mail.read = appendRequest.flags?.includes("\\Seen") || false;
     mail.saved = appendRequest.flags?.includes("\\Flagged") || false;
     mail.deleted = appendRequest.flags?.includes("\\Deleted") || false;
