@@ -437,13 +437,14 @@ export class ImapSession {
     // pipelined ("DONE\r\nA4 NOOP\r\n") DONEs, stranding the session in IDLE.
   };
 
-  endIdle = () => {
+  endIdle = (reason?: string) => {
     if (!this.isIdling || !this.idleTag) return;
     this.isIdling = false;
     const tag = this.idleTag;
     this.idleTag = null;
     idleManager.removeIdleSession(this.sessionId);
-    this.write(`${tag} OK IDLE terminated\r\n`);
+    const suffix = reason ? ` (${reason})` : "";
+    this.write(`${tag} OK IDLE terminated${suffix}\r\n`);
   };
 
   isInIdleMode = (): boolean => {

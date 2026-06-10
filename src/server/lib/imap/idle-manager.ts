@@ -2,7 +2,7 @@
  * IDLE Manager - Handles IMAP IDLE sessions and real-time notifications
  */
 
-import { ImapSession } from "./session";
+import type { ImapSession } from "./session";
 import { logger } from "server";
 
 interface IdleSession {
@@ -13,7 +13,12 @@ interface IdleSession {
   startTime: Date;
 }
 
-class IdleManager {
+// The sweep interval must stay well below the timeout so the keepalive runs
+// several times before a session is force-terminated.
+export const IDLE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+export const IDLE_TIMEOUT_MS = 25 * 60 * 1000;
+
+export class IdleManager {
   private idleSessions: Map<string, IdleSession> = new Map();
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
@@ -105,29 +110,33 @@ class IdleManager {
    * Send heartbeat to all IDLE sessions to keep connections alive
    */
   private startHeartbeat() {
-    // Send heartbeat every 29 minutes (IMAP standard allows 30 min timeout)
     this.heartbeatInterval = setInterval(() => {
-      const now = new Date();
+      this.heartbeatTick(new Date());
+    }, IDLE_HEARTBEAT_INTERVAL_MS);
+  }
 
-      this.idleSessions.forEach((idleSession, sessionId) => {
-        try {
-          // Send a comment as heartbeat (RFC 3501 allows this)
+  /**
+   * One heartbeat sweep: keep young sessions alive, force-terminate sessions
+   * past the timeout. Termination goes through `session.endIdle("timeout")` so
+   * IDLE state (isIdling, the data listener, the manager record) is cleared in
+   * one place — leaving the manager record alone would brick the connection
+   * (RFC 3501: subsequent commands are dropped while isIdling stays true).
+   */
+  heartbeatTick(now: Date) {
+    this.idleSessions.forEach((idleSession, sessionId) => {
+      try {
+        const sessionAge = now.getTime() - idleSession.startTime.getTime();
+        if (sessionAge > IDLE_TIMEOUT_MS) {
+          idleSession.session.endIdle("timeout");
+        } else {
+          // Untagged keepalive is allowed mid-IDLE (RFC 3501 §7).
           idleSession.session.write("* OK Still here\r\n");
-
-          // Remove sessions older than 25 minutes to prevent timeout
-          const sessionAge = now.getTime() - idleSession.startTime.getTime();
-          if (sessionAge > 25 * 60 * 1000) {
-            idleSession.session.write(
-              `${idleSession.tag} OK IDLE terminated (timeout)\r\n`
-            );
-            this.removeIdleSession(sessionId);
-          }
-        } catch (error) {
-          logger.error("Error sending heartbeat to session", { component: "imap.idle", sessionId }, error);
-          this.removeIdleSession(sessionId);
         }
-      });
-    }, 29 * 60 * 1000); // 29 minutes
+      } catch (error) {
+        logger.error("Error sending heartbeat to session", { component: "imap.idle", sessionId }, error);
+        this.removeIdleSession(sessionId);
+      }
+    });
   }
 
   /**

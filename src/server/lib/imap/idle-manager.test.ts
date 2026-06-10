@@ -1,10 +1,18 @@
 /**
- * Tests for idle-manager.ts — IdleManager.notifyNewMail mailbox filtering.
+ * Tests for idle-manager.ts.
  *
- * Regression coverage for #549: PR #373 added a per-mailbox filter so an IDLE
- * session is only notified when it watches one of the target mailboxes (with an
- * INBOX catch-all). PR #331's async refactor constructed `mailboxSet` but never
- * consulted it, so every session for the user got EXISTS regardless of mailbox.
+ * Suite 1 — IdleManager.notifyNewMail mailbox filtering. Regression coverage for
+ * #549: PR #373 added a per-mailbox filter so an IDLE session is only notified
+ * when it watches one of the target mailboxes (with an INBOX catch-all). PR
+ * #331's async refactor constructed `mailboxSet` but never consulted it, so
+ * every session for the user got EXISTS regardless of mailbox.
+ *
+ * Suite 2 — heartbeat sweep, covers #547:
+ *   Bug 1: a timed-out session must be terminated through session.endIdle(), not
+ *          by dropping the manager record alone (which leaves isIdling true,
+ *          silently swallowing later commands).
+ *   Bug 2: the sweep interval must stay below the timeout, or the first tick
+ *          terminates every session before any keepalive helps.
  */
 
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
@@ -15,7 +23,12 @@ import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 // constructed. Importing push first forces the graph to initialize in the order
 // the production server uses, so the singleton is ready.
 import "../push";
-import { idleManager } from "./idle-manager";
+import {
+  idleManager,
+  IdleManager,
+  IDLE_HEARTBEAT_INTERVAL_MS,
+  IDLE_TIMEOUT_MS,
+} from "./idle-manager";
 import type { ImapSession } from "./session";
 
 const makeSession = () => {
@@ -76,5 +89,62 @@ describe("IdleManager.notifyNewMail mailbox filtering", () => {
     await idleManager.notifyNewMail(["alice"], ["usps@hoie.kim"]);
 
     expect(bob.write).not.toHaveBeenCalled();
+  });
+});
+
+// Minimal stand-in for ImapSession. endIdle mirrors the real method's contract:
+// it drops the manager record (the real session calls idleManager.removeIdleSession).
+function makeFakeSession(manager: IdleManager, sessionId: string) {
+  const writes: string[] = [];
+  const endIdleCalls: (string | undefined)[] = [];
+  const session = {
+    write: (data: string) => {
+      writes.push(data);
+      return true;
+    },
+    endIdle: (reason?: string) => {
+      endIdleCalls.push(reason);
+      manager.removeIdleSession(sessionId);
+    },
+  };
+  return { session: session as unknown as ImapSession, writes, endIdleCalls };
+}
+
+describe("idle-manager timing constants (#547 bug 2)", () => {
+  it("sweeps several times before the timeout cutoff", () => {
+    expect(IDLE_HEARTBEAT_INTERVAL_MS).toBeLessThan(IDLE_TIMEOUT_MS);
+    // Want multiple keepalives in the window, not exactly one before death.
+    expect(IDLE_TIMEOUT_MS / IDLE_HEARTBEAT_INTERVAL_MS).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("idle-manager heartbeatTick (#547 bug 1)", () => {
+  it("keeps a young session alive without ending IDLE", () => {
+    const manager = new IdleManager();
+    const fake = makeFakeSession(manager, "young");
+    manager.addIdleSession("young", fake.session, "a1", "INBOX", "admin");
+
+    // 1 minute in — well under the timeout.
+    manager.heartbeatTick(new Date(Date.now() + 60 * 1000));
+
+    expect(fake.writes).toContain("* OK Still here\r\n");
+    expect(fake.endIdleCalls).toHaveLength(0);
+    expect(manager.getActiveSessionCount()).toBe(1);
+    manager.shutdown();
+  });
+
+  it("terminates a timed-out session through endIdle, dropping the record", () => {
+    const manager = new IdleManager();
+    const fake = makeFakeSession(manager, "old");
+    // startTime is "now"; advance the tick past the cutoff.
+    manager.addIdleSession("old", fake.session, "a1", "INBOX", "admin");
+
+    manager.heartbeatTick(new Date(Date.now() + IDLE_TIMEOUT_MS + 1000));
+
+    expect(fake.endIdleCalls).toEqual(["timeout"]);
+    // No wasted keepalive on the terminating tick.
+    expect(fake.writes).not.toContain("* OK Still here\r\n");
+    expect(manager.getActiveSessionCount()).toBe(0);
+    manager.shutdown();
   });
 });
