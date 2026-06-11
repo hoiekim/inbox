@@ -477,6 +477,21 @@ describe("getSearchRoute", () => {
       "subject"
     );
   });
+
+  it("handles percent characters without throwing URIError", async () => {
+    const { getSearchRoute } = await import("./get-search");
+    mockSearchMail.mockResolvedValueOnce([]);
+
+    const req = makeReq({ params: { value: "100% off" }, query: {} });
+    const result = await getSearchRoute.callback(req, makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockSearchMail).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "u1" }),
+      "100% off",
+      undefined
+    );
+  });
 });
 
 // ── get-spam route ────────────────────────────────────────────────────────────
