@@ -41,7 +41,7 @@ mock.module("server", () => ({
     username === "admin" ? "example.com" : `${username}.example.com`,
 }));
 
-import { Store } from "./store";
+import { Store, simplifyCriterion } from "./store";
 
 const makeUser = (overrides: Partial<{ id: string; username: string; email: string }> = {}) =>
   new SignedUser({
@@ -82,5 +82,69 @@ describe("Store.listMailboxes", () => {
     const store = new Store(makeUser());
     const result = await store.listMailboxes();
     expect(result).toEqual(["INBOX"]);
+  });
+});
+
+describe("simplifyCriterion — NOT/OR operand normalisation (regression for #551)", () => {
+  // The parser emits NOT/OR with RAW inner criteria (.criterion / .left / .right),
+  // and raw text/date/header criteria use heterogeneous field names (.value/.date/.field).
+  // simplifyCriterion must recurse so the SQL builder always sees the flat
+  // { type, value } shape — otherwise nested NOT/OR criteria were mis-read or dropped.
+
+  it("normalises NOT's inner criterion (flag)", () => {
+    expect(
+      simplifyCriterion({ type: "NOT", criterion: { type: "SEEN" } } as never)
+    ).toEqual({ type: "NOT", value: { type: "SEEN" } });
+  });
+
+  it("normalises NOT's inner text criterion onto .value", () => {
+    expect(
+      simplifyCriterion({
+        type: "NOT",
+        criterion: { type: "FROM", value: "spam@x" },
+      } as never)
+    ).toEqual({ type: "NOT", value: { type: "FROM", value: "spam@x" } });
+  });
+
+  it("normalises a NOT BEFORE date from .date to .value", () => {
+    const when = new Date("2026-01-01T00:00:00Z");
+    expect(
+      simplifyCriterion({
+        type: "NOT",
+        criterion: { type: "BEFORE", date: when },
+      } as never)
+    ).toEqual({ type: "NOT", value: { type: "BEFORE", value: when } });
+  });
+
+  it("normalises both OR operands recursively", () => {
+    expect(
+      simplifyCriterion({
+        type: "OR",
+        left: { type: "FROM", value: "alice" },
+        right: { type: "TO", value: "bob" },
+      } as never)
+    ).toEqual({
+      type: "OR",
+      value: {
+        left: { type: "FROM", value: "alice" },
+        right: { type: "TO", value: "bob" },
+      },
+    });
+  });
+
+  it("drops an OR whose operand cannot be expressed as a single value (UID)", () => {
+    expect(
+      simplifyCriterion({
+        type: "OR",
+        left: { type: "FROM", value: "alice" },
+        right: { type: "UID", sequenceSet: { ranges: [{ start: 1 }] } },
+      } as never)
+    ).toBeNull();
+  });
+
+  it("normalises HEADER's field/value into { field, text }", () => {
+    expect(
+      simplifyCriterion({ type: "HEADER", field: "Subject", value: "hi" } as never)
+    ).toEqual({ type: "HEADER", value: { field: "Subject", text: "hi" } });
   });
 });

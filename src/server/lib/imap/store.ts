@@ -37,6 +37,107 @@ import {
 } from "./types";
 import { logger, getUserDomain } from "server";
 
+type SimplifiedCriterion = { type: string; value?: unknown };
+
+/**
+ * Normalises a parsed SearchCriterion into the flat `{ type, value }` shape that
+ * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
+ * otherwise the SQL builder would read the wrong field off the raw parser shape
+ * (e.g. `.date`/`.field` instead of `.value`) and silently mis-handle the nested
+ * criterion. Returns null when the criterion imposes no constraint or can't be
+ * expressed as a single flat value (UID, which expands to multiple entries, and is
+ * handled by the caller). See #551.
+ */
+export const simplifyCriterion = (
+  criterion: SearchCriterion
+): SimplifiedCriterion | null => {
+  const type = criterion.type.toUpperCase();
+  switch (type) {
+    // Flag-based: no additional value
+    case "ALL":
+    case "UNSEEN":
+    case "SEEN":
+    case "ANSWERED":
+    case "UNANSWERED":
+    case "DELETED":
+    case "UNDELETED":
+    case "FLAGGED":
+    case "UNFLAGGED":
+    case "DRAFT":
+    case "UNDRAFT":
+    case "NEW":
+    case "OLD":
+    case "RECENT":
+      return { type };
+
+    // Text search: value is embedded in the criterion object
+    case "SUBJECT":
+    case "FROM":
+    case "TO":
+    case "CC":
+    case "BCC":
+    case "BODY":
+    case "TEXT": {
+      const textCriterion = criterion as { type: string; value: string };
+      return { type, value: textCriterion.value };
+    }
+
+    // Header search
+    case "HEADER": {
+      const hdr = criterion as { type: string; field: string; value: string };
+      return { type, value: { field: hdr.field, text: hdr.value } };
+    }
+
+    // Date criteria: value is a Date object
+    case "BEFORE":
+    case "ON":
+    case "SINCE":
+    case "SENTBEFORE":
+    case "SENTON":
+    case "SENTSINCE": {
+      const dateCriterion = criterion as { type: string; date: Date };
+      return { type, value: dateCriterion.date };
+    }
+
+    // Size criteria
+    case "LARGER":
+    case "SMALLER": {
+      const sizeCriterion = criterion as { type: string; size: number };
+      return { type, value: sizeCriterion.size };
+    }
+
+    // Logical NOT: negate a single (normalised) criterion
+    case "NOT": {
+      const notCriterion = criterion as { type: string; criterion: SearchCriterion };
+      const inner = simplifyCriterion(notCriterion.criterion);
+      return inner ? { type: "NOT", value: inner } : null;
+    }
+
+    // Logical OR: two (normalised) criteria
+    case "OR": {
+      const orCriterion = criterion as {
+        type: string;
+        left: SearchCriterion;
+        right: SearchCriterion;
+      };
+      const left = simplifyCriterion(orCriterion.left);
+      const right = simplifyCriterion(orCriterion.right);
+      if (left && right) return { type: "OR", value: { left, right } };
+      // An OR with an unconstrained/unsupported side matches everything; drop it
+      // rather than over-narrow to the one expressible side.
+      return null;
+    }
+
+    // UID expands to multiple ranges; cannot collapse to a single value here.
+    case "UID":
+      return null;
+
+    default:
+      logger.warn("Unsupported search criterion", { component: "imap.store", type });
+      return null;
+  }
+};
+
 // class that creates "store" object
 export class Store {
   constructor(private user: SignedUser) {}
@@ -311,101 +412,31 @@ export class Store {
     try {
       const { accountName, isSent } = this.resolveBox(box);
 
-      // Convert criteria to a simpler flat format for searchMailsByUid
-      const simplifiedCriteria: { type: string; value?: unknown }[] = [];
+      // Convert criteria to a simpler flat format for searchMailsByUid.
+      // UID expands to one entry per range; everything else (including nested
+      // NOT/OR operands) normalises via simplifyCriterion.
+      const simplifiedCriteria: SimplifiedCriterion[] = [];
 
       for (const criterion of criteria) {
         const type = criterion.type.toUpperCase();
 
-        switch (type) {
-          // Flag-based: no additional value
-          case "ALL":
-          case "UNSEEN":
-          case "SEEN":
-          case "ANSWERED":
-          case "UNANSWERED":
-          case "DELETED":
-          case "UNDELETED":
-          case "FLAGGED":
-          case "UNFLAGGED":
-          case "DRAFT":
-          case "UNDRAFT":
-          case "NEW":
-          case "OLD":
-          case "RECENT":
-            simplifiedCriteria.push({ type });
-            break;
-
-          // Text search: value is embedded in the criterion object
-          case "SUBJECT":
-          case "FROM":
-          case "TO":
-          case "CC":
-          case "BCC":
-          case "BODY":
-          case "TEXT": {
-            const textCriterion = criterion as { type: string; value: string };
-            simplifiedCriteria.push({ type, value: textCriterion.value });
-            break;
-          }
-
-          // Header search
-          case "HEADER": {
-            const hdr = criterion as { type: string; field: string; value: string };
-            simplifiedCriteria.push({ type, value: { field: hdr.field, text: hdr.value } });
-            break;
-          }
-
-          // Date criteria: value is a Date object
-          case "BEFORE":
-          case "ON":
-          case "SINCE":
-          case "SENTBEFORE":
-          case "SENTON":
-          case "SENTSINCE": {
-            const dateCriterion = criterion as { type: string; date: Date };
-            simplifiedCriteria.push({ type, value: dateCriterion.date });
-            break;
-          }
-
-          // Size criteria
-          case "LARGER":
-          case "SMALLER": {
-            const sizeCriterion = criterion as { type: string; size: number };
-            simplifiedCriteria.push({ type, value: sizeCriterion.size });
-            break;
-          }
-
-          // Logical NOT: negate a single criterion
-          case "NOT": {
-            const notCriterion = criterion as { type: string; criterion: SearchCriterion };
-            simplifiedCriteria.push({ type: "NOT", value: notCriterion.criterion });
-            break;
-          }
-
-          // Logical OR: two criteria
-          case "OR": {
-            const orCriterion = criterion as { type: string; left: SearchCriterion; right: SearchCriterion };
-            simplifiedCriteria.push({ type: "OR", value: { left: orCriterion.left, right: orCriterion.right } });
-            break;
-          }
-
-          // UID ranges
-          case "UID": {
-            const uidCriterion = criterion as UidCriterion;
-            for (const range of uidCriterion.sequenceSet.ranges) {
-              if (range.end === undefined) {
-                simplifiedCriteria.push({ type: "UID_EXACT", value: range.start });
-              } else {
-                simplifiedCriteria.push({ type: "UID_RANGE", value: { start: range.start, end: range.end } });
-              }
+        if (type === "UID") {
+          const uidCriterion = criterion as UidCriterion;
+          for (const range of uidCriterion.sequenceSet.ranges) {
+            if (range.end === undefined) {
+              simplifiedCriteria.push({ type: "UID_EXACT", value: range.start });
+            } else {
+              simplifiedCriteria.push({
+                type: "UID_RANGE",
+                value: { start: range.start, end: range.end },
+              });
             }
-            break;
           }
-
-          default:
-            logger.warn("Unsupported search criterion", { component: "imap.store", type });
+          continue;
         }
+
+        const simplified = simplifyCriterion(criterion);
+        if (simplified) simplifiedCriteria.push(simplified);
       }
 
       return await searchMailsByUid(

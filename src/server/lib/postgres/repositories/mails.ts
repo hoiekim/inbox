@@ -811,6 +811,166 @@ export const setMailFlags = async (
   }
 };
 
+/**
+ * Builds the SQL boolean fragment for a single IMAP SEARCH criterion, pushing any
+ * bound parameters onto `values` (1-indexed `$N` placeholders track `values.length`).
+ * Returns `null` for criteria that impose no constraint (ALL, unsupported keys), so
+ * the caller simply skips them. NOT/OR recurse so negation and disjunction compose
+ * instead of falling through and matching every message.
+ */
+export const buildCriterionClause = (
+  criterion: { type: string; value?: unknown },
+  uidField: string,
+  values: ParamValue[]
+): string | null => {
+  const type = criterion.type.toUpperCase();
+  switch (type) {
+    // Logical operators — recurse into operands carried on `value`.
+    case "NOT": {
+      const inner = buildCriterionClause(
+        criterion.value as { type: string; value?: unknown },
+        uidField,
+        values
+      );
+      return inner ? `NOT (${inner})` : null;
+    }
+    case "OR": {
+      const { left, right } = criterion.value as {
+        left: { type: string; value?: unknown };
+        right: { type: string; value?: unknown };
+      };
+      const l = buildCriterionClause(left, uidField, values);
+      const r = buildCriterionClause(right, uidField, values);
+      if (l && r) return `(${l} OR ${r})`;
+      // One side imposes no constraint: an OR with an unconstrained side matches
+      // everything, so drop the whole disjunction rather than over-narrow it.
+      return null;
+    }
+
+    // ALL: match everything — no additional condition needed
+    case "ALL":
+      return null;
+
+    // Flag / status criteria
+    case "UNSEEN":
+      return "read = FALSE";
+    case "SEEN":
+      return "read = TRUE";
+    case "FLAGGED":
+      return "saved = TRUE";
+    case "UNFLAGGED":
+      return "saved = FALSE";
+    // ANSWERED / DELETED / DRAFT are tracked as real boolean columns on the
+    // mails table (added upstream); map each to its schema column directly.
+    case "ANSWERED":
+      return "answered = TRUE";
+    case "UNANSWERED":
+      return "answered = FALSE";
+    case "DELETED":
+      return "deleted = TRUE";
+    case "UNDELETED":
+      return "deleted = FALSE";
+    case "DRAFT":
+      return "draft = TRUE";
+    case "UNDRAFT":
+      return "draft = FALSE";
+    // NEW = RECENT + UNSEEN; RECENT / OLD: not tracked, treat as ALL
+    case "NEW":
+      return "read = FALSE";
+    case "OLD":
+    case "RECENT":
+      return null; // no \Recent flag tracking; match all
+
+    // Text search criteria
+    case "SUBJECT":
+      values.push(`%${criterion.value}%`);
+      return `subject ILIKE $${values.length}`;
+    case "FROM":
+      values.push(`%${criterion.value}%`);
+      return `from_text ILIKE $${values.length}`;
+    case "TO":
+      values.push(`%${criterion.value}%`);
+      return `to_text ILIKE $${values.length}`;
+    case "CC":
+      values.push(`%${criterion.value}%`);
+      return `cc_text ILIKE $${values.length}`;
+    case "BCC":
+      values.push(`%${criterion.value}%`);
+      return `bcc_text ILIKE $${values.length}`;
+    case "BODY":
+    case "TEXT":
+    case "SUBJECT_TEXT": {
+      // Full-text search across subject (extend to body when indexed)
+      values.push(`%${criterion.value}%`);
+      const p = values.length;
+      return `(subject ILIKE $${p} OR from_text ILIKE $${p} OR to_text ILIKE $${p})`;
+    }
+
+    // Header search
+    case "HEADER": {
+      const { field, text } = criterion.value as { field: string; text: string };
+      const fieldLower = field.toLowerCase();
+      let column: string | null = null;
+      if (fieldLower === "subject") column = "subject";
+      else if (fieldLower === "from") column = "from_text";
+      else if (fieldLower === "to") column = "to_text";
+      else if (fieldLower === "message-id") column = "message_id";
+      // Unsupported header field — skip to avoid incorrect results
+      if (column === null) return null;
+      values.push(`%${text}%`);
+      return `${column} ILIKE $${values.length}`;
+    }
+
+    // Date criteria (using internal date — date column)
+    case "BEFORE":
+      values.push(criterion.value as Date);
+      return `date < $${values.length}`;
+    case "ON": {
+      const onDate = criterion.value as Date;
+      const nextDay = new Date(onDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      values.push(onDate, nextDay);
+      return `date >= $${values.length - 1} AND date < $${values.length}`;
+    }
+    case "SINCE":
+      values.push(criterion.value as Date);
+      return `date >= $${values.length}`;
+    // SENT* criteria use the same date column (we have only one date field)
+    case "SENTBEFORE":
+      values.push(criterion.value as Date);
+      return `date < $${values.length}`;
+    case "SENTON": {
+      const sentOnDate = criterion.value as Date;
+      const nextDay = new Date(sentOnDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+      values.push(sentOnDate, nextDay);
+      return `date >= $${values.length - 1} AND date < $${values.length}`;
+    }
+    case "SENTSINCE":
+      values.push(criterion.value as Date);
+      return `date >= $${values.length}`;
+
+    // Size criteria: not tracked per-row; skip to avoid incorrect results
+    case "LARGER":
+    case "SMALLER":
+      return null;
+
+    // UID ranges (already split from UidCriterion in store.ts)
+    case "UID_EXACT":
+      values.push(criterion.value as number);
+      return `${uidField} = $${values.length}`;
+    case "UID_RANGE": {
+      const range = criterion.value as { start: number; end: number };
+      values.push(range.start, range.end);
+      return `${uidField} >= $${values.length - 1} AND ${uidField} <= $${values.length}`;
+    }
+
+    // Unsupported criterion — impose no constraint (caller skips it).
+    default:
+      return null;
+  }
+};
+
 export const searchMailsByUid = async (
   user_id: string,
   account: string | null,
@@ -836,167 +996,8 @@ export const searchMailsByUid = async (
     }
 
     for (const criterion of criteria) {
-      const type = criterion.type.toUpperCase();
-      switch (type) {
-        // ALL: match everything — no additional condition needed
-        case "ALL":
-          break;
-
-        // Flag / status criteria
-        case "UNSEEN":
-          conditions.push("read = FALSE");
-          break;
-        case "SEEN":
-          conditions.push("read = TRUE");
-          break;
-        case "FLAGGED":
-          conditions.push("saved = TRUE");
-          break;
-        case "UNFLAGGED":
-          conditions.push("saved = FALSE");
-          break;
-        case "ANSWERED":
-          conditions.push("answered = TRUE");
-          break;
-        case "UNANSWERED":
-          conditions.push("answered = FALSE");
-          break;
-        case "DELETED":
-          conditions.push("deleted = TRUE");
-          break;
-        case "UNDELETED":
-          conditions.push("deleted = FALSE");
-          break;
-        case "DRAFT":
-          conditions.push("draft = TRUE");
-          break;
-        case "UNDRAFT":
-          conditions.push("draft = FALSE");
-          break;
-        // NEW = RECENT + UNSEEN; RECENT / OLD: not tracked, treat as ALL
-        case "NEW":
-          conditions.push("read = FALSE");
-          break;
-        case "OLD":
-        case "RECENT":
-          break; // no \Recent flag tracking; match all
-
-        // Text search criteria
-        case "SUBJECT":
-          conditions.push(`subject ILIKE $${paramIdx}`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-        case "FROM":
-          conditions.push(`from_text ILIKE $${paramIdx}`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-        case "TO":
-          conditions.push(`to_text ILIKE $${paramIdx}`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-        case "CC":
-          conditions.push(`cc_text ILIKE $${paramIdx}`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-        case "BCC":
-          conditions.push(`bcc_text ILIKE $${paramIdx}`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-        case "BODY":
-        case "TEXT":
-        case "SUBJECT_TEXT":
-          // Full-text search across subject (extend to body when indexed)
-          conditions.push(`(subject ILIKE $${paramIdx} OR from_text ILIKE $${paramIdx} OR to_text ILIKE $${paramIdx})`);
-          values.push(`%${criterion.value}%`);
-          paramIdx++;
-          break;
-
-        // Header search
-        case "HEADER": {
-          const { field, text } = criterion.value as { field: string; text: string };
-          const fieldLower = field.toLowerCase();
-          if (fieldLower === "subject") {
-            conditions.push(`subject ILIKE $${paramIdx}`);
-          } else if (fieldLower === "from") {
-            conditions.push(`from_text ILIKE $${paramIdx}`);
-          } else if (fieldLower === "to") {
-            conditions.push(`to_text ILIKE $${paramIdx}`);
-          } else if (fieldLower === "message-id") {
-            conditions.push(`message_id ILIKE $${paramIdx}`);
-          } else {
-            // Unsupported header field — skip to avoid incorrect results
-            break;
-          }
-          values.push(`%${text}%`);
-          paramIdx++;
-          break;
-        }
-
-        // Date criteria (using internal date — date column)
-        case "BEFORE":
-          conditions.push(`date < $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        case "ON": {
-          const onDate = criterion.value as Date;
-          const nextDay = new Date(onDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
-          values.push(onDate, nextDay);
-          paramIdx += 2;
-          break;
-        }
-        case "SINCE":
-          conditions.push(`date >= $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        // SENT* criteria use the same date column (we have only one date field)
-        case "SENTBEFORE":
-          conditions.push(`date < $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-        case "SENTON": {
-          const sentOnDate = criterion.value as Date;
-          const nextDay = new Date(sentOnDate);
-          nextDay.setDate(nextDay.getDate() + 1);
-          conditions.push(`date >= $${paramIdx} AND date < $${paramIdx + 1}`);
-          values.push(sentOnDate, nextDay);
-          paramIdx += 2;
-          break;
-        }
-        case "SENTSINCE":
-          conditions.push(`date >= $${paramIdx}`);
-          values.push(criterion.value as Date);
-          paramIdx++;
-          break;
-
-        // Size criteria: not tracked per-row; skip to avoid incorrect results
-        case "LARGER":
-        case "SMALLER":
-          break;
-
-        // UID ranges (already split from UidCriterion in store.ts)
-        case "UID_EXACT":
-          conditions.push(`${uidField} = $${paramIdx}`);
-          values.push(criterion.value as number);
-          paramIdx++;
-          break;
-        case "UID_RANGE": {
-          const range = criterion.value as { start: number; end: number };
-          conditions.push(`${uidField} >= $${paramIdx} AND ${uidField} <= $${paramIdx + 1}`);
-          values.push(range.start, range.end);
-          paramIdx += 2;
-          break;
-        }
-      }
+      const frag = buildCriterionClause(criterion, uidField, values);
+      if (frag) conditions.push(frag);
     }
 
     const sql = `
