@@ -522,3 +522,39 @@ describe("searchMailsByUid — no result cap (#553)", () => {
     expect(sqlMatch[1]).not.toMatch(/\bLIMIT\b/i);
   });
 });
+
+describe("buildCriterionClause — BODY/TEXT search the message body (#552)", () => {
+  // RFC 3501 §6.4.4: BODY matches the message body; TEXT matches header +
+  // body. The prior impl ORed only subject/from_text/to_text, so IMAP
+  // `SEARCH BODY <s>` / `SEARCH TEXT <s>` never consulted the `text`
+  // (plain-text body) column and missed virtually every body-content match.
+
+  it("BODY matches the body column only", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "BODY", value: "needle" },
+      "uid_account",
+      values as never,
+    );
+    expect(frag).toBe("text ILIKE $1");
+    // Body-only per RFC: must not fold in the header columns.
+    expect(frag).not.toContain("subject ILIKE");
+    expect(frag).not.toContain("from_text ILIKE");
+    expect(values).toEqual(["%needle%"]);
+  });
+
+  it("TEXT matches header columns plus the body column", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "TEXT", value: "needle" },
+      "uid_account",
+      values as never,
+    );
+    expect(frag).toContain("subject ILIKE");
+    expect(frag).toContain("from_text ILIKE");
+    expect(frag).toContain("to_text ILIKE");
+    expect(frag).toContain("text ILIKE");
+  });
+});
