@@ -1000,11 +1000,14 @@ export const searchMailsByUid = async (
       if (frag) conditions.push(frag);
     }
 
+    // No LIMIT: per RFC 3501 §6.4.4 SEARCH must return every matching
+    // message. A cap with ORDER BY uid ASC would silently drop the
+    // newest messages on mailboxes larger than the cap. Consistent with
+    // the unbounded getAllUids / getMailsByRange enumeration paths.
     const sql = `
-      SELECT ${uidField} as uid FROM mails 
+      SELECT ${uidField} as uid FROM mails
       WHERE ${conditions.join(" AND ")}
       ORDER BY ${uidField} ASC
-      LIMIT 10000
     `;
 
     const result = await pool.query(sql, values);
