@@ -10,8 +10,17 @@
  *      the pipelined command was silently dropped.
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import { EventEmitter } from "events";
+
+// Capture the real `./idle-manager` exports BEFORE the `mock.module`
+// override below so `afterAll` can re-mock them back. `mock.module` is
+// process-global; without the restore, a subsequent test file in the
+// same `bun test` process that imports `./idle-manager` (notably the
+// IDLE-heartbeat manager suite landing in this same directory) sees the
+// stubbed `{ idleManager }` shape only and loses access to the real
+// `IdleManager` class + the `IDLE_*_MS` constants.
+const realIdleManagerModule = await import("./idle-manager");
 
 const mockAddIdleSession = mock(() => {});
 const mockRemoveIdleSession = mock(() => {});
@@ -21,6 +30,10 @@ mock.module("./idle-manager", () => ({
     removeIdleSession: mockRemoveIdleSession,
   },
 }));
+
+afterAll(() => {
+  mock.module("./idle-manager", () => ({ ...realIdleManagerModule }));
+});
 
 import { ImapRequestHandler } from "./handler";
 
