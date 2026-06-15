@@ -1098,6 +1098,56 @@ export const getAllUids = async (
 };
 
 /**
+ * UID of the lowest-UID unread (unseen) message in a mailbox, or null when
+ * every message is read. Used to emit the RFC 3501 `[UNSEEN <seq>]` SELECT
+ * response code, where the value is the sequence number of the first unseen
+ * message — never the unread count.
+ */
+export const getFirstUnseenUid = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean
+): Promise<number | null> => {
+  try {
+    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
+
+    let sql: string;
+    let values: ParamValue[];
+
+    if (account === null) {
+      // Domain-wide query (exclude expunged messages)
+      sql = `
+        SELECT ${uidField} as uid FROM mails
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE
+        ORDER BY ${uidField} ASC
+        LIMIT 1
+      `;
+      values = [user_id, sent];
+    } else {
+      // Account-specific query (exclude expunged messages)
+      const addressJson = JSON.stringify([{ address: account }]);
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      sql = `
+        SELECT ${uidField} as uid FROM mails
+        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE AND read = FALSE
+        ORDER BY ${uidField} ASC
+        LIMIT 1
+      `;
+      values = [user_id, sent, addressJson];
+    }
+
+    const result = await pool.query(sql, values);
+    const uid = result.rows[0]?.uid;
+    return uid === undefined ? null : (uid as number);
+  } catch (error) {
+    logger.error("Failed to get first unseen UID", {}, error);
+    return null;
+  }
+};
+
+/**
  * Soft-delete messages marked with \Deleted flag (EXPUNGE operation)
  * Sets expunged = TRUE instead of hard deleting.
  * Returns the UIDs of expunged messages for EXPUNGE responses.
