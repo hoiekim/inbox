@@ -13,13 +13,13 @@
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import { EventEmitter } from "events";
 
-// Capture the real `./idle-manager` exports BEFORE the `mock.module`
-// override below so `afterAll` can re-mock them back. `mock.module` is
+// Capture the real `./idle-manager` module BEFORE the `mock.module`
+// override below so `afterAll` can restore it. `mock.module` is
 // process-global; without the restore, a subsequent test file in the
 // same `bun test` process that imports `./idle-manager` (notably the
 // IDLE-heartbeat manager suite landing in this same directory) sees the
-// stubbed `{ idleManager }` shape only and loses access to the real
-// `IdleManager` class + the `IDLE_*_MS` constants.
+// stubbed two-method `{ idleManager }` shape and loses the real
+// `idleManager` singleton (the module's only export).
 const realIdleManagerModule = await import("./idle-manager");
 
 const mockAddIdleSession = mock(() => {});
