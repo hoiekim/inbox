@@ -76,6 +76,20 @@ export const sendMail = async (
   }
 };
 
+/**
+ * Split a comma-separated address string into address objects, lowercasing
+ * each address. Mirrors the receive-path normalization in `convertAddressValue`
+ * (receive.ts) so stored addresses group case-insensitively — without this the
+ * send path stored addresses verbatim, fragmenting the per-account list when a
+ * sender/recipient was typed with any uppercase letter.
+ */
+export const parseAddressList = (str: string) =>
+  str
+    .split(",")
+    .map((addr) => addr.trim())
+    .filter(Boolean)
+    .map((address) => ({ address: address.toLowerCase() }));
+
 const getSentMail = async (
   user: SignedUser,
   mailToSend: MailDataToSend,
@@ -87,7 +101,7 @@ const getSentMail = async (
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
-  const fromEmail = `${sender}@${userDomain}`;
+  const fromEmail = `${sender}@${userDomain}`.toLowerCase();
   const attachments = (await getAttachmentsToSave(files)) || [];
 
   const [domainUid, accountUid] = await Promise.all([
@@ -96,13 +110,6 @@ const getSentMail = async (
   ]);
 
   const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
-
-  const parseAddresses = (str: string) =>
-    str
-      .split(",")
-      .map((addr) => addr.trim())
-      .filter(Boolean)
-      .map((address) => ({ address }));
 
   return new Mail({
     subject,
@@ -115,11 +122,11 @@ const getSentMail = async (
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: senderFullName ? `${senderFullName} <${fromEmail}>` : fromEmail
     },
-    to: { value: parseAddresses(to), text: to },
-    cc: !cc ? undefined : { value: parseAddresses(cc), text: cc },
-    bcc: !bcc ? undefined : { value: parseAddresses(bcc), text: bcc },
+    to: { value: parseAddressList(to), text: to },
+    cc: !cc ? undefined : { value: parseAddressList(cc), text: cc },
+    bcc: !bcc ? undefined : { value: parseAddressList(bcc), text: bcc },
     envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],
-    envelopeTo: parseAddresses(to),
+    envelopeTo: parseAddressList(to),
     replyTo: {
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: fromEmail
