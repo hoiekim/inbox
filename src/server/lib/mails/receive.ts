@@ -178,9 +178,10 @@ export const convertMail = async (
   const replyTo = convertMailAddress(incoming.replyTo);
 
   const envelopeFrom = convertAddressValue(incoming.envelopeFrom);
-  const envelopeTo = convertAddressValue(
-    incoming.envelopeTo
-  ) as MailAddressValueType[];
+  // convertAddressValue returns undefined when no usable address survives
+  // (empty input, or every entry filtered out). envelopeTo is dereferenced
+  // below and passed to Mail as a non-null array, so default to [].
+  const envelopeTo = convertAddressValue(incoming.envelopeTo) ?? [];
 
   const attachments = await convertAttachments(incoming.attachments);
 
@@ -244,20 +245,42 @@ export const convertMailAddress = (
   return { value, text };
 };
 
-const convertAddressValue = (
+// Exported for direct unit coverage of the group-expansion / address-split /
+// empty-filter logic — the corruption fixed in #535 is entirely inside here.
+export const convertAddressValue = (
   incoming?: IncomingMailAddressValue | IncomingMailAddressValue[]
 ) => {
   if (!incoming) return undefined;
   const array: MailAddressValueType[] = [];
-  const push = ({ address, name }: IncomingMailAddressValue) => {
-    const value = { address: address?.toLowerCase(), name };
-    array.push(value);
+  const push = (entry: IncomingMailAddressValue) => {
+    // RFC 2822 group addresses (`"Team": a@x.com, b@x.com;`) arrive with the
+    // members on `entry.group` and an empty top-level `address`. Recurse into
+    // the members so they aren't dropped as `{ address: "" }`.
+    if (entry.group) {
+      const members = Array.isArray(entry.group) ? entry.group : [entry.group];
+      members.forEach(push);
+      return;
+    }
+    const address = entry.address?.toLowerCase().trim();
+    if (!address) return; // drop empty/whitespace-only addresses
+    // Some parsed entries arrive comma-concatenated in a single `address`
+    // string (`"alice@x.com, bob@x.com"`). A valid address never contains a
+    // comma, so split into separate rows rather than storing a phantom one.
+    if (address.includes(",")) {
+      address
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean)
+        .forEach((a) => array.push({ address: a, name: entry.name }));
+      return;
+    }
+    array.push({ address, name: entry.name });
   };
   if (Array.isArray(incoming)) {
     if (incoming.length) incoming.forEach(push);
     else return undefined;
-  } else if (incoming) push(incoming);
-  return array;
+  } else push(incoming);
+  return array.length ? array : undefined;
 };
 
 const convertAttachments = async (

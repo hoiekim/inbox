@@ -1,7 +1,12 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
 
 import type { IncomingMail, IncomingMailAddress } from "common";
-import { validateIncomingMail, addressToUsername, convertMailAddress } from "./receive";
+import {
+  validateIncomingMail,
+  addressToUsername,
+  convertMailAddress,
+  convertAddressValue,
+} from "./receive";
 
 const makeMail = (envelopeTo: { address: string }[]): IncomingMail =>
   ({ envelopeTo } as unknown as IncomingMail);
@@ -177,5 +182,66 @@ describe("convertMailAddress (spam EmailContext source, #528)", () => {
       fromName: undefined,
       replyToAddress: undefined,
     });
+  });
+});
+
+describe("convertAddressValue", () => {
+  it("returns undefined for empty / nullish input", () => {
+    expect(convertAddressValue(undefined)).toBeUndefined();
+    expect(convertAddressValue([])).toBeUndefined();
+  });
+
+  it("lowercases and keeps a simple address", () => {
+    expect(convertAddressValue({ address: "Alice@Example.COM", name: "Alice" })).toEqual([
+      { address: "alice@example.com", name: "Alice" },
+    ]);
+  });
+
+  it("drops empty / whitespace-only addresses instead of storing { address: '' } (#535)", () => {
+    expect(convertAddressValue({ address: "" })).toBeUndefined();
+    expect(convertAddressValue({ address: "   ", name: "Nobody" })).toBeUndefined();
+    expect(
+      convertAddressValue([{ address: "" }, { address: "bob@example.com" }])
+    ).toEqual([{ address: "bob@example.com", name: undefined }]);
+  });
+
+  it("expands RFC 2822 group members instead of dropping them (#535)", () => {
+    const grouped = {
+      address: "",
+      name: "Team",
+      group: [
+        { address: "Alice@Example.com", name: "Alice" },
+        { address: "bob@example.com", name: "Bob" },
+      ],
+    };
+    expect(convertAddressValue(grouped)).toEqual([
+      { address: "alice@example.com", name: "Alice" },
+      { address: "bob@example.com", name: "Bob" },
+    ]);
+  });
+
+  it("expands a single (non-array) group member", () => {
+    expect(
+      convertAddressValue({ address: "", group: { address: "solo@example.com", name: "Solo" } })
+    ).toEqual([{ address: "solo@example.com", name: "Solo" }]);
+  });
+
+  it("splits comma-concatenated addresses into separate rows (#535)", () => {
+    expect(
+      convertAddressValue({
+        address: "annie@bratko.net, presidential@hoie.kim",
+        name: "Both",
+      })
+    ).toEqual([
+      { address: "annie@bratko.net", name: "Both" },
+      { address: "presidential@hoie.kim", name: "Both" },
+    ]);
+  });
+
+  it("drops empty fragments produced by a trailing comma", () => {
+    expect(convertAddressValue({ address: "a@x.com, , b@x.com" })).toEqual([
+      { address: "a@x.com", name: undefined },
+      { address: "b@x.com", name: undefined },
+    ]);
   });
 });
