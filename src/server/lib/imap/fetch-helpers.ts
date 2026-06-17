@@ -9,8 +9,8 @@ import { MailType } from "common";
 import { logger } from "server";
 import {
   encodeText,
-  formatAddressList,
   formatBodyStructure,
+  formatEnvelope,
   formatFlags,
   formatHeaders,
   formatInternalDate,
@@ -34,22 +34,6 @@ import {
 export type FetchResponsePart =
   | { type: "simple"; content: string }
   | { type: "literal"; content: string; header: string; length: number };
-
-// ---------------------------------------------------------------------------
-// Envelope
-// ---------------------------------------------------------------------------
-
-export function buildEnvelope(mail: Partial<MailType>): string {
-  const dateString = new Date(mail.date!).toUTCString();
-  const subject = (mail.subject || "").replace(/"/g, '\\"');
-  const from = formatAddressList(mail.from?.value);
-  const to = formatAddressList(mail.to?.value);
-  const cc = formatAddressList(mail.cc?.value);
-  const bcc = formatAddressList(mail.bcc?.value);
-  const messageId = mail.messageId || "<unknown@local>";
-
-  return `("${dateString}" "${subject}" NIL NIL NIL (${from}) (${to}) (${cc}) (${bcc}) NIL "${messageId}")`;
-}
 
 // ---------------------------------------------------------------------------
 // Body content extraction
@@ -330,7 +314,7 @@ export async function buildFetchResponsePart(
     }
 
     case "ENVELOPE": {
-      const envelope = buildEnvelope(mail);
+      const envelope = formatEnvelope(mail);
       return { type: "simple", content: `ENVELOPE ${envelope}` };
     }
 
