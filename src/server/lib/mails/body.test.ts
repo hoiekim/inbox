@@ -60,6 +60,23 @@ describe("getMailBody", () => {
     expect(result!.attachments).toEqual(attachments);
   });
 
+  it("should normalize a non-array attachments value to undefined", async () => {
+    // A legacy row can store attachments as a JSON object ({}) rather than an
+    // array; the response must expose only a valid array-or-undefined shape.
+    const mockModel = {
+      mail_id: "mail-005",
+      html: "<p>Legacy mail</p>",
+      attachments: {},
+      message_id: "<msg-005@example.com>",
+      insight: null,
+    };
+    mockGetMailById.mockResolvedValue(mockModel);
+
+    const result = await getMailBody("user-123", "mail-005");
+    expect(result).toBeDefined();
+    expect(result!.attachments).toBeUndefined();
+  });
+
   it("should map insight when present", async () => {
     const insight = { category: "invoice", summary: "Invoice #123" };
     const mockModel = {

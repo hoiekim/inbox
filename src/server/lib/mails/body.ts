@@ -12,7 +12,9 @@ export const getMailBody = async (
   return new MailBodyData({
     id: mailModel.mail_id,
     html: mailModel.html,
-    attachments: mailModel.attachments as AttachmentType[] | undefined,
+    attachments: Array.isArray(mailModel.attachments)
+      ? (mailModel.attachments as AttachmentType[])
+      : undefined,
     messageId: mailModel.message_id,
     insight: mailModel.insight as Insight | undefined,
   });
