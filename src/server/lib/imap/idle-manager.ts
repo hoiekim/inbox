@@ -68,9 +68,14 @@ class IdleManager {
 
     const notifications: Array<{ sessionId: string; idleSession: IdleSession }> = [];
     this.idleSessions.forEach((idleSession, sessionId) => {
-      if (usernameSet.has(idleSession.username)) {
-        notifications.push({ sessionId, idleSession });
+      if (!usernameSet.has(idleSession.username)) return;
+      if (mailboxSet !== null) {
+        const watching = idleSession.mailbox;
+        // INBOX is the aggregate view showing every account's mail, so it is
+        // always notified; other sessions only when watching a target mailbox.
+        if (watching !== "INBOX" && !mailboxSet.has(watching)) return;
       }
+      notifications.push({ sessionId, idleSession });
     });
 
     await Promise.all(
