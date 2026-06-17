@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
 import bcrypt from "bcryptjs";
 import type {
   SMTPServer,
@@ -6,6 +6,7 @@ import type {
   SMTPServerDataStream,
   SMTPServerAuthentication
 } from "smtp-server";
+import * as authRateLimit from "./auth-rate-limit";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -47,18 +48,15 @@ mock.module("mailparser", () => ({
   simpleParser: mockSimpleParser
 }));
 
-// Mock auth-rate-limit so we can drive the rate-limit branch in onAuth without
-// needing 10 real failed attempts (each takes 500ms in production code).
-// Safe to mock globally here — no other test file currently exercises imap/auth.ts.
-const mockIsAuthRateLimited = mock((_ip: string) => false);
-const mockRecordAuthFailure = mock((_ip: string) => Promise.resolve(false));
-const mockResetAuthFailures = mock((_ip: string) => undefined);
-
-mock.module("./auth-rate-limit", () => ({
-  isAuthRateLimited: mockIsAuthRateLimited,
-  recordAuthFailure: mockRecordAuthFailure,
-  resetAuthFailures: mockResetAuthFailures,
-}));
+// Stub auth-rate-limit so we can drive the rate-limit branch in onAuth without
+// needing 10 real failed attempts (each takes 500ms in production code). We use
+// spyOn (restored in afterAll) rather than mock.module: mock.module is process-
+// global in Bun and would replace the real implementation in auth-rate-limit.test.ts
+// when that file runs after this one, making its threshold assertions see the
+// always-false stub. spyOn mutates the live module binding and is reverted cleanly.
+const mockIsAuthRateLimited = spyOn(authRateLimit, "isAuthRateLimited").mockReturnValue(false);
+const mockRecordAuthFailure = spyOn(authRateLimit, "recordAuthFailure").mockResolvedValue(false);
+const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockReturnValue(undefined);
 
 // Note: we deliberately do NOT mock "./alarm" globally — `mock.module` is
 // process-wide in Bun, and a global mock leaks into alarm.test.ts. Instead
@@ -67,6 +65,14 @@ mock.module("./auth-rate-limit", () => ({
 
 // Import the actual SMTP handlers after mocks are set up
 import { onAuth, onData } from "./smtp";
+
+// Revert the auth-rate-limit spies after this file so the real implementation is
+// restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
+afterAll(() => {
+  mockIsAuthRateLimited.mockRestore();
+  mockRecordAuthFailure.mockRestore();
+  mockResetAuthFailures.mockRestore();
+});
 
 describe("onAuth handler", () => {
   const originalEnv = process.env;
@@ -78,6 +84,7 @@ describe("onAuth handler", () => {
     mockRecordAuthFailure.mockReset();
     mockRecordAuthFailure.mockImplementation(() => Promise.resolve(false));
     mockResetAuthFailures.mockReset();
+    mockResetAuthFailures.mockImplementation(() => undefined);
     process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
   });
 
