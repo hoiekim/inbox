@@ -285,6 +285,56 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
   });
 });
 
+describe("searchMailsByUid — flag criteria use schema columns", () => {
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const searchMailsByUid[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("searchMailsByUid not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("ANSWERED pushes answered = TRUE", () => {
+    expect(fnSource).toMatch(/case\s+"ANSWERED":\s*\n\s*conditions\.push\("answered = TRUE"\)/);
+  });
+
+  it("UNANSWERED pushes answered = FALSE", () => {
+    expect(fnSource).toMatch(/case\s+"UNANSWERED":\s*\n\s*conditions\.push\("answered = FALSE"\)/);
+  });
+
+  it("DELETED pushes deleted = TRUE", () => {
+    expect(fnSource).toMatch(/case\s+"DELETED":\s*\n\s*conditions\.push\("deleted = TRUE"\)/);
+  });
+
+  it("UNDELETED pushes deleted = FALSE", () => {
+    expect(fnSource).toMatch(/case\s+"UNDELETED":\s*\n\s*conditions\.push\("deleted = FALSE"\)/);
+  });
+
+  it("DRAFT pushes draft = TRUE", () => {
+    expect(fnSource).toMatch(/case\s+"DRAFT":\s*\n\s*conditions\.push\("draft = TRUE"\)/);
+  });
+
+  it("UNDRAFT pushes draft = FALSE", () => {
+    expect(fnSource).toMatch(/case\s+"UNDRAFT":\s*\n\s*conditions\.push\("draft = FALSE"\)/);
+  });
+
+  it("does not contain FALSE sentinel for any flag criterion", () => {
+    const flagBlock = fnSource.match(
+      /case "ANSWERED"[\s\S]*?case "UNDRAFT"[\s\S]*?break;/
+    );
+    if (!flagBlock) throw new Error("flag block not found");
+    expect(flagBlock[0]).not.toContain('"FALSE"');
+  });
+});
+
 describe("getMailHeaders — envelope_to in received-branch address condition", () => {
   // Companion to the getAccountStats change in PR #525. That PR surfaced
   // the per-account row keyed on envelope_to in the accounts list, but
