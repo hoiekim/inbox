@@ -21,8 +21,9 @@ mock.module("server", () => ({
   }
 }));
 
-import { getRequestedFields, buildFetchResponsePart } from "./fetch-helpers";
+import { getRequestedFields, buildFetchResponsePart, buildBodyResponsePart } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
+import { BodyFetch } from "./types";
 import type { MailType } from "common";
 
 describe("getRequestedFields", () => {
@@ -104,5 +105,53 @@ describe("buildFetchResponsePart ENVELOPE", () => {
     expect(content).not.toContain('"Hello" NIL NIL NIL');
     // message-id sits in the envelope (slot 10), not dropped to NIL.
     expect(content).toContain('"<test@example.com>"');
+  });
+});
+
+describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", () => {
+  // A long text body so a <0.10> partial is a genuine sub-range slice.
+  const mail = {
+    messageId: "msg-partial-test",
+    text: "The quick brown fox jumps over the lazy dog, then does it all again.",
+  };
+
+  it("announces a literal length equal to the octets actually emitted", async () => {
+    const fetch: BodyFetch = {
+      type: "BODY",
+      peek: false,
+      section: { type: "TEXT" },
+      partial: { start: 0, length: 10 },
+    };
+
+    const part = await buildBodyResponsePart(mail, fetch, "doc-1", "INBOX");
+
+    expect(part).not.toBeNull();
+    expect(part!.type).toBe("literal");
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    // The {N} literal header must match the bytes that follow it on the wire;
+    // before the fix the partial branch appended an uncounted CRLF, advertising
+    // {10} while emitting 12 octets and desyncing the client's parse.
+    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    // A <0.10> partial returns exactly 10 octets — no trailing CRLF.
+    expect(part!.length).toBe(10);
+    expect(part!.header).toContain("<0.10>");
+    expect(part!.content.endsWith("\r\n")).toBe(false);
+  });
+
+  it("matches literal length to emitted octets at a non-zero offset too", async () => {
+    const fetch: BodyFetch = {
+      type: "BODY",
+      peek: false,
+      section: { type: "TEXT" },
+      partial: { start: 5, length: 8 },
+    };
+
+    const part = await buildBodyResponsePart(mail, fetch, "doc-1", "INBOX");
+
+    expect(part).not.toBeNull();
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    expect(part!.length).toBe(8);
+    expect(part!.header).toContain("<5.8>");
   });
 });

@@ -267,7 +267,11 @@ export async function buildBodyResponsePart(
       length = Buffer.byteLength(finalContent, "utf8");
     }
     header += `<${start}.${Math.min(partialLength, length)}>`;
-    finalContent += "\r\n";
+    // A partial fetch returns exactly the requested substring — no trailing
+    // CRLF. (The non-partial branch below appends one and recounts `length`;
+    // doing that here would emit 2 octets more than the `{length}` literal
+    // and the `<start.length>` annotation both advertise, desyncing clients
+    // that read exactly `length` octets.)
   } else if (section.type !== "HEADER") {
     finalContent += "\r\n";
     length = Buffer.byteLength(finalContent, "utf8");
