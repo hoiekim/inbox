@@ -10,6 +10,7 @@ import {
   parseDate,
   parseNumber,
   parseSequenceSet,
+  parseString,
   skipWhitespace
 } from "./primitive-parsers";
 
@@ -231,7 +232,7 @@ export const parseSearchCriteria = (
           break;
         case "FROM":
           skipWhitespace(context);
-          const fromValue = parseAtom(context);
+          const fromValue = parseString(context);
           if (fromValue.success) {
             criteria.push({
               type: "FROM",
@@ -247,7 +248,7 @@ export const parseSearchCriteria = (
           break;
         case "TO":
           skipWhitespace(context);
-          const toValue = parseAtom(context);
+          const toValue = parseString(context);
           if (toValue.success) {
             criteria.push({
               type: "TO",
@@ -263,7 +264,7 @@ export const parseSearchCriteria = (
           break;
         case "CC":
           skipWhitespace(context);
-          const ccValue = parseAtom(context);
+          const ccValue = parseString(context);
           if (ccValue.success) {
             criteria.push({
               type: "CC",
@@ -279,7 +280,7 @@ export const parseSearchCriteria = (
           break;
         case "BCC":
           skipWhitespace(context);
-          const bccValue = parseAtom(context);
+          const bccValue = parseString(context);
           if (bccValue.success) {
             criteria.push({
               type: "BCC",
@@ -295,7 +296,7 @@ export const parseSearchCriteria = (
           break;
         case "SUBJECT":
           skipWhitespace(context);
-          const subjectValue = parseAtom(context);
+          const subjectValue = parseString(context);
           if (subjectValue.success) {
             criteria.push({
               type: "SUBJECT",
@@ -311,7 +312,7 @@ export const parseSearchCriteria = (
           break;
         case "BODY":
           skipWhitespace(context);
-          const bodyValue = parseAtom(context);
+          const bodyValue = parseString(context);
           if (bodyValue.success) {
             criteria.push({
               type: "BODY",
@@ -327,7 +328,7 @@ export const parseSearchCriteria = (
           break;
         case "TEXT":
           skipWhitespace(context);
-          const textValue = parseAtom(context);
+          const textValue = parseString(context);
           if (textValue.success) {
             criteria.push({
               type: "TEXT",
@@ -343,9 +344,9 @@ export const parseSearchCriteria = (
           break;
         case "HEADER":
           skipWhitespace(context);
-          const headerField = parseAtom(context);
+          const headerField = parseString(context);
           skipWhitespace(context);
-          const headerValue = parseAtom(context);
+          const headerValue = parseString(context);
           if (headerField.success && headerValue.success) {
             criteria.push({
               type: "HEADER",
