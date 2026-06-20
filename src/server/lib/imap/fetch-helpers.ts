@@ -283,7 +283,10 @@ export async function buildBodyResponsePart(
       length = Buffer.byteLength(finalContent, "utf8");
     }
     header += `<${start}.${Math.min(partialLength, length)}>`;
-    finalContent += "\r\n";
+    // A `<start.length>` partial returns exactly the requested octets — no
+    // trailing CRLF. (The non-partial branch appends one and recounts `length`;
+    // appending here without recounting would make the announced literal `{N}`
+    // two bytes short of the octets emitted, desyncing the client parse.)
   } else if (section.type !== "HEADER") {
     finalContent += "\r\n";
     length = Buffer.byteLength(finalContent, "utf8");
