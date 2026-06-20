@@ -243,7 +243,15 @@ export function addBodyFields(
 export function convertSequenceSet(
   sequenceSet: import("./types").SequenceSet
 ): { start: number; end: number }[] {
-  return sequenceSet.ranges.map(({ start, end = start }) => ({ start, end }));
+  // RFC 3501 §9: a seq/UID range is order-independent — `3:1` ≡ `1:3`. The
+  // wildcard `*` is already expanded to MAX_SAFE_INTEGER by the parser, so
+  // normalizing min/max here (the single resolution point shared by FETCH and
+  // STORE) covers descending ranges like `3:1`, `5:1`, and `*:1` without the
+  // empty `uid >= 3 AND uid <= 1` predicate they would otherwise produce.
+  return sequenceSet.ranges.map(({ start, end = start }) => ({
+    start: Math.min(start, end),
+    end: Math.max(start, end),
+  }));
 }
 
 // ---------------------------------------------------------------------------

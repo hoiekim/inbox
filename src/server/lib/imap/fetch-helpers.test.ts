@@ -1,13 +1,12 @@
 /**
  * Tests for fetch-helpers.ts.
  *  - getRequestedFields column mapping. Covers inbox #542 (FETCH FLAGS must
- *    request the `answered` column so the \Answered flag round-trips) and
- *    inbox #587 (RFC822 / RFC822.HEADER / RFC822.TEXT alias BODY[] /
- *    BODY[HEADER] / BODY[TEXT] per RFC 3501 §6.4.5 — must request the same
- *    columns and emit the same bytes as their BODY[...] equivalents).
+ *    request the `answered` column so the \Answered flag round-trips).
  *  - buildFetchResponsePart FETCH response construction. Covers inbox #580:
  *    the ENVELOPE case must emit the RFC 3501 §7.4.2 10-field envelope (From
  *    in slot 3), not the dropped-From 11-field shape.
+ *  - convertSequenceSet normalization. Covers inbox #582: a descending
+ *    seq/UID range like `3:1` must resolve the same as `1:3` (RFC 3501 §9).
  */
 
 import { describe, it, expect, mock } from "bun:test";
@@ -23,9 +22,14 @@ mock.module("server", () => ({
   }
 }));
 
-import { getRequestedFields, buildFetchResponsePart, buildBodyResponsePart } from "./fetch-helpers";
+import {
+  getRequestedFields,
+  buildFetchResponsePart,
+  buildBodyResponsePart,
+  convertSequenceSet,
+} from "./fetch-helpers";
 import { formatEnvelope } from "./util";
-import { BodyFetch } from "./types";
+import { BodyFetch, SequenceSet } from "./types";
 import type { MailType } from "common";
 
 describe("getRequestedFields", () => {
@@ -252,5 +256,50 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
     expect(part!.length).toBe(8);
     expect(part!.header).toContain("<5.8>");
+  });
+});
+
+// inbox #582: RFC 3501 §9 — a seq/UID range is order-independent, so `3:1` must
+// resolve to the same set as `1:3`. The unnormalized version passed the raw
+// endpoints into a `uid >= start AND uid <= end` predicate, so a descending
+// range produced `>= 3 AND <= 1` → matched nothing (FETCH empty / STORE NO).
+const MAX = Number.MAX_SAFE_INTEGER; // the parser's expansion of `*`
+const seqSet = (ranges: { start: number; end?: number }[]): SequenceSet => ({
+  type: "sequence",
+  ranges
+});
+
+describe("convertSequenceSet normalizes descending ranges (#582)", () => {
+  it("flips a descending range to ascending (3:1 ≡ 1:3)", () => {
+    expect(convertSequenceSet(seqSet([{ start: 3, end: 1 }]))).toEqual([
+      { start: 1, end: 3 }
+    ]);
+  });
+
+  it("leaves an ascending range unchanged (1:3)", () => {
+    expect(convertSequenceSet(seqSet([{ start: 1, end: 3 }]))).toEqual([
+      { start: 1, end: 3 }
+    ]);
+  });
+
+  it("normalizes *:1 (MAX:1) to 1:MAX so it covers the whole mailbox", () => {
+    expect(convertSequenceSet(seqSet([{ start: MAX, end: 1 }]))).toEqual([
+      { start: 1, end: MAX }
+    ]);
+  });
+
+  it("keeps a single number as a unit range (end defaults to start)", () => {
+    expect(convertSequenceSet(seqSet([{ start: 5 }]))).toEqual([
+      { start: 5, end: 5 }
+    ]);
+  });
+
+  it("normalizes each range independently in a multi-range set", () => {
+    expect(
+      convertSequenceSet(seqSet([{ start: 5, end: 2 }, { start: 7, end: 9 }]))
+    ).toEqual([
+      { start: 2, end: 5 },
+      { start: 7, end: 9 }
+    ]);
   });
 });
