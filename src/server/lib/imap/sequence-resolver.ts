@@ -52,6 +52,33 @@ export function seqToUidNumber(seqToUid: number[], seq: number): number | undefi
 }
 
 /**
+ * Resolve a message-sequence range [start, end] to UID bounds for a store query.
+ *
+ * RFC 3501 §6.4.5/§9: an endpoint beyond the largest message number is not an
+ * error — it is clamped to the last message and the in-range messages are still
+ * returned. The previous behaviour (resolve each endpoint independently, drop
+ * the whole range if either is undefined) silently matched nothing whenever the
+ * upper bound exceeded the mailbox size (e.g. `11320:11400` on 11322 messages).
+ *
+ * Returns undefined only when the range starts past the end of the mailbox (no
+ * messages match) or the mailbox is empty. '*' (MAX_SAFE_INTEGER) clamps to the
+ * last message. Endpoint ordering is left as-is; descending ranges are handled
+ * separately in convertSequenceSet (issue #582).
+ */
+export function resolveSeqRangeToUids(
+  seqToUid: number[],
+  start: number,
+  end: number
+): { uidStart: number; uidEnd: number } | undefined {
+  const maxSeq = seqToUid.length;
+  if (maxSeq === 0 || start > maxSeq) return undefined;
+  const uidStart = seqToUidNumber(seqToUid, Math.min(start, maxSeq));
+  const uidEnd = seqToUidNumber(seqToUid, Math.min(end, maxSeq));
+  if (uidStart === undefined || uidEnd === undefined) return undefined;
+  return { uidStart, uidEnd };
+}
+
+/**
  * Convert a UID to sequence number.
  * Handles '*' (represented as MAX_SAFE_INTEGER) by returning the highest seq.
  */
