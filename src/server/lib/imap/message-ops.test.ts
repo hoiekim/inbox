@@ -1,7 +1,7 @@
 /**
  * Tests for message-ops.ts — IMAP message operations.
  *
- * Covers two regressions:
+ * Covers three regressions:
  *  - inbox #543: STORE on a UID/sequence range that matches no messages must
  *    send exactly ONE tagged response (OK, not NO). The old code wrote a
  *    tagged NO and threw on an empty result, and the surrounding catch block
@@ -13,6 +13,10 @@
  *    `Date.now()` timestamp. RFC 4315 requires the APPENDUID's UIDVALIDITY to
  *    match the destination mailbox's UIDVALIDITY so UIDPLUS clients can
  *    correlate the appended message without a full re-sync. [appendMessage]
+ *  - #548: an APPEND with no flag list must store the mail with draft = false
+ *    (RFC 3501 §6.3.11: absent flag list means "no flags set", not "\Draft
+ *    set"). The old `?? true` default misclassified every flag-less APPEND as
+ *    a draft, hiding it from the per-account web UI. [appendMessage]
  *
  * Isolation mirrors users.test.ts: mock `pg` so the lazy pool in
  * postgres/client.ts instantiates a FakePool, then run the REAL
@@ -33,12 +37,23 @@ import {
   afterAll,
 } from "bun:test";
 import { restoreLeaves } from "test-helpers";
+import type { MailType } from "common";
 import type { Store } from "./store";
-import type { StoreRequest } from "./types";
+import type { StoreRequest, AppendRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
 const STORED_UIDVALIDITY = 1716512400;
 const DOMAIN_UID = 100;
+
+// pg-FakePool pattern (see users.test.ts): mock `pg` so the lazy pool in
+// postgres/client.ts is a FakePool, then run the REAL imap code. The functions
+// under test are driven with fake Stores, but appendMessage reaches the `server`
+// barrel's getDomainUidNext / getAccountUidNext (which query Postgres), so the
+// FakePool keeps those calls off a real connection. We mock `pg` (NOT the
+// `server` barrel) so markRead/getDomainUidNext/getAccountUidNext keep their real
+// identities — stubbing them on the barrel would bleed into update.test.ts /
+// search.test.ts. Importing message-ops AFTER the mock is registered guarantees
+// the pool is built from the FakePool.
 
 // A full, schema-valid users row so usersTable.queryOne's `new UserModel(row)`
 // validates. imap_uid_validity is pre-set, so getImapUidValidity returns it
@@ -97,7 +112,7 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// appendMessage — APPENDUID (#544)
+// appendMessage — APPENDUID (#544) + flag defaults (#548)
 // ---------------------------------------------------------------------------
 
 type FakeStore = {
@@ -160,6 +175,7 @@ describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
 // storeFlagsTyped — empty result (inbox #543)
 // ---------------------------------------------------------------------------
 
+// ── Suite 1 helpers ──────────────────────────────────────────────────────────
 const emptySeqState = (): SequenceState => ({
   seqToUid: [],
   uidToSeq: new Map(),
@@ -278,5 +294,56 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
     const tagged = taggedResponses(lines, "A004");
     expect(tagged.length).toBe(1);
     expect(tagged[0]).toContain("NO [READ-ONLY]");
+  });
+});
+
+// ── Suite 2 helpers ──────────────────────────────────────────────────────────
+// Drive appendMessage with a fake store that captures the stored mail.
+async function appendAndCapture(flags?: string[]): Promise<MailType> {
+  let captured: MailType | undefined;
+  const store = {
+    getUser: () => ({ id: 1, username: "admin" }),
+    storeMail: async (mail: MailType) => {
+      captured = mail;
+      return true;
+    },
+  } as unknown as Store;
+
+  const request: AppendRequest = {
+    mailbox: "INBOX",
+    flags,
+    message: "Subject: hello\r\nFrom: a@b.com\r\n\r\nbody",
+  } as AppendRequest;
+
+  await appendMessage(
+    "a1",
+    request,
+    store,
+    "INBOX",
+    () => true,
+    async () => {}
+  );
+
+  if (!captured) throw new Error("storeMail was never called");
+  return captured;
+}
+
+describe("appendMessage flag defaults (#548)", () => {
+  it("defaults draft to false when no flag list is sent", async () => {
+    const mail = await appendAndCapture(undefined);
+    expect(mail.draft).toBe(false);
+  });
+
+  it("sets draft true only when \\Draft is explicitly present", async () => {
+    const mail = await appendAndCapture(["\\Draft"]);
+    expect(mail.draft).toBe(true);
+  });
+
+  it("leaves the other flags false when absent", async () => {
+    const mail = await appendAndCapture(undefined);
+    expect(mail.read).toBe(false);
+    expect(mail.saved).toBe(false);
+    expect(mail.deleted).toBe(false);
+    expect(mail.answered).toBe(false);
   });
 });
