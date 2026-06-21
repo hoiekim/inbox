@@ -491,3 +491,34 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
     expect(buildCriterionClause({ type: "ALL" }, "uid_account", values as never)).toBeNull();
   });
 });
+
+describe("searchMailsByUid — no result cap (#553)", () => {
+  // A `LIMIT 10000` with `ORDER BY uid ASC` made SEARCH/UID SEARCH drop
+  // the NEWEST messages once a mailbox exceeded 10000 — the worst-possible
+  // truncation for an email client and an RFC 3501 §6.4.4 violation (SEARCH
+  // must return all matching messages). The enumeration siblings getAllUids
+  // and getMailsByRange are unbounded; the search path must match.
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const searchMailsByUid[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("searchMailsByUid not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("the search SQL has no LIMIT clause", () => {
+    const sqlMatch = fnSource.match(
+      /const sql = `([\s\S]*?SELECT[\s\S]*?)`/
+    );
+    if (!sqlMatch) throw new Error("search SQL not found");
+    expect(sqlMatch[1]).not.toMatch(/\bLIMIT\b/i);
+  });
+});
