@@ -897,13 +897,16 @@ export const buildCriterionClause = (
     case "BCC":
       values.push(`%${criterion.value}%`);
       return `bcc_text ILIKE $${values.length}`;
-    case "BODY":
+    // RFC 3501 §6.4.4: BODY matches the message body; TEXT matches header + body.
+    case "BODY": {
+      values.push(`%${criterion.value}%`);
+      return `text ILIKE $${values.length}`;
+    }
     case "TEXT":
     case "SUBJECT_TEXT": {
-      // Full-text search across subject (extend to body when indexed)
       values.push(`%${criterion.value}%`);
       const p = values.length;
-      return `(subject ILIKE $${p} OR from_text ILIKE $${p} OR to_text ILIKE $${p})`;
+      return `(subject ILIKE $${p} OR from_text ILIKE $${p} OR to_text ILIKE $${p} OR text ILIKE $${p})`;
     }
 
     // Header search
