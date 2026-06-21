@@ -244,6 +244,22 @@ describe("shouldMarkAsRead", () => {
     ];
     expect(shouldMarkAsRead(items)).toBe(true);
   });
+
+  it("returns true for RFC822 (non-peek, equivalent to BODY[])", () => {
+    expect(shouldMarkAsRead([{ type: "RFC822" }])).toBe(true);
+  });
+
+  it("returns true for RFC822.TEXT (non-peek, equivalent to BODY[TEXT])", () => {
+    expect(shouldMarkAsRead([{ type: "RFC822.TEXT" }])).toBe(true);
+  });
+
+  it("returns false for RFC822.HEADER (peek-equivalent to BODY.PEEK[HEADER])", () => {
+    expect(shouldMarkAsRead([{ type: "RFC822.HEADER" }])).toBe(false);
+  });
+
+  it("returns false for RFC822.SIZE (no body content fetched)", () => {
+    expect(shouldMarkAsRead([{ type: "RFC822.SIZE" }])).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

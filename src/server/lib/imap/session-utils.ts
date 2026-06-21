@@ -58,7 +58,15 @@ export const getBodySectionKey = (section: BodySection): string => {
  * Check if any fetch data item should mark message as read
  */
 export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
-  return dataItems.some((item) => item.type === "BODY" && !item.peek);
+  // RFC822 ≡ BODY[] and RFC822.TEXT ≡ BODY[TEXT] are non-peek, so they set
+  // \Seen like a non-peek BODY fetch. RFC822.HEADER ≡ BODY.PEEK[HEADER] is
+  // peek-equivalent and never marks the message read (RFC 3501 §6.4.5).
+  return dataItems.some(
+    (item) =>
+      (item.type === "BODY" && !item.peek) ||
+      item.type === "RFC822" ||
+      item.type === "RFC822.TEXT"
+  );
 };
 
 /**
