@@ -285,53 +285,52 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
   });
 });
 
-describe("searchMailsByUid — flag criteria use schema columns", () => {
-  let fnSource: string;
+describe("buildCriterionClause — flag criteria use schema columns", () => {
+  // Regression guard (originally on searchMailsByUid's inline switch, retargeted
+  // here when #551 extracted the per-criterion logic into buildCriterionClause):
+  // the answered/deleted/draft flags map to their real boolean columns, never to
+  // a bare "FALSE" match-none sentinel that an earlier draft of this fix used.
+  const clauseFor = async (type: string) => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    return buildCriterionClause({ type }, "uid_account", values as never);
+  };
 
-  beforeAll(async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    const mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
-    const fnMatch = mailsSource.match(
-      /export const searchMailsByUid[\s\S]*?\n};/
-    );
-    if (!fnMatch) throw new Error("searchMailsByUid not found in mails.ts");
-    fnSource = fnMatch[0];
+  it("ANSWERED maps to answered = TRUE", async () => {
+    expect(await clauseFor("ANSWERED")).toBe("answered = TRUE");
   });
 
-  it("ANSWERED pushes answered = TRUE", () => {
-    expect(fnSource).toMatch(/case\s+"ANSWERED":\s*\n\s*conditions\.push\("answered = TRUE"\)/);
+  it("UNANSWERED maps to answered = FALSE", async () => {
+    expect(await clauseFor("UNANSWERED")).toBe("answered = FALSE");
   });
 
-  it("UNANSWERED pushes answered = FALSE", () => {
-    expect(fnSource).toMatch(/case\s+"UNANSWERED":\s*\n\s*conditions\.push\("answered = FALSE"\)/);
+  it("DELETED maps to deleted = TRUE", async () => {
+    expect(await clauseFor("DELETED")).toBe("deleted = TRUE");
   });
 
-  it("DELETED pushes deleted = TRUE", () => {
-    expect(fnSource).toMatch(/case\s+"DELETED":\s*\n\s*conditions\.push\("deleted = TRUE"\)/);
+  it("UNDELETED maps to deleted = FALSE", async () => {
+    expect(await clauseFor("UNDELETED")).toBe("deleted = FALSE");
   });
 
-  it("UNDELETED pushes deleted = FALSE", () => {
-    expect(fnSource).toMatch(/case\s+"UNDELETED":\s*\n\s*conditions\.push\("deleted = FALSE"\)/);
+  it("DRAFT maps to draft = TRUE", async () => {
+    expect(await clauseFor("DRAFT")).toBe("draft = TRUE");
   });
 
-  it("DRAFT pushes draft = TRUE", () => {
-    expect(fnSource).toMatch(/case\s+"DRAFT":\s*\n\s*conditions\.push\("draft = TRUE"\)/);
+  it("UNDRAFT maps to draft = FALSE", async () => {
+    expect(await clauseFor("UNDRAFT")).toBe("draft = FALSE");
   });
 
-  it("UNDRAFT pushes draft = FALSE", () => {
-    expect(fnSource).toMatch(/case\s+"UNDRAFT":\s*\n\s*conditions\.push\("draft = FALSE"\)/);
-  });
-
-  it("does not contain FALSE sentinel for any flag criterion", () => {
-    const flagBlock = fnSource.match(
-      /case "ANSWERED"[\s\S]*?case "UNDRAFT"[\s\S]*?break;/
-    );
-    if (!flagBlock) throw new Error("flag block not found");
-    expect(flagBlock[0]).not.toContain('"FALSE"');
+  it("no flag criterion returns a bare FALSE sentinel", async () => {
+    for (const type of [
+      "ANSWERED",
+      "UNANSWERED",
+      "DELETED",
+      "UNDELETED",
+      "DRAFT",
+      "UNDRAFT",
+    ]) {
+      expect(await clauseFor(type)).not.toBe("FALSE");
+    }
   });
 });
 
@@ -381,5 +380,114 @@ describe("getMailHeaders — envelope_to in received-branch address condition", 
     expect(sentSql).toContain("${FROM_ADDRESS}");
     expect(sentSql).not.toContain("envelope_to");
     expect(sentSql).not.toContain("envelope_from");
+  });
+});
+
+describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)", () => {
+  // buildCriterionClause receives the normalised `{ type, value }` shape that
+  // store.ts's simplifyCriterion produces. It pushes bound params onto `values`
+  // (1-indexed `$N` tracks values.length) and returns the boolean SQL fragment,
+  // or null when the criterion imposes no constraint.
+
+  it("NOT wraps the inner clause instead of dropping it", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "NOT", value: { type: "SEEN" } },
+      "uid_account",
+      values as never
+    );
+    // Pre-fix this case had no `case "NOT"`/default, so the criterion fell
+    // through the switch and contributed NOTHING — the query matched everything.
+    expect(frag).toBe("NOT (read = TRUE)");
+    expect(values).toHaveLength(0);
+  });
+
+  it("OR joins both sides with continuous param numbering", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      {
+        type: "OR",
+        value: {
+          left: { type: "FROM", value: "alice" },
+          right: { type: "FROM", value: "bob" },
+        },
+      },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("(from_text ILIKE $1 OR from_text ILIKE $2)");
+    expect(values).toEqual(["%alice%", "%bob%"]);
+  });
+
+  it("NOT FROM negates a text predicate and binds its param", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "NOT", value: { type: "FROM", value: "spam@x" } },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("NOT (from_text ILIKE $1)");
+    expect(values).toEqual(["%spam@x%"]);
+  });
+
+  it("continues param numbering from an already-populated values array", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = ["user-1", false]; // e.g. base user_id/sent params
+    const frag = buildCriterionClause(
+      {
+        type: "OR",
+        value: {
+          left: { type: "SUBJECT", value: "a" },
+          right: { type: "TO", value: "b" },
+        },
+      },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("(subject ILIKE $3 OR to_text ILIKE $4)");
+    expect(values).toEqual(["user-1", false, "%a%", "%b%"]);
+  });
+
+  it("drops an OR whose side imposes no constraint rather than over-narrowing", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      {
+        type: "OR",
+        value: {
+          left: { type: "FROM", value: "alice" },
+          right: { type: "ALL" }, // ALL → null fragment
+        },
+      },
+      "uid_account",
+      values as never
+    );
+    // FROM alice OR ALL = everything, so the whole disjunction is dropped.
+    expect(frag).toBeNull();
+  });
+
+  it("normalised NOT BEFORE flows a Date param through correctly", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const when = new Date("2026-01-01T00:00:00Z");
+    const frag = buildCriterionClause(
+      { type: "NOT", value: { type: "BEFORE", value: when } },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("NOT (date < $1)");
+    expect(values).toEqual([when]);
+  });
+
+  it("plain criteria are unaffected by the refactor", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    expect(buildCriterionClause({ type: "SEEN" }, "uid_account", values as never)).toBe(
+      "read = TRUE"
+    );
+    expect(buildCriterionClause({ type: "ALL" }, "uid_account", values as never)).toBeNull();
   });
 });
