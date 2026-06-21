@@ -214,6 +214,60 @@ describe("parseSearchCriteria", () => {
     });
   });
 
+  // RFC 3501 §6.4.4 / §9: search-key arguments are astring, which may be a
+  // quoted string. Every MUA (Thunderbird, Apple Mail, …) quotes its argument,
+  // so a quoted-string value must parse, not return BAD.
+  describe("quoted-string criteria", () => {
+    it("parses SUBJECT with a quoted single-word value", () => {
+      const c = ctx('SUBJECT "order"');
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({ type: "SUBJECT", value: "order" });
+    });
+
+    it("parses SUBJECT with a quoted multi-word phrase", () => {
+      const c = ctx('SUBJECT "order confirmation"');
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "SUBJECT",
+        value: "order confirmation",
+      });
+    });
+
+    it("parses FROM with a quoted value", () => {
+      const c = ctx('FROM "alice@example.com"');
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "FROM",
+        value: "alice@example.com",
+      });
+    });
+
+    it("parses BODY/TEXT with quoted phrases", () => {
+      expect(parseSearchCriteria(ctx('BODY "two words"')).value?.[0]).toEqual({
+        type: "BODY",
+        value: "two words",
+      });
+      expect(parseSearchCriteria(ctx('TEXT "two words"')).value?.[0]).toEqual({
+        type: "TEXT",
+        value: "two words",
+      });
+    });
+
+    it("parses HEADER with quoted field and quoted value", () => {
+      const c = ctx('HEADER "Message-Id" "<abc@host>"');
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "HEADER",
+        field: "Message-Id",
+        value: "<abc@host>",
+      });
+    });
+  });
+
   describe("size criteria", () => {
     it("parses LARGER with size", () => {
       const c = ctx("LARGER 1000");
