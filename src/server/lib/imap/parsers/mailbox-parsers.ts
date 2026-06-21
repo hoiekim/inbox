@@ -6,6 +6,7 @@ import { ParseContext, ParseResult, ImapRequest, StatusItem } from "../types";
 import {
   skipWhitespace,
   parseString,
+  parseListMailbox,
   parseAtom,
   peek,
   consume
@@ -37,21 +38,10 @@ export const parseList = (
 
   skipWhitespace(context);
 
-  // Parse mailbox pattern - handle wildcards specially
-  let mailboxName: ParseResult<string>;
-  if (
-    context.position < context.length &&
-    (context.input[context.position] === "*" ||
-      context.input[context.position] === "%")
-  ) {
-    // Handle wildcard patterns
-    const wildcard = context.input[context.position];
-    context.position++;
-    mailboxName = { success: true, value: wildcard, consumed: 1 };
-  } else {
-    // Parse as normal string
-    mailboxName = parseString(context);
-  }
+  // Parse the mailbox pattern. list-mailbox allows the "*"/"%" wildcards as
+  // ordinary characters, so a mixed pattern like "INBOX/%" must be captured in
+  // full rather than truncated at the first wildcard.
+  const mailboxName = parseListMailbox(context);
 
   if (!mailboxName.success) {
     logger.debug("Failed to parse mailbox name", {

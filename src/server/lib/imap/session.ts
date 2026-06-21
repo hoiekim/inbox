@@ -206,18 +206,28 @@ export class ImapSession {
     return statusMailbox(tag, mailbox, items, this.store, this.write);
   };
 
-  listMailboxes = async (tag: string) => {
+  listMailboxes = async (tag: string, reference: string, pattern: string) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
-    return listMailboxes(tag, this.store, this.write);
+    return listMailboxes(tag, reference, pattern, this.store, this.write);
   };
 
-  listSubscribedMailboxes = async (tag: string) => {
+  listSubscribedMailboxes = async (
+    tag: string,
+    reference: string,
+    pattern: string
+  ) => {
     if (!this.authenticated || !this.store) {
       return this.write(`${tag} NO Not authenticated.\r\n`);
     }
-    return listSubscribedMailboxes(tag, this.store, this.write);
+    return listSubscribedMailboxes(
+      tag,
+      reference,
+      pattern,
+      this.store,
+      this.write
+    );
   };
 
   examineMailbox = async (tag: string, name: string) => {

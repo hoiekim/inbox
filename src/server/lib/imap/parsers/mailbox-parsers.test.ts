@@ -257,6 +257,35 @@ describe('mailbox-parsers', () => {
       expect(result.value.request.data.reference).toBe('');
       expect(result.value.request.data.pattern).toBe('*');
     });
+
+    // Regression for #596: patterns that mix literal text with a wildcard were
+    // truncated at the first wildcard (only "%" survived from "INBOX/%").
+    it('should keep a trailing wildcard after a hierarchy path', () => {
+      const result = parseCommand('A001 LIST "" "INBOX/%"');
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== 'LIST') {
+        throw new Error('Expected LIST request type');
+      }
+      expect(result.value.request.data.pattern).toBe('INBOX/%');
+    });
+
+    it('should keep a leading wildcard followed by a path', () => {
+      const result = parseCommand('A001 LIST "" "%/accounts"');
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== 'LIST') {
+        throw new Error('Expected LIST request type');
+      }
+      expect(result.value.request.data.pattern).toBe('%/accounts');
+    });
+
+    it('should keep a trailing wildcard on an unquoted pattern', () => {
+      const result = parseCommand('A001 LIST "" INBOX*');
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== 'LIST') {
+        throw new Error('Expected LIST request type');
+      }
+      expect(result.value.request.data.pattern).toBe('INBOX*');
+    });
   });
 
   describe('parseSubscribe', () => {

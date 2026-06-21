@@ -125,6 +125,50 @@ export const parseString = (context: ParseContext): ParseResult<string> => {
 };
 
 /**
+ * Parse a list-mailbox token (RFC 3501 list-mailbox rule). Like an atom, but
+ * the list wildcards "*" and "%" are valid characters here, so a pattern such
+ * as "INBOX/%" or "%/accounts" is captured whole rather than truncated at the
+ * first wildcard. A quoted form is also accepted.
+ */
+export const parseListMailbox = (
+  context: ParseContext
+): ParseResult<string> => {
+  if (peek(context) === '"') {
+    return parseQuotedString(context);
+  }
+
+  const start = context.position;
+
+  while (context.position < context.length) {
+    const char = context.input[context.position];
+    if (
+      char === " " ||
+      char === "(" ||
+      char === ")" ||
+      char === "{" ||
+      char === '"' ||
+      char === "\\" ||
+      char === "\r" ||
+      char === "\n" ||
+      char.charCodeAt(0) < 32
+    ) {
+      break;
+    }
+    context.position++;
+  }
+
+  if (context.position === start) {
+    return { success: false, error: "Expected list mailbox", consumed: 0 };
+  }
+
+  return {
+    success: true,
+    value: context.input.substring(start, context.position),
+    consumed: context.position - start
+  };
+};
+
+/**
  * Parse a quoted string
  */
 export const parseQuotedString = (
