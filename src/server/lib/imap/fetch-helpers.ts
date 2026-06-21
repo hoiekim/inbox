@@ -145,6 +145,20 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
         fields.add("html");
         fields.add("attachments");
         break;
+
+      // RFC822* alias the matching BODY[...] sections (§6.4.5); request the
+      // same columns those variants do.
+      case "RFC822":
+        addBodyFields({ type: "BODY", peek: false, section: { type: "FULL" } }, fields);
+        break;
+
+      case "RFC822.HEADER":
+        addBodyFields({ type: "BODY", peek: true, section: { type: "HEADER" } }, fields);
+        break;
+
+      case "RFC822.TEXT":
+        addBodyFields({ type: "BODY", peek: false, section: { type: "TEXT" } }, fields);
+        break;
     }
   }
 
@@ -240,7 +254,8 @@ export async function buildBodyResponsePart(
   mail: Partial<MailType>,
   bodyFetch: BodyFetch,
   docId: string,
-  selectedMailbox: string
+  selectedMailbox: string,
+  keyOverride?: string
 ): Promise<FetchResponsePart | null> {
   void selectedMailbox; // reserved for future per-mailbox logic
   const { section, partial } = bodyFetch;
@@ -250,7 +265,9 @@ export async function buildBodyResponsePart(
     return null;
   }
 
-  const sectionKey = getBodySectionKey(section);
+  // RFC822 / RFC822.HEADER / RFC822.TEXT reuse the BODY[...] builders but must
+  // label the response part with the item the client requested.
+  const sectionKey = keyOverride ?? getBodySectionKey(section);
   let header = sectionKey;
   let finalContent = content;
   let length = Buffer.byteLength(finalContent, "utf8");
@@ -325,6 +342,36 @@ export async function buildFetchResponsePart(
 
     case "BODY":
       return buildBodyResponsePart(mail, item, docId, selectedMailbox);
+
+    // RFC 3501 §6.4.5 aliases: RFC822 ≡ BODY[], RFC822.HEADER ≡ BODY[HEADER],
+    // RFC822.TEXT ≡ BODY[TEXT]. Delegate to the BODY[...] builders, keeping the
+    // RFC822* label on the response part.
+    case "RFC822":
+      return buildBodyResponsePart(
+        mail,
+        { type: "BODY", peek: false, section: { type: "FULL" } },
+        docId,
+        selectedMailbox,
+        "RFC822"
+      );
+
+    case "RFC822.HEADER":
+      return buildBodyResponsePart(
+        mail,
+        { type: "BODY", peek: true, section: { type: "HEADER" } },
+        docId,
+        selectedMailbox,
+        "RFC822.HEADER"
+      );
+
+    case "RFC822.TEXT":
+      return buildBodyResponsePart(
+        mail,
+        { type: "BODY", peek: false, section: { type: "TEXT" } },
+        docId,
+        selectedMailbox,
+        "RFC822.TEXT"
+      );
 
     default:
       return null;
