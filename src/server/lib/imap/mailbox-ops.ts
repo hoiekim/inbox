@@ -244,17 +244,56 @@ export function getMailboxAttributes(box: string, allBoxes: string[]): string {
   return "\\HasNoChildren";
 }
 
+/**
+ * Match a mailbox name against an IMAP LIST reference + pattern (RFC 3501
+ * §6.3.8). The reference and pattern are concatenated; within the result "*"
+ * matches across the "/" hierarchy delimiter while "%" matches only within a
+ * single level. Every other character matches literally.
+ */
+export function matchesListPattern(
+  reference: string,
+  pattern: string,
+  box: string
+): boolean {
+  const combined = reference + pattern;
+  let regex = "^";
+  for (const char of combined) {
+    if (char === "*") {
+      regex += ".*";
+    } else if (char === "%") {
+      regex += "[^/]*";
+    } else {
+      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  regex += "$";
+  return new RegExp(regex).test(box);
+}
+
 export async function listMailboxes(
   tag: string,
+  reference: string,
+  pattern: string,
   store: Store,
   write: (data: string) => boolean | undefined
 ): Promise<void> {
   try {
+    // An empty pattern is a special request for the hierarchy delimiter and the
+    // root name of the reference (RFC 3501 §6.3.8); no mailboxes are returned.
+    if (pattern === "") {
+      write(`* LIST (\\Noselect) "/" "${reference}"\r\n`);
+      write(`${tag} OK LIST completed\r\n`);
+      return;
+    }
     const boxes = await store.listMailboxes();
-    boxes.forEach((box) => {
-      const attrs = getMailboxAttributes(box, boxes);
-      write(`* LIST (${attrs}) "/" "${box}"\r\n`);
-    });
+    boxes
+      .filter((box) => matchesListPattern(reference, pattern, box))
+      .forEach((box) => {
+        // Attributes are computed against the full set so \HasChildren stays
+        // correct even when the child rows are filtered out of the response.
+        const attrs = getMailboxAttributes(box, boxes);
+        write(`* LIST (${attrs}) "/" "${box}"\r\n`);
+      });
     write(`${tag} OK LIST completed\r\n`);
   } catch (error) {
     logger.error("Error listing mailboxes", { component: "imap" }, error);
@@ -264,15 +303,24 @@ export async function listMailboxes(
 
 export async function listSubscribedMailboxes(
   tag: string,
+  reference: string,
+  pattern: string,
   store: Store,
   write: (data: string) => boolean | undefined
 ): Promise<void> {
   try {
+    if (pattern === "") {
+      write(`* LSUB (\\Noselect) "/" "${reference}"\r\n`);
+      write(`${tag} OK LSUB completed\r\n`);
+      return;
+    }
     const boxes = await store.listMailboxes();
-    boxes.forEach((box) => {
-      const attrs = getMailboxAttributes(box, boxes);
-      write(`* LSUB (${attrs}) "/" "${box}"\r\n`);
-    });
+    boxes
+      .filter((box) => matchesListPattern(reference, pattern, box))
+      .forEach((box) => {
+        const attrs = getMailboxAttributes(box, boxes);
+        write(`* LSUB (${attrs}) "/" "${box}"\r\n`);
+      });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {
     logger.error("Error listing subscribed mailboxes", { component: "imap" }, error);

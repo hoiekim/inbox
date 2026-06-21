@@ -249,10 +249,18 @@ export class ImapRequestHandler {
           break;
 
         case "LIST":
-          await this.session.listMailboxes(tag);
+          await this.session.listMailboxes(
+            tag,
+            request.data.reference,
+            request.data.pattern
+          );
           break;
         case "LSUB":
-          await this.session.listSubscribedMailboxes(tag);
+          await this.session.listSubscribedMailboxes(
+            tag,
+            request.data.reference,
+            request.data.pattern
+          );
           break;
 
         case "SELECT":
