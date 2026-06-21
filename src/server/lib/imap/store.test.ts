@@ -18,6 +18,9 @@ const mockSearchMailsByUid = mock(() => Promise.resolve([]));
 const mockSaveMail = mock(() => Promise.resolve({ _id: "x" }));
 const mockExpunge = mock(() => Promise.resolve(0));
 const mockGetAllUids = mock(() => Promise.resolve([]));
+const mockGetFirstUnseenUid = mock<(...args: unknown[]) => Promise<number | null>>(() =>
+  Promise.resolve(null)
+);
 
 mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
@@ -28,6 +31,7 @@ mock.module("../postgres/repositories/mails", () => ({
   saveMail: mockSaveMail,
   expungeDeletedMails: mockExpunge,
   getAllUids: mockGetAllUids,
+  getFirstUnseenUid: mockGetFirstUnseenUid,
 }));
 
 const mockGetMailboxesByUser = mock(() => Promise.resolve([]));
@@ -146,5 +150,33 @@ describe("simplifyCriterion — NOT/OR operand normalisation (regression for #55
     expect(
       simplifyCriterion({ type: "HEADER", field: "Subject", value: "hi" } as never)
     ).toEqual({ type: "HEADER", value: { field: "Subject", text: "hi" } });
+  });
+});
+
+describe("Store.getFirstUnseenUid", () => {
+  beforeEach(() => {
+    mockGetFirstUnseenUid.mockClear();
+    mockGetFirstUnseenUid.mockResolvedValue(null);
+  });
+
+  it("forwards the resolved account/sent for INBOX and returns the unseen UID", async () => {
+    mockGetFirstUnseenUid.mockResolvedValue(42);
+    const store = new Store(makeUser());
+    const result = await store.getFirstUnseenUid("INBOX");
+
+    expect(result).toBe(42);
+    expect(mockGetFirstUnseenUid).toHaveBeenCalledWith("user-123", null, false);
+  });
+
+  it("returns null when every message is read", async () => {
+    mockGetFirstUnseenUid.mockResolvedValue(null);
+    const store = new Store(makeUser());
+    expect(await store.getFirstUnseenUid("INBOX")).toBeNull();
+  });
+
+  it("returns null instead of throwing when the repository query fails", async () => {
+    mockGetFirstUnseenUid.mockRejectedValue(new Error("db down"));
+    const store = new Store(makeUser());
+    expect(await store.getFirstUnseenUid("INBOX")).toBeNull();
   });
 });

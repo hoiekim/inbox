@@ -378,14 +378,23 @@ export async function selectMailbox(
       return;
     }
 
-    const { total, unread } = countResult;
+    const { total } = countResult;
     setSelected(cleanName, total);
 
     const uidValidity = await getImapUidValidity(store.getUser().id);
 
+    // [UNSEEN <n>] is the sequence number of the first unseen message, not the
+    // unread count (RFC 3501 §7.1). Map the lowest-UID unread message to its
+    // 1-based sequence position; omit the response code entirely when all read.
+    const firstUnseenUid = await store.getFirstUnseenUid(cleanName);
+    const firstUnseenSeq =
+      firstUnseenUid !== null ? seqState.uidToSeq.get(firstUnseenUid) : undefined;
+
     write(`* ${total} EXISTS\r\n`);
     write(`* 0 RECENT\r\n`);
-    write(`* OK [UNSEEN ${unread}] Message ${unread} is first unseen\r\n`);
+    if (firstUnseenSeq) {
+      write(`* OK [UNSEEN ${firstUnseenSeq}] Message ${firstUnseenSeq} is first unseen\r\n`);
+    }
     const uidNext =
       seqState.seqToUid.length > 0
         ? seqState.seqToUid[seqState.seqToUid.length - 1] + 1

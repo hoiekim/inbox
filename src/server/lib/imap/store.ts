@@ -15,6 +15,7 @@ import {
   saveMail as pgSaveMail,
   expungeDeletedMails,
   getAllUids as pgGetAllUids,
+  getFirstUnseenUid as pgGetFirstUnseenUid,
   SaveMailInput,
   UpdatedMailFlags,
   StoreOperationType,
@@ -257,6 +258,20 @@ export class Store {
     } catch (error) {
       logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
       return [];
+    }
+  };
+
+  /**
+   * UID of the first (lowest-UID) unseen message in a mailbox, or null when
+   * everything is read. Used to derive the `[UNSEEN <seq>]` SELECT response.
+   */
+  getFirstUnseenUid = async (box: string): Promise<number | null> => {
+    try {
+      const { accountName, isSent } = this.resolveBox(box);
+      return await pgGetFirstUnseenUid(this.user.id, accountName, isSent);
+    } catch (error) {
+      logger.error("Error getting first unseen UID", { component: "imap.store", box }, error);
+      return null;
     }
   };
 
