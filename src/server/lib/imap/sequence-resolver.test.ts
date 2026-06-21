@@ -3,6 +3,7 @@ import {
   buildSequenceMapping,
   seqToUidNumber,
   uidToSeqNumber,
+  resolveSeqRangeToUids,
   countSequenceSetMessages,
   type SequenceState,
 } from "./sequence-resolver";
@@ -93,6 +94,38 @@ describe("seqToUidNumber", () => {
 
   it("returns undefined for * on empty mailbox", () => {
     expect(seqToUidNumber([], Number.MAX_SAFE_INTEGER)).toBeUndefined();
+  });
+});
+
+describe("resolveSeqRangeToUids (inbox #588)", () => {
+  const uids = [10, 20, 30, 40, 50]; // maxSeq = 5
+
+  it("resolves a fully in-range range to its UID bounds", () => {
+    expect(resolveSeqRangeToUids(uids, 2, 4)).toEqual({ uidStart: 20, uidEnd: 40 });
+  });
+
+  it("clamps an upper bound past the end to the last message (the bug)", () => {
+    // 3:80 on a 5-message mailbox must return messages 3..5, not nothing.
+    expect(resolveSeqRangeToUids(uids, 3, 80)).toEqual({ uidStart: 30, uidEnd: 50 });
+  });
+
+  it("resolves N:* to the last message", () => {
+    expect(resolveSeqRangeToUids(uids, 3, Number.MAX_SAFE_INTEGER)).toEqual({
+      uidStart: 30,
+      uidEnd: 50,
+    });
+  });
+
+  it("resolves a single-message range", () => {
+    expect(resolveSeqRangeToUids(uids, 5, 5)).toEqual({ uidStart: 50, uidEnd: 50 });
+  });
+
+  it("returns undefined when the whole range is past the end", () => {
+    expect(resolveSeqRangeToUids(uids, 6, 9)).toBeUndefined();
+  });
+
+  it("returns undefined on an empty mailbox", () => {
+    expect(resolveSeqRangeToUids([], 1, 10)).toBeUndefined();
   });
 });
 

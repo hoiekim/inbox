@@ -23,7 +23,7 @@ import {
   convertSequenceSet,
 } from "./fetch-helpers";
 import {
-  seqToUidNumber,
+  resolveSeqRangeToUids,
   uidToSeqNumber,
   countSequenceSetMessages,
   buildSequenceMapping,
@@ -113,18 +113,17 @@ async function _fetchMessages(
       let uidEnd = end;
 
       if (!isUidFetch) {
-        const startUid = seqToUidNumber(seqState.seqToUid, start);
-        const endUid = seqToUidNumber(seqState.seqToUid, end);
-        if (startUid === undefined || endUid === undefined) {
-          logger.warn("Invalid sequence range", {
+        const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
+        if (!resolved) {
+          logger.warn("Sequence range matched no messages", {
             component: "imap",
             start,
             end,
           });
           return;
         }
-        uidStart = startUid;
-        uidEnd = endUid;
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
       }
 
       const messages = await store.getMessages(
@@ -265,18 +264,17 @@ export async function storeFlagsTyped(
       let uidEnd = end;
 
       if (!isUidStore) {
-        const startUid = seqToUidNumber(seqState.seqToUid, start);
-        const endUid = seqToUidNumber(seqState.seqToUid, end);
-        if (startUid === undefined || endUid === undefined) {
-          logger.warn("Invalid sequence range", {
+        const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
+        if (!resolved) {
+          logger.warn("Sequence range matched no messages", {
             component: "imap",
             start,
             end,
           });
           continue;
         }
-        uidStart = startUid;
-        uidEnd = endUid;
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
       }
 
       const baseOperation = operation.replace(
