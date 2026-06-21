@@ -10,29 +10,37 @@
  *      the pipelined command was silently dropped.
  */
 
-import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, spyOn, beforeEach, afterAll } from "bun:test";
 import { EventEmitter } from "events";
+// idle-manager ↔ push ↔ server-barrel form a runtime import cycle: idle-manager
+// imports the `server` barrel (for `logger`), which re-exports push.ts, whose
+// top-level `createPush(realIdleManager)` needs the idleManager singleton.
+// Importing push first forces the graph to initialize in production order so the
+// singleton is constructed before we spy on it. (Same guard as idle-manager.test.ts.)
+import "../push";
+import { idleManager } from "./idle-manager";
 
-// Capture the real `./idle-manager` module BEFORE the `mock.module`
-// override below so `afterAll` can restore it. `mock.module` is
-// process-global; without the restore, a subsequent test file in the
-// same `bun test` process that imports `./idle-manager` (notably the
-// IDLE-heartbeat manager suite landing in this same directory) sees the
-// stubbed two-method `{ idleManager }` shape and loses the real
-// `idleManager` singleton (the module's only export).
-const realIdleManagerModule = await import("./idle-manager");
-
-const mockAddIdleSession = mock(() => {});
-const mockRemoveIdleSession = mock(() => {});
-mock.module("./idle-manager", () => ({
-  idleManager: {
-    addIdleSession: mockAddIdleSession,
-    removeIdleSession: mockRemoveIdleSession,
-  },
-}));
+// session.ts registers/unregisters IDLE sessions on the real `idleManager`
+// singleton. Spy on just those two methods (restored in afterAll) rather than
+// `mock.module`-ing the whole module: `mock.module` is process-global, and
+// replacing `./idle-manager` with a partial `{ idleManager }` stub drops the
+// singleton's other methods — notably `shutdown()` — which then breaks
+// idle-manager.test.ts when it runs later in the same `bun test` process
+// (TypeError: idleManager.shutdown is not a function). The previous
+// spread-restore in afterAll did not reliably reinstate the binding for that
+// sibling file. spyOn mutates the live singleton session.ts already holds and
+// reverts cleanly via mockRestore.
+const mockAddIdleSession = spyOn(idleManager, "addIdleSession").mockImplementation(
+  () => {}
+);
+const mockRemoveIdleSession = spyOn(
+  idleManager,
+  "removeIdleSession"
+).mockImplementation(() => {});
 
 afterAll(() => {
-  mock.module("./idle-manager", () => ({ ...realIdleManagerModule }));
+  mockAddIdleSession.mockRestore();
+  mockRemoveIdleSession.mockRestore();
 });
 
 import { ImapRequestHandler } from "./handler";
