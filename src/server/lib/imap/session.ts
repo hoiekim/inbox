@@ -334,10 +334,21 @@ export class ImapSession {
 
   copyMessageTyped = async (
     tag: string,
-    _copyRequest: CopyRequest,
-    _isUidCommand: boolean = false
+    copyRequest: CopyRequest,
+    isUidCommand: boolean = false
   ) => {
-    return copyMessageOp(tag, _copyRequest, _isUidCommand, this.write);
+    if (!this.authenticated || !this.store || !this.selectedMailbox) {
+      return this.write(`${tag} NO Not authenticated or no mailbox selected.\r\n`);
+    }
+    return copyMessageOp(
+      tag,
+      copyRequest,
+      isUidCommand,
+      this.store,
+      this.selectedMailbox,
+      this.seqState,
+      this.write
+    );
   };
 
   appendMessage = async (tag: string, appendRequest: AppendRequest) => {
