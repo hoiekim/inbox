@@ -351,6 +351,63 @@ describe("storeFlagsTyped — UID item on UID-command FETCH (#589)", () => {
     const fetch = lines.find((l) => l.includes("FETCH"));
     expect(fetch).toBe("* 1 FETCH (FLAGS (\\Seen))\r\n");
   });
+
+  it("emits no untagged FETCH for a SILENT UID STORE", async () => {
+    const { store } = makeFlagStore([{ uid: 11395, read: true }]);
+    const { write, lines } = makeWriter();
+
+    await storeFlagsTyped(
+      "A3",
+      {
+        sequenceSet: { type: "uid", ranges: [{ start: 11395 }] },
+        operation: "+FLAGS.SILENT",
+        flags: ["\\Seen"],
+      },
+      true,
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    expect(lines.some((l) => l.startsWith("* "))).toBe(false);
+    expect(taggedResponses(lines, "A3")).toEqual([
+      "A3 OK STORE completed\r\n",
+    ]);
+  });
+
+  it("emits one FETCH per mail, each carrying its own UID, for a multi-message UID STORE", async () => {
+    const { store } = makeFlagStore([
+      { uid: 11395, read: true },
+      { uid: 11396, read: true },
+    ]);
+    const multiSeqState: SequenceState = {
+      seqToUid: [11395, 11396],
+      uidToSeq: new Map([
+        [11395, 1],
+        [11396, 2],
+      ]),
+    };
+    const { write, lines } = makeWriter();
+
+    await storeFlagsTyped(
+      "A4",
+      uidStoreRequest(11395, 11396),
+      true,
+      store,
+      "INBOX",
+      false,
+      multiSeqState,
+      write
+    );
+
+    const fetches = lines.filter((l) => l.includes("FETCH"));
+    expect(fetches).toEqual([
+      "* 1 FETCH (UID 11395 FLAGS (\\Seen))\r\n",
+      "* 2 FETCH (UID 11396 FLAGS (\\Seen))\r\n",
+    ]);
+  });
 });
 
 // ── Suite 2 helpers ──────────────────────────────────────────────────────────
