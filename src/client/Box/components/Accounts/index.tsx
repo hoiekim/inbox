@@ -31,6 +31,7 @@ import {
   onKeyboardActivate
 } from "client";
 import { MailsSynchronizer } from "client/Box";
+import { mergeSavedAccounts } from "./savedAccounts";
 
 import "./index.scss";
 
@@ -226,7 +227,7 @@ const Accounts = ({
     } else if (selectedCategory === Category.AllMails) {
       sortedAccountData = received;
     } else if (selectedCategory === Category.SavedMails) {
-      sortedAccountData = received.filter((e) => e.saved_doc_count);
+      sortedAccountData = mergeSavedAccounts(received, sent);
     } else if (selectedCategory === Category.SentMails) {
       sortedAccountData = sent;
     } else if (selectedCategory === Category.Search && searchHistory) {
@@ -274,7 +275,7 @@ const Accounts = ({
         let targetAccounts: Account[];
         if (e === Category.SentMails) targetAccounts = sent;
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
-        else if (e === Category.SavedMails) targetAccounts = received.filter((a) => a.saved_doc_count);
+        else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
         else if (e === Category.Search) targetAccounts = searchHistory;
         else targetAccounts = received;
         if (

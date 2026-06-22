@@ -33,7 +33,12 @@ export class MailsSynchronizer {
       if (category === Category.NewMails)
         countInAccounts = accountData?.unread_doc_count || 0;
       else if (category === Category.SavedMails)
-        countInAccounts = accountData?.saved_doc_count || 0;
+        // The Saved view spans both folders (#568), so a starred sent mail's
+        // account lives in `sent`, not `received`. Sum saved counts across both.
+        countInAccounts =
+          (accounts.received.find((e) => e.key === account)?.saved_doc_count ||
+            0) +
+          (accounts.sent.find((e) => e.key === account)?.saved_doc_count || 0);
       else countInAccounts = accountData?.doc_count || 0;
 
       const countInMails = mails.reduce((acc, e) => {

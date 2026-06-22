@@ -361,9 +361,9 @@ describe("getMailHeaders — envelope_to in received-branch address condition", 
     // expands to "to_address" at runtime; the static text contains the
     // token, so the test asserts on the template tokens directly.
     const exprMatch = fnSource.match(
-      /addressCondition\s*=\s*options\.sent\s*\?\s*`[^`]*`\s*:\s*`([^`]*)`\s*;/
+      /receivedCondition\s*=\s*`([^`]*)`/
     );
-    if (!exprMatch) throw new Error("addressCondition ternary not found");
+    if (!exprMatch) throw new Error("receivedCondition not found");
     const receivedSql = exprMatch[1];
     expect(receivedSql).toContain("${TO_ADDRESS}");
     expect(receivedSql).toContain("cc_address @>");
@@ -372,10 +372,8 @@ describe("getMailHeaders — envelope_to in received-branch address condition", 
   });
 
   it("sent branch's addressCondition remains from_address only", () => {
-    const exprMatch = fnSource.match(
-      /addressCondition\s*=\s*options\.sent\s*\?\s*`([^`]*)`/
-    );
-    if (!exprMatch) throw new Error("sent branch not found");
+    const exprMatch = fnSource.match(/sentCondition\s*=\s*`([^`]*)`/);
+    if (!exprMatch) throw new Error("sentCondition not found");
     const sentSql = exprMatch[1];
     expect(sentSql).toContain("${FROM_ADDRESS}");
     expect(sentSql).not.toContain("envelope_to");
@@ -556,5 +554,51 @@ describe("buildCriterionClause — BODY/TEXT search the message body (#552)", ()
     expect(frag).toContain("from_text ILIKE");
     expect(frag).toContain("to_text ILIKE");
     expect(frag).toContain("text ILIKE");
+  });
+});
+
+describe("getMailHeaders — saved query spans both folders (#568)", () => {
+  // A starred mail can be either sent or received. A saved query with no
+  // explicit folder must match an account address in EITHER from_address
+  // (sent) or the received to/cc/bcc/envelope_to branch — otherwise a
+  // starred sent mail is unreachable from the Saved view, the client-side
+  // complement of #384's server fix.
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(
+      /export const getMailHeaders[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeaders not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("uses the union (sent OR received) condition when saved && !sent", () => {
+    const exprMatch = fnSource.match(
+      /addressCondition\s*=\s*([\s\S]*?);/
+    );
+    if (!exprMatch) throw new Error("addressCondition assignment not found");
+    const expr = exprMatch[1];
+    // The saved-and-not-sent branch is the union of both folder conditions.
+    expect(expr).toContain("options.saved && !options.sent");
+    expect(expr).toContain("sentCondition} OR ${receivedCondition");
+  });
+
+  it("falls back to the sent-only or received-only condition otherwise", () => {
+    const exprMatch = fnSource.match(
+      /addressCondition\s*=\s*([\s\S]*?);/
+    );
+    if (!exprMatch) throw new Error("addressCondition assignment not found");
+    const expr = exprMatch[1];
+    expect(expr).toContain("options.sent");
+    // Non-union branches reuse the single-folder conditions verbatim.
+    expect(expr).toMatch(/\?\s*sentCondition/);
+    expect(expr).toContain(": receivedCondition");
   });
 });

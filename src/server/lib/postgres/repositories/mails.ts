@@ -270,9 +270,19 @@ export const getMailHeaders = async (
     // received-branch address expansion in `getAccountStats` (PR #525)
     // so that an account row surfaced by envelope_to still resolves to
     // its mails when the user clicks through.
-    const addressCondition = options.sent
-      ? `${FROM_ADDRESS} @> $2::jsonb`
-      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
+    const sentCondition = `${FROM_ADDRESS} @> $2::jsonb`;
+    const receivedCondition = `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
+    // The Saved view is a flat starred collection per account: a starred
+    // mail can be either sent or received, so a saved query with no explicit
+    // folder must span both branches. Without this, a starred *sent* mail is
+    // unreachable from the Saved view — the account address only matches
+    // from_address, never the received to/cc/bcc condition (#568).
+    const addressCondition =
+      options.saved && !options.sent
+        ? `(${sentCondition} OR ${receivedCondition})`
+        : options.sent
+        ? sentCondition
+        : receivedCondition;
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
     const headerColumns = [
