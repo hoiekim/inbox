@@ -599,25 +599,37 @@ export async function copyMessageTyped(
 // ---------------------------------------------------------------------------
 
 /**
- * RFC 6851 MOVE: atomic COPY + EXPUNGE. Wire shape mirrors COPY; the
- * difference is the source rows disappear after the move succeeds.
+ * RFC 6851 MOVE: atomic copy + targeted expunge. Wire shape mirrors
+ * COPY; the difference is the source rows disappear after the move.
  *
  * Response sequence (RFC 6851 §3.2):
  *   * <seq> EXPUNGE                (one per moved message; high→low)
  *   <tag> OK [COPYUID <validity> <src> <dst>] MOVE completed
  *
- * Atomicity: same caveat as COPY — no transaction wrapper, so a mid-loop
- * `storeMail` failure leaves stored copies in the destination AND the
- * source intact (we abort before flipping \\Deleted). A mid-EXPUNGE
- * failure leaves the copies in the destination AND the source flagged
- * but unremoved. Both modes are client-recoverable (re-issue MOVE /
- * EXPUNGE) and don't lose data.
+ * Implementation notes:
  *
- * The per-mail clone uses the same fixed shape as COPY (post-#604
- * round-2): fresh `messageId` to avoid the UNIQUE(user_id, message_id)
- * conflict; `getDomainUidNext` / `getAccountUidNext` get `destIsSent`;
- * `envelope_to` / `cc` / `bcc` are re-anchored for non-INBOX
- * destinations so the copy doesn't re-surface in the source.
+ * - The expunge is targeted via `store.expungeUids(box, sourceUids)` —
+ *   RFC 6851 §3.3 forbids the COPY+STORE(\\Deleted)+EXPUNGE pattern
+ *   (since EXPUNGE is mailbox-wide and would also remove pre-existing
+ *   \\Deleted-flagged messages, surfacing untagged EXPUNGE responses
+ *   for UIDs not in the COPYUID set).
+ * - No transaction wrapper around the per-mail copy loop — a mid-loop
+ *   `storeMail` failure leaves the already-stored copies in the
+ *   destination AND the source intact; the response is a tagged NO,
+ *   client can re-issue MOVE. A mid-expunge failure (`expungeUids`
+ *   throws) leaves all copies stored in dest AND all source rows
+ *   intact; same NO + re-issue contract.
+ * - Address routing: for non-INBOX destinations the new copy's
+ *   `to_address` / `envelope_to` / `cc_address` / `bcc_address` JSONB
+ *   value arrays are re-anchored to the destination address (or
+ *   cleared) so the copy doesn't re-surface in the source mailbox's
+ *   view. For INBOX destinations from a non-INBOX source, the same
+ *   clearing applies — INBOX has no address filter so cleared routing
+ *   is safe, AND it prevents the source account view from re-matching
+ *   the copy under its new UID after the source is expunged.
+ * - Display text fields (`to_text` / `cc_text` / `bcc_text`) are
+ *   preserved so the FETCH BODY[HEADER] render on the destination
+ *   still shows the original recipient header.
  */
 export async function moveMessageTyped(
   tag: string,
@@ -735,8 +747,30 @@ export async function moveMessageTyped(
       });
 
       if (destIsInbox) {
-        newMail.to = sourceMail.to;
-        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+        // INBOX has no address filter; the new copy surfaces in INBOX
+        // regardless of `to_address` / `envelope_to` content. But if the
+        // source view IS address-filtered (accounts/foo, Sent Messages/
+        // accounts/foo), preserving the source's address fields would
+        // re-anchor the new copy in the source mailbox even AFTER we
+        // expunge the original — the message would re-appear in the
+        // source view under a new UID. To prevent that, clear the
+        // routing JSONB to empty when the source is non-INBOX. INBOX→
+        // INBOX is a no-op address-wise so it's safe to preserve.
+        if (sourceIsInbox) {
+          newMail.to = sourceMail.to;
+          newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+        } else {
+          newMail.to = sourceMail.to
+            ? { value: [], text: sourceMail.to.text }
+            : undefined;
+          newMail.envelopeTo = [];
+          newMail.cc = sourceMail.cc
+            ? { value: [], text: sourceMail.cc.text }
+            : undefined;
+          newMail.bcc = sourceMail.bcc
+            ? { value: [], text: sourceMail.bcc.text }
+            : undefined;
+        }
       } else {
         const destAddr = { address: destAccount, name: "" };
         newMail.to = {
@@ -744,8 +778,8 @@ export async function moveMessageTyped(
           text: sourceMail.to?.text || destAccount,
         };
         newMail.envelopeTo = [destAddr];
-        // Same fix as COPY (#604 round-2): preserve cc_text / bcc_text
-        // (the header render) but empty the routing JSONB.
+        // Clear routing JSONB but preserve display text (cc_text /
+        // bcc_text drive the FETCH BODY[HEADER] render).
         newMail.cc = sourceMail.cc
           ? { value: [], text: sourceMail.cc.text }
           : undefined;
@@ -776,24 +810,16 @@ export async function moveMessageTyped(
       destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
     }
 
-    // === DELETE + EXPUNGE phase (RFC 6851 §3.2) ===
-    // Mark every source UID as \\Deleted (per-UID range so we hit
-    // exactly the moved set), then expunge. RFC 3501 §6.4.3 accepts
-    // that EXPUNGE is mailbox-wide — any pre-existing \\Deleted-flagged
-    // messages in the source mailbox get expunged as a side effect; same
-    // shape as COPY+STORE+EXPUNGE on a real client.
-    for (const uid of sourceUids) {
-      await store.setFlags(
-        selectedMailbox,
-        uid,
-        uid,
-        ["\\Deleted"],
-        true,
-        "+FLAGS"
-      );
-    }
-
-    const expungedUids = await store.expunge(selectedMailbox);
+    // === EXPUNGE phase ===
+    // RFC 6851 §3.3: MOVE MUST NOT set \\Deleted on source UIDs, and the
+    // server MUST NOT expunge messages other than the moved set.
+    // `store.expungeUids` directly soft-deletes the specific source UIDs
+    // (sets `expunged=TRUE`) without ever touching the `\\Deleted` flag
+    // and without affecting pre-existing \\Deleted-flagged messages in
+    // the mailbox. Errors propagate so the outer try/catch writes a
+    // tagged NO instead of falsely emitting OK + COPYUID against a
+    // partial expunge.
+    const expungedUids = await store.expungeUids(selectedMailbox, sourceUids);
 
     // Map UIDs back to seq numbers; emit high→low so the client's
     // own message-index updates don't cascade-shift mid-response.
