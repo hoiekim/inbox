@@ -269,7 +269,8 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
       write
     );
 
-    expect(lines).toContain("* 1 FETCH (FLAGS (\\Seen))\r\n");
+    // UID STORE → the untagged FETCH must carry the UID item (#589).
+    expect(lines).toContain("* 1 FETCH (UID 5 FLAGS (\\Seen))\r\n");
     expect(taggedResponses(lines, "A003")).toEqual([
       "A003 OK STORE completed\r\n",
     ]);
@@ -294,6 +295,61 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
     const tagged = taggedResponses(lines, "A004");
     expect(tagged.length).toBe(1);
     expect(tagged[0]).toContain("NO [READ-ONLY]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storeFlagsTyped — UID item on UID-command FETCH (#589, RFC 3501 §6.4.8)
+// ---------------------------------------------------------------------------
+
+const seqStoreRequest = (start: number, end?: number): StoreRequest => ({
+  sequenceSet: { type: "sequence", ranges: [{ start, end }] },
+  operation: "+FLAGS",
+  flags: ["\\Seen"],
+});
+
+describe("storeFlagsTyped — UID item on UID-command FETCH (#589)", () => {
+  const seqState: SequenceState = {
+    seqToUid: [11395],
+    uidToSeq: new Map([[11395, 1]]),
+  };
+
+  it("includes the UID item for a UID STORE", async () => {
+    const { store } = makeFlagStore([{ uid: 11395, read: true }]);
+    const { write, lines } = makeWriter();
+
+    await storeFlagsTyped(
+      "A1",
+      uidStoreRequest(11395),
+      true, // isUidCommand
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    const fetch = lines.find((l) => l.includes("FETCH"));
+    expect(fetch).toBe("* 1 FETCH (UID 11395 FLAGS (\\Seen))\r\n");
+  });
+
+  it("omits the UID item for a plain (sequence) STORE", async () => {
+    const { store } = makeFlagStore([{ uid: 11395, read: true }]);
+    const { write, lines } = makeWriter();
+
+    await storeFlagsTyped(
+      "A2",
+      seqStoreRequest(1),
+      false, // not a UID command
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    const fetch = lines.find((l) => l.includes("FETCH"));
+    expect(fetch).toBe("* 1 FETCH (FLAGS (\\Seen))\r\n");
   });
 });
 
