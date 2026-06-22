@@ -343,15 +343,6 @@ export async function storeFlagsTyped(
 // ---------------------------------------------------------------------------
 
 /**
- * Helper: explicit UID list for a [start, end] range.
- */
-const expandRange = (start: number, end: number): number[] => {
-  const out: number[] = [];
-  for (let n = start; n <= end; n++) out.push(n);
-  return out;
-};
-
-/**
  * Compact a sorted UID list to the RFC 3501 sequence-set form ("1,3:5,7").
  * Per RFC 4315, the COPYUID response uses the same sequence-set syntax.
  */
@@ -484,15 +475,22 @@ export async function copyMessageTyped(
     const destUids: number[] = [];
 
     const Mail = (await import("common")).Mail;
+    const getRandomId = (await import("common")).getRandomId;
 
     // No transaction wrapper around storeMail — `pgSaveMail` is a single
     // INSERT and the per-mail loop is sequential, so a mid-loop failure
-    // leaves the already-stored copies in the destination. Documented as a
-    // limitation; a follow-up issue can promote this loop to a single
-    // multi-row INSERT or a transaction.
+    // leaves the already-stored copies in the destination. Documented as
+    // a limitation; a follow-up can promote this to a multi-row INSERT
+    // or transaction.
     for (const sourceMail of sourceMails) {
+      // The mails table has UNIQUE(user_id, message_id); the copy must
+      // carry a fresh message_id so the INSERT actually creates a new
+      // row (otherwise saveMail merges into the source row and the
+      // COPYUID response would fabricate dest UIDs that don't exist).
+      // RFC 3501 §6.4.7 doesn't mandate preserving Message-ID across
+      // COPY — a duplicate row is a server-storage representation, not
+      // a re-delivered RFC 5322 message — so a fresh id is RFC-compliant.
       const newMail = new Mail({
-        // Preserve everything header- and content-shaped.
         subject: sourceMail.subject,
         date: sourceMail.date,
         html: sourceMail.html,
@@ -502,9 +500,8 @@ export async function copyMessageTyped(
         bcc: sourceMail.bcc,
         replyTo: sourceMail.replyTo,
         envelopeFrom: sourceMail.envelopeFrom,
-        envelopeTo: sourceMail.envelopeTo,
         attachments: sourceMail.attachments,
-        messageId: sourceMail.messageId,
+        messageId: getRandomId(),
         insight: sourceMail.insight,
         // Flags carry over per RFC 3501 §6.4.7.
         read: sourceMail.read,
@@ -514,39 +511,58 @@ export async function copyMessageTyped(
         answered: sourceMail.answered,
       });
 
-      // Routing: the destination mailbox is identified to queries by the
-      // mail's `to_address` (for received) or `sent`+address (for sent).
-      // For INBOX targets, the existing `to_address` is fine — INBOX shows
-      // every received mail in the user's domain. For per-account /
-      // user-created targets, override `to_address` to the destination
-      // account so the copy surfaces in the destination's mailbox view.
-      // The `to_text` (the human-readable header text returned in FETCH
-      // BODY[HEADER]) is preserved from the source so the client sees the
+      // Routing: a mail surfaces in the destination's mailbox view via
+      // `addressCondition`'s OR of `to_address` + `cc_address` +
+      // `bcc_address` + `envelope_to` JSONB containment (see
+      // `repositories/mails.ts`). For per-account / user-created
+      // destinations the copy must address ALL of these to the
+      // destination account so it surfaces in the destination AND does
+      // not stay surfaced in the source (the source's envelope_to / cc
+      // / bcc would re-anchor it). For INBOX targets the existing
+      // header fields are fine — INBOX has no address filter (it shows
+      // every received mail in the user's domain). `to_text` is
+      // preserved so the client's FETCH BODY[HEADER] still shows the
       // original recipient header — the override only affects routing.
       if (destIsInbox) {
         newMail.to = sourceMail.to;
+        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
+        const destAddr = { address: destAccount, name: "" };
         newMail.to = {
-          value: [{ address: destAccount, name: "" }],
+          value: [destAddr],
           text: sourceMail.to?.text || destAccount,
         };
+        // Re-anchor envelope_to so the OR-clause doesn't re-surface the
+        // copy in the source mailbox.
+        newMail.envelopeTo = [destAddr];
+        // cc / bcc are display-only in the destination, but since they
+        // also participate in the source's `addressCondition`, the
+        // routing is cleanest when the copy's cc/bcc don't reference
+        // the source's address. Set them empty.
+        newMail.cc = undefined;
+        newMail.bcc = undefined;
       }
       newMail.sent = destIsSent;
 
-      // Fresh UIDs in the destination's UID space. Per RFC 3501 the
-      // destination's UIDNEXT increments per copied message. `getDomainUidNext`
-      // / `getAccountUidNext` are atomic at the DB layer (sequence/counter).
-      const newDomainUid = await getDomainUidNext(user.id);
-      const newAccountUid = await getAccountUidNext(user.id, destAccount);
+      // Fresh UIDs in the destination's UID space. The `sent` arg
+      // matters: `getDomainUidNext`/`getAccountUidNext` query MAX(uid)
+      // WHERE sent=? so a copy to a Sent box without the arg would pick
+      // a UID from the received-side counter and collide with existing
+      // sent rows. (These are SELECT MAX(uid)+1 with no locking — see
+      // `repositories/mails.ts:388-427` — so concurrent COPYs against
+      // the same destination CAN race to the same UID. Pre-existing
+      // limitation across receive.ts/send.ts/append; not corrected here.)
+      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
+      const newAccountUid = await getAccountUidNext(
+        user.id,
+        destAccount,
+        destIsSent
+      );
       newMail.uid.domain = newDomainUid || 1;
       newMail.uid.account = newAccountUid || 1;
 
       const ok = await store.storeMail(newMail);
       if (!ok) {
-        // Mid-loop failure. RFC 3501 says COPY should be atomic; we
-        // best-effort the partial state and report NO. A future
-        // improvement could wrap the loop in a transaction (see comment
-        // above).
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
         return;
       }

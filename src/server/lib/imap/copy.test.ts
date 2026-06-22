@@ -168,31 +168,11 @@ describe("COPY with empty source range (#520)", () => {
 });
 
 describe("COPY happy path (#520)", () => {
-  // Mock the module-level postgres helpers — scoped to this file via
-  // `mock.module`. Per the Bun mock.module process-global hazard, the
-  // imports inside `copyMessageTyped` need to resolve to the mock at
-  // call time. The `await import("server")` inside that function (no —
-  // it's a top-level import) means we have to mock once at file scope
-  // and accept that any other test file in the same `bun test` run that
-  // also imports from "server" sees the mock. Workaround: keep the mock
-  // surface minimal so unrelated tests don't depend on these specific
-  // functions returning real data. (Server-suite runs verify no bleed.)
-  //
-  // Actually — `getDomainUidNext` / `getAccountUidNext` / `getImapUidValidity`
-  // are all in `server/index.ts`. Mocking the whole `server` module is too
-  // wide. Easier path: stub them on a per-call basis by spying on the
-  // `Store.storeMail` mock and asserting structural properties of the
-  // captured mail (subject preserved, fresh UIDs in opts, etc.), without
-  // running the full uid-fetch flow. We CAN do that here because the
-  // copy loop calls these helpers AFTER `storeMail` only for the
-  // resulting UIDs — but actually they're called BEFORE `storeMail`, to
-  // populate the new mail's UID. So we can't fully sidestep them.
-  //
-  // For now: skip the full happy-path assertion via a fully-stubbed flow,
-  // and instead test the formatUidSet helper directly (covered below).
-  // The integration test for "real source mails → real storeMail call"
-  // belongs in a fixture with a FakePool that intercepts the postgres
-  // calls — out of scope for this PR.
+  // End-to-end "real source mails → COPYUID emission" needs a FakePool
+  // fixture (per the users.test.ts pattern) so the module-imported
+  // postgres helpers `getDomainUidNext` / `getAccountUidNext` /
+  // `getImapUidValidity` can be intercepted without mock.module's
+  // process-global hoist. TODO follow-up.
   it.todo(
     "copies source mails to destination with fresh UIDs and emits COPYUID (FakePool fixture needed)"
   );
