@@ -178,14 +178,6 @@ describe("COPY happy path (#520)", () => {
   );
 });
 
-// The COPYUID response uses the RFC 3501 sequence-set syntax. The formatter
-// is a private helper; verify it via the public surface (or expose for
-// testing). Since it's internal, test it indirectly through observable
-// behavior: a COPY of UIDs `1,3:5,7` should emit `COPYUID … 1,3:5,7 …`.
-// That's covered by the integration test (todo'd above). The unit shape of
-// the formatter is exercised by the integration test once the FakePool
-// fixture lands.
-
 describe("COPY dispatch — sequence vs UID semantics (#520)", () => {
   it("UID COPY consumes the sequenceSet as UIDs (no seqState lookup)", async () => {
     const ctx = buildStore({ existsBoxes: ["Archive"] });

@@ -535,12 +535,19 @@ export async function copyMessageTyped(
         // Re-anchor envelope_to so the OR-clause doesn't re-surface the
         // copy in the source mailbox.
         newMail.envelopeTo = [destAddr];
-        // cc / bcc are display-only in the destination, but since they
-        // also participate in the source's `addressCondition`, the
-        // routing is cleanest when the copy's cc/bcc don't reference
-        // the source's address. Set them empty.
-        newMail.cc = undefined;
-        newMail.bcc = undefined;
+        // cc / bcc participate in `addressCondition` via JSONB
+        // containment (`cc_address @> $2`) AND in FETCH BODY[HEADER]
+        // render via `cc_text` / `bcc_text` (util.ts:54). Clear the
+        // routing JSONB to empty (so `[] @> [{address:'foo'}]` is false
+        // and the copy doesn't re-surface in the source mailbox) but
+        // keep `text` so the destination's header render still shows
+        // `Cc:` / `Bcc:` lines.
+        newMail.cc = sourceMail.cc
+          ? { value: [], text: sourceMail.cc.text }
+          : undefined;
+        newMail.bcc = sourceMail.bcc
+          ? { value: [], text: sourceMail.bcc.text }
+          : undefined;
       }
       newMail.sent = destIsSent;
 
