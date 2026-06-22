@@ -649,6 +649,15 @@ export async function moveMessageTyped(
   try {
     const destMailbox = isInbox(moveRequest.mailbox) ? "INBOX" : moveRequest.mailbox;
 
+    // RFC 6851 §3.4-§3.5: MOVE to the currently-selected mailbox is a
+    // no-op (the messages are already where they'd land). Skip the
+    // copy+expunge round-trip and respond with a bare OK — clients see
+    // the same end-state with no UID churn or surprise EXPUNGE.
+    if (destMailbox === selectedMailbox) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
     if (!(await store.mailboxExists(destMailbox))) {
       write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
       return;

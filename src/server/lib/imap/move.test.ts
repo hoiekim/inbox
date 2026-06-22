@@ -1,12 +1,20 @@
 /**
  * Tests for `moveMessageTyped` (#453, RFC 6851).
  *
- * MOVE composes COPY + STORE \\Deleted + EXPUNGE. The COPY-phase logic
- * mirrors `copyMessageTyped` (post-#604 round-2: fresh messageId, `sent`
- * arg threading, envelope_to / cc / bcc re-anchor). Tests here focus on
- * the MOVE-specific surface: read-only refusal, TRYCREATE, no-op
- * range cases. End-to-end "real source mails → COPYUID + EXPUNGE
- * emission" needs a FakePool fixture (same as the COPY it.todo).
+ * MOVE is copy-then-targeted-expunge: clone the source rows into the
+ * destination (same shape as `copyMessageTyped` — fresh messageId, the
+ * `sent` arg threaded through UidNext helpers, envelope_to / cc / bcc
+ * re-anchored away from the source address), then call
+ * `Store.expungeUids(box, sourceUids)` to soft-delete exactly the
+ * moved set. RFC 6851 §3.3 forbids both setting `\\Deleted` on the
+ * source and the mailbox-wide EXPUNGE that the COPY+STORE+EXPUNGE
+ * pattern would produce — the targeted expunge avoids both.
+ *
+ * Tests here focus on the MOVE-specific control flow: read-only
+ * refusal, TRYCREATE, no-op range cases, MOVE-to-self short-circuit.
+ * End-to-end "real source mails → COPYUID + targeted EXPUNGE
+ * emission, and the INBOX-from-non-INBOX address-clearing invariant"
+ * needs a FakePool fixture (same as COPY's it.todo).
  */
 
 import { describe, it, expect } from "bun:test";
@@ -119,8 +127,47 @@ describe("MOVE with empty source range (#453)", () => {
   });
 });
 
+describe("MOVE to self short-circuit (RFC 6851 §3.4-§3.5, #453)", () => {
+  it("MOVE to the selected mailbox returns OK without copy+expunge", async () => {
+    const store = buildStore(["Archive"]);
+    let getMessagesCalled = false;
+    store.getMessages = async () => {
+      getMessagesCalled = true;
+      return new Map();
+    };
+    const lines = await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 1, end: 5 }] }),
+      true,
+      store,
+      false,
+      "Archive"
+    );
+    expect(lines).toEqual(["A1 OK MOVE completed\r\n"]);
+    // No copy phase — getMessages never consulted.
+    expect(getMessagesCalled).toBe(false);
+  });
+
+  it("MOVE INBOX → inbox while selected on INBOX (case variant) is also a self-move", async () => {
+    const store = buildStore([]);
+    let getMessagesCalled = false;
+    store.getMessages = async () => {
+      getMessagesCalled = true;
+      return new Map();
+    };
+    const lines = await runMove(
+      moveReq("inbox", { type: "uid", ranges: [{ start: 1, end: 1 }] }),
+      true,
+      store,
+      false,
+      "INBOX"
+    );
+    expect(lines).toEqual(["A1 OK MOVE completed\r\n"]);
+    expect(getMessagesCalled).toBe(false);
+  });
+});
+
 describe("MOVE happy path (#453)", () => {
   it.todo(
-    "moves source mails, marks them \\\\Deleted, expunges, emits COPYUID + EXPUNGE (FakePool fixture needed)"
+    "moves source mails (fresh messageId, address routing cleared on non-INBOX dest AND on INBOX dest from a non-INBOX source), calls Store.expungeUids on the source set, emits COPYUID + targeted EXPUNGE (FakePool fixture needed)"
   );
 });
