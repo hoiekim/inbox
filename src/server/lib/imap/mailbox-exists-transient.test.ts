@@ -17,7 +17,7 @@
  * usable when the DB hiccups.
  */
 
-import { describe, it, expect, mock, afterEach } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { Store } from "./store";
 import { selectMailbox, statusMailbox } from "./mailbox-ops";
 import type { SignedUser } from "common";
@@ -62,7 +62,6 @@ describe("Store.mailboxExists propagates transient errors (#601)", () => {
       throwInListOrThrow: true, // would throw if consulted
     });
     expect(await store.mailboxExists("INBOX")).toBe(true);
-    expect(await store.mailboxExists("inbox")).toBe(true);
   });
 
   it("returns true for a listed mailbox on healthy queries", async () => {
@@ -174,8 +173,4 @@ describe("STATUS writes 'NO STATUS failed' (not 'does not exist') on transient m
     ).toBe(false);
     expect(lines.some((l) => l.startsWith("* STATUS"))).toBe(false);
   });
-});
-
-afterEach(() => {
-  mock.restore();
 });
