@@ -43,6 +43,16 @@ export async function createMailbox(
     write(`${tag} NO Empty mailbox name\r\n`);
     return;
   }
+  // RFC 3501 §6.3.3: "It is an error to attempt to create INBOX or a
+  // mailbox with a name that refers to an existent mailbox." INBOX always
+  // exists as a synthetic mailbox — any casing of the name refers to it.
+  // Without this guard, the DB would accept the INSERT (no row named
+  // "inbox" exists) and leave a phantom user-mailbox row that's de-duped
+  // out of LIST but lingers in the table.
+  if (isInbox(cleanName)) {
+    write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);
+    return;
+  }
   try {
     const userId = store.getUser().id;
     const created = await dbCreateMailbox({ user_id: userId, name: cleanName });
@@ -71,6 +81,14 @@ export async function deleteMailbox(
   const cleanName = mailbox.replace(/^"(.*)"$/, "$1");
   if (!cleanName) {
     write(`${tag} NO Empty mailbox name\r\n`);
+    return;
+  }
+  // RFC 3501 §6.3.4: deletion of INBOX is forbidden. Short-circuit on every
+  // casing — without this guard, `deleteMailboxByName` would return
+  // "not_found" (no DB row matches lowercase 'inbox') and the client would
+  // get a misleading "does not exist" instead of the correct refusal.
+  if (isInbox(cleanName)) {
+    write(`${tag} NO [CANNOT] Cannot delete INBOX\r\n`);
     return;
   }
   try {
@@ -107,6 +125,21 @@ export async function renameMailbox(
   const cleanNew = newName.replace(/^"(.*)"$/, "$1");
   if (!cleanOld || !cleanNew) {
     write(`${tag} NO Empty mailbox name\r\n`);
+    return;
+  }
+  // RFC 3501 §6.3.5 defines special RENAME-INBOX semantics (move all
+  // messages to the new name, leave INBOX empty). The current backing
+  // implementation doesn't support that, so guard explicitly rather than
+  // returning the misleading "[NONEXISTENT] Mailbox does not exist" the
+  // DB layer would otherwise produce for any casing of `inbox` (no DB
+  // row → not_found). Filed as a follow-up if the workflow needs it.
+  if (isInbox(cleanOld)) {
+    write(`${tag} NO [CANNOT] RENAME INBOX is not supported\r\n`);
+    return;
+  }
+  // Target must not collide with the synthetic INBOX either.
+  if (isInbox(cleanNew)) {
+    write(`${tag} NO [ALREADYEXISTS] Target mailbox already exists\r\n`);
     return;
   }
   try {
@@ -277,7 +310,13 @@ export function matchesListPattern(
     }
   }
   regex += "$";
-  return new RegExp(regex).test(box);
+  // RFC 3501 §5.1: INBOX is matched case-insensitively. This applies to
+  // LIST/LSUB patterns too — `LIST "" "inbox"` must surface the canonical
+  // INBOX row. Apply the `i` regex flag ONLY when the target box is
+  // INBOX, so every other mailbox name stays strictly case-sensitive
+  // (Archive ≠ archive, per the RFC).
+  const flags = isInbox(box) ? "i" : "";
+  return new RegExp(regex, flags).test(box);
 }
 
 export async function listMailboxes(

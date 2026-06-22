@@ -409,7 +409,17 @@ export async function appendMessage(
     }
 
     const user = store.getUser();
-    const account = boxToAccount(user.username, appendRequest.mailbox);
+    // RFC 3501 §5.1: INBOX is case-insensitive. SELECT canonicalizes
+    // selectedMailbox to "INBOX"; APPEND must canonicalize the target to
+    // match — otherwise a SELECT inbox + APPEND inbox sequence reads
+    // `selectedMailbox === appendRequest.mailbox` as `"INBOX" === "inbox"`
+    // (false), skipping onAppended (the sequence-mapping rebuild) and
+    // leaving the next seq-numbered FETCH for the appended message
+    // returning wrong/missing data.
+    const targetMailbox = isInbox(appendRequest.mailbox)
+      ? "INBOX"
+      : appendRequest.mailbox;
+    const account = boxToAccount(user.username, targetMailbox);
     const domainUid = await getDomainUidNext(user.id);
     const accountUid = await getAccountUidNext(user.id, account);
     mail.uid.domain = domainUid || 1;
@@ -417,12 +427,10 @@ export async function appendMessage(
 
     const result = await store.storeMail(mail);
 
-    let uid: number;
-    if (isInbox(appendRequest.mailbox)) uid = mail.uid.domain;
-    else uid = mail.uid.account;
+    const uid = isInbox(targetMailbox) ? mail.uid.domain : mail.uid.account;
 
     if (result) {
-      if (selectedMailbox === appendRequest.mailbox) {
+      if (selectedMailbox === targetMailbox) {
         await onAppended();
       }
       const uidValidity = await getImapUidValidity(user.id);

@@ -20,7 +20,14 @@
 
 import { describe, it, expect } from "bun:test";
 import { isInbox } from "./util";
-import { selectMailbox, statusMailbox } from "./mailbox-ops";
+import {
+  selectMailbox,
+  statusMailbox,
+  matchesListPattern,
+  createMailbox,
+  deleteMailbox,
+  renameMailbox,
+} from "./mailbox-ops";
 import { Store } from "./store";
 import type { SignedUser } from "common";
 import type { SequenceState } from "./sequence-resolver";
@@ -199,3 +206,137 @@ describe("STATUS canonicalizes INBOX casing in response echo (#600)", () => {
     );
   });
 });
+
+describe("matchesListPattern is case-insensitive for INBOX target (#600 — review finding 2)", () => {
+  // LIST returns the canonical "INBOX" name in its output, but the pattern
+  // a client sends may be any casing of "inbox". RFC 3501 §5.1's
+  // case-insensitivity applies to the pattern→INBOX match in LIST/LSUB too.
+  // The flag-toggle is scoped to box==="INBOX" so every other mailbox
+  // name keeps strict case-sensitive matching.
+
+  it('matches lowercase pattern "inbox" against canonical "INBOX"', () => {
+    expect(matchesListPattern("", "inbox", "INBOX")).toBe(true);
+  });
+
+  it('matches mixed-case pattern "Inbox" against canonical "INBOX"', () => {
+    expect(matchesListPattern("", "Inbox", "INBOX")).toBe(true);
+  });
+
+  it('matches canonical "INBOX" pattern against "INBOX" (regression)', () => {
+    expect(matchesListPattern("", "INBOX", "INBOX")).toBe(true);
+  });
+
+  it('does NOT match "inbox" pattern against a non-INBOX mailbox', () => {
+    expect(matchesListPattern("", "inbox", "Archive")).toBe(false);
+    expect(matchesListPattern("", "inbox", "Sent Messages")).toBe(false);
+  });
+
+  it('non-INBOX names stay case-sensitive — "archive" pattern does NOT match "Archive" mailbox', () => {
+    // Wildcards in the pattern would change this — `*` and `%` always match
+    // any case — but a literal pattern stays case-sensitive for every
+    // mailbox name other than INBOX. (Archive lowercased would have to be
+    // its own LIST entry to be matchable.)
+    expect(matchesListPattern("", "archive", "Archive")).toBe(false);
+  });
+
+  it("wildcard patterns work as before — `*` matches everything", () => {
+    expect(matchesListPattern("", "*", "INBOX")).toBe(true);
+    expect(matchesListPattern("", "*", "Archive")).toBe(true);
+    expect(matchesListPattern("", "*", "Sent Messages")).toBe(true);
+  });
+});
+
+describe("CREATE / DELETE / RENAME reject INBOX (#600 — review finding 3)", () => {
+  // INBOX always exists as a synthetic mailbox. CREATE / DELETE / RENAME
+  // against any casing of "inbox" must short-circuit at the IMAP layer
+  // rather than fall through to the DB (where a `createMailbox` call would
+  // INSERT a phantom row that the LIST de-dup logic later hides). RFC
+  // refs in the inline comments at the call sites.
+
+  const makeStore = (): Store => {
+    const store = new Store({ id: "u1", username: "admin" } as SignedUser);
+    // Patch out getUser/listMailboxes so the no-op stubs are never called
+    // (we expect the INBOX guard to fire BEFORE any DB work happens).
+    return store;
+  };
+
+  it("CREATE inbox returns NO [ALREADYEXISTS] (every casing)", async () => {
+    for (const name of ["INBOX", "inbox", "Inbox", "iNbOx"]) {
+      const lines: string[] = [];
+      await createMailbox(
+        "A1",
+        name,
+        makeStore(),
+        (data: string) => {
+          lines.push(data);
+          return true;
+        }
+      );
+      expect(lines).toEqual([
+        "A1 NO [ALREADYEXISTS] Mailbox already exists\r\n",
+      ]);
+    }
+  });
+
+  it("DELETE inbox returns NO [CANNOT] (every casing)", async () => {
+    for (const name of ["INBOX", "inbox", "Inbox"]) {
+      const lines: string[] = [];
+      await deleteMailbox(
+        "A1",
+        name,
+        makeStore(),
+        (data: string) => {
+          lines.push(data);
+          return true;
+        }
+      );
+      expect(lines).toEqual([
+        "A1 NO [CANNOT] Cannot delete INBOX\r\n",
+      ]);
+    }
+  });
+
+  it("RENAME inbox to NewName returns NO [CANNOT]", async () => {
+    const lines: string[] = [];
+    await renameMailbox(
+      "A1",
+      "inbox",
+      "NewName",
+      makeStore(),
+      (data: string) => {
+        lines.push(data);
+        return true;
+      }
+    );
+    expect(lines).toEqual([
+      "A1 NO [CANNOT] RENAME INBOX is not supported\r\n",
+    ]);
+  });
+
+  it("RENAME Archive to inbox returns NO [ALREADYEXISTS]", async () => {
+    const lines: string[] = [];
+    await renameMailbox(
+      "A1",
+      "Archive",
+      "Inbox",
+      makeStore(),
+      (data: string) => {
+        lines.push(data);
+        return true;
+      }
+    );
+    expect(lines).toEqual([
+      "A1 NO [ALREADYEXISTS] Target mailbox already exists\r\n",
+    ]);
+  });
+});
+
+// HIGH review finding 1 (APPEND `selectedMailbox === appendRequest.mailbox`
+// comparison) is addressed at the source level in `message-ops.ts:appendMessage`:
+// `appendRequest.mailbox` is canonicalized to "INBOX" (when isInbox) at the top
+// of the function and the rest of the body uses the canonical name. An
+// integration test that asserts the `onAppended` callback fires for an
+// APPEND with a casing mismatch needs a FakePool fixture (getDomainUidNext /
+// getAccountUidNext / getImapUidValidity are imported directly, not on the
+// store), and isn't worth the wiring cost here when the source-level audit
+// already shows no remaining `=== "INBOX"` literal in message-ops.ts.
