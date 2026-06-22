@@ -19,6 +19,7 @@ import {
   SearchRequest,
   StoreRequest,
   CopyRequest,
+  MoveRequest,
   AppendRequest,
 } from "./types";
 import {
@@ -590,6 +591,236 @@ export async function copyMessageTyped(
   } catch (error) {
     logger.error("COPY error", { component: "imap" }, error);
     write(`${tag} NO COPY failed\r\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MOVE (RFC 6851)
+// ---------------------------------------------------------------------------
+
+/**
+ * RFC 6851 MOVE: atomic COPY + EXPUNGE. Wire shape mirrors COPY; the
+ * difference is the source rows disappear after the move succeeds.
+ *
+ * Response sequence (RFC 6851 §3.2):
+ *   * <seq> EXPUNGE                (one per moved message; high→low)
+ *   <tag> OK [COPYUID <validity> <src> <dst>] MOVE completed
+ *
+ * Atomicity: same caveat as COPY — no transaction wrapper, so a mid-loop
+ * `storeMail` failure leaves stored copies in the destination AND the
+ * source intact (we abort before flipping \\Deleted). A mid-EXPUNGE
+ * failure leaves the copies in the destination AND the source flagged
+ * but unremoved. Both modes are client-recoverable (re-issue MOVE /
+ * EXPUNGE) and don't lose data.
+ *
+ * The per-mail clone uses the same fixed shape as COPY (post-#604
+ * round-2): fresh `messageId` to avoid the UNIQUE(user_id, message_id)
+ * conflict; `getDomainUidNext` / `getAccountUidNext` get `destIsSent`;
+ * `envelope_to` / `cc` / `bcc` are re-anchored for non-INBOX
+ * destinations so the copy doesn't re-surface in the source.
+ */
+export async function moveMessageTyped(
+  tag: string,
+  moveRequest: MoveRequest,
+  isUidCommand: boolean,
+  store: Store,
+  selectedMailbox: string,
+  mailboxReadOnly: boolean,
+  seqState: SequenceState,
+  write: (data: string) => boolean | undefined
+): Promise<void> {
+  if (mailboxReadOnly) {
+    write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
+    return;
+  }
+
+  try {
+    const destMailbox = isInbox(moveRequest.mailbox) ? "INBOX" : moveRequest.mailbox;
+
+    if (!(await store.mailboxExists(destMailbox))) {
+      write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+      return;
+    }
+
+    const isUidMove = moveRequest.sequenceSet.type === "uid" || isUidCommand;
+    const ranges = convertSequenceSet(moveRequest.sequenceSet);
+
+    const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
+    for (const { start, end } of ranges) {
+      if (isUidMove) {
+        uidRanges.push({ uidStart: start, uidEnd: end });
+      } else {
+        const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
+        if (!resolved) continue;
+        uidRanges.push({ uidStart: resolved.uidStart, uidEnd: resolved.uidEnd });
+      }
+    }
+
+    if (uidRanges.length === 0) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
+    const cloneFields = [
+      "subject",
+      "date",
+      "html",
+      "text",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "replyTo",
+      "envelopeFrom",
+      "envelopeTo",
+      "attachments",
+      "messageId",
+      "insight",
+      "flags",
+      "uid",
+    ];
+
+    const sourceMails: Array<Partial<MailType>> = [];
+    for (const { uidStart, uidEnd } of uidRanges) {
+      const batch = await store.getMessages(
+        selectedMailbox,
+        uidStart,
+        uidEnd,
+        cloneFields,
+        true
+      );
+      batch.forEach((mail) => sourceMails.push(mail));
+    }
+
+    if (sourceMails.length === 0) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
+    const user = store.getUser();
+    const destAccount = boxToAccount(user.username, destMailbox);
+    const destIsInbox = isInbox(destMailbox);
+    const destIsSent = isSentBox(destMailbox);
+    const sourceIsInbox = isInbox(selectedMailbox);
+    const srcUidOf = (mail: Partial<MailType>): number =>
+      sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+
+    const sourceUids: number[] = [];
+    const destUids: number[] = [];
+
+    const Mail = (await import("common")).Mail;
+    const getRandomId = (await import("common")).getRandomId;
+
+    // === COPY phase (mirrors copyMessageTyped's fixed shape) ===
+    for (const sourceMail of sourceMails) {
+      const newMail = new Mail({
+        subject: sourceMail.subject,
+        date: sourceMail.date,
+        html: sourceMail.html,
+        text: sourceMail.text,
+        from: sourceMail.from,
+        cc: sourceMail.cc,
+        bcc: sourceMail.bcc,
+        replyTo: sourceMail.replyTo,
+        envelopeFrom: sourceMail.envelopeFrom,
+        attachments: sourceMail.attachments,
+        // Fresh messageId — see copyMessageTyped for the UNIQUE(...) rationale.
+        messageId: getRandomId(),
+        insight: sourceMail.insight,
+        read: sourceMail.read,
+        saved: sourceMail.saved,
+        deleted: sourceMail.deleted,
+        draft: sourceMail.draft,
+        answered: sourceMail.answered,
+      });
+
+      if (destIsInbox) {
+        newMail.to = sourceMail.to;
+        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+      } else {
+        const destAddr = { address: destAccount, name: "" };
+        newMail.to = {
+          value: [destAddr],
+          text: sourceMail.to?.text || destAccount,
+        };
+        newMail.envelopeTo = [destAddr];
+        // Same fix as COPY (#604 round-2): preserve cc_text / bcc_text
+        // (the header render) but empty the routing JSONB.
+        newMail.cc = sourceMail.cc
+          ? { value: [], text: sourceMail.cc.text }
+          : undefined;
+        newMail.bcc = sourceMail.bcc
+          ? { value: [], text: sourceMail.bcc.text }
+          : undefined;
+      }
+      newMail.sent = destIsSent;
+
+      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
+      const newAccountUid = await getAccountUidNext(
+        user.id,
+        destAccount,
+        destIsSent
+      );
+      newMail.uid.domain = newDomainUid || 1;
+      newMail.uid.account = newAccountUid || 1;
+
+      const ok = await store.storeMail(newMail);
+      if (!ok) {
+        // Pre-deletion failure: copies already stored in the destination
+        // linger; the source is untouched. Client can re-issue MOVE.
+        write(`${tag} NO [SERVERBUG] MOVE partially failed during copy phase\r\n`);
+        return;
+      }
+
+      sourceUids.push(srcUidOf(sourceMail));
+      destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
+    }
+
+    // === DELETE + EXPUNGE phase (RFC 6851 §3.2) ===
+    // Mark every source UID as \\Deleted (per-UID range so we hit
+    // exactly the moved set), then expunge. RFC 3501 §6.4.3 accepts
+    // that EXPUNGE is mailbox-wide — any pre-existing \\Deleted-flagged
+    // messages in the source mailbox get expunged as a side effect; same
+    // shape as COPY+STORE+EXPUNGE on a real client.
+    for (const uid of sourceUids) {
+      await store.setFlags(
+        selectedMailbox,
+        uid,
+        uid,
+        ["\\Deleted"],
+        true,
+        "+FLAGS"
+      );
+    }
+
+    const expungedUids = await store.expunge(selectedMailbox);
+
+    // Map UIDs back to seq numbers; emit high→low so the client's
+    // own message-index updates don't cascade-shift mid-response.
+    const expungedSeqs: number[] = [];
+    for (const uid of expungedUids) {
+      const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
+      if (seq !== undefined) expungedSeqs.push(seq);
+    }
+    expungedSeqs.sort((a, b) => b - a);
+    for (const seq of expungedSeqs) {
+      write(`* ${seq} EXPUNGE\r\n`);
+    }
+
+    // Rebuild seqState so subsequent sequence-numbered commands operate
+    // on the post-expunge mapping. A stale seqState would surface as
+    // wrong FETCH results downstream.
+    await buildSequenceMapping(store, selectedMailbox, seqState);
+
+    const uidValidity = await getImapUidValidity(user.id);
+    const sourceSet = formatUidSet(sourceUids);
+    const destSet = formatUidSet(destUids);
+    write(
+      `${tag} OK [COPYUID ${uidValidity} ${sourceSet} ${destSet}] MOVE completed\r\n`
+    );
+  } catch (error) {
+    logger.error("MOVE error", { component: "imap" }, error);
+    write(`${tag} NO MOVE failed\r\n`);
   }
 }
 

@@ -29,6 +29,16 @@ export interface CopyRequest {
   mailbox: string;
 }
 
+/**
+ * RFC 6851 MOVE — wire-identical to COPY (sequence-set + target mailbox).
+ * Distinct type so the dispatch layer can route to `moveMessageTyped`
+ * without an extra command-name pivot.
+ */
+export interface MoveRequest {
+  sequenceSet: SequenceSet;
+  mailbox: string;
+}
+
 export interface AppendRequest {
   mailbox: string;
   flags?: string[];
@@ -447,6 +457,7 @@ export type ImapRequest =
   | { type: "FETCH"; data: FetchRequest }
   | { type: "STORE"; data: StoreRequest }
   | { type: "COPY"; data: CopyRequest }
+  | { type: "MOVE"; data: MoveRequest }
   | { type: "UID"; data: { command: string; request: ImapRequest } }
   | { type: "ID" }
   | { type: "DONE" }

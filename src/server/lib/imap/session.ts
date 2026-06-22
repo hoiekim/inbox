@@ -11,6 +11,7 @@ import {
   SearchRequest,
   StoreRequest,
   CopyRequest,
+  MoveRequest,
   AppendRequest,
   StatusItem,
 } from "./types";
@@ -36,6 +37,7 @@ import {
   searchTyped as searchOp,
   storeFlagsTyped as storeFlagsOp,
   copyMessageTyped as copyMessageOp,
+  moveMessageTyped as moveMessageOp,
   appendMessage as appendMessageOp,
   expunge as expungeOp,
 } from "./message-ops";
@@ -346,6 +348,26 @@ export class ImapSession {
       isUidCommand,
       this.store,
       this.selectedMailbox,
+      this.seqState,
+      this.write
+    );
+  };
+
+  moveMessageTyped = async (
+    tag: string,
+    moveRequest: MoveRequest,
+    isUidCommand: boolean = false
+  ) => {
+    if (!this.authenticated || !this.store || !this.selectedMailbox) {
+      return this.write(`${tag} NO Not authenticated or no mailbox selected.\r\n`);
+    }
+    return moveMessageOp(
+      tag,
+      moveRequest,
+      isUidCommand,
+      this.store,
+      this.selectedMailbox,
+      this.mailboxReadOnly,
       this.seqState,
       this.write
     );

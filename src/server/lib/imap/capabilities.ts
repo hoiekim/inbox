@@ -7,6 +7,7 @@ export const getCapabilities = (isTls = false) => {
     "ID",
     "ENABLE",
     "IDLE",
+    "MOVE",
     "AUTH=PLAIN"
   ];
 
