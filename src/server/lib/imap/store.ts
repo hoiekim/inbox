@@ -166,70 +166,88 @@ export class Store {
     return { accountName, isSent };
   }
 
+  /**
+   * Build the listable mailbox set; propagate backend errors. `listMailboxes`
+   * (below) wraps this in a fallback so the LIST command stays resilient,
+   * but the existence gate (`mailboxExists`) needs to distinguish "the user
+   * doesn't have this mailbox" from "I couldn't determine whether they do" —
+   * conflating the two turns a transient DB hiccup into a permanent-sounding
+   * `NO Mailbox does not exist` for the SELECT/STATUS/EXAMINE caller (#601).
+   */
+  private listMailboxesOrThrow = async (): Promise<string[]> => {
+    // Match HTTP /api/mails/accounts: filter by user's domain so we only
+    // expose addresses that belong to this server, not every external
+    // CC/BCC/recipient address found on stored mails.
+    const userDomain = getUserDomain(this.user.username);
+    const [receivedStats, sentStats, userMailboxes] = await Promise.all([
+      getAccountStats(this.user.id, false, userDomain),
+      getAccountStats(this.user.id, true, userDomain),
+      getMailboxesByUser(this.user.id),
+    ]);
+
+    const seen = new Set<string>();
+    const addMailbox = (name: string) => {
+      const trimmed = name.trim();
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        mailboxes.push(trimmed);
+      }
+    };
+
+    const mailboxes: string[] = [];
+    addMailbox("INBOX");
+
+    // Add Sent Messages (unified across all accounts) if any sent mail exists
+    if (sentStats.length > 0) {
+      addMailbox(SENT_MESSAGES_FOLDER);
+    }
+
+    // Add accounts/ parent folder if any received-mail accounts exist
+    if (receivedStats.length > 0) {
+      addMailbox(ACCOUNTS_FOLDER);
+    }
+
+    // Add received mail accounts under accounts/ (deduplicated)
+    receivedStats.forEach((stat) => {
+      if (stat.address) {
+        addMailbox(accountToBox(stat.address));
+      }
+    });
+
+    // Add Sent Messages/accounts/ parent folder if any per-account sent mail exists
+    if (sentStats.length > 0) {
+      addMailbox(SENT_MESSAGES_ACCOUNTS_FOLDER);
+    }
+
+    // Add per-account sent mailboxes under Sent Messages/accounts/ (deduplicated)
+    sentStats.forEach((stat) => {
+      if (stat.address) {
+        addMailbox(accountToSentBox(stat.address));
+      }
+    });
+
+    // Add user-created mailboxes (those without a special_use and no address tie-in)
+    const systemNames = new Set(mailboxes.map((m) => m.toLowerCase()));
+    userMailboxes
+      .filter((mb) => mb.special_use === null && mb.address === null)
+      .forEach((mb) => {
+        if (!systemNames.has(mb.name.toLowerCase())) {
+          mailboxes.push(mb.name);
+        }
+      });
+
+    return mailboxes;
+  };
+
+  /**
+   * LIST-facing version: on backend error, log + return a single `["INBOX"]`
+   * fallback so the LIST command can still respond. The fallback is fine for
+   * LIST (the client just sees a minimal view) but NOT fine for the existence
+   * gate — see `mailboxExists` below.
+   */
   listMailboxes = async (): Promise<string[]> => {
     try {
-      // Match HTTP /api/mails/accounts: filter by user's domain so we only
-      // expose addresses that belong to this server, not every external
-      // CC/BCC/recipient address found on stored mails.
-      const userDomain = getUserDomain(this.user.username);
-      const [receivedStats, sentStats, userMailboxes] = await Promise.all([
-        getAccountStats(this.user.id, false, userDomain),
-        getAccountStats(this.user.id, true, userDomain),
-        getMailboxesByUser(this.user.id),
-      ]);
-
-      const seen = new Set<string>();
-      const addMailbox = (name: string) => {
-        const trimmed = name.trim();
-        if (!seen.has(trimmed)) {
-          seen.add(trimmed);
-          mailboxes.push(trimmed);
-        }
-      };
-
-      const mailboxes: string[] = [];
-      addMailbox("INBOX");
-
-      // Add Sent Messages (unified across all accounts) if any sent mail exists
-      if (sentStats.length > 0) {
-        addMailbox(SENT_MESSAGES_FOLDER);
-      }
-
-      // Add accounts/ parent folder if any received-mail accounts exist
-      if (receivedStats.length > 0) {
-        addMailbox(ACCOUNTS_FOLDER);
-      }
-
-      // Add received mail accounts under accounts/ (deduplicated)
-      receivedStats.forEach((stat) => {
-        if (stat.address) {
-          addMailbox(accountToBox(stat.address));
-        }
-      });
-
-      // Add Sent Messages/accounts/ parent folder if any per-account sent mail exists
-      if (sentStats.length > 0) {
-        addMailbox(SENT_MESSAGES_ACCOUNTS_FOLDER);
-      }
-
-      // Add per-account sent mailboxes under Sent Messages/accounts/ (deduplicated)
-      sentStats.forEach((stat) => {
-        if (stat.address) {
-          addMailbox(accountToSentBox(stat.address));
-        }
-      });
-
-      // Add user-created mailboxes (those without a special_use and no address tie-in)
-      const systemNames = new Set(mailboxes.map((m) => m.toLowerCase()));
-      userMailboxes
-        .filter((mb) => mb.special_use === null && mb.address === null)
-        .forEach((mb) => {
-          if (!systemNames.has(mb.name.toLowerCase())) {
-            mailboxes.push(mb.name);
-          }
-        });
-
-      return mailboxes;
+      return await this.listMailboxesOrThrow();
     } catch (error) {
       logger.error("Error listing mailboxes", { component: "imap.store" }, error);
       return ["INBOX"];
@@ -244,10 +262,17 @@ export class Store {
    * zero-count aggregate for any unknown name — so SELECT/EXAMINE/STATUS must
    * gate on this to return a tagged NO for phantom mailboxes rather than
    * reporting them as valid-but-empty (RFC 3501 §6.3.1/2/10). See #595.
+   *
+   * Uses `listMailboxesOrThrow` (not the fallback `listMailboxes`) so a
+   * transient DB error propagates: the SELECT/STATUS handler's existing
+   * try-catch then writes `NO SELECT failed` / `NO STATUS failed` (a
+   * retry-friendly transient signal) instead of `NO Mailbox does not exist`
+   * (a permanent signal that makes the client treat the mailbox as deleted).
+   * See #601.
    */
   mailboxExists = async (box: string): Promise<boolean> => {
     if (isInbox(box)) return true;
-    const mailboxes = await this.listMailboxes();
+    const mailboxes = await this.listMailboxesOrThrow();
     return mailboxes.includes(box);
   };
 

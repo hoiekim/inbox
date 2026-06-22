@@ -131,18 +131,28 @@ describe("mailbox-existence validation (#595)", () => {
 
 describe("Store.mailboxExists (#595)", () => {
   // The constructor only stashes the user (no DB), so we can build a real
-  // Store and override its listMailboxes to exercise the real mailboxExists.
+  // Store and override its list methods to exercise the real mailboxExists.
+  // `mailboxExists` consults `listMailboxesOrThrow` (the throwing path —
+  // see #601) so transient backend errors propagate instead of getting
+  // swallowed into a false "does not exist." We patch both — the public
+  // `listMailboxes` (for any consumer reading it directly) and the private
+  // `listMailboxesOrThrow` (what `mailboxExists` actually calls).
   const makeStore = (boxes: string[]): Store => {
     const store = new Store({ id: "u1", username: "admin" } as SignedUser);
     store.listMailboxes = async () => boxes;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (store as any).listMailboxesOrThrow = async () => boxes;
     return store;
   };
 
   it("returns true for INBOX without consulting the list", async () => {
     const store = new Store({ id: "u1", username: "admin" } as SignedUser);
-    store.listMailboxes = async () => {
-      throw new Error("listMailboxes should not be called for INBOX");
+    const guard = async () => {
+      throw new Error("list path should not be called for INBOX");
     };
+    store.listMailboxes = guard;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (store as any).listMailboxesOrThrow = guard;
     expect(await store.mailboxExists("INBOX")).toBe(true);
   });
 
