@@ -268,6 +268,17 @@ export const isSentBox = (box: string): boolean => {
   return box === SENT_MESSAGES_FOLDER || box.startsWith(`${SENT_MESSAGES_ACCOUNTS_FOLDER}/`);
 };
 
+/**
+ * Returns true for the special INBOX mailbox name. RFC 3501 §5.1 mandates
+ * case-insensitive matching for INBOX only ("there is a special name INBOX
+ * … in a case-insensitive fashion"); all other mailbox names remain
+ * case-sensitive. Every `=== "INBOX"` check in the IMAP layer routes through
+ * this helper so the rule lives in one place.
+ */
+export const isInbox = (box: string): boolean => {
+  return box.toUpperCase() === "INBOX";
+};
+
 /** Returns true for the accounts/ parent folder itself (non-selectable). */
 export const isAccountsFolder = (box: string): boolean => {
   return box === ACCOUNTS_FOLDER;

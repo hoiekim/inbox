@@ -14,6 +14,7 @@ import {
   formatFlags,
   formatHeaders,
   formatInternalDate,
+  isInbox,
 } from "./util";
 import {
   applyPartialFetch,
@@ -313,7 +314,7 @@ export async function buildFetchResponsePart(
 ): Promise<FetchResponsePart | null> {
   switch (item.type) {
     case "UID": {
-      const isDomainInbox = selectedMailbox === "INBOX";
+      const isDomainInbox = isInbox(selectedMailbox);
       const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
       return { type: "simple", content: `UID ${uid}` };
     }

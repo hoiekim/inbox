@@ -25,6 +25,7 @@ import {
   accountToBox,
   accountToSentBox,
   boxToAccount,
+  isInbox,
   isSentBox,
   isAccountsFolder,
   isSentMessagesAccountsFolder,
@@ -157,7 +158,7 @@ export class Store {
    * the per-account address derived from the box name.
    */
   private resolveBox(box: string): { accountName: string | null; isSent: boolean } {
-    const isDomainInbox = box === "INBOX";
+    const isDomainInbox = isInbox(box);
     const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
     const isSent = isSentBox(box);
     const accountName =
@@ -245,7 +246,7 @@ export class Store {
    * reporting them as valid-but-empty (RFC 3501 §6.3.1/2/10). See #595.
    */
   mailboxExists = async (box: string): Promise<boolean> => {
-    if (box === "INBOX") return true;
+    if (isInbox(box)) return true;
     const mailboxes = await this.listMailboxes();
     return mailboxes.includes(box);
   };

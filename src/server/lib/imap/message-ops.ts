@@ -12,7 +12,7 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount } from "./util";
+import { boxToAccount, isInbox } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -156,7 +156,7 @@ async function _processFetchMessages(
   seqState: SequenceState,
   write: (data: string) => boolean | undefined
 ): Promise<void> {
-  const isDomainInbox = selectedMailbox === "INBOX";
+  const isDomainInbox = isInbox(selectedMailbox);
   const isUidFetch =
     fetchRequest.sequenceSet.type === "uid" || isUidCommand;
 
@@ -418,7 +418,7 @@ export async function appendMessage(
     const result = await store.storeMail(mail);
 
     let uid: number;
-    if (appendRequest.mailbox === "INBOX") uid = mail.uid.domain;
+    if (isInbox(appendRequest.mailbox)) uid = mail.uid.domain;
     else uid = mail.uid.account;
 
     if (result) {
