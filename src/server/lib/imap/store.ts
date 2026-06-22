@@ -235,6 +235,21 @@ export class Store {
     }
   };
 
+  /**
+   * Whether `box` names a mailbox that actually exists for this user. INBOX
+   * always exists; every other name must be a member of the listable set
+   * (the unified Sent folder, the accounts/ parents, per-account boxes, and
+   * user-created mailboxes). countMessages can't answer this — it returns a
+   * zero-count aggregate for any unknown name — so SELECT/EXAMINE/STATUS must
+   * gate on this to return a tagged NO for phantom mailboxes rather than
+   * reporting them as valid-but-empty (RFC 3501 §6.3.1/2/10). See #595.
+   */
+  mailboxExists = async (box: string): Promise<boolean> => {
+    if (box === "INBOX") return true;
+    const mailboxes = await this.listMailboxes();
+    return mailboxes.includes(box);
+  };
+
   countMessages = async (
     box: string
   ): Promise<{ total: number; unread: number; maxUid: number } | null> => {

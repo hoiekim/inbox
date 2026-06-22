@@ -181,6 +181,11 @@ export async function statusMailbox(
   write: (data: string) => boolean | undefined
 ): Promise<void> {
   try {
+    if (!(await store.mailboxExists(mailbox))) {
+      write(`${tag} NO Mailbox does not exist\r\n`);
+      return;
+    }
+
     const countResult = await store.countMessages(mailbox);
 
     if (countResult === null) {
@@ -365,6 +370,11 @@ export async function selectMailbox(
   }
 
   try {
+    if (!(await store.mailboxExists(cleanName))) {
+      write(`${tag} NO Mailbox does not exist\r\n`);
+      return;
+    }
+
     setSelected(cleanName, 0);
 
     await buildSequenceMapping(store, cleanName, seqState);
