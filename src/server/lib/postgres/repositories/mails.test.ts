@@ -285,6 +285,58 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
   });
 });
 
+describe("draft-exclusion invariant — user-facing read paths hide drafts (#611)", () => {
+  // A draft lives in the IMAP Drafts folder; the web client presents no Drafts
+  // view, so a draft must not surface in ANY user-facing read surface (folder
+  // lists, per-account counts, search results, push badge, spam list). The
+  // invariant is enforced query-side with `AND draft = FALSE`. getMailHeaders
+  // and getAccountStats already carried it; searchMails / getUnreadNotifications
+  // / getSpamMails dropped it (#611) so a draft showed in search but in no
+  // folder/count. These source-scan guards pin the filter on every path so they
+  // cannot re-drift independently. Source-text scanning (not a live query) is
+  // used here because module-mock interactions make pool.query mocking fragile
+  // in the full suite — same rationale as the getAccountStats guard above.
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+  });
+
+  const bodyOf = (name: string): string => {
+    const re = new RegExp(`export const ${name}[\\s\\S]*?\\n};`);
+    const m = mailsSource.match(re);
+    if (!m) throw new Error(`${name} not found in mails.ts`);
+    return m[0];
+  };
+
+  // Every user-facing read path that must hide drafts.
+  const draftHidingPaths = [
+    "getMailHeaders",
+    "getAccountStats",
+    "searchMails",
+    "getUnreadNotifications",
+    "getSpamMails",
+  ];
+
+  for (const name of draftHidingPaths) {
+    it(`${name} filters draft = FALSE`, () => {
+      expect(bodyOf(name)).toMatch(/draft = FALSE/);
+    });
+  }
+
+  it("searchMails keeps the draft filter alongside its existing expunged filter", () => {
+    // Guard against a regression that removes one filter while editing the other.
+    const body = bodyOf("searchMails");
+    expect(body).toMatch(/expunged = FALSE/);
+    expect(body).toMatch(/draft = FALSE/);
+  });
+});
+
 describe("buildCriterionClause — flag criteria use schema columns", () => {
   // Regression guard (originally on searchMailsByUid's inline switch, retargeted
   // here when #551 extracted the per-criterion logic into buildCriterionClause):
