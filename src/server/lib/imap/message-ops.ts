@@ -322,7 +322,10 @@ export async function storeFlagsTyped(
             if (mail.draft) currentFlags.push("\\Draft");
             if (mail.answered) currentFlags.push("\\Answered");
 
-            write(`* ${seq} FETCH (FLAGS (${currentFlags.join(" ")}))\r\n`);
+            const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
+            write(
+              `* ${seq} FETCH (${uidItem}FLAGS (${currentFlags.join(" ")}))\r\n`
+            );
           }
         }
       }
