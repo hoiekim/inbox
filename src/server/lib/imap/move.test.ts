@@ -10,21 +10,103 @@
  * source and the mailbox-wide EXPUNGE that the COPY+STORE+EXPUNGE
  * pattern would produce — the targeted expunge avoids both.
  *
- * Tests here focus on the MOVE-specific control flow: read-only
- * refusal, TRYCREATE, no-op range cases, MOVE-to-self short-circuit.
- * End-to-end "real source mails → COPYUID + targeted EXPUNGE
- * emission, and the INBOX-from-non-INBOX address-clearing invariant"
- * needs a FakePool fixture (same as COPY's it.todo).
+ * Two layers of coverage:
+ *   - Control flow (no DB): read-only refusal, TRYCREATE, no-op range
+ *     cases, MOVE-to-self short-circuit. Driven with a bare fake Store.
+ *   - End-to-end happy path: real source mails → COPYUID + targeted
+ *     EXPUNGE emission, fresh messageId, and the address-routing
+ *     invariants (non-INBOX dest re-anchors to the dest account; INBOX
+ *     dest from a non-INBOX source CLEARS routing so the moved copy
+ *     does not re-surface in the source account view). The copy phase
+ *     reaches `getDomainUidNext` / `getAccountUidNext` /
+ *     `getImapUidValidity` (imported from the `server` barrel, not on
+ *     the store), so we use the pg-FakePool pattern from
+ *     message-ops.test.ts: mock `pg` so postgres/client.ts's lazy pool
+ *     is a FakePool and run the REAL helpers against it. We mock `pg`
+ *     (NOT the `server` barrel) so those helpers keep their real
+ *     identities — stubbing the barrel would bleed across files via
+ *     Bun's process-global mock.module. `afterAll(restoreLeaves)` +
+ *     resetPool re-mocks pg back to real.
  */
 
-import { describe, it, expect } from "bun:test";
-import type { SignedUser } from "common";
-import { moveMessageTyped } from "./message-ops";
+import {
+  describe,
+  it,
+  expect,
+  mock,
+  beforeAll,
+  beforeEach,
+  afterAll,
+} from "bun:test";
+import { restoreLeaves } from "test-helpers";
+import type { MailType, SignedUser } from "common";
 import { Store } from "./store";
 import type { MoveRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
+const STORED_UIDVALIDITY = 1716512400;
+
 const VALID_USER: SignedUser = { id: "u1", username: "admin" } as SignedUser;
+
+// A full, schema-valid users row so usersTable.queryOne's `new UserModel(row)`
+// validates inside getImapUidValidity. imap_uid_validity is pre-set, so the
+// helper returns it directly without an update.
+const USER_ROW = {
+  user_id: "u1",
+  username: "admin",
+  password: null,
+  email: null,
+  expiry: null,
+  token: null,
+  updated: null,
+  is_deleted: null,
+  imap_uid_validity: STORED_UIDVALIDITY,
+};
+
+// getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails.
+// Hand back a monotonically-increasing value per call so each cloned mail gets
+// a distinct dest UID (domain then account, per the copy loop's call order).
+let uidCounter = 100;
+const mockQuery = mock(async (sql: string) => {
+  if (typeof sql === "string" && sql.includes("next_uid")) {
+    return { rows: [{ next_uid: String(uidCounter++) }], rowCount: 1 };
+  }
+  // usersTable.queryOne(...) for getImapUidValidity
+  return { rows: [USER_ROW], rowCount: 1 };
+});
+
+class FakePool {
+  query = mockQuery;
+  end = async () => {};
+  connect = async () => ({ query: mockQuery, release: () => {} });
+  on() {}
+}
+
+const pgMock = () => ({
+  Pool: FakePool,
+  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
+  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
+});
+
+mock.module("pg", pgMock);
+
+const { moveMessageTyped } = await import("./message-ops");
+const { resetPool } = await import("../postgres/client");
+
+beforeAll(() => {
+  mock.module("pg", pgMock);
+  resetPool();
+});
+
+afterAll(() => {
+  restoreLeaves();
+  resetPool();
+});
+
+beforeEach(() => {
+  mockQuery.mockClear();
+  uidCounter = 100;
+});
 
 const emptySeqState = (): SequenceState => ({
   seqToUid: [],
@@ -166,8 +248,164 @@ describe("MOVE to self short-circuit (RFC 6851 §3.4-§3.5, #453)", () => {
   });
 });
 
-describe("MOVE happy path (#453)", () => {
-  it.todo(
-    "moves source mails (fresh messageId, address routing cleared on non-INBOX dest AND on INBOX dest from a non-INBOX source), calls Store.expungeUids on the source set, emits COPYUID + targeted EXPUNGE (FakePool fixture needed)"
-  );
+// ---------------------------------------------------------------------------
+// End-to-end happy path (RFC 6851 §3.2-§3.3)
+// ---------------------------------------------------------------------------
+
+// Build a source mail with the routing fields the copy phase re-anchors.
+const sourceMail = (
+  uid: { domain: number; account: number },
+  overrides: Partial<MailType> = {}
+): Partial<MailType> => ({
+  subject: "hello",
+  date: "2026-06-23T00:00:00.000Z",
+  html: "<p>hi</p>",
+  text: "hi",
+  from: { value: [{ address: "sender@x.com", name: "S" }], text: "sender@x.com" },
+  to: { value: [{ address: "src@hoie.kim", name: "" }], text: "src@hoie.kim" },
+  cc: { value: [{ address: "ccd@x.com", name: "" }], text: "ccd@x.com" },
+  bcc: { value: [{ address: "bccd@x.com", name: "" }], text: "bccd@x.com" },
+  envelopeTo: [{ address: "src@hoie.kim", name: "" }],
+  messageId: `orig-${uid.domain}-${uid.account}`,
+  uid: uid as MailType["uid"],
+  ...overrides,
+});
+
+// A Store wired for the full copy+expunge flow: getMessages hands back the
+// source mails, storeMail records each clone, expungeUids records its arg set
+// and echoes it back (the repo soft-deletes exactly the passed UIDs), getAllUids
+// returns the post-expunge mailbox state for the seqState rebuild.
+const makeMoveStore = (
+  existsBoxes: string[],
+  mails: Array<Partial<MailType>>,
+  postExpungeUids: number[] = []
+) => {
+  const store = new Store(VALID_USER);
+  store.mailboxExists = async (box: string) =>
+    box === "INBOX" || existsBoxes.includes(box);
+  store.getMessages = async () => {
+    const map = new Map<number, Partial<MailType>>();
+    mails.forEach((m, i) => map.set(i, m));
+    return map as never;
+  };
+  const stored: Array<Partial<MailType>> = [];
+  store.storeMail = async (mail: never) => {
+    stored.push({ ...(mail as Partial<MailType>) });
+    return true as never;
+  };
+  let expungeArg: number[] = [];
+  store.expungeUids = async (_box: string, uids: number[]) => {
+    expungeArg = uids;
+    return uids; // repo soft-deletes exactly the passed set
+  };
+  store.getAllUids = async () => postExpungeUids;
+  return {
+    store,
+    stored,
+    getExpungeArg: () => expungeArg,
+  };
+};
+
+describe("MOVE happy path — INBOX → non-INBOX dest (#453, RFC 6851 §3.2-§3.3)", () => {
+  it("clones with fresh messageId, re-anchors routing to dest, targets the expunge, emits EXPUNGE high→low + COPYUID", async () => {
+    const mails = [
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 7, account: 60 }),
+    ];
+    const { store, stored, getExpungeArg } = makeMoveStore(["Archive"], mails);
+    const seqState: SequenceState = {
+      seqToUid: [5, 7],
+      uidToSeq: new Map([
+        [5, 1],
+        [7, 2],
+      ]),
+    };
+
+    const lines = await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store,
+      false,
+      "INBOX",
+      seqState
+    );
+
+    // Two clones stored, each with a fresh messageId (not the source's).
+    expect(stored.length).toBe(2);
+    expect(stored[0].messageId).not.toBe(mails[0].messageId);
+    expect(stored[1].messageId).not.toBe(mails[1].messageId);
+
+    // Non-INBOX dest: `to` / `envelopeTo` re-anchored to the dest
+    // account (a single recipient that is NOT the source address),
+    // display text preserved; cc/bcc routing cleared but their header
+    // text kept for FETCH BODY[HEADER].
+    expect(stored[0].to?.value?.length).toBe(1);
+    expect(stored[0].to?.value?.[0]?.name).toBe("");
+    expect(stored[0].to?.value?.[0]?.address).not.toBe("src@hoie.kim");
+    expect(stored[0].envelopeTo).toEqual(stored[0].to?.value);
+    expect(stored[0].to?.text).toBe("src@hoie.kim");
+    expect(stored[0].cc?.value).toEqual([]);
+    expect(stored[0].cc?.text).toBe("ccd@x.com");
+    expect(stored[0].bcc?.value).toEqual([]);
+    expect(stored[0].bcc?.text).toBe("bccd@x.com");
+
+    // RFC 6851 §3.3: the expunge targets exactly the moved source UIDs
+    // (INBOX source → domain UIDs), never the whole mailbox.
+    expect(getExpungeArg()).toEqual([5, 7]);
+
+    // EXPUNGE emitted high→low so client index shifts don't cascade.
+    const expungeLines = lines.filter((l) => l.includes("EXPUNGE"));
+    expect(expungeLines).toEqual(["* 2 EXPUNGE\r\n", "* 1 EXPUNGE\r\n"]);
+
+    // COPYUID: src set is the moved domain UIDs; dest set is the fresh
+    // account UIDs (counter: domain 100/account 101, domain 102/account 103).
+    const tagged = lines.find((l) => l.startsWith("A1 "));
+    expect(tagged).toBe(
+      `A1 OK [COPYUID ${STORED_UIDVALIDITY} 5,7 101,103] MOVE completed\r\n`
+    );
+  });
+});
+
+describe("MOVE happy path — non-INBOX source → INBOX dest (#453, address-clear invariant)", () => {
+  it("clears to/envelopeTo/cc/bcc routing so the moved copy does not re-surface in the source account view", async () => {
+    // Source is a per-account mailbox (Archive). The source row carries
+    // src@hoie.kim in to/envelope_to; if the INBOX clone preserved those,
+    // the jsonb account filter would re-match it in Archive after the
+    // original is expunged (reviewoie HIGH 3). The clone must clear them.
+    const mails = [sourceMail({ domain: 9, account: 90 })];
+    const { store, stored, getExpungeArg } = makeMoveStore(["Archive"], mails);
+    const seqState: SequenceState = {
+      seqToUid: [90],
+      uidToSeq: new Map([[90, 1]]),
+    };
+
+    const lines = await runMove(
+      moveReq("INBOX", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store,
+      false,
+      "Archive",
+      seqState
+    );
+
+    expect(stored.length).toBe(1);
+    // Routing value arrays cleared; only header text survives.
+    expect(stored[0].to?.value).toEqual([]);
+    expect(stored[0].to?.text).toBe("src@hoie.kim");
+    expect(stored[0].envelopeTo).toEqual([]);
+    expect(stored[0].cc?.value).toEqual([]);
+    expect(stored[0].bcc?.value).toEqual([]);
+
+    // Non-INBOX source → expunge keys on the ACCOUNT UID, not domain.
+    expect(getExpungeArg()).toEqual([90]);
+
+    // INBOX dest → dest UID is the fresh DOMAIN uid (counter starts 100).
+    const tagged = lines.find((l) => l.startsWith("A1 "));
+    expect(tagged).toBe(
+      `A1 OK [COPYUID ${STORED_UIDVALIDITY} 90 100] MOVE completed\r\n`
+    );
+    expect(lines.filter((l) => l.includes("EXPUNGE"))).toEqual([
+      "* 1 EXPUNGE\r\n",
+    ]);
+  });
 });
