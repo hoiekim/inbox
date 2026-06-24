@@ -10,6 +10,7 @@ import type { ApiResponse } from "../route";
 // ── Shared mocks for "server" barrel ─────────────────────────────────────────
 
 const mockGetMailHeaders = mock(async () => []);
+const mockGetMailHeadersDelta = mock(async () => ({ as_of: "", headers: [], expunged_ids: [] }));
 const mockGetAccounts = mock(async () => ({ received: [], sent: [] }));
 const mockGetMailBody = mock(async () => null as unknown);
 const mockDeleteMail = mock(async () => {});
@@ -37,6 +38,7 @@ class MockMailSendingError extends Error {}
 
 mock.module("server", () => ({
   getMailHeaders: mockGetMailHeaders,
+  getMailHeadersDelta: mockGetMailHeadersDelta,
   getAccounts: mockGetAccounts,
   getMailBody: mockGetMailBody,
   deleteMail: mockDeleteMail,
@@ -129,6 +131,7 @@ const noopStream = stream as unknown as import("../route").Stream<unknown>;
 describe("getHeadersRoute", () => {
   beforeEach(() => {
     mockGetMailHeaders.mockClear();
+    mockGetMailHeadersDelta.mockClear();
     mockAddressToUsername.mockClear();
   });
 
@@ -204,6 +207,69 @@ describe("getHeadersRoute", () => {
 
     const callArgs = mockGetMailHeaders.mock.calls[0];
     expect(callArgs[2]).toMatchObject({ sent: true, new: true, saved: false });
+  });
+
+  it("without ?since= falls back to the full-list path (backwards-compat)", async () => {
+    const { getHeadersRoute } = await import("./get-headers");
+
+    mockGetMailHeaders.mockResolvedValueOnce([{ id: "m1" }] as never);
+    mockAddressToUsername.mockReturnValueOnce("alice");
+
+    const req = makeReq({
+      method: "GET",
+      session: { user: makeUser("alice") },
+      params: { account: "alice@example.com" },
+      query: {},
+    });
+    const res = makeRes();
+
+    const result = await getHeadersRoute.callback(req, res, noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockGetMailHeaders).toHaveBeenCalledTimes(1);
+    expect(mockGetMailHeadersDelta).not.toHaveBeenCalled();
+  });
+
+  it("with a valid ?since= returns the delta shape via getMailHeadersDelta", async () => {
+    const { getHeadersRoute } = await import("./get-headers");
+
+    const delta = { as_of: "2024-02-01T00:00:00.000Z", headers: [{ id: "m9" }], expunged_ids: ["x"] };
+    mockGetMailHeadersDelta.mockResolvedValueOnce(delta as never);
+    mockAddressToUsername.mockReturnValueOnce("alice");
+
+    const since = "2024-01-01T00:00:00.000Z";
+    const req = makeReq({
+      method: "GET",
+      session: { user: makeUser("alice") },
+      params: { account: "alice@example.com" },
+      query: { since },
+    });
+    const res = makeRes();
+
+    const result = await getHeadersRoute.callback(req, res, noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect((result as ApiResponse<unknown>).body).toEqual(delta);
+    expect(mockGetMailHeaders).not.toHaveBeenCalled();
+    const callArgs = mockGetMailHeadersDelta.mock.calls[0];
+    expect(callArgs[3]).toBe(since);
+  });
+
+  it("rejects a malformed ?since= at the boundary instead of full-fetching or hitting SQL", async () => {
+    const { getHeadersRoute } = await import("./get-headers");
+
+    mockAddressToUsername.mockReturnValueOnce("alice");
+
+    const req = makeReq({
+      method: "GET",
+      session: { user: makeUser("alice") },
+      params: { account: "alice@example.com" },
+      query: { since: "not-a-date" },
+    });
+    const res = makeRes();
+
+    const result = await getHeadersRoute.callback(req, res, noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockGetMailHeadersDelta).not.toHaveBeenCalled();
+    expect(mockGetMailHeaders).not.toHaveBeenCalled();
   });
 });
 

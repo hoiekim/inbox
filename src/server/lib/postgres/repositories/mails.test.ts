@@ -334,11 +334,14 @@ describe("buildCriterionClause — flag criteria use schema columns", () => {
   });
 });
 
-describe("getMailHeaders — envelope_to in received-branch address condition", () => {
+describe("buildHeaderAddressCondition — envelope_to in received-branch address condition", () => {
   // Mails addressed via envelope_to (e.g. GitHub notification routing,
   // listserv sub-addressing) must appear in per-account mail lists, not
   // only in account-stats counts. The received-branch filter must include
-  // envelope_to alongside MIME to/cc/bcc.
+  // envelope_to alongside MIME to/cc/bcc. The condition is shared by the
+  // full-list (getMailHeaders) and delta (getMailHeadersDelta) paths via the
+  // extracted buildHeaderAddressCondition helper, so this guards the one
+  // source of truth.
   let mailsSource: string;
   let fnSource: string;
 
@@ -350,9 +353,9 @@ describe("getMailHeaders — envelope_to in received-branch address condition", 
       "utf8"
     );
     const fnMatch = mailsSource.match(
-      /export const getMailHeaders[\s\S]*?\n};/
+      /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("getMailHeaders not found in mails.ts");
+    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails.ts");
     fnSource = fnMatch[0];
   });
 
@@ -378,6 +381,71 @@ describe("getMailHeaders — envelope_to in received-branch address condition", 
     expect(sentSql).toContain("${FROM_ADDRESS}");
     expect(sentSql).not.toContain("envelope_to");
     expect(sentSql).not.toContain("envelope_from");
+  });
+});
+
+describe("getMailHeaders / getMailHeadersDelta — `?since=` delta path (#457)", () => {
+  // The delta path drives the IndexedDB cache: only rows changed since the
+  // client's cursor, plus tombstones for rows expunged in that window. These
+  // guard the SQL invariants that make the cursor safe — they can't be unit-
+  // checked without a DB, so we assert on the query source (the repo's
+  // established style for SQL-shape regressions).
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+  });
+
+  it("getMailHeaders filters on `updated >` when options.since is set", () => {
+    const fnMatch = mailsSource.match(/export const getMailHeaders[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("getMailHeaders not found");
+    const src = fnMatch[0];
+    // Guarded behind options.since so the full-list path is unaffected.
+    expect(src).toContain("options.since !== undefined");
+    expect(src).toContain("AND updated > $");
+  });
+
+  it("getMailHeadersDelta scans expunged rows for tombstones over the same window", () => {
+    const fnMatch = mailsSource.match(
+      /export const getMailHeadersDelta[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeadersDelta not found");
+    const src = fnMatch[0];
+    // Tombstone query: expunged rows in the same account, changed in-window.
+    expect(src).toContain("expunged = TRUE");
+    expect(src).toContain("AND updated > $3");
+    // Reuses the one address-condition source of truth, not a private copy.
+    expect(src).toContain("buildHeaderAddressCondition(options)");
+  });
+
+  it("getMailHeadersDelta reads as_of from the DB clock BEFORE the data queries", () => {
+    const fnMatch = mailsSource.match(
+      /export const getMailHeadersDelta[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeadersDelta not found");
+    const src = fnMatch[0];
+    // as_of must come from now() (same timeline as the `updated` column set by
+    // CURRENT_TIMESTAMP), not the app clock, or clock skew could skip rows.
+    const asOfIdx = src.indexOf("SELECT now() AS as_of");
+    const headersIdx = src.indexOf("getMailHeaders(");
+    expect(asOfIdx).toBeGreaterThanOrEqual(0);
+    expect(headersIdx).toBeGreaterThanOrEqual(0);
+    // Captured first → a safe lower bound (at-least-once on concurrent writes).
+    expect(asOfIdx).toBeLessThan(headersIdx);
+  });
+
+  it("getMailHeadersDelta echoes `since` as as_of on failure (cursor must not advance)", () => {
+    const fnMatch = mailsSource.match(
+      /export const getMailHeadersDelta[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeadersDelta not found");
+    const src = fnMatch[0];
+    expect(src).toMatch(/return\s*\{\s*as_of:\s*since/);
   });
 });
 
@@ -573,17 +641,17 @@ describe("getMailHeaders — saved query spans both folders (#568)", () => {
       "utf8"
     );
     const fnMatch = mailsSource.match(
-      /export const getMailHeaders[\s\S]*?\n};/
+      /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("getMailHeaders not found in mails.ts");
+    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails.ts");
     fnSource = fnMatch[0];
   });
 
   it("uses the union (sent OR received) condition when saved && !sent", () => {
     const exprMatch = fnSource.match(
-      /addressCondition\s*=\s*([\s\S]*?);/
+      /return\s+([\s\S]*?);/
     );
-    if (!exprMatch) throw new Error("addressCondition assignment not found");
+    if (!exprMatch) throw new Error("address-condition return expression not found");
     const expr = exprMatch[1];
     // The saved-and-not-sent branch is the union of both folder conditions.
     expect(expr).toContain("options.saved && !options.sent");
@@ -592,9 +660,9 @@ describe("getMailHeaders — saved query spans both folders (#568)", () => {
 
   it("falls back to the sent-only or received-only condition otherwise", () => {
     const exprMatch = fnSource.match(
-      /addressCondition\s*=\s*([\s\S]*?);/
+      /return\s+([\s\S]*?);/
     );
-    if (!exprMatch) throw new Error("addressCondition assignment not found");
+    if (!exprMatch) throw new Error("address-condition return expression not found");
     const expr = exprMatch[1];
     expect(expr).toContain("options.sent");
     // Non-union branches reuse the single-folder conditions verbatim.
