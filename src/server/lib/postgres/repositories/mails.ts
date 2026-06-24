@@ -350,22 +350,39 @@ export interface MailHeadersDeltaResult {
   expunged_ids: string[];
 }
 
+// Seconds the delta cursor lags real time. `as_of` is backed off by this
+// margin so a row mutated just before the read — the commit-latency window (a
+// txn whose CURRENT_TIMESTAMP precedes our now() but commits after our SELECT),
+// or one stamped under bounded app/DB clock skew — is re-sent on the NEXT call
+// rather than skipped forever. Re-sends are deduped client-side by mail_id, so
+// the cost is a small overlap, not duplicates. Must exceed expected commit
+// latency + clock skew (NTP keeps the latter well under a second).
+const DELTA_CURSOR_SAFETY_MARGIN_SECONDS = 2;
+
 // Delta variant of getMailHeaders for the IndexedDB cache (#457): returns only
 // rows changed since `since`, plus the ids of rows expunged within that window
 // so a cached client can apply an incremental update and evict stale entries
 // instead of refetching the whole folder.
 //
-// `as_of` is the DB clock read BEFORE the data queries, making it a safe lower
-// bound for the next call: any mutation committed at or before as_of is
-// reflected here, and a row mutated *during* the read simply has
-// `updated > as_of` and is re-sent on the next call (at-least-once — the client
-// dedups by mail_id). Reading as_of from the DB (not the app clock) keeps it on
-// the same timeline as the `updated` column, which is set by CURRENT_TIMESTAMP.
+// `as_of` is read from the DB clock BEFORE the data queries and backed off by
+// DELTA_CURSOR_SAFETY_MARGIN_SECONDS, making it a safe lower bound: every
+// mutation up to that instant is reflected here, and anything newer (or within
+// the margin) is re-sent next call (at-least-once — the client dedups by id).
+// Reading from the DB, not the app clock, keeps it on the same timeline as the
+// `updated` column (set by CURRENT_TIMESTAMP on the flag-update paths).
+// NOTE: the expunge path (expungeDeletedMails) currently stamps `updated` from
+// the *app* clock (`new Date()`); the safety margin absorbs the resulting skew,
+// but the rigorous fix is to move every `updated` write onto the DB clock —
+// tracked as a follow-up. Fully eliminating the concurrent-commit window would
+// further need an xid-snapshot cursor, beyond the approved Phase-1 timestamp
+// contract.
 //
-// The expunged scan reuses the request's address condition so the evicted ids
-// belong to the same folder view the client is updating; it omits `draft` and
-// `read`/`saved` sub-filters because eviction is by id and is harmless for ids
-// the client never cached.
+// Tombstones (`expunged_ids`) cover EXPUNGED rows only — the approved Phase-1
+// contract. In a filtered view (?new / ?saved) a row that LEAVES the filter
+// (marked read, un-starred) drops out of `headers` but is NOT reported as a
+// tombstone, so a client applying delta to a filtered view must full-revalidate
+// it. The default (inbox/sent) view is fully correct. Generalizing this to an
+// `evicted_ids` set is an open contract question for the Phase-2 client.
 export const getMailHeadersDelta = async (
   user_id: string,
   address: string,
@@ -376,7 +393,10 @@ export const getMailHeadersDelta = async (
     // The pool's TIMESTAMPTZ type parser (client.ts) already returns an ISO
     // string, the same representation the `updated` column carries — so this
     // value round-trips straight back as the next `?since=` cursor.
-    const asOfResult = await pool.query<{ as_of: string }>("SELECT now() AS as_of");
+    const asOfResult = await pool.query<{ as_of: string }>(
+      "SELECT now() - make_interval(secs => $1) AS as_of",
+      [DELTA_CURSOR_SAFETY_MARGIN_SECONDS]
+    );
     const as_of = asOfResult.rows[0].as_of;
 
     const addressJson = JSON.stringify([{ address }]);

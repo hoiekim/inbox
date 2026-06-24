@@ -423,7 +423,7 @@ describe("getMailHeaders / getMailHeadersDelta — `?since=` delta path (#457)",
     expect(src).toContain("buildHeaderAddressCondition(options)");
   });
 
-  it("getMailHeadersDelta reads as_of from the DB clock BEFORE the data queries", () => {
+  it("getMailHeadersDelta reads as_of from the DB clock (with safety margin) BEFORE the data queries", () => {
     const fnMatch = mailsSource.match(
       /export const getMailHeadersDelta[\s\S]*?\n};/
     );
@@ -431,12 +431,16 @@ describe("getMailHeaders / getMailHeadersDelta — `?since=` delta path (#457)",
     const src = fnMatch[0];
     // as_of must come from now() (same timeline as the `updated` column set by
     // CURRENT_TIMESTAMP), not the app clock, or clock skew could skip rows.
-    const asOfIdx = src.indexOf("SELECT now() AS as_of");
+    const asOfIdx = src.indexOf("now()");
     const headersIdx = src.indexOf("getMailHeaders(");
     expect(asOfIdx).toBeGreaterThanOrEqual(0);
     expect(headersIdx).toBeGreaterThanOrEqual(0);
     // Captured first → a safe lower bound (at-least-once on concurrent writes).
     expect(asOfIdx).toBeLessThan(headersIdx);
+    // Backed off by a safety margin so the commit-latency / skew window re-sends
+    // rather than skips.
+    expect(src).toContain("make_interval(secs => $1)");
+    expect(src).toContain("DELTA_CURSOR_SAFETY_MARGIN_SECONDS");
   });
 
   it("getMailHeadersDelta echoes `since` as as_of on failure (cursor must not advance)", () => {
