@@ -1,6 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App, callUser } from "client";
+import {
+  App,
+  callUser,
+  hydrateQueryCache,
+  setCacheUser,
+  startCachePersistence,
+} from "client";
 
 import "./index.scss";
 
@@ -42,6 +48,12 @@ const root = createRoot(document.getElementById("root") as HTMLElement);
 
 const mountApp = async () => {
   const user = await callUser();
+  // Seed React Query from the last session's IndexedDB cache before the first
+  // render so cached screens paint without waiting on the network (#457), then
+  // keep that cache fresh as new responses arrive.
+  setCacheUser(user?.id);
+  await hydrateQueryCache(user?.id);
+  startCachePersistence();
   root.render(
     <StrictMode>
       <App user={user} />
