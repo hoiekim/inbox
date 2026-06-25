@@ -3,6 +3,7 @@
  */
 
 import type { ImapSession } from "./session";
+import { isInbox } from "./util";
 import { logger } from "server";
 
 interface IdleSession {
@@ -78,7 +79,7 @@ export class IdleManager {
         const watching = idleSession.mailbox;
         // INBOX is the aggregate view showing every account's mail, so it is
         // always notified; other sessions only when watching a target mailbox.
-        if (watching !== "INBOX" && !mailboxSet.has(watching)) return;
+        if (!isInbox(watching) && !mailboxSet.has(watching)) return;
       }
       notifications.push({ sessionId, idleSession });
     });
