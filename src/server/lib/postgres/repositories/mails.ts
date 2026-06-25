@@ -576,6 +576,12 @@ const reserveNextUid = async (query: {
   return parseInt(result.rows[0]?.next_uid || "1", 10);
 };
 
+// The counter is now the authoritative UID source, so a reservation failure must
+// ABORT the save — never fall back to a fabricated UID. Returning 1 here (the old
+// behavior) would assign a value colliding with the mailbox's first message, the
+// exact duplicate-UID corruption this fix removes, now via the error path. Every
+// caller aborts cleanly on a throw: SMTP receive NACKs (sender retries), the send
+// route surfaces the error, and IMAP APPEND replies `NO` (client retries).
 export const getDomainUidNext = async (
   user_id: string,
   sent: boolean = false
@@ -584,7 +590,7 @@ export const getDomainUidNext = async (
     return await reserveNextUid(buildDomainUidQuery(user_id, sent));
   } catch (error) {
     logger.error("Error getting next UID", {}, error);
-    return 1;
+    throw error;
   }
 };
 
@@ -597,7 +603,7 @@ export const getAccountUidNext = async (
     return await reserveNextUid(buildAccountUidQuery(user_id, account, sent));
   } catch (error) {
     logger.error("Error getting account UID next", {}, error);
-    return 1;
+    throw error;
   }
 };
 
