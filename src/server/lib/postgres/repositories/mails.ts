@@ -352,10 +352,14 @@ export const searchMails = async (
           'StartSel=<em>, StopSel=</em>, MaxWords=50, MinWords=10') as subject_highlight,
         ts_headline('english', text, plainto_tsquery('english', $2), 
           'StartSel=<em>, StopSel=</em>, MaxWords=50, MinWords=10') as text_highlight
-      FROM mails 
-      WHERE user_id = $1 
+      FROM mails
+      WHERE user_id = $1
         AND search_vector @@ plainto_tsquery('english', $2)
         AND expunged = FALSE
+        -- Drafts belong to the IMAP Drafts folder, not the search results;
+        -- mirrors the draft filter on getMailHeaders / getAccountStats so a
+        -- draft never surfaces in a view (search) that no folder/count shows.
+        AND draft = FALSE
       ORDER BY rank DESC, date DESC
       LIMIT 1000
     `;
@@ -1045,8 +1049,11 @@ export const getUnreadNotifications = async (
         user_id,
         COUNT(*) FILTER (WHERE read = FALSE) as unread_count,
         MAX(date) as latest
-      FROM mails 
-      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE
+      FROM mails
+      -- draft = FALSE: a user's own unsent draft must not ring the new-mail
+      -- push badge. Mirrors getMailHeaders / getAccountStats so the badge count
+      -- matches the headers list view (drafts live in the Drafts folder).
+      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE AND draft = FALSE
       GROUP BY user_id
     `;
 
@@ -1223,8 +1230,10 @@ export const expungeDeletedMails = async (
 export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
   try {
     const sql = `
-      SELECT * FROM mails 
-      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE AND expunged = FALSE
+      SELECT * FROM mails
+      -- draft = FALSE mirrors the other user-facing read paths: a draft belongs
+      -- to the Drafts folder, never to the spam list, even if flagged is_spam.
+      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE AND expunged = FALSE AND draft = FALSE
       ORDER BY date DESC
     `;
     const result = await pool.query(sql, [user_id]);
