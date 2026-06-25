@@ -2,12 +2,16 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { Pagination, SignedUser, MaskedUser } from "common";
 
 const mockGetMailHeaders = mock(() => Promise.resolve([]));
+const mockGetMailHeadersDelta = mock(() =>
+  Promise.resolve({ as_of: "2024-01-02T00:00:00.000Z", headers: [], expunged_ids: [] })
+);
 
 mock.module("../postgres/repositories/mails", () => ({
   getMailHeaders: mockGetMailHeaders,
+  getMailHeadersDelta: mockGetMailHeadersDelta,
 }));
 
-import { getMailHeaders } from "./headers";
+import { getMailHeaders, getMailHeadersDelta } from "./headers";
 
 const makeUser = (overrides: Partial<SignedUser> = {}) => new SignedUser({
   id: "user-123",
@@ -209,5 +213,79 @@ describe("getMailHeaders", () => {
     expect(results).toHaveLength(2);
     expect(results[0].id).toBe("m1");
     expect(results[1].id).toBe("m2");
+  });
+});
+
+describe("getMailHeadersDelta", () => {
+  const since = "2024-01-01T00:00:00.000Z";
+
+  beforeEach(() => {
+    mockGetMailHeadersDelta.mockClear();
+    mockGetMailHeadersDelta.mockResolvedValue({
+      as_of: "2024-01-02T00:00:00.000Z",
+      headers: [],
+      expunged_ids: [],
+    });
+  });
+
+  it("returns an empty delta that echoes `since` when user has no id", async () => {
+    const user = { username: "noId" };
+    const result = await getMailHeadersDelta(user, "inbox@example.com", defaultOptions, since);
+    // as_of must NOT advance past `since`, or the client would skip unseen rows.
+    expect(result).toEqual({ as_of: since, headers: [], expunged_ids: [] });
+    expect(mockGetMailHeadersDelta).not.toHaveBeenCalled();
+  });
+
+  it("passes since + folder options to the repository (and never paginates)", async () => {
+    const user = makeUser();
+    await getMailHeadersDelta(
+      user,
+      "inbox@example.com",
+      { ...defaultOptions, sent: true },
+      since
+    );
+    const callArgs = mockGetMailHeadersDelta.mock.calls[0];
+    expect(callArgs[0]).toBe("user-123");
+    expect(callArgs[1]).toBe("inbox@example.com");
+    expect(callArgs[2]).toMatchObject({ sent: true, new: false, saved: false });
+    // Delta returns the full changed set, so it must NOT carry pagination.
+    expect(callArgs[2]).not.toHaveProperty("from");
+    expect(callArgs[2]).not.toHaveProperty("size");
+    expect(callArgs[3]).toBe(since);
+  });
+
+  it("maps repository header rows to MailHeaderData and passes through as_of + expunged_ids", async () => {
+    mockGetMailHeadersDelta.mockResolvedValue({
+      as_of: "2024-01-03T12:00:00.000Z",
+      headers: [
+        {
+          mail_id: "mail-delta",
+          subject: "Changed",
+          date: "2024-01-03T10:00:00Z",
+          from_address: [{ address: "s@example.com" }],
+          from_text: "s@example.com",
+          to_address: null,
+          to_text: null,
+          cc_address: null,
+          cc_text: null,
+          bcc_address: null,
+          bcc_text: null,
+          read: false,
+          saved: false,
+          sent: false,
+          insight: null,
+        },
+      ],
+      expunged_ids: ["gone-1", "gone-2"],
+    });
+
+    const user = makeUser();
+    const result = await getMailHeadersDelta(user, "inbox@example.com", defaultOptions, since);
+    expect(result.as_of).toBe("2024-01-03T12:00:00.000Z");
+    expect(result.expunged_ids).toEqual(["gone-1", "gone-2"]);
+    expect(result.headers).toHaveLength(1);
+    expect(result.headers[0].id).toBe("mail-delta");
+    expect(result.headers[0].subject).toBe("Changed");
+    expect(result.headers[0].from).toBeDefined();
   });
 });

@@ -251,7 +251,39 @@ export interface GetMailHeadersOptions {
   saved: boolean;
   from?: number;
   size?: number;
+  // ISO timestamp; when set, restrict to rows whose `updated` is newer than
+  // this. Used by the IndexedDB-cache delta path (#457) to fetch only the
+  // rows a cached client hasn't seen.
+  since?: string;
 }
+
+// Builds the address-match SQL fragment for a per-account header query, bound
+// to `$2` = the address-as-jsonb param. Shared by the full-list and the delta
+// (getMailHeadersDelta) paths so the sent/received/saved address semantics
+// can't drift between them.
+//   - sent: match from_address only.
+//   - received: match to_address, cc_address, bcc_address AND envelope_to.
+//     `envelope_to` is the SMTP-level delivery address that can differ from
+//     MIME to/cc/bcc under listserv-style routing (e.g. GitHub notifications:
+//     MIME `to` = list address, envelope_to = the actual recipient
+//     sub-address). Mirrors the received-branch expansion in `getAccountStats`
+//     (PR #525) so an account row surfaced by envelope_to still resolves to
+//     its mails when the user clicks through.
+//   - saved (no explicit folder): a starred mail can be sent or received, so
+//     the Saved view must span both branches. Without this, a starred *sent*
+//     mail is unreachable from the Saved view — its account address only
+//     matches from_address, never the received condition (#568).
+export const buildHeaderAddressCondition = (
+  options: Pick<GetMailHeadersOptions, "sent" | "saved">
+): string => {
+  const sentCondition = `${FROM_ADDRESS} @> $2::jsonb`;
+  const receivedCondition = `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
+  return options.saved && !options.sent
+    ? `(${sentCondition} OR ${receivedCondition})`
+    : options.sent
+    ? sentCondition
+    : receivedCondition;
+};
 
 export const getMailHeaders = async (
   user_id: string,
@@ -260,29 +292,7 @@ export const getMailHeaders = async (
 ): Promise<MailHeaderResult[]> => {
   try {
     const addressJson = JSON.stringify([{ address }]);
-    // Detect sent/received by address matching, not the `sent` flag.
-    // For sent mails, check from_address only.
-    // For received mails, check to_address, cc_address, bcc_address AND
-    // envelope_to. `envelope_to` is the SMTP-level delivery address that
-    // can differ from MIME to/cc/bcc when a sender uses listserv-style
-    // routing (e.g. GitHub notifications: MIME `to` = list address,
-    // envelope_to = the actual recipient sub-address). Mirrors the
-    // received-branch address expansion in `getAccountStats` (PR #525)
-    // so that an account row surfaced by envelope_to still resolves to
-    // its mails when the user clicks through.
-    const sentCondition = `${FROM_ADDRESS} @> $2::jsonb`;
-    const receivedCondition = `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
-    // The Saved view is a flat starred collection per account: a starred
-    // mail can be either sent or received, so a saved query with no explicit
-    // folder must span both branches. Without this, a starred *sent* mail is
-    // unreachable from the Saved view — the account address only matches
-    // from_address, never the received to/cc/bcc condition (#568).
-    const addressCondition =
-      options.saved && !options.sent
-        ? `(${sentCondition} OR ${receivedCondition})`
-        : options.sent
-        ? sentCondition
-        : receivedCondition;
+    const addressCondition = buildHeaderAddressCondition(options);
     // Select only columns needed for mail headers — excludes html/text/attachments
     // to avoid loading full email bodies into memory for every concurrent request.
     const headerColumns = [
@@ -309,6 +319,11 @@ export const getMailHeaders = async (
       sql += ` AND saved = TRUE`;
     }
 
+    if (options.since !== undefined) {
+      sql += ` AND updated > $${paramIdx++}`;
+      values.push(options.since);
+    }
+
     sql += ` ORDER BY date DESC`;
 
     if (options.size !== undefined) {
@@ -326,6 +341,96 @@ export const getMailHeaders = async (
   } catch (error) {
     logger.error("Failed to get mail headers", {}, error);
     return [];
+  }
+};
+
+export interface MailHeadersDeltaResult {
+  as_of: string;
+  headers: MailHeaderResult[];
+  expunged_ids: string[];
+}
+
+// Seconds the delta cursor lags real time. `as_of` is backed off by this
+// margin so a row mutated just before the read — the commit-latency window (a
+// txn whose CURRENT_TIMESTAMP precedes our now() but commits after our SELECT),
+// or one stamped under bounded app/DB clock skew — is re-sent on the NEXT call
+// rather than skipped forever. Re-sends are deduped client-side by mail_id, so
+// the cost is a small overlap, not duplicates. Must exceed expected commit
+// latency + clock skew (NTP keeps the latter well under a second).
+const DELTA_CURSOR_SAFETY_MARGIN_SECONDS = 2;
+
+// Delta variant of getMailHeaders for the IndexedDB cache (#457): returns only
+// rows changed since `since`, plus the ids of rows expunged within that window
+// so a cached client can apply an incremental update and evict stale entries
+// instead of refetching the whole folder.
+//
+// `as_of` is read from the DB clock BEFORE the data queries and backed off by
+// DELTA_CURSOR_SAFETY_MARGIN_SECONDS, making it a safe lower bound: every
+// mutation up to that instant is reflected here, and anything newer (or within
+// the margin) is re-sent next call (at-least-once — the client dedups by id).
+// Reading from the DB, not the app clock, keeps it on the same timeline as the
+// `updated` column (set by CURRENT_TIMESTAMP on the flag-update paths).
+// NOTE: the expunge path (expungeDeletedMails) currently stamps `updated` from
+// the *app* clock (`new Date()`); the safety margin absorbs the resulting skew,
+// but the rigorous fix is to move every `updated` write onto the DB clock —
+// tracked as a follow-up. Fully eliminating the concurrent-commit window would
+// further need an xid-snapshot cursor, beyond the approved Phase-1 timestamp
+// contract.
+//
+// Tombstones (`expunged_ids`) cover EXPUNGED rows only — the approved Phase-1
+// contract. In a filtered view (?new / ?saved) a row that LEAVES the filter
+// (marked read, un-starred) drops out of `headers` but is NOT reported as a
+// tombstone, so a client applying delta to a filtered view must full-revalidate
+// it. The default (inbox/sent) view is fully correct. Generalizing this to an
+// `evicted_ids` set is an open contract question for the Phase-2 client.
+export const getMailHeadersDelta = async (
+  user_id: string,
+  address: string,
+  options: GetMailHeadersOptions,
+  since: string
+): Promise<MailHeadersDeltaResult> => {
+  try {
+    // The pool's TIMESTAMPTZ type parser (client.ts) already returns an ISO
+    // string, the same representation the `updated` column carries — so this
+    // value round-trips straight back as the next `?since=` cursor.
+    const asOfResult = await pool.query<{ as_of: string }>(
+      "SELECT now() - make_interval(secs => $1) AS as_of",
+      [DELTA_CURSOR_SAFETY_MARGIN_SECONDS]
+    );
+    const as_of = asOfResult.rows[0].as_of;
+
+    const addressJson = JSON.stringify([{ address }]);
+    const addressCondition = buildHeaderAddressCondition(options);
+    const expungedSql = `
+      SELECT ${MAIL_ID} FROM mails
+      WHERE user_id = $1
+        AND ${addressCondition}
+        AND expunged = TRUE
+        AND updated > $3
+    `;
+
+    const [headers, expungedResult] = await Promise.all([
+      // Delta never paginates — the changed set is small and the client needs
+      // every changed row, so from/size are deliberately omitted.
+      getMailHeaders(user_id, address, {
+        sent: options.sent,
+        new: options.new,
+        saved: options.saved,
+        since,
+      }),
+      pool.query<{ mail_id: string }>(expungedSql, [user_id, addressJson, since]),
+    ]);
+
+    return {
+      as_of,
+      headers,
+      expunged_ids: expungedResult.rows.map((r) => r.mail_id),
+    };
+  } catch (error) {
+    logger.error("Failed to get mail headers delta", {}, error);
+    // Echo `since` back as as_of so a failed call doesn't advance the client's
+    // cursor past unseen mutations.
+    return { as_of: since, headers: [], expunged_ids: [] };
   }
 };
 

@@ -16,6 +16,7 @@ export { push } from "./push";
 // Mails module (uses postgres internally)
 export {
   getMailHeaders,
+  getMailHeadersDelta,
   getMailBody,
   searchMail,
   markRead,
@@ -42,7 +43,7 @@ export {
   getSpamHeaders,
   markSpam,
 } from "./mails";
-export type { AccountsGetResponse, GetMailsOptions, ValidationResult, SaveMailHandlerOptions } from "./mails";
+export type { AccountsGetResponse, GetMailsOptions, MailHeadersDelta, ValidationResult, SaveMailHandlerOptions } from "./mails";
 
 // Spam filter
 export * from "./spam";
