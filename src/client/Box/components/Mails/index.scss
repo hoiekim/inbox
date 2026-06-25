@@ -61,6 +61,16 @@
     }
   }
 
+  .mailBodyActions {
+    margin-bottom: 0.4rem;
+
+    .openInNewTab {
+      font-size: 14px;
+      padding: 0.3rem 0.6rem;
+      cursor: pointer;
+    }
+  }
+
   .mailcard {
     position: relative;
 
