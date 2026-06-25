@@ -27,6 +27,10 @@ import {
   ENVELOPE_TO,
   DELETED,
   EXPUNGED,
+  MAIL_UID_COUNTERS,
+  UID_KIND,
+  UID_SCOPE,
+  LAST_UID,
 } from "../models";
 
 /**
@@ -494,17 +498,90 @@ export const searchMails = async (
   }
 };
 
+/**
+ * Build the atomic UID-reservation upsert.
+ *
+ * The counter row in `mail_uid_counters` holds the most recently assigned UID.
+ * The INSERT seeds it once from the current `MAX(uid)` in `mails` (via `seedSql`,
+ * which reuses $1=user_id and $4=sent), so a deployment with existing mail keeps
+ * its sequence continuous — no UID renumbering, no UIDVALIDITY churn. Every call
+ * after the first conflicts on the composite key and takes the row lock through
+ * `DO UPDATE`, returning a strictly larger value.
+ *
+ * This is what closes the receive-path race (#617): a bare `MAX(uid)+1` read in
+ * `convertMail` followed by a later INSERT is a TOCTOU — two concurrent receipts
+ * read the same max and write the same UID. Funneling assignment through this
+ * single atomic statement removes the window for every write path (receive, send,
+ * IMAP APPEND), since they all assign through the two functions below.
+ *
+ * Pure (no DB) so the SQL shape is unit-testable without intercepting the pool.
+ * `seedParams` supply any extra placeholders `seedSql` references ($5…).
+ */
+const buildReserveUidQuery = (
+  user_id: string,
+  kind: string,
+  scope: string,
+  sent: boolean,
+  seedSql: string,
+  seedParams: ParamValue[]
+): { sql: string; values: ParamValue[] } => {
+  const sql = `
+    INSERT INTO ${MAIL_UID_COUNTERS} (${USER_ID}, ${UID_KIND}, ${UID_SCOPE}, ${SENT}, ${LAST_UID})
+    VALUES ($1, $2, $3, $4, (${seedSql}))
+    ON CONFLICT (${USER_ID}, ${UID_KIND}, ${UID_SCOPE}, ${SENT})
+    DO UPDATE SET ${LAST_UID} = ${MAIL_UID_COUNTERS}.${LAST_UID} + 1
+    RETURNING ${LAST_UID} AS next_uid
+  `;
+  return { sql, values: [user_id, kind, scope, sent, ...seedParams] };
+};
+
+/** Domain-wide UID-reservation query (kind="domain", no scope). */
+export const buildDomainUidQuery = (
+  user_id: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const seedSql = `
+      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
+      WHERE user_id = $1 AND sent = $4
+    `;
+  return buildReserveUidQuery(user_id, "domain", "", sent, seedSql, []);
+};
+
+/** Per-account UID-reservation query (kind="account", scope=address). */
+export const buildAccountUidQuery = (
+  user_id: string,
+  account: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const addressJson = JSON.stringify([{ address: account }]);
+  const addressCondition = sent
+    ? `${FROM_ADDRESS} @> $5::jsonb`
+    : `(${TO_ADDRESS} @> $5::jsonb OR cc_address @> $5::jsonb OR bcc_address @> $5::jsonb OR envelope_to @> $5::jsonb)`;
+  const seedSql = `
+      SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 FROM mails
+      WHERE user_id = $1
+        AND ${addressCondition}
+        AND sent = $4
+    `;
+  return buildReserveUidQuery(user_id, "account", account, sent, seedSql, [
+    addressJson,
+  ]);
+};
+
+const reserveNextUid = async (query: {
+  sql: string;
+  values: ParamValue[];
+}): Promise<number> => {
+  const result = await pool.query(query.sql, query.values);
+  return parseInt(result.rows[0]?.next_uid || "1", 10);
+};
+
 export const getDomainUidNext = async (
   user_id: string,
   sent: boolean = false
 ): Promise<number> => {
   try {
-    const sql = `
-      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 AS next_uid FROM mails
-      WHERE user_id = $1 AND sent = $2
-    `;
-    const result = await pool.query(sql, [user_id, sent]);
-    return parseInt(result.rows[0]?.next_uid || "1", 10);
+    return await reserveNextUid(buildDomainUidQuery(user_id, sent));
   } catch (error) {
     logger.error("Error getting next UID", {}, error);
     return 1;
@@ -517,18 +594,7 @@ export const getAccountUidNext = async (
   sent: boolean = false
 ): Promise<number> => {
   try {
-    const addressJson = JSON.stringify([{ address: account }]);
-    const addressCondition = sent
-      ? `${FROM_ADDRESS} @> $2::jsonb`
-      : `(${TO_ADDRESS} @> $2::jsonb OR cc_address @> $2::jsonb OR bcc_address @> $2::jsonb OR envelope_to @> $2::jsonb)`;
-    const sql = `
-      SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 AS next_uid FROM mails
-      WHERE user_id = $1
-        AND ${addressCondition}
-        AND sent = $3
-    `;
-    const result = await pool.query(sql, [user_id, addressJson, sent]);
-    return parseInt(result.rows[0]?.next_uid || "1", 10);
+    return await reserveNextUid(buildAccountUidQuery(user_id, account, sent));
   } catch (error) {
     logger.error("Error getting account UID next", {}, error);
     return 1;
