@@ -1329,6 +1329,74 @@ export const expungeDeletedMails = async (
 };
 
 /**
+ * Soft-delete a specific set of UIDs in one mailbox (account / sent /
+ * domain), regardless of their `\Deleted` flag. The MOVE command needs
+ * this — RFC 6851 §3.3 forbids the COPY+STORE(\Deleted)+EXPUNGE pattern
+ * the prior implementation used (it caused mailbox-wide collateral
+ * EXPUNGE of pre-existing \Deleted-flagged mails). Returns the UIDs
+ * actually flipped, in case any were already expunged concurrently.
+ */
+export const expungeMailsByUid = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean,
+  uids: number[]
+): Promise<number[]> => {
+  if (uids.length === 0) return [];
+  try {
+    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
+
+    if (account === null) {
+      // Domain-wide: simple equality on user_id+sent + IN(uids).
+      const rows = await mailsTable.updateWhere(
+        {
+          [USER_ID]: user_id,
+          [SENT]: sent,
+          [EXPUNGED]: false,
+          [uidField]: { op: "IN", value: uids },
+        },
+        { [EXPUNGED]: true, updated: new Date() },
+        [`${uidField} as uid`]
+      );
+      return rows.map((row: Record<string, unknown>) => row.uid as number);
+    }
+
+    // Account-specific: mirror `expungeDeletedMails`'s two-step pattern.
+    // SELECT mail_ids via the address-OR predicate + UID IN, then UPDATE
+    // by mail_id IN so the data-bag pattern bumps `updated`.
+    const addressJson = JSON.stringify([{ address: account }]);
+    const addressCondition = sent
+      ? `${FROM_ADDRESS} @> $3::jsonb`
+      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+    const uidPlaceholders = uids.map((_, i) => `$${i + 4}`).join(",");
+    const selectSql = `
+      SELECT ${MAIL_ID} as mail_id FROM mails
+      WHERE user_id = $1
+        AND sent = $2
+        AND ${addressCondition}
+        AND ${uidField} IN (${uidPlaceholders})
+        AND expunged = FALSE
+    `;
+    const selectValues: ParamValue[] = [user_id, sent, addressJson, ...uids];
+    const selectResult = await pool.query(selectSql, selectValues);
+    const mailIds = selectResult.rows.map(
+      (row: Record<string, unknown>) => row.mail_id as string
+    );
+    if (mailIds.length === 0) return [];
+
+    const rows = await mailsTable.updateWhere(
+      { [MAIL_ID]: { op: "IN", value: mailIds } },
+      { [EXPUNGED]: true, updated: new Date() },
+      [`${uidField} as uid`]
+    );
+    return rows.map((row: Record<string, unknown>) => row.uid as number);
+  } catch (error) {
+    logger.error("Failed to expunge mails by UID", { uids }, error);
+    throw error;
+  }
+};
+
+/**
  * Get all spam-flagged mails for a user.
  * Returns mails where is_spam = true, sorted by date descending.
  */

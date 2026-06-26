@@ -149,3 +149,41 @@ export const parseCopy = (context: ParseContext): ParseResult<ImapRequest> => {
     consumed: context.position
   };
 };
+
+/**
+ * Parse MOVE command (RFC 6851). Same wire shape as COPY — a sequence
+ * set followed by a target mailbox name.
+ */
+export const parseMove = (context: ParseContext): ParseResult<ImapRequest> => {
+  const sequenceSet = parseSequenceSet(context);
+  if (!sequenceSet.success) {
+    return {
+      success: false,
+      error: "Invalid sequence set in MOVE",
+      consumed: 0
+    };
+  }
+
+  skipWhitespace(context);
+
+  const mailbox = parseString(context);
+  if (!mailbox.success) {
+    return {
+      success: false,
+      error: "Invalid mailbox name in MOVE",
+      consumed: 0
+    };
+  }
+
+  return {
+    success: true,
+    value: {
+      type: "MOVE",
+      data: {
+        sequenceSet: sequenceSet.value!,
+        mailbox: mailbox.value!
+      }
+    },
+    consumed: context.position
+  };
+};

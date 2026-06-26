@@ -19,6 +19,7 @@ import {
   SearchRequest,
   StoreRequest,
   CopyRequest,
+  MoveRequest,
   AppendRequest,
 } from "./types";
 import {
@@ -590,6 +591,271 @@ export async function copyMessageTyped(
   } catch (error) {
     logger.error("COPY error", { component: "imap" }, error);
     write(`${tag} NO COPY failed\r\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MOVE (RFC 6851)
+// ---------------------------------------------------------------------------
+
+/**
+ * RFC 6851 MOVE: atomic copy + targeted expunge. Wire shape mirrors
+ * COPY; the difference is the source rows disappear after the move.
+ *
+ * Response sequence (RFC 6851 §3.2):
+ *   * <seq> EXPUNGE                (one per moved message; high→low)
+ *   <tag> OK [COPYUID <validity> <src> <dst>] MOVE completed
+ *
+ * Implementation notes:
+ *
+ * - The expunge is targeted via `store.expungeUids(box, sourceUids)` —
+ *   RFC 6851 §3.3 forbids the COPY+STORE(\\Deleted)+EXPUNGE pattern
+ *   (since EXPUNGE is mailbox-wide and would also remove pre-existing
+ *   \\Deleted-flagged messages, surfacing untagged EXPUNGE responses
+ *   for UIDs not in the COPYUID set).
+ * - No transaction wrapper around the per-mail copy loop — a mid-loop
+ *   `storeMail` failure leaves the already-stored copies in the
+ *   destination AND the source intact; the response is a tagged NO,
+ *   client can re-issue MOVE. A mid-expunge failure (`expungeUids`
+ *   throws) leaves all copies stored in dest AND all source rows
+ *   intact; same NO + re-issue contract.
+ * - Address routing: for non-INBOX destinations the new copy's
+ *   `to_address` / `envelope_to` / `cc_address` / `bcc_address` JSONB
+ *   value arrays are re-anchored to the destination address (or
+ *   cleared) so the copy doesn't re-surface in the source mailbox's
+ *   view. For INBOX destinations from a non-INBOX source, the same
+ *   clearing applies — INBOX has no address filter so cleared routing
+ *   is safe, AND it prevents the source account view from re-matching
+ *   the copy under its new UID after the source is expunged.
+ * - Display text fields (`to_text` / `cc_text` / `bcc_text`) are
+ *   preserved so the FETCH BODY[HEADER] render on the destination
+ *   still shows the original recipient header.
+ */
+export async function moveMessageTyped(
+  tag: string,
+  moveRequest: MoveRequest,
+  isUidCommand: boolean,
+  store: Store,
+  selectedMailbox: string,
+  mailboxReadOnly: boolean,
+  seqState: SequenceState,
+  write: (data: string) => boolean | undefined
+): Promise<void> {
+  if (mailboxReadOnly) {
+    write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
+    return;
+  }
+
+  try {
+    const destMailbox = isInbox(moveRequest.mailbox) ? "INBOX" : moveRequest.mailbox;
+
+    // RFC 6851 §3.4-§3.5: MOVE to the currently-selected mailbox is a
+    // no-op (the messages are already where they'd land). Skip the
+    // copy+expunge round-trip and respond with a bare OK — clients see
+    // the same end-state with no UID churn or surprise EXPUNGE.
+    if (destMailbox === selectedMailbox) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
+    if (!(await store.mailboxExists(destMailbox))) {
+      write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+      return;
+    }
+
+    const isUidMove = moveRequest.sequenceSet.type === "uid" || isUidCommand;
+    const ranges = convertSequenceSet(moveRequest.sequenceSet);
+
+    const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
+    for (const { start, end } of ranges) {
+      if (isUidMove) {
+        uidRanges.push({ uidStart: start, uidEnd: end });
+      } else {
+        const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
+        if (!resolved) continue;
+        uidRanges.push({ uidStart: resolved.uidStart, uidEnd: resolved.uidEnd });
+      }
+    }
+
+    if (uidRanges.length === 0) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
+    const cloneFields = [
+      "subject",
+      "date",
+      "html",
+      "text",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "replyTo",
+      "envelopeFrom",
+      "envelopeTo",
+      "attachments",
+      "messageId",
+      "insight",
+      "flags",
+      "uid",
+    ];
+
+    const sourceMails: Array<Partial<MailType>> = [];
+    for (const { uidStart, uidEnd } of uidRanges) {
+      const batch = await store.getMessages(
+        selectedMailbox,
+        uidStart,
+        uidEnd,
+        cloneFields,
+        true
+      );
+      batch.forEach((mail) => sourceMails.push(mail));
+    }
+
+    if (sourceMails.length === 0) {
+      write(`${tag} OK MOVE completed\r\n`);
+      return;
+    }
+
+    const user = store.getUser();
+    const destAccount = boxToAccount(user.username, destMailbox);
+    const destIsInbox = isInbox(destMailbox);
+    const destIsSent = isSentBox(destMailbox);
+    const sourceIsInbox = isInbox(selectedMailbox);
+    const srcUidOf = (mail: Partial<MailType>): number =>
+      sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+
+    const sourceUids: number[] = [];
+    const destUids: number[] = [];
+
+    const Mail = (await import("common")).Mail;
+    const getRandomId = (await import("common")).getRandomId;
+
+    // === COPY phase (mirrors copyMessageTyped's fixed shape) ===
+    for (const sourceMail of sourceMails) {
+      const newMail = new Mail({
+        subject: sourceMail.subject,
+        date: sourceMail.date,
+        html: sourceMail.html,
+        text: sourceMail.text,
+        from: sourceMail.from,
+        cc: sourceMail.cc,
+        bcc: sourceMail.bcc,
+        replyTo: sourceMail.replyTo,
+        envelopeFrom: sourceMail.envelopeFrom,
+        attachments: sourceMail.attachments,
+        // Fresh messageId — see copyMessageTyped for the UNIQUE(...) rationale.
+        messageId: getRandomId(),
+        insight: sourceMail.insight,
+        read: sourceMail.read,
+        saved: sourceMail.saved,
+        deleted: sourceMail.deleted,
+        draft: sourceMail.draft,
+        answered: sourceMail.answered,
+      });
+
+      if (destIsInbox) {
+        // INBOX has no address filter; the new copy surfaces in INBOX
+        // regardless of `to_address` / `envelope_to` content. But if the
+        // source view IS address-filtered (accounts/foo, Sent Messages/
+        // accounts/foo), preserving the source's address fields would
+        // re-anchor the new copy in the source mailbox even AFTER we
+        // expunge the original — the message would re-appear in the
+        // source view under a new UID. To prevent that, clear the
+        // routing JSONB to empty when the source is non-INBOX. INBOX→
+        // INBOX is a no-op address-wise so it's safe to preserve.
+        if (sourceIsInbox) {
+          newMail.to = sourceMail.to;
+          newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+        } else {
+          newMail.to = sourceMail.to
+            ? { value: [], text: sourceMail.to.text }
+            : undefined;
+          newMail.envelopeTo = [];
+          newMail.cc = sourceMail.cc
+            ? { value: [], text: sourceMail.cc.text }
+            : undefined;
+          newMail.bcc = sourceMail.bcc
+            ? { value: [], text: sourceMail.bcc.text }
+            : undefined;
+        }
+      } else {
+        const destAddr = { address: destAccount, name: "" };
+        newMail.to = {
+          value: [destAddr],
+          text: sourceMail.to?.text || destAccount,
+        };
+        newMail.envelopeTo = [destAddr];
+        // Clear routing JSONB but preserve display text (cc_text /
+        // bcc_text drive the FETCH BODY[HEADER] render).
+        newMail.cc = sourceMail.cc
+          ? { value: [], text: sourceMail.cc.text }
+          : undefined;
+        newMail.bcc = sourceMail.bcc
+          ? { value: [], text: sourceMail.bcc.text }
+          : undefined;
+      }
+      newMail.sent = destIsSent;
+
+      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
+      const newAccountUid = await getAccountUidNext(
+        user.id,
+        destAccount,
+        destIsSent
+      );
+      newMail.uid.domain = newDomainUid || 1;
+      newMail.uid.account = newAccountUid || 1;
+
+      const ok = await store.storeMail(newMail);
+      if (!ok) {
+        // Pre-deletion failure: copies already stored in the destination
+        // linger; the source is untouched. Client can re-issue MOVE.
+        write(`${tag} NO [SERVERBUG] MOVE partially failed during copy phase\r\n`);
+        return;
+      }
+
+      sourceUids.push(srcUidOf(sourceMail));
+      destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
+    }
+
+    // === EXPUNGE phase ===
+    // RFC 6851 §3.3: MOVE MUST NOT set \\Deleted on source UIDs, and the
+    // server MUST NOT expunge messages other than the moved set.
+    // `store.expungeUids` directly soft-deletes the specific source UIDs
+    // (sets `expunged=TRUE`) without ever touching the `\\Deleted` flag
+    // and without affecting pre-existing \\Deleted-flagged messages in
+    // the mailbox. Errors propagate so the outer try/catch writes a
+    // tagged NO instead of falsely emitting OK + COPYUID against a
+    // partial expunge.
+    const expungedUids = await store.expungeUids(selectedMailbox, sourceUids);
+
+    // Map UIDs back to seq numbers; emit high→low so the client's
+    // own message-index updates don't cascade-shift mid-response.
+    const expungedSeqs: number[] = [];
+    for (const uid of expungedUids) {
+      const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
+      if (seq !== undefined) expungedSeqs.push(seq);
+    }
+    expungedSeqs.sort((a, b) => b - a);
+    for (const seq of expungedSeqs) {
+      write(`* ${seq} EXPUNGE\r\n`);
+    }
+
+    // Rebuild seqState so subsequent sequence-numbered commands operate
+    // on the post-expunge mapping. A stale seqState would surface as
+    // wrong FETCH results downstream.
+    await buildSequenceMapping(store, selectedMailbox, seqState);
+
+    const uidValidity = await getImapUidValidity(user.id);
+    const sourceSet = formatUidSet(sourceUids);
+    const destSet = formatUidSet(destUids);
+    write(
+      `${tag} OK [COPYUID ${uidValidity} ${sourceSet} ${destSet}] MOVE completed\r\n`
+    );
+  } catch (error) {
+    logger.error("MOVE error", { component: "imap" }, error);
+    write(`${tag} NO MOVE failed\r\n`);
   }
 }
 

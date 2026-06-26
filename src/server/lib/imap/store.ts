@@ -14,6 +14,7 @@ import {
   searchMailsByUid,
   saveMail as pgSaveMail,
   expungeDeletedMails,
+  expungeMailsByUid,
   getAllUids as pgGetAllUids,
   getFirstUnseenUid as pgGetFirstUnseenUid,
   SaveMailInput,
@@ -459,6 +460,20 @@ export class Store {
       logger.error("Error expunging messages", { component: "imap.store", box }, error);
       throw error;
     }
+  };
+
+  /**
+   * Soft-delete a specific set of UIDs in `box` without touching their
+   * `\Deleted` flag. Used by RFC 6851 MOVE (§3.3 forbids the
+   * COPY+STORE(\Deleted)+EXPUNGE pattern, since EXPUNGE is mailbox-wide
+   * and would also remove pre-existing \Deleted-flagged messages).
+   * Propagates errors so the MOVE handler can write `NO MOVE failed`
+   * instead of falsely emitting OK + COPYUID against a no-op.
+   */
+  expungeUids = async (box: string, uids: number[]): Promise<number[]> => {
+    if (uids.length === 0) return [];
+    const { accountName, isSent } = this.resolveBox(box);
+    return await expungeMailsByUid(this.user.id, accountName, isSent, uids);
   };
 
   search = async (
