@@ -12,7 +12,7 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount, isInbox } from "./util";
+import { boxToAccount, isInbox, isSentBox } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -339,16 +339,258 @@ export async function storeFlagsTyped(
 }
 
 // ---------------------------------------------------------------------------
-// COPY
+// COPY (RFC 3501 §6.4.7 + RFC 4315 COPYUID)
 // ---------------------------------------------------------------------------
+
+/**
+ * Compact a sorted UID list to the RFC 3501 sequence-set form ("1,3:5,7").
+ * Per RFC 4315, the COPYUID response uses the same sequence-set syntax.
+ */
+const formatUidSet = (uids: number[]): string => {
+  if (uids.length === 0) return "";
+  const sorted = [...new Set(uids)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  let rangeStart = sorted[0];
+  let rangeEnd = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === rangeEnd + 1) {
+      rangeEnd = sorted[i];
+    } else {
+      parts.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}:${rangeEnd}`);
+      rangeStart = sorted[i];
+      rangeEnd = sorted[i];
+    }
+  }
+  parts.push(rangeStart === rangeEnd ? `${rangeStart}` : `${rangeStart}:${rangeEnd}`);
+  return parts.join(",");
+};
 
 export async function copyMessageTyped(
   tag: string,
-  _copyRequest: CopyRequest,
-  _isUidCommand: boolean,
+  copyRequest: CopyRequest,
+  isUidCommand: boolean,
+  store: Store,
+  selectedMailbox: string,
+  seqState: SequenceState,
   write: (data: string) => boolean | undefined
 ): Promise<void> {
-  write(`${tag} NO [CANNOT] COPY not permitted\r\n`);
+  try {
+    // Canonicalize destination per RFC 3501 §5.1 (INBOX case-insensitive).
+    const destMailbox = isInbox(copyRequest.mailbox) ? "INBOX" : copyRequest.mailbox;
+
+    // RFC 4315 §2.1: destination must exist; otherwise NO [TRYCREATE].
+    if (!(await store.mailboxExists(destMailbox))) {
+      write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+      return;
+    }
+
+    // RFC 3501 §6.4.7: COPY source must use the selected mailbox's UID/seq
+    // space. `isUidCopy` reflects whether the protocol entry was UID COPY
+    // (operating on UIDs directly) or COPY (operating on sequence numbers).
+    const isUidCopy =
+      copyRequest.sequenceSet.type === "uid" || isUidCommand;
+    const ranges = convertSequenceSet(copyRequest.sequenceSet);
+
+    // Resolve each range to a concrete UID list. Sequence-number ranges
+    // map through seqState; UID ranges pass through as-is.
+    const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
+    for (const { start, end } of ranges) {
+      if (isUidCopy) {
+        uidRanges.push({ uidStart: start, uidEnd: end });
+      } else {
+        const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
+        if (!resolved) continue;
+        uidRanges.push({ uidStart: resolved.uidStart, uidEnd: resolved.uidEnd });
+      }
+    }
+
+    if (uidRanges.length === 0) {
+      // Nothing to copy (every range resolved to no messages). RFC says
+      // OK with no COPYUID is fine.
+      write(`${tag} OK COPY completed\r\n`);
+      return;
+    }
+
+    // The full set of fields we need to clone — anything the FETCH/render
+    // pipeline might surface to a client of the destination mailbox.
+    const cloneFields = [
+      "subject",
+      "date",
+      "html",
+      "text",
+      "from",
+      "to",
+      "cc",
+      "bcc",
+      "replyTo",
+      "envelopeFrom",
+      "envelopeTo",
+      "attachments",
+      "messageId",
+      "insight",
+      "flags",
+      "uid",
+    ];
+
+    // Pull the source mails. `getMessages` queries by the selected
+    // mailbox's UID space, so the source UIDs are interpreted correctly.
+    const sourceMails: Array<Partial<MailType>> = [];
+    for (const { uidStart, uidEnd } of uidRanges) {
+      const batch = await store.getMessages(
+        selectedMailbox,
+        uidStart,
+        uidEnd,
+        cloneFields,
+        true
+      );
+      // Preserve UID order (Map preserves insertion order from the SQL
+      // query; downstream we sort by source UID for the COPYUID response).
+      batch.forEach((mail) => sourceMails.push(mail));
+    }
+
+    if (sourceMails.length === 0) {
+      // Range pointed at deleted/unknown UIDs. RFC 4315 says: still OK,
+      // no COPYUID required when no messages were actually copied.
+      write(`${tag} OK COPY completed\r\n`);
+      return;
+    }
+
+    const user = store.getUser();
+    // The destination's address routing. For INBOX, `accountName` is null
+    // in `resolveBox` (the mail's existing to_address keeps it in INBOX
+    // anyway). For accounts/<name>, "Sent Messages/accounts/<name>", and
+    // user-created mailboxes (e.g. "Archive"), `boxToAccount` returns the
+    // synthetic address that drives the destination-mailbox query
+    // (e.g. "Archive@<domain>").
+    const destAccount = boxToAccount(user.username, destMailbox);
+    const destIsInbox = isInbox(destMailbox);
+    const destIsSent = isSentBox(destMailbox);
+
+    // Source-side UID extraction for the COPYUID response.
+    const sourceIsInbox = isInbox(selectedMailbox);
+    const srcUidOf = (mail: Partial<MailType>): number =>
+      sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+
+    const sourceUids: number[] = [];
+    const destUids: number[] = [];
+
+    const Mail = (await import("common")).Mail;
+    const getRandomId = (await import("common")).getRandomId;
+
+    // No transaction wrapper around storeMail — `pgSaveMail` is a single
+    // INSERT and the per-mail loop is sequential, so a mid-loop failure
+    // leaves the already-stored copies in the destination. Documented as
+    // a limitation; a follow-up can promote this to a multi-row INSERT
+    // or transaction.
+    for (const sourceMail of sourceMails) {
+      // The mails table has UNIQUE(user_id, message_id); the copy must
+      // carry a fresh message_id so the INSERT actually creates a new
+      // row (otherwise saveMail merges into the source row and the
+      // COPYUID response would fabricate dest UIDs that don't exist).
+      // RFC 3501 §6.4.7 doesn't mandate preserving Message-ID across
+      // COPY — a duplicate row is a server-storage representation, not
+      // a re-delivered RFC 5322 message — so a fresh id is RFC-compliant.
+      const newMail = new Mail({
+        subject: sourceMail.subject,
+        date: sourceMail.date,
+        html: sourceMail.html,
+        text: sourceMail.text,
+        from: sourceMail.from,
+        cc: sourceMail.cc,
+        bcc: sourceMail.bcc,
+        replyTo: sourceMail.replyTo,
+        envelopeFrom: sourceMail.envelopeFrom,
+        attachments: sourceMail.attachments,
+        messageId: getRandomId(),
+        insight: sourceMail.insight,
+        // Flags carry over per RFC 3501 §6.4.7.
+        read: sourceMail.read,
+        saved: sourceMail.saved,
+        deleted: sourceMail.deleted,
+        draft: sourceMail.draft,
+        answered: sourceMail.answered,
+      });
+
+      // Routing: a mail surfaces in the destination's mailbox view via
+      // `addressCondition`'s OR of `to_address` + `cc_address` +
+      // `bcc_address` + `envelope_to` JSONB containment (see
+      // `repositories/mails.ts`). For per-account / user-created
+      // destinations the copy must address ALL of these to the
+      // destination account so it surfaces in the destination AND does
+      // not stay surfaced in the source (the source's envelope_to / cc
+      // / bcc would re-anchor it). For INBOX targets the existing
+      // header fields are fine — INBOX has no address filter (it shows
+      // every received mail in the user's domain). `to_text` is
+      // preserved so the client's FETCH BODY[HEADER] still shows the
+      // original recipient header — the override only affects routing.
+      if (destIsInbox) {
+        newMail.to = sourceMail.to;
+        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+      } else {
+        const destAddr = { address: destAccount, name: "" };
+        newMail.to = {
+          value: [destAddr],
+          text: sourceMail.to?.text || destAccount,
+        };
+        // Re-anchor envelope_to so the OR-clause doesn't re-surface the
+        // copy in the source mailbox.
+        newMail.envelopeTo = [destAddr];
+        // cc / bcc participate in `addressCondition` via JSONB
+        // containment (`cc_address @> $2`) AND in FETCH BODY[HEADER]
+        // render via `cc_text` / `bcc_text` (util.ts:54). Clear the
+        // routing JSONB to empty (so `[] @> [{address:'foo'}]` is false
+        // and the copy doesn't re-surface in the source mailbox) but
+        // keep `text` so the destination's header render still shows
+        // `Cc:` / `Bcc:` lines.
+        newMail.cc = sourceMail.cc
+          ? { value: [], text: sourceMail.cc.text }
+          : undefined;
+        newMail.bcc = sourceMail.bcc
+          ? { value: [], text: sourceMail.bcc.text }
+          : undefined;
+      }
+      newMail.sent = destIsSent;
+
+      // Fresh UIDs in the destination's UID space. The `sent` arg
+      // matters: `getDomainUidNext`/`getAccountUidNext` query MAX(uid)
+      // WHERE sent=? so a copy to a Sent box without the arg would pick
+      // a UID from the received-side counter and collide with existing
+      // sent rows. (These are SELECT MAX(uid)+1 with no locking — see
+      // `repositories/mails.ts:388-427` — so concurrent COPYs against
+      // the same destination CAN race to the same UID. Pre-existing
+      // limitation across receive.ts/send.ts/append; not corrected here.)
+      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
+      const newAccountUid = await getAccountUidNext(
+        user.id,
+        destAccount,
+        destIsSent
+      );
+      newMail.uid.domain = newDomainUid || 1;
+      newMail.uid.account = newAccountUid || 1;
+
+      const ok = await store.storeMail(newMail);
+      if (!ok) {
+        write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
+        return;
+      }
+
+      sourceUids.push(srcUidOf(sourceMail));
+      destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
+    }
+
+    // RFC 4315 §2: untagged or tagged OK with [COPYUID uidvalidity
+    // source-set dest-set] response code. Most servers attach it to the
+    // tagged OK; doing the same here.
+    const uidValidity = await getImapUidValidity(user.id);
+    const sourceSet = formatUidSet(sourceUids);
+    const destSet = formatUidSet(destUids);
+    write(
+      `${tag} OK [COPYUID ${uidValidity} ${sourceSet} ${destSet}] COPY completed\r\n`
+    );
+  } catch (error) {
+    logger.error("COPY error", { component: "imap" }, error);
+    write(`${tag} NO COPY failed\r\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
