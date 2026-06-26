@@ -248,6 +248,14 @@ const RenderedMail = ({
           return found;
         });
 
+        // Trashing an unread spam mail drops it from the spam list too, so the
+        // sidebar's unread-spam badge must decrement — independent of the
+        // per-account decrement above (which no-ops in the Spam folder where
+        // selectedAccount === "").
+        if (mail.is_spam && !mail.read && newData.spamUnreadCount > 0) {
+          newData.spamUnreadCount -= 1;
+        }
+
         return newData;
       });
 
@@ -558,6 +566,16 @@ const RenderedMails = ({ page }: { page: number }) => {
         if (found && unread_doc_count) account.unread_doc_count -= 1;
         return found;
       });
+
+      // An unread spam mail is counted in both the per-account unread badge
+      // (above) and the sidebar's unread-spam badge. The per-account decrement
+      // no-ops in the Spam folder (selectedAccount === ""), and the spam badge
+      // is a separate count regardless of view, so decrement it here whenever
+      // the read mail was spam. markReadInQueryData is only called for an
+      // unread mail (caller guards on !mail.read), so no read-state recheck.
+      if (mail.is_spam && newData.spamUnreadCount > 0) {
+        newData.spamUnreadCount -= 1;
+      }
 
       return newData;
     });

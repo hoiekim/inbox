@@ -12,6 +12,9 @@ export interface MailHeaderDataType {
   id: string;
   read: boolean;
   saved: boolean;
+  /** Whether the spam classifier flagged this mail. Drives the spam-folder
+   * list membership and the sidebar's unread-spam badge decrement. */
+  is_spam: boolean;
   /**
    * @deprecated Do not consume. Sent/received state is derived from the
    * sender address against the user's domain — the `sent` column on the
@@ -42,6 +45,7 @@ export class MailHeaderData
   declare date: DateString;
   declare read: boolean;
   declare saved: boolean;
+  declare is_spam: boolean;
   declare sent: boolean;
   declare from?: MailAddressType;
   declare to?: MailAddressType;
@@ -60,6 +64,7 @@ export class MailHeaderData
     if (!data?.date) this.date = new Date().toISOString();
     if (!data?.read) this.read = false;
     if (!data?.saved) this.saved = false;
+    if (!data?.is_spam) this.is_spam = false;
     if (!data?.sent) this.sent = false;
   }
 }

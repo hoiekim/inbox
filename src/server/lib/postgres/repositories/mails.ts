@@ -23,6 +23,7 @@ import {
   BCC_ADDRESS,
   BCC_TEXT,
   SENT,
+  IS_SPAM,
   INSIGHT,
   ENVELOPE_TO,
   DELETED,
@@ -54,6 +55,7 @@ export interface MailHeaderResult {
   read: boolean;
   saved: boolean;
   sent: boolean;
+  is_spam: boolean;
   insight: object | null;
 }
 
@@ -305,7 +307,7 @@ export const getMailHeaders = async (
       TO_ADDRESS, TO_TEXT,
       CC_ADDRESS, CC_TEXT,
       BCC_ADDRESS, BCC_TEXT,
-      READ, SAVED, SENT, INSIGHT,
+      READ, SAVED, SENT, IS_SPAM, INSIGHT,
     ].join(", ");
     let sql = `
       SELECT ${headerColumns} FROM mails 
