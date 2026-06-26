@@ -16,6 +16,7 @@ import {
   MarkMailPostBody,
   MarkMailPostResponse,
   SearchGetResponse,
+  SpamGetResponse,
   MailDeleteResponse
 } from "server";
 
@@ -59,12 +60,16 @@ const GettingStarted = () => {
   );
 };
 
-const getMailsQueryUrl = (account: string, category: Category) => {
+export const getMailsQueryUrl = (account: string, category: Category) => {
   let queryOption: string;
 
   switch (category) {
     case Category.Search:
       return `/api/mails/search/${encodeURIComponent(account)}`;
+    // Spam is user-global, not account-scoped: the endpoint returns every
+    // spam-flagged mail for the signed-in user, so `account` is ignored.
+    case Category.SpamMails:
+      return "/api/mails/spam";
     case Category.SentMails:
       queryOption = "?sent=1";
       break;
@@ -463,7 +468,7 @@ const RenderedMails = ({ page }: { page: number }) => {
 
   const getMails = async () => {
     const { status, body, message } = await call.get<
-      HeadersGetResponse | SearchGetResponse
+      HeadersGetResponse | SearchGetResponse | SpamGetResponse
     >(queryUrl);
     if (status === "success") {
       return body?.map((d) => new MailHeaderData(d)) || [];
@@ -642,6 +647,8 @@ const RenderedMails = ({ page }: { page: number }) => {
             return "No saved emails.";
           case Category.SentMails:
             return "No sent emails.";
+          case Category.SpamMails:
+            return "No spam — nice.";
           case Category.Search:
             return "No results found.";
           default:
@@ -662,8 +669,11 @@ const RenderedMails = ({ page }: { page: number }) => {
 };
 
 const Mails = ({ page }: { page: number }) => {
-  const { selectedAccount } = useContext(Context);
-  if (!selectedAccount) return <GettingStarted />;
+  const { selectedAccount, selectedCategory } = useContext(Context);
+  // Spam is user-global, so it renders without an account selected; every
+  // other category needs an account before there's anything to show.
+  if (!selectedAccount && selectedCategory !== Category.SpamMails)
+    return <GettingStarted />;
   else return <RenderedMails page={page} />;
 };
 

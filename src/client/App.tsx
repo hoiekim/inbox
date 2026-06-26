@@ -20,6 +20,7 @@ export enum Category {
   AllMails = "All Mails",
   SavedMails = "Saved Mails",
   SentMails = "Sent Mails",
+  SpamMails = "Spam Mails",
   Search = "Search"
 }
 
