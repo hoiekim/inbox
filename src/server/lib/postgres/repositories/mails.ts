@@ -1490,6 +1490,27 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
 };
 
 /**
+ * Count unread spam for a user. Powers the sidebar's spam badge without
+ * fetching the full spam rows (which carry html/attachment columns). The
+ * WHERE clause mirrors getSpamMails so the badge and the list agree on what
+ * "spam" means.
+ */
+export const getSpamUnreadCount = async (user_id: string): Promise<number> => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*)::int AS unread FROM mails
+       WHERE user_id = $1 AND is_spam = TRUE AND read = FALSE
+         AND sent = FALSE AND expunged = FALSE AND draft = FALSE`,
+      [user_id]
+    );
+    return (result.rows[0]?.unread as number) ?? 0;
+  } catch (error) {
+    logger.error("Failed to count unread spam", {}, error);
+    return 0;
+  }
+};
+
+/**
  * Mark or unmark a mail as spam.
  *
  * Returns:

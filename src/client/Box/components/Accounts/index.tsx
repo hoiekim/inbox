@@ -21,7 +21,7 @@ import {
 } from "./components";
 
 import { Account } from "common";
-import { AccountsGetResponse, LoginDeleteResponse, SpamGetResponse } from "server";
+import { AccountsGetResponse, LoginDeleteResponse } from "server";
 import {
   Context,
   Category,
@@ -122,25 +122,10 @@ const Accounts = ({
     retry: false
   });
 
-  // Spam is user-global (no per-account breakdown in the accounts endpoint),
-  // so its unread badge is derived from the spam list itself. The query key
-  // matches the one the Mails list view uses, so the two share a single fetch
-  // and cache entry. (A dedicated unread-spam count belongs on the accounts
-  // endpoint once spam volume grows — tracked as a follow-up.)
-  const spamUrl = "/api/mails/spam";
-  const getSpamMails = async () => {
-    const { status, body, message } = await call.get<SpamGetResponse>(spamUrl);
-    if (status === "success") return body || [];
-    else throw new Error(message);
-  };
-  const spamQuery = useQuery<SpamGetResponse>(spamUrl, getSpamMails, {
-    cacheTime: Infinity,
-    refetchInterval: 1000 * 60 * 10,
-    refetchIntervalInBackground: true,
-    refetchOnWindowFocus: "always",
-    retry: false
-  });
-  const spamUnread = (spamQuery.data || []).filter((m) => !m.read).length;
+  // Spam is user-global (no per-account breakdown), so its unread badge rides
+  // on the accounts payload — already fetched and refreshed on the cadence
+  // above — rather than fetching the full spam list just to count.
+  const spamUnread = query.data?.spamUnreadCount ?? 0;
 
   useEffect(() => {
     if (searchInputDom && isAccountsOpen && !isWriterOpen)
