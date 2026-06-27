@@ -1,5 +1,3 @@
-import { openDB, type IDBPDatabase } from "idb";
-
 /**
  * Typed wrapper over a single IndexedDB object store that mirrors cacheable
  * React Query responses (see cacheCatalog.ts). Every entry is scoped to the
@@ -7,6 +5,9 @@ import { openDB, type IDBPDatabase } from "idb";
  * user's view with another's mail. All operations fail soft: when IndexedDB is
  * unavailable (private mode, an old browser, a non-DOM context) they no-op and
  * the app falls back to its normal network-only behavior.
+ *
+ * Hand-rolled over the raw IndexedDB API (no external `idb` dependency),
+ * mirroring the budget app's IndexedDbAccessor idiom.
  */
 export interface CachedQuery {
   /** React Query key = the request URL. Primary key of the store. */
@@ -23,63 +24,131 @@ const DB_NAME = "inbox-query-cache";
 const STORE = "queries";
 const DB_VERSION = 1;
 
-let dbPromise: Promise<IDBPDatabase> | null = null;
+class QueryCacheStore {
+  private db: IDBDatabase | null = null;
+  private available = true;
 
-const getDb = (): Promise<IDBPDatabase> | null => {
-  if (typeof indexedDB === "undefined") return null;
-  if (!dbPromise) {
-    dbPromise = openDB(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains(STORE)) {
-          db.createObjectStore(STORE, { keyPath: "key" });
+  private init = (): Promise<IDBDatabase> => {
+    return new Promise((resolve, reject) => {
+      if (!this.available || typeof indexedDB === "undefined") {
+        this.available = false;
+        reject(new Error("IndexedDB is not available"));
+        return;
+      }
+
+      if (this.db) {
+        resolve(this.db);
+        return;
+      }
+
+      let request: IDBOpenDBRequest;
+      try {
+        request = indexedDB.open(DB_NAME, DB_VERSION);
+      } catch (err) {
+        this.available = false;
+        console.warn("IndexedDB unavailable; query cache disabled.", err);
+        reject(err);
+        return;
+      }
+
+      request.onerror = () => {
+        this.available = false;
+        console.warn("IndexedDB unavailable; query cache disabled.", request.error);
+        reject(request.error);
+      };
+      request.onsuccess = () => {
+        this.db = request.result;
+        resolve(this.db);
+      };
+
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(STORE)) {
+          database.createObjectStore(STORE, { keyPath: "key" });
         }
-      },
-    }).catch((error) => {
-      console.error("IndexedDB open failed; query cache disabled", error);
-      // Reset so a later call can retry rather than reject forever.
-      dbPromise = null;
-      throw error;
+      };
     });
-  }
-  return dbPromise;
-};
+  };
 
-export const idbGetAllQueries = async (): Promise<CachedQuery[]> => {
-  const dbp = getDb();
-  if (!dbp) return [];
-  try {
-    return await (await dbp).getAll(STORE);
-  } catch {
-    return [];
-  }
-};
+  getAll = async (): Promise<CachedQuery[]> => {
+    if (!this.available) return [];
+    let database: IDBDatabase;
+    try {
+      database = await this.init();
+    } catch {
+      return [];
+    }
+    return new Promise<CachedQuery[]>((resolve) => {
+      const transaction = database.transaction(STORE, "readonly");
+      const store = transaction.objectStore(STORE);
+      const request = store.getAll();
+      request.onerror = () => resolve([]);
+      request.onsuccess = () => resolve(request.result as CachedQuery[]);
+    });
+  };
 
-export const idbPutQuery = async (entry: CachedQuery): Promise<void> => {
-  const dbp = getDb();
-  if (!dbp) return;
-  try {
-    await (await dbp).put(STORE, entry);
-  } catch (error) {
-    console.error("IndexedDB write failed", error);
-  }
-};
+  put = async (entry: CachedQuery): Promise<void> => {
+    if (!this.available) return;
+    let database: IDBDatabase;
+    try {
+      database = await this.init();
+    } catch {
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      const transaction = database.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
+      const request = store.put(entry);
+      request.onerror = () => {
+        console.error("IndexedDB write failed", request.error);
+        resolve();
+      };
+      request.onsuccess = () => resolve();
+    });
+  };
 
-export const idbDeleteQuery = async (key: string): Promise<void> => {
-  const dbp = getDb();
-  if (!dbp) return;
-  try {
-    await (await dbp).delete(STORE, key);
-  } catch {
-    /* fail soft — a failed eviction just leaves a stale entry */
-  }
-};
+  delete = async (key: string): Promise<void> => {
+    if (!this.available) return;
+    let database: IDBDatabase;
+    try {
+      database = await this.init();
+    } catch {
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      const transaction = database.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
+      const request = store.delete(key);
+      // fail soft — a failed eviction just leaves a stale entry
+      request.onerror = () => resolve();
+      request.onsuccess = () => resolve();
+    });
+  };
 
-export const idbClearQueries = async (): Promise<void> => {
-  const dbp = getDb();
-  if (!dbp) return;
-  try {
-    await (await dbp).clear(STORE);
-  } catch {
-    /* fail soft */
-  }
-};
+  clear = async (): Promise<void> => {
+    if (!this.available) return;
+    let database: IDBDatabase;
+    try {
+      database = await this.init();
+    } catch {
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      const transaction = database.transaction(STORE, "readwrite");
+      const store = transaction.objectStore(STORE);
+      const request = store.clear();
+      request.onerror = () => resolve();
+      request.onsuccess = () => resolve();
+    });
+  };
+}
+
+const store = new QueryCacheStore();
+
+export const idbGetAllQueries = (): Promise<CachedQuery[]> => store.getAll();
+
+export const idbPutQuery = (entry: CachedQuery): Promise<void> => store.put(entry);
+
+export const idbDeleteQuery = (key: string): Promise<void> => store.delete(key);
+
+export const idbClearQueries = (): Promise<void> => store.clear();
