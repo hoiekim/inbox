@@ -739,7 +739,8 @@ export async function moveMessageTyped(
     // RFC 4315 §3 (via RFC 6851 §4.3): keep the COPYUID source/dest sets
     // positionally aligned for out-of-order sequence-sets — assign dest
     // UIDs in ascending source-UID order. See copyMessageTyped for the
-    // full rationale. Sorting also tidies the targeted EXPUNGE emission.
+    // full rationale. (The EXPUNGE emission order is set separately by the
+    // explicit high→low sort below, so it is unaffected by this.)
     sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
 
     const sourceUids: number[] = [];
