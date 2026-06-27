@@ -542,7 +542,7 @@ export const buildDomainUidQuery = (
 ): { sql: string; values: ParamValue[] } => {
   const seedSql = `
       SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
-      WHERE user_id = $1 AND sent = $4
+      WHERE ${USER_ID} = $1 AND ${SENT} = $4
     `;
   return buildReserveUidQuery(user_id, "domain", "", sent, seedSql, []);
 };
@@ -559,9 +559,9 @@ export const buildAccountUidQuery = (
     : `(${TO_ADDRESS} @> $5::jsonb OR cc_address @> $5::jsonb OR bcc_address @> $5::jsonb OR envelope_to @> $5::jsonb)`;
   const seedSql = `
       SELECT COALESCE(MAX(${UID_ACCOUNT}), 0) + 1 FROM mails
-      WHERE user_id = $1
+      WHERE ${USER_ID} = $1
         AND ${addressCondition}
-        AND sent = $4
+        AND ${SENT} = $4
     `;
   return buildReserveUidQuery(user_id, "account", account, sent, seedSql, [
     addressJson,
