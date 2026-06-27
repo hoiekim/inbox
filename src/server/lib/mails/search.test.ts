@@ -2,26 +2,12 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 
 // Mock the postgres repository
 const mockSearchMails = mock(() => Promise.resolve([]));
-const mockGetDomainUidNext = mock(() => Promise.resolve(42));
-const mockGetAccountUidNext = mock(() => Promise.resolve(10));
 
 mock.module("../postgres/repositories/mails", () => ({
   searchMails: mockSearchMails,
-  getDomainUidNext: mockGetDomainUidNext,
-  getAccountUidNext: mockGetAccountUidNext,
 }));
 
-// Mock the logger
-mock.module("../logger", () => ({
-  logger: {
-    info: mock(() => {}),
-    error: mock(() => {}),
-    warn: mock(() => {}),
-    debug: mock(() => {}),
-  },
-}));
-
-import { searchMail, getDomainUidNext, getAccountUidNext } from "./search";
+import { searchMail } from "./search";
 import { SignedUser } from "common";
 
 const mockUser = new SignedUser({
@@ -174,55 +160,5 @@ describe("searchMail", () => {
     expect(results).toHaveLength(2);
     expect(results[0].id).toBe("m1");
     expect(results[1].id).toBe("m2");
-  });
-});
-
-describe("getDomainUidNext", () => {
-  beforeEach(() => {
-    mockGetDomainUidNext.mockClear();
-  });
-
-  it("should return the result from pgGetDomainUidNext", async () => {
-    mockGetDomainUidNext.mockResolvedValue(42);
-    const result = await getDomainUidNext("user-123");
-    expect(result).toBe(42);
-    expect(mockGetDomainUidNext).toHaveBeenCalledWith("user-123", false);
-  });
-
-  it("should pass sent=true when specified", async () => {
-    mockGetDomainUidNext.mockResolvedValue(5);
-    await getDomainUidNext("user-123", true);
-    expect(mockGetDomainUidNext).toHaveBeenCalledWith("user-123", true);
-  });
-
-  it("should return 1 on error", async () => {
-    mockGetDomainUidNext.mockRejectedValue(new Error("DB error"));
-    const result = await getDomainUidNext("user-123");
-    expect(result).toBe(1);
-  });
-});
-
-describe("getAccountUidNext", () => {
-  beforeEach(() => {
-    mockGetAccountUidNext.mockClear();
-  });
-
-  it("should return the result from pgGetAccountUidNext", async () => {
-    mockGetAccountUidNext.mockResolvedValue(10);
-    const result = await getAccountUidNext("user-123", "inbox");
-    expect(result).toBe(10);
-    expect(mockGetAccountUidNext).toHaveBeenCalledWith("user-123", "inbox", false);
-  });
-
-  it("should pass sent=true when specified", async () => {
-    mockGetAccountUidNext.mockResolvedValue(3);
-    await getAccountUidNext("user-123", "sent", true);
-    expect(mockGetAccountUidNext).toHaveBeenCalledWith("user-123", "sent", true);
-  });
-
-  it("should return 1 on error", async () => {
-    mockGetAccountUidNext.mockRejectedValue(new Error("DB error"));
-    const result = await getAccountUidNext("user-123", "inbox");
-    expect(result).toBe(1);
   });
 });

@@ -205,7 +205,7 @@ export const convertMail = async (
     pgGetAccountUidNext(user.id!, envelopeToAddress),
   ]);
 
-  const uid = new MailUid({ domain: domainUid || 0, account: accountUid || 0 });
+  const uid = new MailUid({ domain: domainUid, account: accountUid });
 
   return new Mail({
     messageId,
