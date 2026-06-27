@@ -16,8 +16,10 @@ import {
   SearchIcon,
   RefreshIcon,
   LogoutIcon,
+  SettingsIcon,
   SortDownIcon,
-  SortUpIcon
+  SortUpIcon,
+  Allowlist
 } from "./components";
 
 import { Account } from "common";
@@ -70,6 +72,7 @@ const Accounts = ({
     true
   );
   const [showSortOptions, setShowSortOptions] = useState(false);
+  const [isAllowlistOpen, setIsAllowlistOpen] = useState(false);
 
   const {
     viewSize,
@@ -411,6 +414,16 @@ const Accounts = ({
             <div className="flex">
               <button
                 className="icon-button"
+                onClick={() => setIsAllowlistOpen(true)}
+                aria-label="Allowlist settings"
+                title="Allowlist"
+              >
+                <SettingsIcon />
+              </button>
+            </div>
+            <div className="flex">
+              <button
+                className="icon-button"
                 onClick={onClickLogout}
                 aria-label="Logout"
                 title="Logout"
@@ -420,6 +433,9 @@ const Accounts = ({
             </div>
           </div>
         </div>
+        {isAllowlistOpen ? (
+          <Allowlist onClose={() => setIsAllowlistOpen(false)} />
+        ) : null}
         <div className="accounts">
           <div className="sort_box">
             {showSortOptions ? (
