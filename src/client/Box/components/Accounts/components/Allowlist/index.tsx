@@ -8,7 +8,7 @@ import {
   AllowlistAddBody,
   AllowlistDeleteResponse
 } from "server";
-import { call, onKeyboardActivate } from "client";
+import { call, onKeyboardActivate, queryClient } from "client";
 import { isValidAllowlistPattern } from "./pattern";
 
 import "./index.scss";
@@ -29,21 +29,27 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
       if (status === "success") return body as AllowlistGetResponse;
       throw new Error(message);
     },
-    { retry: false, refetchOnWindowFocus: false }
+    { retry: false, refetchOnWindowFocus: false, refetchInterval: false }
   );
 
   const addMutation = useMutation(
     (pattern: string) =>
       call.post<AllowlistAddResponse, AllowlistAddBody>(queryUrl, { pattern }),
     {
+      // The POST returns the created entry, so write it straight into the cache
+      // instead of triggering a second GET.
       onSuccess: (res) => {
-        if (res.status !== "success") {
+        if (res.status !== "success" || !res.body) {
           setError(res.message || "Failed to add entry.");
           return;
         }
+        const entry = res.body;
+        queryClient.setQueryData<AllowlistGetResponse>(queryUrl, (old) => [
+          entry,
+          ...(old || [])
+        ]);
         setInput("");
         setError(null);
-        query.refetch();
       }
     }
   );
@@ -54,14 +60,16 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
         `${queryUrl}/${encodeURIComponent(pattern)}`
       ),
     {
-      onSuccess: (res) => {
+      onSuccess: (res, pattern) => {
         if (res.status !== "success") {
           setError(res.message || "Failed to remove entry.");
           return;
         }
+        queryClient.setQueryData<AllowlistGetResponse>(queryUrl, (old) =>
+          (old || []).filter((e) => e.pattern !== pattern)
+        );
         setConfirmingId(null);
         setError(null);
-        query.refetch();
       }
     }
   );
@@ -177,6 +185,7 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
 
         <div className="allowlist-add">
           <input
+            autoFocus
             type="text"
             value={input}
             placeholder="user@example.com or *@example.com"
