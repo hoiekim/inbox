@@ -24,14 +24,89 @@
  * documented Bun hazard, full server-suite runs verify there's no bleed).
  */
 
-import { describe, it, expect } from "bun:test";
+import {
+  describe,
+  it,
+  expect,
+  mock,
+  beforeAll,
+  beforeEach,
+  afterAll,
+} from "bun:test";
+import { restoreLeaves } from "test-helpers";
 import type { MailType, SignedUser } from "common";
-import { copyMessageTyped } from "./message-ops";
 import { Store } from "./store";
 import type { CopyRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
 const VALID_USER: SignedUser = { id: "u1", username: "admin" } as SignedUser;
+
+const STORED_UIDVALIDITY = 1716512400;
+
+// A schema-valid users row so usersTable.queryOne's `new UserModel(row)`
+// validates inside getImapUidValidity (imap_uid_validity pre-set → returned
+// directly). Mirrors the move.test.ts / message-ops.test.ts FakePool fixture.
+const USER_ROW = {
+  user_id: "u1",
+  username: "admin",
+  password: null,
+  email: null,
+  expiry: null,
+  token: null,
+  updated: null,
+  is_deleted: null,
+  imap_uid_validity: STORED_UIDVALIDITY,
+};
+
+// getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid. Hand back a
+// monotonically-increasing value per call so each cloned mail gets a distinct
+// dest UID in the copy loop's call order (domain then account).
+let uidCounter = 100;
+const mockQuery = mock(async (sql: string) => {
+  if (typeof sql === "string" && sql.includes("next_uid")) {
+    return { rows: [{ next_uid: String(uidCounter++) }], rowCount: 1 };
+  }
+  return { rows: [USER_ROW], rowCount: 1 };
+});
+
+class FakePool {
+  query = mockQuery;
+  end = async () => {};
+  connect = async () => ({ query: mockQuery, release: () => {} });
+  on() {}
+}
+
+const pgMock = () => ({
+  Pool: FakePool,
+  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
+  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
+});
+
+// Mock `pg` (NOT the `server` barrel) so the real getDomainUidNext /
+// getAccountUidNext / getImapUidValidity run against the FakePool and keep
+// their real identities — stubbing the barrel would bleed across files via
+// Bun's process-global mock.module. The control-flow tests below never reach
+// the per-mail loop, so the mocked pool is harmless to them; the happy-path
+// tests exercise it. `afterAll(restoreLeaves)` + resetPool re-mocks pg to real.
+mock.module("pg", pgMock);
+
+const { copyMessageTyped } = await import("./message-ops");
+const { resetPool } = await import("../postgres/client");
+
+beforeAll(() => {
+  mock.module("pg", pgMock);
+  resetPool();
+});
+
+afterAll(() => {
+  restoreLeaves();
+  resetPool();
+});
+
+beforeEach(() => {
+  mockQuery.mockClear();
+  uidCounter = 100;
+});
 
 const emptySeqState = (): SequenceState => ({
   seqToUid: [],
@@ -167,15 +242,114 @@ describe("COPY with empty source range (#520)", () => {
   });
 });
 
+// Build a source mail carrying a distinguishing subject + UID so the COPYUID
+// pairing can be cross-checked against the stored clone.
+const sourceMail = (
+  uid: { domain: number; account: number },
+  overrides: Partial<MailType> = {}
+): Partial<MailType> => ({
+  subject: `src-${uid.domain}`,
+  date: "2026-06-27T00:00:00.000Z",
+  html: "<p>hi</p>",
+  text: "hi",
+  from: { value: [{ address: "sender@x.com", name: "S" }], text: "sender@x.com" },
+  to: { value: [{ address: "src@hoie.kim", name: "" }], text: "src@hoie.kim" },
+  envelopeTo: [{ address: "src@hoie.kim", name: "" }],
+  messageId: `orig-${uid.domain}-${uid.account}`,
+  uid: uid as MailType["uid"],
+  ...overrides,
+});
+
+// A Store wired for the full copy flow: getMessages hands back the source
+// mails in the supplied (copy) order; storeMail records each clone (so the
+// test can read the dest UID actually assigned to each source).
+const makeCopyStore = (
+  existsBoxes: string[],
+  mails: Array<Partial<MailType>>
+) => {
+  const store = new Store(VALID_USER);
+  store.mailboxExists = async (box: string) =>
+    box === "INBOX" || existsBoxes.includes(box);
+  store.getMessages = async () => {
+    const map = new Map<number, Partial<MailType>>();
+    mails.forEach((m, i) => map.set(i, m));
+    return map as never;
+  };
+  const stored: Array<Partial<MailType>> = [];
+  store.storeMail = async (mail: never) => {
+    stored.push({ ...(mail as Partial<MailType>) });
+    return true as never;
+  };
+  return { store, stored };
+};
+
 describe("COPY happy path (#520)", () => {
-  // End-to-end "real source mails → COPYUID emission" needs a FakePool
-  // fixture (per the users.test.ts pattern) so the module-imported
-  // postgres helpers `getDomainUidNext` / `getAccountUidNext` /
-  // `getImapUidValidity` can be intercepted without mock.module's
-  // process-global hoist. TODO follow-up.
-  it.todo(
-    "copies source mails to destination with fresh UIDs and emits COPYUID (FakePool fixture needed)"
-  );
+  it("copies source mails to a non-INBOX dest with fresh UIDs and emits COPYUID", async () => {
+    const mails = [
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 7, account: 70 }),
+    ];
+    const { store, stored } = makeCopyStore(["Archive"], mails);
+    const lines = await runCopy(
+      copyReq("Archive", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+    expect(stored.length).toBe(2);
+    // Fresh messageId on each clone.
+    expect(stored[0].messageId).not.toBe(mails[0].messageId);
+    // Non-INBOX dest → dest UID is the fresh account UID (counter: domain
+    // 100/account 101, domain 102/account 103).
+    expect(lines).toEqual([
+      `A1 OK [COPYUID ${STORED_UIDVALIDITY} 5,7 101,103] COPY completed\r\n`,
+    ]);
+  });
+});
+
+describe("COPY COPYUID positional pairing — out-of-order set (#624, RFC 4315 §3)", () => {
+  it("pairs the n-th source UID with the n-th dest UID for a non-ascending sequence-set", async () => {
+    // `UID COPY 5,3` — client lists the higher UID first. getMessages
+    // returns the mails in that copy order (uid 5 then uid 3). The fix
+    // sorts the source mails ascending before assigning dest UIDs so the
+    // COPYUID source-set and dest-set (each independently sorted by
+    // `formatUidSet`) report the REAL mapping, not an inverted one.
+    const mails = [
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 3, account: 30 }),
+    ];
+    const { store, stored } = makeCopyStore(["Archive"], mails);
+    const lines = await runCopy(
+      copyReq("Archive", { type: "uid", ranges: [{ start: 3, end: 5 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+
+    const tagged = lines.find((l) => l.startsWith("A1 OK [COPYUID"))!;
+    const m = tagged.match(/\[COPYUID \d+ ([\d,:]+) ([\d,:]+)\]/)!;
+    const expand = (set: string): number[] =>
+      set.split(",").flatMap((part) => {
+        if (!part.includes(":")) return [Number(part)];
+        const [a, b] = part.split(":").map(Number);
+        const out: number[] = [];
+        for (let i = a; i <= b; i++) out.push(i);
+        return out;
+      });
+    const srcSet = expand(m[1]);
+    const destSet = expand(m[2]);
+    expect(srcSet.length).toBe(destSet.length);
+    const claimedPairing = new Map<number, number>();
+    srcSet.forEach((s, i) => claimedPairing.set(s, destSet[i]));
+
+    expect(stored.length).toBe(2);
+    const actualDestOf = (srcUid: number): number =>
+      stored.find((c) => c.subject === `src-${srcUid}`)!.uid!.account;
+
+    // COPYUID must report the real source→dest mapping.
+    expect(claimedPairing.get(3)).toBe(actualDestOf(3));
+    expect(claimedPairing.get(5)).toBe(actualDestOf(5));
+    // Smaller source UID owns the smaller dest UID — fails on pre-#624 code.
+    expect(actualDestOf(3)).toBeLessThan(actualDestOf(5));
+  });
 });
 
 describe("COPY dispatch — sequence vs UID semantics (#520)", () => {

@@ -472,6 +472,16 @@ export async function copyMessageTyped(
     const srcUidOf = (mail: Partial<MailType>): number =>
       sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
 
+    // RFC 4315 §3: the COPYUID source-set and dest-set must correspond
+    // positionally (n-th source UID ↔ n-th dest UID). The two sets are
+    // built by `formatUidSet`, which sorts each independently. To keep
+    // that sort from desynchronizing the pairing for an out-of-order
+    // sequence-set (e.g. `UID COPY 5,3`), assign dest UIDs in ascending
+    // source-UID order: sort the materialized source mails ascending here
+    // so the copy loop pushes both `sourceUids` and `destUids` already
+    // ascending, and `formatUidSet`'s independent sorts stay aligned.
+    sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
+
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
@@ -725,6 +735,12 @@ export async function moveMessageTyped(
     const sourceIsInbox = isInbox(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
       sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+
+    // RFC 4315 §3 (via RFC 6851 §4.3): keep the COPYUID source/dest sets
+    // positionally aligned for out-of-order sequence-sets — assign dest
+    // UIDs in ascending source-UID order. See copyMessageTyped for the
+    // full rationale. Sorting also tidies the targeted EXPUNGE emission.
+    sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
 
     const sourceUids: number[] = [];
     const destUids: number[] = [];

@@ -409,3 +409,67 @@ describe("MOVE happy path — non-INBOX source → INBOX dest (#453, address-cle
     ]);
   });
 });
+
+describe("MOVE COPYUID positional pairing — out-of-order set (#624, RFC 4315 §3)", () => {
+  it("pairs the n-th source UID with the n-th dest UID for a non-ascending sequence-set", async () => {
+    // `UID MOVE 5,3` — the client lists the higher UID first. The copy
+    // loop must assign dest UIDs in ascending source-UID order so the
+    // COPYUID source-set and dest-set (each independently sorted by
+    // `formatUidSet`) stay positionally aligned. getMessages hands the
+    // mails back in the request's copy order (uid 5 then uid 3); the fix
+    // sorts them ascending before assigning dest UIDs.
+    const mails = [
+      sourceMail({ domain: 5, account: 50 }, { subject: "src-5" }),
+      sourceMail({ domain: 3, account: 30 }, { subject: "src-3" }),
+    ];
+    const { store, stored } = makeMoveStore(["Archive"], mails);
+    const seqState: SequenceState = {
+      seqToUid: [3, 5],
+      uidToSeq: new Map([
+        [3, 1],
+        [5, 2],
+      ]),
+    };
+
+    const lines = await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 3, end: 3 }] }),
+      true,
+      store,
+      false,
+      "INBOX",
+      seqState
+    );
+
+    // Parse the emitted COPYUID source-set ↔ dest-set into a positional map.
+    const tagged = lines.find((l) => l.startsWith("A1 OK [COPYUID"))!;
+    const m = tagged.match(/\[COPYUID \d+ ([\d,:]+) ([\d,:]+)\]/)!;
+    const expand = (set: string): number[] =>
+      set.split(",").flatMap((part) => {
+        if (!part.includes(":")) return [Number(part)];
+        const [a, b] = part.split(":").map(Number);
+        const out: number[] = [];
+        for (let i = a; i <= b; i++) out.push(i);
+        return out;
+      });
+    const srcSet = expand(m[1]);
+    const destSet = expand(m[2]);
+    expect(srcSet.length).toBe(destSet.length);
+    const claimedPairing = new Map<number, number>();
+    srcSet.forEach((s, i) => claimedPairing.set(s, destSet[i]));
+
+    // Ground truth: each stored clone keeps its source's subject and carries
+    // the dest account UID it was actually assigned (non-INBOX dest).
+    expect(stored.length).toBe(2);
+    const actualDestOf = (srcUid: number): number => {
+      const clone = stored.find((c) => c.subject === `src-${srcUid}`)!;
+      return clone.uid!.account;
+    };
+
+    // The COPYUID response must report the REAL mapping, not an inverted one.
+    expect(claimedPairing.get(3)).toBe(actualDestOf(3));
+    expect(claimedPairing.get(5)).toBe(actualDestOf(5));
+    // And the smaller source UID must own the smaller dest UID (ascending
+    // assignment) — the assertion that fails on the pre-#624 code.
+    expect(actualDestOf(3)).toBeLessThan(actualDestOf(5));
+  });
+});
