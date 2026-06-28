@@ -232,6 +232,14 @@ const MailBody = ({ mailId }: Props) => {
           }
         });
 
+      // Native `toggle` fires after the browser lays out the slotted
+      // content, so `scrollHeight` read in the handler reflects the new
+      // size — robust under keyboard activation and slow renders, where
+      // the body-level click listener's setTimeout(50) heuristic misses.
+      Array.from(content.querySelectorAll("details")).forEach((det) => {
+        det.addEventListener("toggle", () => adjustMailContentSize(iframeDom));
+      });
+
       adjustMailContentSize(iframeDom);
       const id = setTimeout(() => adjustMailContentSize(iframeDom), 50);
       pendingTimers.current.push(id);
