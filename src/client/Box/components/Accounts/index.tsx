@@ -28,7 +28,8 @@ import {
   useLocalStorage,
   QueryCache,
   call,
-  onKeyboardActivate
+  onKeyboardActivate,
+  clearCachedQueries
 } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
@@ -376,6 +377,9 @@ const Accounts = ({
         "/api/users/login"
       );
       if (response.status !== "success") return;
+      // Drop the IndexedDB query cache so the next user on this browser can't be
+      // seeded with this user's cached mail headers (#457).
+      await clearCachedQueries();
       // Clear compose draft data so it doesn't leak to the next user on this browser
       [
         "name",

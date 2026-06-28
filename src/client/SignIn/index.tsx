@@ -3,7 +3,13 @@ import { useMutation } from "react-query";
 import { Link } from "react-router-dom";
 import { SignedUser, SignedUserType } from "common";
 import { LoginPostResponse } from "server";
-import { Notifier, call, Context } from "client";
+import {
+  Notifier,
+  call,
+  Context,
+  setCacheUser,
+  hydrateQueryCache
+} from "client";
 import LoginIcon from "./components/LoginIcon";
 import "./index.scss";
 
@@ -47,7 +53,16 @@ const Home = () => {
       const user = new SignedUser(
         mutation.data?.body as unknown as SignedUserType
       );
-      setTimeout(() => setUserInfo(user), 500);
+      // The bootstrap hydrate/persist setup (src/index.tsx) ran before this
+      // in-app login, so it saw no user. Re-point the query cache at the now
+      // logged-in user so persistence starts, and seed from any cache that
+      // survived a prior session on this browser. Await the seed before showing
+      // the app so a slow IDB read can't land after — and clobber — the fresh
+      // fetch the mail list kicks off on mount. (#457)
+      setCacheUser(user.id);
+      hydrateQueryCache(user.id).finally(() => {
+        setTimeout(() => setUserInfo(user), 500);
+      });
     }
   }, [mutation.data, setUserInfo]);
 

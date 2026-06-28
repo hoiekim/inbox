@@ -8,3 +8,5 @@ export * from "./user";
 export * from "./queryClient";
 export * from "./a11y";
 export * from "./mails";
+export * from "./cacheCatalog";
+export * from "./cachePersist";
