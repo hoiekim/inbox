@@ -47,12 +47,15 @@ const MailBody = ({ mailId }: Props) => {
 
   const iframeElement = useRef<HTMLIFrameElement>(null);
   const pendingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   // Cancel all pending timers when the component unmounts
   useEffect(() => {
     return () => {
       pendingTimers.current.forEach(clearTimeout);
       pendingTimers.current = [];
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
     };
   }, []);
 
@@ -239,6 +242,33 @@ const MailBody = ({ mailId }: Props) => {
       Array.from(content.querySelectorAll("details")).forEach((det) => {
         det.addEventListener("toggle", () => adjustMailContentSize(iframeDom));
       });
+
+      // Defense-in-depth fallback for browsers/contexts where the `toggle`
+      // event on `<details>` doesn't reliably reach our listener — iOS
+      // Safari has been the recurring case (#627 fix worked in macOS
+      // Chrome but not Safari mobile). ResizeObserver fires whenever the
+      // body's content rect changes height, so any unfolding (details
+      // toggle, image load, font swap, web-font fallback) reflows the
+      // iframe. Guarded with `suppressResize` so the body height change
+      // adjustMailContentSize itself causes (iframe height "auto" →
+      // body's `height: 100%` follows) doesn't recurse.
+      resizeObserverRef.current?.disconnect();
+      let suppressResize = false;
+      const resizeObserver = new ResizeObserver(() => {
+        if (suppressResize) return;
+        suppressResize = true;
+        try {
+          adjustMailContentSize(iframeDom);
+        } finally {
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              suppressResize = false;
+            }),
+          );
+        }
+      });
+      resizeObserver.observe(content);
+      resizeObserverRef.current = resizeObserver;
 
       adjustMailContentSize(iframeDom);
       const id = setTimeout(() => adjustMailContentSize(iframeDom), 50);
