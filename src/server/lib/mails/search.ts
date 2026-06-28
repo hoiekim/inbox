@@ -1,11 +1,5 @@
 import { MailHeaderData, SignedUser, MailAddressValueType, Insight } from "common";
-import {
-  searchMails,
-  SearchMailModel,
-  getDomainUidNext as pgGetDomainUidNext,
-  getAccountUidNext as pgGetAccountUidNext,
-} from "../postgres/repositories/mails";
-import { logger } from "../logger";
+import { searchMails, SearchMailModel } from "../postgres/repositories/mails";
 
 export const searchMail = async (
   user: SignedUser,
@@ -44,29 +38,4 @@ export const searchMail = async (
       highlight: m.highlight,
     });
   });
-};
-
-export const getDomainUidNext = async (
-  userId: string,
-  sent: boolean = false
-): Promise<number | null> => {
-  try {
-    return await pgGetDomainUidNext(userId, sent);
-  } catch (error) {
-    logger.error("Error getting next UID", {}, error);
-    return 1;
-  }
-};
-
-export const getAccountUidNext = async (
-  userId: string,
-  account: string,
-  sent: boolean = false
-): Promise<number | null> => {
-  try {
-    return await pgGetAccountUidNext(userId, account, sent);
-  } catch (error) {
-    logger.error("Error getting next UID", {}, error);
-    return 1;
-  }
 };

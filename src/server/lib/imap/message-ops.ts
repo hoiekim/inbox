@@ -553,21 +553,21 @@ export async function copyMessageTyped(
       newMail.sent = destIsSent;
 
       // Fresh UIDs in the destination's UID space. The `sent` arg
-      // matters: `getDomainUidNext`/`getAccountUidNext` query MAX(uid)
-      // WHERE sent=? so a copy to a Sent box without the arg would pick
-      // a UID from the received-side counter and collide with existing
-      // sent rows. (These are SELECT MAX(uid)+1 with no locking — see
-      // `repositories/mails.ts:388-427` — so concurrent COPYs against
-      // the same destination CAN race to the same UID. Pre-existing
-      // limitation across receive.ts/send.ts/append; not corrected here.)
+      // matters: the UID counter is keyed by `sent`, so a copy to a
+      // Sent box without the arg would draw from the received-side
+      // counter and collide with existing sent rows. Reservation is
+      // atomic (getDomainUidNext/getAccountUidNext upsert a per-(user,
+      // sent) counter), so concurrent COPYs to the same destination no
+      // longer race to the same UID. A reservation failure throws and
+      // is caught below as a tagged NO — never a fabricated UID.
       const newDomainUid = await getDomainUidNext(user.id, destIsSent);
       const newAccountUid = await getAccountUidNext(
         user.id,
         destAccount,
         destIsSent
       );
-      newMail.uid.domain = newDomainUid || 1;
-      newMail.uid.account = newAccountUid || 1;
+      newMail.uid.domain = newDomainUid;
+      newMail.uid.account = newAccountUid;
 
       const ok = await store.storeMail(newMail);
       if (!ok) {
@@ -804,8 +804,8 @@ export async function moveMessageTyped(
         destAccount,
         destIsSent
       );
-      newMail.uid.domain = newDomainUid || 1;
-      newMail.uid.account = newAccountUid || 1;
+      newMail.uid.domain = newDomainUid;
+      newMail.uid.account = newAccountUid;
 
       const ok = await store.storeMail(newMail);
       if (!ok) {
@@ -930,8 +930,8 @@ export async function appendMessage(
     const account = boxToAccount(user.username, targetMailbox);
     const domainUid = await getDomainUidNext(user.id);
     const accountUid = await getAccountUidNext(user.id, account);
-    mail.uid.domain = domainUid || 1;
-    mail.uid.account = accountUid || 1;
+    mail.uid.domain = domainUid;
+    mail.uid.account = accountUid;
 
     const result = await store.storeMail(mail);
 

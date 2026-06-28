@@ -5,6 +5,7 @@ export const SESSIONS = "sessions";
 export const PUSH_SUBSCRIPTIONS = "push_subscriptions";
 export const SPAM_ALLOWLIST = "spam_allowlist";
 export const SPAM_TRAINING = "spam_training";
+export const MAIL_UID_COUNTERS = "mail_uid_counters";
 
 // Common column names
 export const UPDATED = "updated";
@@ -49,6 +50,10 @@ export const EXPUNGED = "expunged";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
 export const UID_ACCOUNT = "uid_account";
+// mail_uid_counters columns
+export const UID_KIND = "uid_kind";
+export const UID_SCOPE = "uid_scope";
+export const LAST_UID = "last_uid";
 export const SPAM_SCORE = "spam_score";
 export const SPAM_REASONS = "spam_reasons";
 export const IS_SPAM = "is_spam";

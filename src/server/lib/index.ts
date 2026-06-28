@@ -29,8 +29,6 @@ export {
   addressToUsername,
   saveBuffer,
   getAccounts,
-  getDomainUidNext,
-  getAccountUidNext,
   getText,
   ATTACHMENT_FOLDER,
   getAttachmentId,

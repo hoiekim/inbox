@@ -13,6 +13,7 @@ import {
   pushSubscriptionsTable,
   spamAllowlistTable,
   spamTrainingTable,
+  mailUidCountersTable,
 } from "./models";
 
 export const version = "1";
@@ -26,6 +27,7 @@ const tables: Table<unknown, Schema>[] = [
   pushSubscriptionsTable,
   spamAllowlistTable,
   spamTrainingTable,
+  mailUidCountersTable,
 ];
 
 export const postgresIsAvailable = async (): Promise<void> => {
