@@ -8,3 +8,4 @@ export { default as TrashIcon } from "./TrashIcon";
 export { default as EmptyStarIcon } from "./EmptyStarIcon";
 export { default as SolidStarIcon } from "./SolidStarIcon";
 export { default as RobotIcon } from "./RobotIcon";
+export { default as NewTabIcon } from "./NewTabIcon";

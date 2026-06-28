@@ -245,48 +245,10 @@ const MailBody = ({ mailId }: Props) => {
       pendingTimers.current.push(id);
     };
 
-    const onClickOpenInNewTab = () => {
-      // Render the email inside a sandboxed iframe in the new tab — NOT
-      // directly into the top document. A `blob:` document inherits this
-      // page's origin, so any script in the email body would otherwise run
-      // with full inbox origin (cookies / session). The inline preview is
-      // safe only because its iframe omits `allow-scripts`; the new tab must
-      // preserve that backstop. The shell below carries no script of its own
-      // and confines the email to an iframe whose sandbox matches the inline
-      // viewer (no `allow-scripts`, no top-navigation), so email scripts stay
-      // inert and `<meta http-equiv=refresh>` can't redirect the tab. The
-      // sanitizer stays defense-in-depth, not the sole barrier.
-      const processed = processHtmlForViewer(data.html);
-      // Escape for embedding in the double-quoted `srcdoc` attribute.
-      const srcdoc = processed.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-      const shell =
-        "<!doctype html><html><head><meta charset=\"utf-8\" />" +
-        "<style>html,body{margin:0;padding:0;height:100%}" +
-        "iframe{border:0;width:100%;height:100%}</style></head>" +
-        '<body><iframe sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" ' +
-        `srcdoc="${srcdoc}"></iframe></body></html>`;
-      const blob = new Blob([shell], { type: "text/html;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank", "noopener,noreferrer");
-      // Revoke after a delay so the new tab has a chance to load. Chrome /
-      // Safari hold the blob alive in the open tab regardless once the
-      // load is committed.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    };
-
     return (
       <div className="text">
         <div className="loading_message">
           {isLoadingIframe ? loadingMessage : null}
-        </div>
-        <div className="mailBodyActions">
-          <button
-            className="openInNewTab"
-            onClick={onClickOpenInNewTab}
-            title="Open this email body in a new tab"
-          >
-            Open in new tab
-          </button>
         </div>
         {attachments.length ? (
           <div className="attachmentBox">{attachments}</div>

@@ -1,8 +1,11 @@
-import { ComponentProps, useContext } from "react";
-import { Context, getDateForMailHeader, onKeyboardActivate } from "client";
+import { ComponentProps } from "react";
+import { getDateForMailHeader, onKeyboardActivate } from "client";
 import { MailAddressValueType, MailHeaderData } from "common";
 
-export interface MailHeaderProps extends Omit<ComponentProps<"div">, "onClick"> {
+export interface MailHeaderProps extends Omit<
+  ComponentProps<"div">,
+  "onClick"
+> {
   mail: MailHeaderData;
   isActive: boolean;
   onClick?: () => void;
@@ -10,14 +13,7 @@ export interface MailHeaderProps extends Omit<ComponentProps<"div">, "onClick"> 
 
 const MailHeader = (props: MailHeaderProps) => {
   const { mail, isActive, onClick, onMouseLeave } = props;
-  const { isWriterOpen } = useContext(Context);
   const { date, time, duration } = getDateForMailHeader(new Date(mail.date));
-
-  const classes = ["mailcard"];
-
-  if (!mail.read) classes.push("unread");
-  if (mail.saved) classes.push("star");
-  if (!isWriterOpen) classes.push("shadow");
 
   const cc = "cc" in mail ? mail.cc : undefined;
   const bcc = "bcc" in mail ? mail.bcc : undefined;
@@ -66,9 +62,7 @@ const MailHeader = (props: MailHeaderProps) => {
         <></>
       )}
       <div className="mailcard-subject content">
-        {mail.subject || (
-          <span className="no-subject">(No Subject)</span>
-        )}
+        {mail.subject || <span className="no-subject">(No Subject)</span>}
       </div>
     </div>
   );

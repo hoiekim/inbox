@@ -187,6 +187,43 @@
       }
     }
 
+    @media only screen and (max-width: 750px) {
+      .actionBox {
+        &.open {
+          padding-top: 20px;
+          padding-right: 10px;
+          gap: 15px;
+          justify-content: right;
+          align-items: flex-start;
+          left: 0;
+          margin: 0;
+          background-color: #0002;
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          height: 100%;
+          width: 100%;
+
+          .iconBox {
+            width: 50px;
+            svg {
+              width: 40px;
+              height: 40px;
+            }
+
+            &:hover > svg {
+              width: 48px;
+              height: 48px;
+            }
+
+            &:active > svg {
+              width: 44px;
+              height: 44px;
+            }
+          }
+        }
+      }
+    }
+
     &.skeleton {
       border: none;
       width: 100%;

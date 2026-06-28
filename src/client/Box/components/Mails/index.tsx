@@ -5,12 +5,13 @@ import {
   Dispatch,
   SetStateAction
 } from "react";
-import { useQuery } from "react-query";
+import { useQuery, useQueryClient } from "react-query";
 import { marked } from "marked";
-import { MailHeaderData, ReplyData } from "common";
+import { MailBodyData, MailHeaderData, ReplyData } from "common";
 
 import {
   ApiResponse,
+  BodyGetResponse,
   HeadersGetResponse,
   MarkMailPostBody,
   MarkMailPostResponse,
@@ -23,6 +24,7 @@ import {
   MailBody,
   SkeletonMail,
   KebabIcon,
+  NewTabIcon,
   ReplyIcon,
   ShareIcon,
   TrashIcon,
@@ -31,7 +33,14 @@ import {
   RobotIcon
 } from "./components";
 
-import { Context, Category, QueryCache, call, isSentMail } from "client";
+import {
+  Context,
+  Category,
+  QueryCache,
+  call,
+  isSentMail,
+  processHtmlForViewer
+} from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 
 import "./index.scss";
@@ -83,10 +92,14 @@ interface RenderedMailProps {
   i: number;
   activeMailId: ActiveMailMap;
   setActiveMailId: Dispatch<SetStateAction<ActiveMailMap>>;
-  requestMarkRead: (mail: MailHeaderData) => Promise<ApiResponse<MarkMailPostResponse>>;
+  requestMarkRead: (
+    mail: MailHeaderData
+  ) => Promise<ApiResponse<MarkMailPostResponse>>;
   markReadInQueryData: (mail: MailHeaderData) => void;
   setReplyData: Dispatch<SetStateAction<ReplyData>>;
-  requestDeleteMail: (mail: MailHeaderData) => Promise<ApiResponse<MailDeleteResponse>>;
+  requestDeleteMail: (
+    mail: MailHeaderData
+  ) => Promise<ApiResponse<MailDeleteResponse>>;
   selectedAccount: string;
   domainName: string;
   accountsCache: AccountsCache;
@@ -122,6 +135,46 @@ const RenderedMail = ({
   const isActive = !!activeMailId[mail.id];
 
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
+
+  const queryClient = useQueryClient();
+
+  const onClickOpenInNewTab = async () => {
+    const queryUrl = `/api/mails/body/${mail.id}`;
+    const getMail = () =>
+      call.get<BodyGetResponse>(queryUrl).then(({ status, body, message }) => {
+        if (status === "success") return new MailBodyData(body);
+        throw new Error(message);
+      });
+    const data = await queryClient.fetchQuery<MailBodyData>(queryUrl, getMail, {
+      staleTime: Infinity
+    });
+    // Render the email inside a sandboxed iframe in the new tab — NOT
+    // directly into the top document. A `blob:` document inherits this
+    // page's origin, so any script in the email body would otherwise run
+    // with full inbox origin (cookies / session). The inline preview is
+    // safe only because its iframe omits `allow-scripts`; the new tab must
+    // preserve that backstop. The shell below carries no script of its own
+    // and confines the email to an iframe whose sandbox matches the inline
+    // viewer (no `allow-scripts`, no top-navigation), so email scripts stay
+    // inert and `<meta http-equiv=refresh>` can't redirect the tab. The
+    // sanitizer stays defense-in-depth, not the sole barrier.
+    const processed = processHtmlForViewer(data.html);
+    // Escape for embedding in the double-quoted `srcdoc` attribute.
+    const srcdoc = processed.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    const shell =
+      '<!doctype html><html><head><meta charset="utf-8" />' +
+      "<style>html,body{margin:0;padding:0;height:100%}" +
+      "iframe{border:0;width:100%;height:100%}</style></head>" +
+      '<body><iframe sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" ' +
+      `srcdoc="${srcdoc}"></iframe></body></html>`;
+    const blob = new Blob([shell], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    // Revoke after a delay so the new tab has a chance to load. Chrome /
+    // Safari hold the blob alive in the open tab regardless once the
+    // load is committed.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
 
   const onClickMailcard = () => {
     if (isActive) {
@@ -234,7 +287,9 @@ const RenderedMail = ({
           .replace(/&lt;em&gt;/g, "<em>")
           .replace(/&lt;\/em&gt;/g, "</em>");
       const __html = "..." + e.map(sanitize).join("... ...") + "...";
-      return <div key={`highlight_${index}`} dangerouslySetInnerHTML={{ __html }} />;
+      return (
+        <div key={`highlight_${index}`} dangerouslySetInnerHTML={{ __html }} />
+      );
     });
   }
 
@@ -306,6 +361,16 @@ const RenderedMail = ({
               )}
             </div>
             <div
+              key="openInNewTab"
+              className="iconBox cursor"
+              onClick={onClickOpenInNewTab}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+              title="Open this email body in a new tab"
+            >
+              <NewTabIcon />
+            </div>
+            <div
               key="reply"
               className="iconBox cursor"
               onClick={onClickReply}
@@ -335,8 +400,12 @@ const RenderedMail = ({
           </>
         ) : (
           <>
-            {(summary?.length || actionItems?.length) ? (
-              <div key="robot" className="iconBox cursor" onClick={onClickRobot}>
+            {summary?.length || actionItems?.length ? (
+              <div
+                key="robot"
+                className="iconBox cursor"
+                onClick={onClickRobot}
+              >
                 <RobotIcon />
               </div>
             ) : null}
@@ -586,11 +655,7 @@ const RenderedMails = ({ page }: { page: number }) => {
       );
     }
 
-    return (
-      <div className="mails_container">
-        {result}
-      </div>
-    );
+    return <div className="mails_container">{result}</div>;
   }
 
   return <></>;

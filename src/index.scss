@@ -69,244 +69,126 @@ code {
   border-radius: 10px;
 }
 
-@media (prefers-color-scheme: light) {
-  *:hover::-webkit-scrollbar-thumb {
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#block-menu-container,
+#emoji-menu-container,
+.editor_container {
+  &:hover::-webkit-scrollbar-thumb {
     background: rgba(0, 0, 0, 0.2);
-  }
-
-  #block-menu-container,
-  #emoji-menu-container,
-  .editor_container {
-    &:hover::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.2);
-    }
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.7);
-  }
-
-  #block-menu-container,
-  #emoji-menu-container,
-  .editor_container {
-    &::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.7);
-    }
-  }
-
-  input::-webkit-scrollbar-thumb {
-    border: 7px solid $color-light;
-  }
-
-  body,
-  .main_pane {
-    background-color: $color-light;
-    color: $color-dark;
-  }
-
-  .login_card,
-  .writer-buttons {
-    & > button {
-      background-color: color.adjust($color-accent, $lightness: 17%);
-      color: $color-light;
-
-      &:hover {
-        background-color: color.adjust($color-accent, $lightness: 24%);
-      }
-
-      &:active {
-        background-color: color.adjust($color-accent, $lightness: 22%);
-      }
-    }
-  }
-
-  .mailcard,
-  .writer,
-  .login_card {
-    background-color: color.adjust($color-light, $lightness: 3%);
-    border-left: 3px solid color.adjust($color-light, $lightness: 8%);
-  }
-
-  .mailcard:hover {
-    background-color: color.adjust($color-light, $lightness: 4%);
-  }
-
-  .inputBox-flex,
-  .search_container,
-  .login_card {
-    input {
-      color: $color-dark;
-      background-color: color.adjust($color-light, $lightness: 10%);
-      box-shadow:
-        2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
-        -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
-    }
-  }
-
-  .writer-content {
-    box-shadow:
-      2px 2px 2px color.adjust($color-light, $lightness: -5%) inset,
-      -1px -1px 2px color.adjust($color-light, $lightness: 20%) inset;
-
-    &,
-    * {
-      color: $color-dark;
-      background-color: color.adjust($color-light, $lightness: 10%);
-    }
-  }
-
-  .attachment {
-    background-color: color.adjust($color-light, $lightness: 8%);
-
-    &:hover {
-      background-color: color.adjust($color-light, $lightness: 10%);
-    }
-  }
-
-  .tag {
-    background-color: color.adjust($color-light, $lightness: 8%);
-    color: $color-dark;
-
-    &:not(.skeleton):not(.clicked):hover {
-      background-color: color.adjust($color-light, $lightness: 14%);
-    }
-
-    &:not(.skeleton):not(.clicked):active {
-      background-color: color.adjust($color-light, $lightness: 12%);
-    }
-
-    &.clicked {
-      background-color: color.adjust($color-light, $lightness: -10%);
-    }
-  }
-
-  .curtain.on {
-    background-color: color.adjust($color-light, $alpha: -0.4);
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  *:hover::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
-  }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
 
-  #block-menu-container,
-  #emoji-menu-container,
-  .editor_container {
-    &:hover::-webkit-scrollbar-thumb {
-      background: rgba(0, 0, 0, 0.2);
-    }
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.7);
-  }
-
-  #block-menu-container,
-  #emoji-menu-container,
-  .editor_container {
-    &::-webkit-scrollbar-thumb:hover {
-      background: rgba(0, 0, 0, 0.7);
-    }
-  }
-
-  input::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2);
-    border: 7px solid rgb(235, 235, 235);
-  }
-
-  input::-webkit-scrollbar-thumb:hover {
+#block-menu-container,
+#emoji-menu-container,
+.editor_container {
+  &::-webkit-scrollbar-thumb:hover {
     background: rgba(0, 0, 0, 0.7);
   }
+}
 
-  body,
-  .main_pane {
-    background-color: $color-dark;
+input::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border: 7px solid rgb(235, 235, 235);
+}
+
+input::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+body,
+.main_pane {
+  background-color: $color-dark;
+  color: $color-light;
+}
+
+.login_card,
+.writer-buttons {
+  & > button {
     color: $color-light;
-  }
+    background-color: color.adjust($color-accent, $lightness: 7%);
 
-  .login_card,
-  .writer-buttons {
-    & > button {
-      color: $color-light;
-      background-color: color.adjust($color-accent, $lightness: 7%);
-
-      &:hover {
-        background-color: color.adjust($color-accent, $lightness: 14%);
-      }
-      &:active {
-        background-color: color.adjust($color-accent, $lightness: 12%);
-      }
+    &:hover {
+      background-color: color.adjust($color-accent, $lightness: 14%);
+    }
+    &:active {
+      background-color: color.adjust($color-accent, $lightness: 12%);
     }
   }
+}
 
-  .mailcard,
-  .writer,
-  .login_card {
+.mailcard,
+.writer,
+.login_card {
+  background-color: color.adjust($color-dark, $lightness: 3%);
+  border-left: 3px solid color.adjust($color-dark, $lightness: 10%);
+}
+
+.mailcard:not(.skeleton):hover {
+  background-color: color.adjust($color-dark, $lightness: 4%);
+
+  .insight {
     background-color: color.adjust($color-dark, $lightness: 3%);
-    border-left: 3px solid color.adjust($color-dark, $lightness: 10%);
   }
+}
 
-  .mailcard:not(.skeleton):hover {
-    background-color: color.adjust($color-dark, $lightness: 4%);
-
-    .insight {
-      background-color: color.adjust($color-dark, $lightness: 3%);
-    }
-  }
-
-  .inputBox-flex,
-  .search_container,
-  .login_card {
-    input {
-      color: $color-light;
-      background-color: color.adjust($color-dark, $lightness: -3%);
-      box-shadow:
-        1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
-        -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
-    }
-  }
-
-  .writer-content {
+.inputBox-flex,
+.search_container,
+.login_card {
+  input {
+    color: $color-light;
+    background-color: color.adjust($color-dark, $lightness: -3%);
     box-shadow:
       1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
       -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
-
-    &,
-    * {
-      color: $color-light;
-      background-color: color.adjust($color-dark, $lightness: -3%);
-    }
   }
+}
 
-  .attachment {
-    background-color: color.adjust($color-dark, $lightness: 10%);
+.writer-content {
+  box-shadow:
+    1px 1px 2px color.adjust($color-dark, $lightness: -10%) inset,
+    -0.5px -0.5px 2px color.adjust($color-dark, $lightness: 10%) inset;
 
-    &:hover {
-      background-color: color.adjust($color-dark, $lightness: 13%);
-    }
-  }
-
-  .tag {
-    background-color: color.adjust($color-dark, $lightness: 7%);
+  &,
+  * {
     color: $color-light;
+    background-color: color.adjust($color-dark, $lightness: -3%);
+  }
+}
 
-    &:not(.skeleton):not(.clicked):hover {
-      background-color: color.adjust($color-dark, $lightness: 14%);
-    }
+.attachment {
+  background-color: color.adjust($color-dark, $lightness: 10%);
 
-    &:not(.skeleton):not(.clicked):active {
-      background-color: color.adjust($color-dark, $lightness: 10%);
-    }
+  &:hover {
+    background-color: color.adjust($color-dark, $lightness: 13%);
+  }
+}
 
-    &.clicked {
-      background-color: color.adjust($color-dark, $lightness: -4%);
-    }
+.tag {
+  background-color: color.adjust($color-dark, $lightness: 7%);
+  color: $color-light;
+
+  &:not(.skeleton):not(.clicked):hover {
+    background-color: color.adjust($color-dark, $lightness: 14%);
   }
 
-  .curtain.on {
-    background-color: color.adjust($color-dark, $alpha: -0.4);
+  &:not(.skeleton):not(.clicked):active {
+    background-color: color.adjust($color-dark, $lightness: 10%);
   }
+
+  &.clicked {
+    background-color: color.adjust($color-dark, $lightness: -4%);
+  }
+}
+
+.curtain.on {
+  background-color: color.adjust($color-dark, $alpha: -0.4);
 }
 
 .writer-content {
@@ -474,25 +356,13 @@ svg {
     animation: loading 2s infinite;
     content: "";
 
-    @media (prefers-color-scheme: dark) {
-      background-image: repeating-linear-gradient(
-        60deg,
-        rgba(#fff, 0) 0%,
-        rgba(#fff, 0) 10%,
-        rgba(#fff, 0.03) 50%,
-        rgba(#fff, 0) 90%,
-        rgba(#fff, 0) 100%
-      );
-    }
-    @media (prefers-color-scheme: light) {
-      background-image: repeating-linear-gradient(
-        60deg,
-        rgba(#000, 0) 0%,
-        rgba(#000, 0) 10%,
-        rgba(#000, 0.03) 50%,
-        rgba(#000, 0) 90%,
-        rgba(#000, 0) 100%
-      );
-    }
+    background-image: repeating-linear-gradient(
+      60deg,
+      rgba(#fff, 0) 0%,
+      rgba(#fff, 0) 10%,
+      rgba(#fff, 0.03) 50%,
+      rgba(#fff, 0) 90%,
+      rgba(#fff, 0) 100%
+    );
   }
 }

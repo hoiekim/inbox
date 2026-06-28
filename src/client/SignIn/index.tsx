@@ -77,43 +77,45 @@ const Home = () => {
 
   return (
     <div className="container_login">
-      <form className="login_card" onSubmit={onSubmit}>
-        <h3 className="greeting">Please log in</h3>
-        <div className="info_message">{infoMessage}</div>
-        <input
-          className="login_ui"
-          placeholder="username or email"
-          type="text"
-          name="username"
-          autoComplete="username"
-          value={usernameInput}
-          onChange={onChangeUsername}
-        />
-        <input
-          className="login_ui"
-          placeholder="password"
-          type="password"
-          name="password"
-          autoComplete="current-password"
-          value={passwordInput}
-          onChange={onChangePassword}
-        />
-        <button className="login_ui" type="submit">
-          <LoginIcon />
-          <span>Login</span>
-        </button>
-        <div className="card_footer">
-          <div className="info_message">
-            <span>Forgot password?</span>
-            &nbsp;
-            <Link to="/set-info">Reset Password</Link>
+      <form onSubmit={onSubmit}>
+        <blockquote className="login_card">
+          <h3 className="greeting">Please log in</h3>
+          <div className="info_message">{infoMessage}</div>
+          <input
+            className="login_ui"
+            placeholder="username or email"
+            type="text"
+            name="username"
+            autoComplete="username"
+            value={usernameInput}
+            onChange={onChangeUsername}
+          />
+          <input
+            className="login_ui"
+            placeholder="password"
+            type="password"
+            name="password"
+            autoComplete="current-password"
+            value={passwordInput}
+            onChange={onChangePassword}
+          />
+          <button className="login_ui" type="submit">
+            <LoginIcon />
+            <span>Login</span>
+          </button>
+          <div className="card_footer">
+            <div className="info_message">
+              <span>Forgot password?</span>
+              &nbsp;
+              <Link to="/set-info">Reset Password</Link>
+            </div>
+            <div className="info_message">
+              <span>Don't have account?</span>
+              &nbsp;
+              <Link to="/set-info">Sign Up</Link>
+            </div>
           </div>
-          <div className="info_message">
-            <span>Don't have account?</span>
-            &nbsp;
-            <Link to="/set-info">Sign Up</Link>
-          </div>
-        </div>
+        </blockquote>
       </form>
     </div>
   );
