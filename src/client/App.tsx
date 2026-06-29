@@ -13,7 +13,21 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Account, SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
 
-import { Header, SignIn, Box, SignUp, ErrorBoundary, useLocalStorage, Notifier, call, callUser, queryClient, registerServiceWorker } from "client";
+import {
+  Header,
+  SignIn,
+  Box,
+  SignUp,
+  ErrorBoundary,
+  OfflineBanner,
+  IsOnlineProvider,
+  useLocalStorage,
+  Notifier,
+  call,
+  callUser,
+  queryClient,
+  registerServiceWorker
+} from "client";
 
 export enum Category {
   NewMails = "New Mails",
@@ -210,29 +224,40 @@ const App = ({ user: session }: Props) => {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <Context.Provider value={contextValue}>
-          <BrowserRouter>
-            <ErrorBoundary>
-              <Header />
-              <Routes>
-                <Route
-                  path="/"
-                  element={userInfo ? <Box /> : <Navigate to="/sign-in" replace />}
-                />
-                <Route
-                  path="/sign-in"
-                  element={userInfo ? <Navigate to="/" replace /> : <SignIn />}
-                />
-                <Route
-                  path="/set-info"
-                  element={userInfo ? <Navigate to="/" replace /> : <SignUp />}
-                />
-                <Route
-                  path="/set-info/:email"
-                  element={userInfo ? <Navigate to="/" replace /> : <SignUp />}
-                />
-              </Routes>
-            </ErrorBoundary>
-          </BrowserRouter>
+          <IsOnlineProvider>
+            <BrowserRouter>
+              <ErrorBoundary>
+                <OfflineBanner />
+                <Header />
+                <Routes>
+                  <Route
+                    path="/"
+                    element={
+                      userInfo ? <Box /> : <Navigate to="/sign-in" replace />
+                    }
+                  />
+                  <Route
+                    path="/sign-in"
+                    element={
+                      userInfo ? <Navigate to="/" replace /> : <SignIn />
+                    }
+                  />
+                  <Route
+                    path="/set-info"
+                    element={
+                      userInfo ? <Navigate to="/" replace /> : <SignUp />
+                    }
+                  />
+                  <Route
+                    path="/set-info/:email"
+                    element={
+                      userInfo ? <Navigate to="/" replace /> : <SignUp />
+                    }
+                  />
+                </Routes>
+              </ErrorBoundary>
+            </BrowserRouter>
+          </IsOnlineProvider>
         </Context.Provider>
       </QueryClientProvider>
     </StrictMode>

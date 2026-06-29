@@ -1,0 +1,42 @@
+/*
+ * The app shell is a fixed layout: #title_bar is `position: fixed; top: 0` and
+ * the mail panes are `position: fixed; top: 55px`. A normal-flow banner would
+ * sit underneath them, so the banner is itself fixed — pinned to the bottom
+ * edge, above the panes (z-index 30 > #title_bar's 20) — which keeps it visible
+ * without reflowing the pinned header/content.
+ */
+.offline-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.4rem 1rem;
+  background: #5a5a5a;
+  color: white;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.offline-banner-message {
+  flex: 0 1 auto;
+}
+
+.offline-banner-retry {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.offline-banner-retry:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
