@@ -13,7 +13,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Account, SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
 
-import { Header, SignIn, Box, SignUp, ErrorBoundary, useLocalStorage, Notifier, call, callUser, queryClient } from "client";
+import { Header, SignIn, Box, SignUp, ErrorBoundary, useLocalStorage, Notifier, call, callUser, queryClient, registerServiceWorker } from "client";
 
 export enum Category {
   NewMails = "New Mails",
@@ -168,6 +168,9 @@ const App = ({ user: session }: Props) => {
       setSearchHistory([]);
       setNewMailsTotal(0);
     } else {
+      // Register the SW for every authenticated session, not just push opt-ins,
+      // so the asset cache + offline-navigation fallback reach all users (#458).
+      registerServiceWorker();
       new Notifier().subscribe();
     }
   }, [
