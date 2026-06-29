@@ -2,10 +2,10 @@ import { useIsOnline, formatLastSeen } from "client";
 import "./index.css";
 
 /**
- * Top banner shown only while the server is unreachable (#458 Phase 2). The app
+ * Banner shown only while the server is unreachable (#458 Phase 2). The app
  * keeps rendering the last-known data from the React Query cache (seeded from
  * IndexedDB in Phase 1); this tells the user the data is frozen and offers an
- * immediate reconnect attempt.
+ * immediate reconnect attempt. Bottom-fixed — see index.css for why.
  */
 const OfflineBanner = () => {
   const { isOnline, lastSeenOnline, recheck } = useIsOnline();

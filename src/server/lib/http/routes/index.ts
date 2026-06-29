@@ -15,8 +15,10 @@ import { sendAlarm } from "../../alarm";
 const apiRouter = Router();
 
 apiRouter.use((req, _res, next) => {
-  // Skip logging for health check requests (e.g. from reverse proxy)
-  if (req.url === "/health") {
+  // Skip logging for the infra health check and the client liveness ping —
+  // both are polled frequently (reverse proxy / every open tab's 30s offline
+  // heartbeat) and would otherwise flood the request log.
+  if (req.url === "/health" || req.url === "/ping") {
     next();
     return;
   }
@@ -29,6 +31,13 @@ apiRouter.use((req, _res, next) => {
     from: getClientIp(req),
   });
   next();
+});
+
+// Cheap liveness probe for the client's offline heartbeat: just "is the HTTP
+// server reachable", with none of /health's DB query + SMTP/IMAP socket probes
+// (which would multiply into N port-scans per 30s at N users with open tabs).
+apiRouter.get("/ping", (_req, res) => {
+  res.json({ status: "success" });
 });
 
 apiRouter.use("/health", healthRouter);

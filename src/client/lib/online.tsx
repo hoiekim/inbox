@@ -8,7 +8,8 @@ import {
   ReactNode
 } from "react";
 
-import { queryClient, matchCacheCatalog } from "client";
+import { queryClient } from "./queryClient";
+import { matchCacheCatalog } from "./cacheCatalog";
 
 /**
  * Phase 2 (#458) offline-read UX. Tracks whether the app can currently reach
@@ -19,8 +20,10 @@ import { queryClient, matchCacheCatalog } from "client";
  * Two signals feed the state, in increasing order of trust:
  *   1. `navigator.onLine` window events — instant but unreliable (stays `true`
  *      on captive-portal Wi-Fi where no request actually completes).
- *   2. A `GET /api/health` heartbeat while the tab is visible — the ground
- *      truth, used to correct `navigator.onLine`'s false positives.
+ *   2. A `GET /api/ping` heartbeat while the tab is visible — the ground truth,
+ *      used to correct `navigator.onLine`'s false positives. Deliberately the
+ *      cheap liveness route, not `/api/health` (whose DB + socket probes would
+ *      multiply by open-tab count).
  */
 
 export interface OnlineState {
@@ -54,15 +57,15 @@ export const reduceOnline = (
 });
 
 /**
- * Hit the health endpoint and report reachability. `fetchImpl` is injectable so
- * the heartbeat can be tested without a real network. Any throw (DNS failure,
- * abort, offline) is reachability=false, never a rejection.
+ * Hit the liveness endpoint and report reachability. `fetchImpl` is injectable
+ * so the heartbeat can be tested without a real network. Any throw (DNS
+ * failure, abort, offline) is reachability=false, never a rejection.
  */
 export const pingHealth = async (
   fetchImpl: typeof fetch = fetch
 ): Promise<boolean> => {
   try {
-    const res = await fetchImpl("/api/health", { cache: "no-store" });
+    const res = await fetchImpl("/api/ping", { cache: "no-store" });
     return res.ok;
   } catch {
     return false;
