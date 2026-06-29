@@ -39,17 +39,17 @@ describe("reduceOnline", () => {
 });
 
 describe("pingHealth", () => {
-  it("is true when /api/health responds ok", async () => {
+  it("is true when /api/ping responds ok (cheap liveness route, not /api/health)", async () => {
     let calledPath = "";
     const fakeFetch = (async (path: string) => {
       calledPath = path as string;
       return { ok: true } as Response;
     }) as unknown as typeof fetch;
     expect(await pingHealth(fakeFetch)).toBe(true);
-    expect(calledPath).toBe("/api/health");
+    expect(calledPath).toBe("/api/ping");
   });
 
-  it("is false when /api/health responds non-ok", async () => {
+  it("is false when /api/ping responds non-ok", async () => {
     const fakeFetch = (async () =>
       ({ ok: false }) as Response) as unknown as typeof fetch;
     expect(await pingHealth(fakeFetch)).toBe(false);
