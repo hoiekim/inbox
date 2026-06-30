@@ -10,3 +10,4 @@ export * from "./a11y";
 export * from "./mails";
 export * from "./cacheCatalog";
 export * from "./cachePersist";
+export * from "./serviceWorker";

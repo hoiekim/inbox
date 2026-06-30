@@ -29,7 +29,8 @@ import {
   QueryCache,
   call,
   onKeyboardActivate,
-  clearCachedQueries
+  clearCachedQueries,
+  unregisterServiceWorker
 } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
@@ -380,6 +381,9 @@ const Accounts = ({
       // Drop the IndexedDB query cache so the next user on this browser can't be
       // seeded with this user's cached mail headers (#457).
       await clearCachedQueries();
+      // Tear down the SW + Cache Storage so the logged-out browser holds no
+      // cached app shell / assets from this session (#458).
+      await unregisterServiceWorker();
       // Clear compose draft data so it doesn't leak to the next user on this browser
       [
         "name",
