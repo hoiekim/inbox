@@ -20,6 +20,18 @@ services:
       retries: 3
       start_period: 60s
     restart: always
+    # journald log driver so container stdout persists across restart /
+    # `compose down`/recreate. json-file (the docker default) is keyed by
+    # container-id, so the previous container's logs become unreachable
+    # via `docker logs` the moment compose replaces the container — every
+    # OOM triage today loses history that way. journald keeps everything
+    # under systemd-journald's retention (SystemMaxUse / MaxRetentionSec
+    # in /etc/systemd/journald.conf on the host). Read live or historical:
+    #   journalctl CONTAINER_NAME=hoie-inbox-1 --since '1 hour ago'
+    logging:
+      driver: journald
+      options:
+        tag: "hoie-inbox"
     volumes:
       - attachments:/app/attachments
     environment:
