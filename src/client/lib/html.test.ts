@@ -61,6 +61,11 @@ describe("processHtmlForViewer — dangerous URI scheme neutralization", () => {
     },
   );
 
+  test("strips javascript: in an SVG-namespaced xlink:href", () => {
+    const doc = viewerDoc(`<svg><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>`);
+    expect(doc.querySelector("a")?.hasAttribute("xlink:href")).toBe(false);
+  });
+
   test("strips vbscript: in href", () => {
     const doc = viewerDoc(`<a href="vbscript:msgbox(1)">x</a>`);
     expect(doc.querySelector("a")?.hasAttribute("href")).toBe(false);
