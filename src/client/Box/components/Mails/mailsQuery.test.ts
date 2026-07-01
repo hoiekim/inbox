@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { Category } from "client";
-import { getMailsQueryUrl } from "./index";
+import { getMailsQueryUrl } from "./mailsQuery";
 
 describe("getMailsQueryUrl", () => {
   it("routes Spam to the user-global spam endpoint, ignoring the account", () => {
