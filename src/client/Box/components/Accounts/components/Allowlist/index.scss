@@ -1,3 +1,4 @@
+@use "sass:color";
 @use "../../../../../variables" as *;
 
 .allowlist-overlay {
@@ -15,8 +16,8 @@
     max-width: 420px;
     max-height: 80vh;
     overflow-y: auto;
-    background-color: white;
-    color: $color-dark;
+    background-color: color.adjust($color-dark, $lightness: 3%);
+    color: $color-light;
     border-radius: 12px;
     padding: 1.25rem;
     box-shadow: rgb(0 0 0 / 30%) 0 12px 40px;
@@ -47,9 +48,9 @@
         flex: 1;
         min-width: 0;
         padding: 0.5rem 0.6rem;
-        border: 1px solid $color-light;
+        border: 1px solid color.adjust($color-dark, $lightness: 10%);
         border-radius: 8px;
-        background: transparent;
+        background-color: color.adjust($color-dark, $lightness: -3%);
         color: inherit;
         font-size: 0.9rem;
       }
@@ -78,7 +79,7 @@
         justify-content: space-between;
         gap: 0.5rem;
         padding: 0.5rem 0;
-        border-top: 1px solid $color-light;
+        border-top: 1px solid color.adjust($color-dark, $lightness: 10%);
 
         .pattern {
           font-size: 0.9rem;
@@ -95,7 +96,7 @@
 
     .text-button {
       background: none;
-      border: 1px solid $color-light;
+      border: 1px solid color.adjust($color-dark, $lightness: 10%);
       border-radius: 8px;
       padding: 0.4rem 0.75rem;
       cursor: pointer;
