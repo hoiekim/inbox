@@ -23,6 +23,7 @@ import {
   BCC_ADDRESS,
   BCC_TEXT,
   SENT,
+  IS_SPAM,
   INSIGHT,
   ENVELOPE_TO,
   DELETED,
@@ -54,6 +55,7 @@ export interface MailHeaderResult {
   read: boolean;
   saved: boolean;
   sent: boolean;
+  is_spam: boolean;
   insight: object | null;
 }
 
@@ -305,7 +307,7 @@ export const getMailHeaders = async (
       TO_ADDRESS, TO_TEXT,
       CC_ADDRESS, CC_TEXT,
       BCC_ADDRESS, BCC_TEXT,
-      READ, SAVED, SENT, INSIGHT,
+      READ, SAVED, SENT, IS_SPAM, INSIGHT,
     ].join(", ");
     let sql = `
       SELECT ${headerColumns} FROM mails 
@@ -1486,6 +1488,27 @@ export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
   } catch (error) {
     logger.error("Failed to get spam mails", {}, error);
     return [];
+  }
+};
+
+/**
+ * Count unread spam for a user. Powers the sidebar's spam badge without
+ * fetching the full spam rows (which carry html/attachment columns). The
+ * WHERE clause mirrors getSpamMails so the badge and the list agree on what
+ * "spam" means.
+ */
+export const getSpamUnreadCount = async (user_id: string): Promise<number> => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*)::int AS unread FROM mails
+       WHERE user_id = $1 AND is_spam = TRUE AND read = FALSE
+         AND sent = FALSE AND expunged = FALSE AND draft = FALSE`,
+      [user_id]
+    );
+    return (result.rows[0]?.unread as number) ?? 0;
+  } catch (error) {
+    logger.error("Failed to count unread spam", {}, error);
+    return 0;
   }
 };
 

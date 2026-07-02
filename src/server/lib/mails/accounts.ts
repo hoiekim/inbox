@@ -1,10 +1,14 @@
 import { Account, SignedUser } from "common";
-import { getAccountStats } from "../postgres/repositories/mails";
+import { getAccountStats, getSpamUnreadCount } from "../postgres/repositories/mails";
 import { getUserDomain } from "server";
 
 export interface AccountsGetResponse {
   received: Account[];
   sent: Account[];
+  // Spam is user-global (no per-account breakdown), so its unread badge rides
+  // on the accounts payload — already fetched on load — instead of a separate
+  // full-list fetch just to count.
+  spamUnreadCount: number;
 }
 
 export const getAccounts = async (
@@ -12,9 +16,10 @@ export const getAccounts = async (
 ): Promise<AccountsGetResponse> => {
   const userDomain = getUserDomain(user.username);
 
-  const [receivedStats, sentStats] = await Promise.all([
+  const [receivedStats, sentStats, spamUnreadCount] = await Promise.all([
     getAccountStats(user.id, false, userDomain),
     getAccountStats(user.id, true, userDomain),
+    getSpamUnreadCount(user.id),
   ]);
 
   const received = receivedStats.map((stat) => {
@@ -37,5 +42,5 @@ export const getAccounts = async (
     });
   });
 
-  return { received, sent };
+  return { received, sent, spamUnreadCount };
 };

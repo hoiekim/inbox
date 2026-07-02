@@ -122,6 +122,11 @@ const Accounts = ({
     retry: false
   });
 
+  // Spam is user-global (no per-account breakdown), so its unread badge rides
+  // on the accounts payload — already fetched and refreshed on the cadence
+  // above — rather than fetching the full spam list just to count.
+  const spamUnread = query.data?.spamUnreadCount ?? 0;
+
   useEffect(() => {
     if (searchInputDom && isAccountsOpen && !isWriterOpen)
       searchInputDom.focus();
@@ -150,6 +155,7 @@ const Accounts = ({
       <div className="tab-holder">
         <div className="categories skeleton">
           <div>
+            <SkeletonCategory />
             <SkeletonCategory />
             <SkeletonCategory />
             <SkeletonCategory />
@@ -279,7 +285,12 @@ const Accounts = ({
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
         else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
         else if (e === Category.Search) targetAccounts = searchHistory;
-        else targetAccounts = received;
+        // Spam is global: no account to auto-select, and on narrow screens we
+        // collapse the side pane so the global list is immediately visible.
+        else if (e === Category.SpamMails) {
+          targetAccounts = [];
+          if (viewSize.width <= 750) setIsAccountsOpen(false);
+        } else targetAccounts = received;
         if (
           targetAccounts.length > 0 &&
           !targetAccounts.some((a) => a.key === selectedAccount)
@@ -306,9 +317,9 @@ const Accounts = ({
           ) : (
             <div>
               {e.split(" ")[0]}
-              {e === Category.NewMails &&
-              e !== selectedCategory &&
-              newMailsTotal ? (
+              {e !== selectedCategory &&
+              ((e === Category.NewMails && newMailsTotal) ||
+                (e === Category.SpamMails && spamUnread)) ? (
                 <div className="numberBall" />
               ) : (
                 <></>
@@ -476,9 +487,37 @@ const Accounts = ({
                 />
               </div>
             ) : null}
-            {!showSortOptions && accountComponents?.length
-              ? accountComponents
-              : "This category is empty"}
+            {(() => {
+              if (showSortOptions) return null;
+              // Spam has no per-account breakdown — show a single global entry
+              // carrying the unread badge. The list renders in the main pane
+              // regardless of selection; on narrow screens, tapping it collapses
+              // the side pane so the list is visible.
+              if (selectedCategory === Category.SpamMails) {
+                const onClickSpam = () => {
+                  if (viewSize.width <= 750) setIsAccountsOpen(false);
+                };
+                return (
+                  <div>
+                    <div
+                      className="tag clicked"
+                      role="button"
+                      tabIndex={0}
+                      onClick={onClickSpam}
+                      onKeyDown={onKeyboardActivate(onClickSpam)}
+                    >
+                      <span>Spam</span>
+                      {spamUnread ? (
+                        <div className="numberBall">{spamUnread}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              }
+              return accountComponents?.length
+                ? accountComponents
+                : "This category is empty";
+            })()}
           </div>
         </div>
       </div>

@@ -2,9 +2,11 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
+const mockGetSpamUnreadCount = mock(() => Promise.resolve(0));
 
 mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
+  getSpamUnreadCount: mockGetSpamUnreadCount,
 }));
 
 // Mock getUserDomain from "server" — only mock what accounts.ts actually imports
@@ -31,6 +33,8 @@ describe("getAccounts", () => {
   beforeEach(() => {
     mockGetAccountStats.mockClear();
     mockGetAccountStats.mockResolvedValue([]);
+    mockGetSpamUnreadCount.mockClear();
+    mockGetSpamUnreadCount.mockResolvedValue(0);
   });
 
   it("should call getAccountStats twice (received and sent)", async () => {
@@ -48,6 +52,18 @@ describe("getAccounts", () => {
     const result = await getAccounts(mockUser);
     expect(result.received).toEqual([]);
     expect(result.sent).toEqual([]);
+  });
+
+  it("should surface the unread-spam count for the sidebar badge", async () => {
+    mockGetSpamUnreadCount.mockResolvedValueOnce(4);
+    const result = await getAccounts(mockUser);
+    expect(mockGetSpamUnreadCount).toHaveBeenCalledWith("user-123");
+    expect(result.spamUnreadCount).toBe(4);
+  });
+
+  it("should default the unread-spam count to 0", async () => {
+    const result = await getAccounts(mockUser);
+    expect(result.spamUnreadCount).toBe(0);
   });
 
   it("should map received stats to Account objects", async () => {
