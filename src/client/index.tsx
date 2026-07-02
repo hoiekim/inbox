@@ -1,6 +1,7 @@
 export * from "./lib";
 export { default as Box } from "./Box";
 export { default as ErrorBoundary } from "./ErrorBoundary";
+export { default as OfflineBanner } from "./OfflineBanner";
 export { default as Header } from "./Header";
 export { default as SignIn } from "./SignIn";
 export { default as SignUp } from "./SignUp";

@@ -11,3 +11,4 @@ export * from "./mails";
 export * from "./cacheCatalog";
 export * from "./cachePersist";
 export * from "./serviceWorker";
+export * from "./online";
