@@ -41,6 +41,7 @@
   font-size: 0.8rem;
 
   &:hover {
-    background-color: color.adjust($color-dark, $lightness: 12%);
+    background-color: $color-point;
+    color: $color-dark;
   }
 }
