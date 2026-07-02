@@ -27,7 +27,7 @@ services:
     # OOM triage today loses history that way. journald keeps everything
     # under systemd-journald's retention (SystemMaxUse / MaxRetentionSec
     # in /etc/systemd/journald.conf on the host). Read live or historical:
-    #   journalctl CONTAINER_NAME=hoie-inbox-1 --since '1 hour ago'
+    #   journalctl CONTAINER_TAG=hoie-inbox --since '1 hour ago'
     logging:
       driver: journald
       options:
