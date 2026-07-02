@@ -1,3 +1,6 @@
+@use "sass:color";
+@use "../variables" as *;
+
 /*
  * The app shell is a fixed layout: #title_bar is `position: fixed; top: 0` and
  * the mail panes are `position: fixed; top: 55px`. A normal-flow banner would
@@ -16,8 +19,9 @@
   justify-content: center;
   gap: 0.75rem;
   padding: 0.4rem 1rem;
-  background: #5a5a5a;
-  color: white;
+  border-top: 2px solid $color-point;
+  background-color: color.adjust($color-dark, $lightness: 6%);
+  color: $color-light;
   font-size: 0.85rem;
   text-align: center;
 }
@@ -29,14 +33,14 @@
 .offline-banner-retry {
   flex: 0 0 auto;
   padding: 0.2rem 0.7rem;
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid $color-point;
   border-radius: 4px;
   background: transparent;
-  color: white;
+  color: $color-point;
   cursor: pointer;
   font-size: 0.8rem;
-}
 
-.offline-banner-retry:hover {
-  background: rgba(255, 255, 255, 0.15);
+  &:hover {
+    background-color: color.adjust($color-dark, $lightness: 12%);
+  }
 }
