@@ -152,13 +152,21 @@ const Accounts = ({
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
   // Auto-select the first received account on fresh login when no account is
-  // stored in localStorage (e.g., first visit or cleared storage).
+  // stored in localStorage (e.g., first visit or cleared storage). Skipped in
+  // Search mode, where an empty selectedAccount is the empty search term (a
+  // fresh, not-yet-typed search) — auto-selecting an account there would turn
+  // that account's address into a stray search keyword.
   useEffect(() => {
-    if (!selectedAccount && query.isSuccess && query.data?.received?.length) {
+    if (
+      !selectedAccount &&
+      selectedCategory !== Category.Search &&
+      query.isSuccess &&
+      query.data?.received?.length
+    ) {
       const firstKey = query.data.received[0].key;
       if (firstKey) setSelectedAccount(firstKey);
     }
-  }, [selectedAccount, query.isSuccess, query.data]);
+  }, [selectedAccount, selectedCategory, query.isSuccess, query.data]);
 
   const touchStartHandler = () => setShowSortOptions(false);
 
@@ -305,24 +313,28 @@ const Accounts = ({
           setSelectedAccount("");
           return;
         }
-        if (selectedCategory === Category.Search) {
-          // Leaving search: restore the pre-search account if we have one
-          // (preSearchAccount is a ref and won't survive a page reload)
-          if (preSearchAccount.current) {
-            setSelectedAccount(preSearchAccount.current);
-          }
-        }
-        setSelectedCategory(e);
-        // Reset selectedAccount if it doesn't exist in the new category's account list
+
+        // The account to keep selected in the destination category. Leaving
+        // search restores the pre-search account (selectedAccount currently
+        // holds the search term, so we can't read it here); otherwise we keep
+        // the current account.
+        const candidate =
+          selectedCategory === Category.Search
+            ? preSearchAccount.current
+            : selectedAccount;
+
+        // The destination category's account list — used to fall back to its
+        // first account when the candidate isn't present in it.
         let targetAccounts: Account[];
         if (e === Category.SentMails) targetAccounts = sent;
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
         else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
         else targetAccounts = received;
-        if (
-          targetAccounts.length > 0 &&
-          !targetAccounts.some((a) => a.key === selectedAccount)
-        ) {
+
+        setSelectedCategory(e);
+        if (candidate && targetAccounts.some((a) => a.key === candidate)) {
+          if (candidate !== selectedAccount) setSelectedAccount(candidate);
+        } else if (targetAccounts.length > 0) {
           setSelectedAccount(targetAccounts[0].key);
         }
       };
