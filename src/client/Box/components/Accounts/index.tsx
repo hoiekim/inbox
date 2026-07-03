@@ -32,7 +32,8 @@ import {
   call,
   onKeyboardActivate,
   clearCachedQueries,
-  unregisterServiceWorker
+  unregisterServiceWorker,
+  useIsOnline
 } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
@@ -89,6 +90,8 @@ const Accounts = ({
     newMailsTotal,
     setNewMailsTotal
   } = useContext(Context);
+
+  const { isOnline } = useIsOnline();
 
   const getAccounts = async () => {
     isFetched = false;
@@ -426,7 +429,12 @@ const Accounts = ({
                 className="icon-button"
                 onClick={onClickLogout}
                 aria-label="Logout"
-                title="Logout"
+                disabled={!isOnline}
+                title={
+                  isOnline
+                    ? "Logout"
+                    : "You're offline — reconnect to log out"
+                }
               >
                 <LogoutIcon />
               </button>

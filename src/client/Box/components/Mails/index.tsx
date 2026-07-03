@@ -303,8 +303,8 @@ const RenderedMail = ({
 
   const isKebabOpen = openedKebab === mail.id;
 
-  // Mutating controls (save, delete) are disabled while offline per the #458
-  // Behavior Matrix; the handlers also early-return as a backstop.
+  // Mutating controls (save, delete) are disabled while offline; the handlers
+  // also early-return as a backstop against a stray click.
   const offlineClass = isOnline ? "" : " disabled";
   const offlineTitle = isOnline
     ? undefined

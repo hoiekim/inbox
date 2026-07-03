@@ -97,6 +97,18 @@
               height: 22px;
             }
 
+            // Offline-disabled control (e.g. logout): dim it and suppress the
+            // hover/active grow so it doesn't read as interactive.
+            &:disabled {
+              opacity: 0.4;
+              cursor: not-allowed;
+
+              &:hover svg,
+              &:active svg {
+                height: 20px;
+              }
+            }
+
             &:focus-visible {
               outline: 2px solid currentColor;
               outline-offset: 2px;
