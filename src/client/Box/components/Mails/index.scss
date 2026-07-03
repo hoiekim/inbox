@@ -181,6 +181,19 @@
           height: 22px;
         }
 
+        // Offline-disabled control: dim it and suppress the hover/active grow
+        // so it doesn't read as interactive while mutations are unavailable.
+        &.disabled {
+          cursor: not-allowed;
+          opacity: 0.4;
+
+          &:hover > svg,
+          &:active > svg {
+            width: 20px;
+            height: 20px;
+          }
+        }
+
         .star {
           color: $color-point;
         }

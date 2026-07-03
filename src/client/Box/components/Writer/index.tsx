@@ -19,7 +19,8 @@ import {
   useLocalStorage,
   getDateForMailHeader,
   processHtmlToSendMail,
-  call
+  call,
+  useIsOnline
 } from "client";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
@@ -81,6 +82,8 @@ const Writer = () => {
     replyData,
     setReplyData
   } = useContext(Context);
+
+  const { isOnline } = useIsOnline();
 
   const [isCcOpen, setIsCcOpen] = useLocalStorage("isCcOpen", false);
 
@@ -414,7 +417,13 @@ const Writer = () => {
         </div>
       </div>
       <div className="writer-buttons">
-        <button onClick={onClickSend}>
+        <button
+          onClick={onClickSend}
+          disabled={!isOnline}
+          title={
+            isOnline ? undefined : "You're offline — reconnect to send mail"
+          }
+        >
           <SendIcon />
           <span>Send</span>
         </button>

@@ -39,7 +39,8 @@ import {
   QueryCache,
   call,
   isSentMail,
-  processHtmlForViewer
+  processHtmlForViewer,
+  useIsOnline
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 
@@ -136,6 +137,8 @@ const RenderedMail = ({
 
   const [isSummaryOpen, setIsSummaryOpen] = useState(false);
 
+  const { isOnline } = useIsOnline();
+
   const queryClient = useQueryClient();
 
   const onClickOpenInNewTab = async () => {
@@ -182,7 +185,10 @@ const RenderedMail = ({
       delete clonedActiveMailId[mail.id];
       setActiveMailId(clonedActiveMailId);
     } else {
-      if (!mail.read) {
+      // Auto-mark-read is a side effect of opening, not a user-clicked
+      // control — so gate the request itself when offline rather than
+      // disabling a button. The mail still opens and renders cached body.
+      if (!mail.read && isOnline) {
         requestMarkRead(mail);
         markReadInQueryData(mail);
         mail.read = true;
@@ -219,6 +225,7 @@ const RenderedMail = ({
   };
 
   const onClickTrash = () => {
+    if (!isOnline) return;
     if (window.confirm("Do you want to delete this mail?")) {
       requestDeleteMail(mail);
 
@@ -259,6 +266,7 @@ const RenderedMail = ({
   };
 
   const onClickStar = () => {
+    if (!isOnline) return;
     requestMarkSaved(mail, !mail.saved);
     markSavedInQueryData(mail, !mail.saved);
   };
@@ -294,6 +302,13 @@ const RenderedMail = ({
   }
 
   const isKebabOpen = openedKebab === mail.id;
+
+  // Mutating controls (save, delete) are disabled while offline per the #458
+  // Behavior Matrix; the handlers also early-return as a backstop.
+  const offlineClass = isOnline ? "" : " disabled";
+  const offlineTitle = isOnline
+    ? undefined
+    : "You're offline — reconnect to make changes";
 
   const summary = ("insight" in mail ? mail.insight?.summary : undefined)?.map(
     (e, i) => {
@@ -349,7 +364,8 @@ const RenderedMail = ({
           <>
             <div
               key="star"
-              className="iconBox cursor"
+              className={"iconBox cursor" + offlineClass}
+              title={offlineTitle}
               onClick={onClickStar}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
@@ -390,7 +406,8 @@ const RenderedMail = ({
             </div>
             <div
               key="trash"
-              className="iconBox cursor"
+              className={"iconBox cursor" + offlineClass}
+              title={offlineTitle}
               onClick={onClickTrash}
               onTouchStart={(e) => e.stopPropagation()}
               onMouseEnter={() => setOpenedKebab(mail.id)}
@@ -410,7 +427,12 @@ const RenderedMail = ({
               </div>
             ) : null}
             {mail.saved ? (
-              <div key="star" className="iconBox cursor" onClick={onClickStar}>
+              <div
+                key="star"
+                className={"iconBox cursor" + offlineClass}
+                title={offlineTitle}
+                onClick={onClickStar}
+              >
                 <SolidStarIcon className="star" />
               </div>
             ) : null}
