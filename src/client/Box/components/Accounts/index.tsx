@@ -23,7 +23,11 @@ import {
 } from "./components";
 
 import { Account } from "common";
-import { AccountsGetResponse, LoginDeleteResponse } from "server";
+import {
+  AccountsGetResponse,
+  LoginDeleteResponse,
+  SearchAccountsGetResponse
+} from "server";
 import {
   Context,
   Category,
@@ -81,8 +85,6 @@ const Accounts = ({
     setSelectedAccount,
     selectedCategory,
     setSelectedCategory,
-    searchHistory,
-    setSearchHistory,
     isAccountsOpen,
     setIsAccountsOpen,
     isWriterOpen,
@@ -124,6 +126,25 @@ const Accounts = ({
     refetchOnReconnect: false,
     retry: false
   });
+
+  // In search mode `selectedAccount` holds the search term. Fetch the accounts
+  // that own a matching mail so the side-tab can list them (clicking one jumps
+  // to that account's All view). Empty term → disabled, so the tab stays empty
+  // until the user types.
+  const searchValue =
+    selectedCategory === Category.Search ? selectedAccount : "";
+  const searchAccountsQuery = useQuery<SearchAccountsGetResponse>(
+    ["/api/mails/search-accounts", searchValue],
+    async () => {
+      const { status, body, message } =
+        await call.get<SearchAccountsGetResponse>(
+          `/api/mails/search-accounts/${encodeURIComponent(searchValue)}`
+        );
+      if (status === "success") return body as SearchAccountsGetResponse;
+      throw new Error(message);
+    },
+    { enabled: !!searchValue, cacheTime: 0, retry: false }
+  );
 
   useEffect(() => {
     if (searchInputDom && isAccountsOpen && !isWriterOpen)
@@ -196,6 +217,16 @@ const Accounts = ({
       const accountName = data.key;
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
+        // A found account in the search side-tab jumps to that account's All
+        // view (the search term lives in selectedAccount, so we must switch
+        // category as well as the account).
+        if (selectedCategory === Category.Search) {
+          setPage(1);
+          setSelectedCategory(Category.AllMails);
+          setSelectedAccount(accountName);
+          if (viewSize.width <= 750) setIsAccountsOpen(false);
+          return;
+        }
         if (selectedAccount !== accountName) {
           setPage(1);
           setSelectedAccount(accountName);
@@ -235,8 +266,8 @@ const Accounts = ({
       sortedAccountData = mergeSavedAccounts(received, sent);
     } else if (selectedCategory === Category.SentMails) {
       sortedAccountData = sent;
-    } else if (selectedCategory === Category.Search && searchHistory) {
-      sortedAccountData = searchHistory;
+    } else if (selectedCategory === Category.Search) {
+      sortedAccountData = searchAccountsQuery.data || [];
     }
 
     const sortingFactor = 2 * +sortAscending - 1;
@@ -266,9 +297,15 @@ const Accounts = ({
     const categoryComponents = Object.values(Category).map((e, i) => {
       const onClickCategory = () => {
         if (e === Category.Search) {
-          // Entering search: save current account so we can restore it later
+          // Entering search: remember the current account to restore on exit,
+          // and start from an empty term so the side-tab (found accounts) and
+          // the mails list stay empty until the user types a keyword.
           preSearchAccount.current = selectedAccount;
-        } else if (selectedCategory === Category.Search) {
+          setSelectedCategory(e);
+          setSelectedAccount("");
+          return;
+        }
+        if (selectedCategory === Category.Search) {
           // Leaving search: restore the pre-search account if we have one
           // (preSearchAccount is a ref and won't survive a page reload)
           if (preSearchAccount.current) {
@@ -281,7 +318,6 @@ const Accounts = ({
         if (e === Category.SentMails) targetAccounts = sent;
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
         else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
-        else if (e === Category.Search) targetAccounts = searchHistory;
         else targetAccounts = received;
         if (
           targetAccounts.length > 0 &&
@@ -354,16 +390,8 @@ const Accounts = ({
     const onKeyDownSearch: KeyboardEventHandler<HTMLInputElement> = (e) => {
       if (e.key === "Enter") {
         const target = e.target as HTMLInputElement;
-        setSearchHistory([
-          new Account({
-            key: target.value,
-            doc_count: 0,
-            unread_doc_count: 0,
-            saved_doc_count: 0,
-            updated: new Date()
-          }),
-          ...searchHistory
-        ]);
+        // Search immediately instead of waiting out the debounce.
+        clearTimeout(searchDelay);
         setSelectedAccount(target.value);
         if (viewSize.width <= 750) setIsAccountsOpen(false);
       }

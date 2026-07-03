@@ -6,6 +6,7 @@ import { getHeadersRoute } from "./get-headers";
 import { getBodyRoute } from "./get-body";
 import { getAttachmentRoute } from "./get-attachment";
 import { getSearchRoute } from "./get-search";
+import { getSearchAccountsRoute } from "./get-search-accounts";
 import { postMarkMailRoute } from "./post-mark";
 import { postSendMailRoute } from "./post-send";
 import { deleteMailRoute } from "./delete";
@@ -30,6 +31,7 @@ const routes = [
   getBodyRoute,
   getAttachmentRoute,
   getSearchRoute,
+  getSearchAccountsRoute,
   postMarkMailRoute,
   postSendMailRoute,
   deleteMailRoute,
@@ -50,6 +52,7 @@ export * from "./get-headers";
 export * from "./get-body";
 export * from "./get-attachment";
 export * from "./get-search";
+export * from "./get-search-accounts";
 export * from "./post-mark";
 export * from "./post-send";
 export * from "./delete";
