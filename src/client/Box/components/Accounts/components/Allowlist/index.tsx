@@ -91,6 +91,9 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
   }, [onClose]);
 
   const handleAdd = () => {
+    // Guard the shared handler, not just the button — the input's Enter key
+    // (onInputKeyDown) routes here too and would otherwise fire the POST offline.
+    if (!isOnline) return;
     const pattern = input.trim();
     if (!isValidAllowlistPattern(pattern)) {
       setError(
