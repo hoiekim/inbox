@@ -366,6 +366,62 @@ describe("MOVE happy path — INBOX → non-INBOX dest (#453, RFC 6851 §3.2-§3
   });
 });
 
+describe("MOVE overlapping ranges — dedupe by source UID (#626, RFC 4315 §3 via RFC 6851)", () => {
+  it("clones each distinct source UID once, keeps COPYUID sets aligned, and expunges each UID once", async () => {
+    // `UID MOVE 3:5,4:6` — overlap on 4,5. Same defect as COPY plus the
+    // expunge set: without the dedupe, `sourceUids` (and therefore the
+    // targeted EXPUNGE set) carries 4 and 5 twice.
+    const all = [
+      sourceMail({ domain: 3, account: 30 }),
+      sourceMail({ domain: 4, account: 40 }),
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 6, account: 60 }),
+    ];
+    const { store, stored, getExpungeArg } = makeMoveStore(["Archive"], all);
+    // Range-aware getMessages: only the overlap is returned twice.
+    store.getMessages = (async (
+      _box: string,
+      start: number,
+      end: number
+    ) => {
+      const map = new Map<number, Partial<MailType>>();
+      all
+        .filter((m) => m.uid!.domain >= start && m.uid!.domain <= end)
+        .forEach((m, i) => map.set(i, m));
+      return map;
+    }) as never;
+    const seqState: SequenceState = {
+      seqToUid: [3, 4, 5, 6],
+      uidToSeq: new Map([
+        [3, 1],
+        [4, 2],
+        [5, 3],
+        [6, 4],
+      ]),
+    };
+
+    await runMove(
+      moveReq("Archive", {
+        type: "uid",
+        ranges: [
+          { start: 3, end: 5 },
+          { start: 4, end: 6 },
+        ],
+      }),
+      true,
+      store,
+      false,
+      "INBOX",
+      seqState
+    );
+
+    // One clone per distinct source UID — pre-#626 stored 6 (4,5 twice).
+    expect(stored.length).toBe(4);
+    // The targeted expunge hits each source UID exactly once, ascending.
+    expect(getExpungeArg()).toEqual([3, 4, 5, 6]);
+  });
+});
+
 describe("MOVE happy path — non-INBOX source → INBOX dest (#453, address-clear invariant)", () => {
   it("clears to/envelopeTo/cc/bcc routing so the moved copy does not re-surface in the source account view", async () => {
     // Source is a per-account mailbox (Archive). The source row carries

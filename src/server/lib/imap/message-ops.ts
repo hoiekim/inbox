@@ -482,6 +482,24 @@ export async function copyMessageTyped(
     // ascending, and `formatUidSet`'s independent sorts stay aligned.
     sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
 
+    // De-duplicate by source UID. A client may send overlapping ranges
+    // (`UID COPY 3:5,4:6`); `getMessages` runs once per range, so a UID
+    // that falls in two ranges is materialized twice. Cloning it twice
+    // would both store a duplicate message and desync the COPYUID sets:
+    // `formatUidSet` collapses the source set via `new Set` while the dest
+    // set keeps every clone, so `sourceSet.length !== destSet.length` and
+    // the positional n-th-source ↔ n-th-dest correspondence the response
+    // promises is broken. Keep the first occurrence of each source UID so
+    // each is copied exactly once (RFC 4315 copies a message set, not a
+    // bag). The array is already ascending, so dups are adjacent.
+    const seenSourceUids = new Set<number>();
+    const uniqueSourceMails = sourceMails.filter((mail) => {
+      const uid = srcUidOf(mail);
+      if (seenSourceUids.has(uid)) return false;
+      seenSourceUids.add(uid);
+      return true;
+    });
+
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
@@ -493,7 +511,7 @@ export async function copyMessageTyped(
     // leaves the already-stored copies in the destination. Documented as
     // a limitation; a follow-up can promote this to a multi-row INSERT
     // or transaction.
-    for (const sourceMail of sourceMails) {
+    for (const sourceMail of uniqueSourceMails) {
       // The mails table has UNIQUE(user_id, message_id); the copy must
       // carry a fresh message_id so the INSERT actually creates a new
       // row (otherwise saveMail merges into the source row and the
@@ -743,6 +761,19 @@ export async function moveMessageTyped(
     // explicit high→low sort below, so it is unaffected by this.)
     sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
 
+    // De-duplicate by source UID before cloning. Overlapping ranges
+    // (`UID MOVE 3:5,4:6`) materialize a UID twice; see copyMessageTyped
+    // for the full rationale (duplicate clone + COPYUID set-length desync).
+    // Deduping here also keeps `sourceUids` — and therefore the EXPUNGE
+    // set below — one entry per distinct source UID.
+    const seenSourceUids = new Set<number>();
+    const uniqueSourceMails = sourceMails.filter((mail) => {
+      const uid = srcUidOf(mail);
+      if (seenSourceUids.has(uid)) return false;
+      seenSourceUids.add(uid);
+      return true;
+    });
+
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
@@ -750,7 +781,7 @@ export async function moveMessageTyped(
     const getRandomId = (await import("common")).getRandomId;
 
     // === COPY phase (mirrors copyMessageTyped's fixed shape) ===
-    for (const sourceMail of sourceMails) {
+    for (const sourceMail of uniqueSourceMails) {
       const newMail = new Mail({
         subject: sourceMail.subject,
         date: sourceMail.date,
