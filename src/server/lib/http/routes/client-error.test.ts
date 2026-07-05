@@ -92,3 +92,34 @@ describe("POST /api/client-error rate limiting (issue #517)", () => {
     expect(args[2]).toBe("client-error");
   });
 });
+
+describe("POST /api/client-error benign-message denylist (issue #629)", () => {
+  // The ResizeObserver "loop" messages are a benign Chrome quirk — no stack, no
+  // user-visible failure. They should be accepted (200) but never paged.
+  it("does not alarm on 'ResizeObserver loop completed with undelivered notifications'", async () => {
+    const res = await postClientError("203.0.113.10", {
+      message: "ResizeObserver loop completed with undelivered notifications.",
+      url: "https://mail.example.com/",
+    });
+    expect(res.status).toBe(200);
+    expect(mockSendAlarm).not.toHaveBeenCalled();
+  });
+
+  it("does not alarm on 'ResizeObserver loop limit exceeded'", async () => {
+    const res = await postClientError("203.0.113.11", {
+      message: "ResizeObserver loop limit exceeded",
+    });
+    expect(res.status).toBe(200);
+    expect(mockSendAlarm).not.toHaveBeenCalled();
+  });
+
+  it("still alarms on a real error that merely mentions ResizeObserver elsewhere", async () => {
+    const res = await postClientError("203.0.113.12", {
+      message:
+        "TypeError: cannot read 'observe' of undefined in ResizeObserver setup",
+      stack: "at setup (app.js:10)",
+    });
+    expect(res.status).toBe(200);
+    expect(mockSendAlarm).toHaveBeenCalledTimes(1);
+  });
+});

@@ -18,6 +18,20 @@ type ClientErrorBody = {
   url?: string;
 };
 
+// Browser-emitted messages that are benign quirks, not real errors. The
+// ResizeObserver "loop" messages fire when a ResizeObserver callback can't
+// settle within a single animation frame during rapid layout changes — a
+// Chrome diagnostic with no stack, no user-visible failure, and no server
+// fault. They are still logged, but never forwarded to the alarm webhook so a
+// benign frontend quirk can't page an operator (issue #629).
+const BENIGN_CLIENT_MESSAGES = [
+  "ResizeObserver loop completed with undelivered notifications",
+  "ResizeObserver loop limit exceeded",
+];
+
+const isBenignClientMessage = (message: string): boolean =>
+  BENIGN_CLIENT_MESSAGES.some((benign) => message.includes(benign));
+
 /**
  * POST /client-error
  *
@@ -39,6 +53,13 @@ clientErrorRouter.post("/", clientErrorLimiter.middleware, async (req, res) => {
   const url = typeof body.url === "string" ? body.url : "";
 
   console.error("Client error reported:", { url, message });
+
+  // A benign browser quirk (logged above) is not an alarm-worthy event. Skip
+  // the webhook forward but still ack so the beacon doesn't retry.
+  if (isBenignClientMessage(message)) {
+    res.json({ status: "success" });
+    return;
+  }
 
   const detail = [
     url ? `**URL:** ${url}` : null,
