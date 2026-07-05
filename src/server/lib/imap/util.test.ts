@@ -254,6 +254,37 @@ describe("IMAP util", () => {
       const result = formatEnvelope(mail);
       expect(result).toContain('"John Doe" NIL "john" "example.com"');
     });
+
+    it("emits absent address-list members as bare NIL, not (NIL) (RFC 3501 §7.4.2)", () => {
+      // Empty mail: every one of the six address slots (from, sender,
+      // reply-to, to, cc, bcc) must be the bare atom NIL. `(NIL)` matches
+      // neither `nil` nor `"(" 1*address ")"` in the §9 grammar.
+      const result = formatEnvelope({});
+      expect(result).not.toContain("(NIL)");
+      // date subject from sender reply-to to cc bcc in-reply-to message-id,
+      // all absent → ten bare NILs wrapped in one outer paren.
+      expect(result).toBe("(NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL)");
+    });
+
+    it("keeps populated address slots parenthesized while absent ones stay bare NIL", () => {
+      // Typical received mail: From + To present, no Cc/Bcc/Reply-To.
+      const mail: Partial<MailType> = {
+        from: {
+          text: "John <john@example.com>",
+          value: [{ name: "John", address: "john@example.com" }]
+        },
+        to: {
+          text: "Jane <jane@example.com>",
+          value: [{ name: "Jane", address: "jane@example.com" }]
+        }
+      };
+      const result = formatEnvelope(mail);
+      // Populated from/sender/to keep their single wrapping paren...
+      expect(result).toContain('(("John" NIL "john" "example.com"))');
+      expect(result).toContain('(("Jane" NIL "jane" "example.com"))');
+      // ...and the absent reply-to/cc/bcc are bare NIL, not (NIL).
+      expect(result).not.toContain("(NIL)");
+    });
   });
 
   describe("formatHeaders", () => {
