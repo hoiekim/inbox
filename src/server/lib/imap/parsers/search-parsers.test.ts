@@ -350,6 +350,81 @@ describe("parseSearchCriteria", () => {
         expect(criterion.right.type).toBe("DELETED");
       }
     });
+
+    // Regression: an operator followed by MORE top-level keys used to be
+    // rejected because NOT/OR recursed into the unbounded criteria parser,
+    // which greedily consumed every remaining key into the operand and then
+    // failed the operand-length guard (#637).
+    it("parses NOT SEEN followed by another ANDed key", () => {
+      const c = ctx("NOT SEEN SINCE 1-Jan-2026");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+      expect(result.value?.[1]?.type).toBe("SINCE");
+    });
+
+    it("parses NOT SEEN FROM bob (NOT bounds to one key)", () => {
+      const c = ctx("NOT SEEN FROM bob");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+      expect(result.value?.[1]).toEqual({ type: "FROM", value: "bob" });
+    });
+
+    it("parses OR SEEN ANSWERED followed by another ANDed key", () => {
+      const c = ctx("OR SEEN ANSWERED FROM bob");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "OR",
+        left: { type: "SEEN" },
+        right: { type: "ANSWERED" },
+      });
+      expect(result.value?.[1]).toEqual({ type: "FROM", value: "bob" });
+    });
+
+    it("parses an operator that appears before other keys (SINCE … NOT SEEN)", () => {
+      const c = ctx("SINCE 1-Jan-2026 NOT SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]?.type).toBe("SINCE");
+      expect(result.value?.[1]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+    });
+
+    it("parses nested NOT NOT SEEN", () => {
+      const c = ctx("NOT NOT SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "NOT", criterion: { type: "SEEN" } },
+      });
+    });
+
+    it("parses OR with a NOT operand (OR NOT SEEN FLAGGED)", () => {
+      const c = ctx("OR NOT SEEN FLAGGED");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(1);
+      expect(result.value?.[0]).toEqual({
+        type: "OR",
+        left: { type: "NOT", criterion: { type: "SEEN" } },
+        right: { type: "FLAGGED" },
+      });
+    });
   });
 
   describe("multiple criteria", () => {
