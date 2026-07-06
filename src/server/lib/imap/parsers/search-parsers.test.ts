@@ -465,6 +465,25 @@ describe("parseSearchCriteria", () => {
       expect(result.value).toEqual([]);
     });
   });
+
+  // An atom that matches no known search-key is skipped and the loop continues
+  // (historical lenient behavior). Pins that invariant plus the no-infinite-loop
+  // guarantee — parseSearchKey must advance past the unknown atom.
+  describe("unknown search key", () => {
+    it("skips an unknown atom and continues to the next key", () => {
+      const c = ctx("FOO SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value).toEqual([{ type: "SEEN" }]);
+    });
+
+    it("returns empty (still success) for a sole unknown atom", () => {
+      const c = ctx("FOO");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value).toEqual([]);
+    });
+  });
 });
 
 describe("parseSearch", () => {
