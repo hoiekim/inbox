@@ -153,6 +153,11 @@
       svg {
         margin-right: 0.5rem;
       }
+
+      &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
     }
   }
 

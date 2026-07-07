@@ -8,7 +8,7 @@ import {
   AllowlistAddBody,
   AllowlistDeleteResponse
 } from "server";
-import { call, onKeyboardActivate, queryClient } from "client";
+import { call, onKeyboardActivate, queryClient, useIsOnline } from "client";
 import { isValidAllowlistPattern } from "./pattern";
 
 import "./index.scss";
@@ -19,6 +19,13 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  // The allowlist stays viewable from cache while offline, but its add/remove
+  // mutations are disabled — they'd silently fail against an unreachable server.
+  const { isOnline } = useIsOnline();
+  const offlineTitle = isOnline
+    ? undefined
+    : "You're offline — reconnect to change the allowlist";
 
   const query = useQuery<AllowlistGetResponse>(
     queryUrl,
@@ -84,6 +91,9 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
   }, [onClose]);
 
   const handleAdd = () => {
+    // Guard the shared handler, not just the button — the input's Enter key
+    // (onInputKeyDown) routes here too and would otherwise fire the POST offline.
+    if (!isOnline) return;
     const pattern = input.trim();
     if (!isValidAllowlistPattern(pattern)) {
       setError(
@@ -124,7 +134,8 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
                 <button
                   className="text-button danger"
                   onClick={() => deleteMutation.mutate(entry.pattern)}
-                  disabled={deleteMutation.isLoading}
+                  disabled={deleteMutation.isLoading || !isOnline}
+                  title={offlineTitle}
                 >
                   Remove
                 </button>
@@ -139,7 +150,8 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
               <button
                 className="icon-button"
                 aria-label={`Remove ${entry.pattern}`}
-                title="Remove"
+                title={offlineTitle || "Remove"}
+                disabled={!isOnline}
                 onClick={() => {
                   setError(null);
                   setConfirmingId(entry.id);
@@ -196,7 +208,8 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
           <button
             className="text-button"
             onClick={handleAdd}
-            disabled={addMutation.isLoading || !input.trim()}
+            disabled={addMutation.isLoading || !input.trim() || !isOnline}
+            title={offlineTitle}
           >
             Add
           </button>
