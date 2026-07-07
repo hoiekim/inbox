@@ -117,7 +117,13 @@ export const formatEnvelope = (mail: Partial<MailType>): string => {
   const inReplyTo = "NIL"; // Not implemented
   const messageId = mail.messageId ? `"${mail.messageId}"` : "NIL";
 
-  return `(${date} ${subject} (${from}) (${sender}) (${replyTo}) (${to}) (${cc}) (${bcc}) ${inReplyTo} ${messageId})`;
+  // RFC 3501 §7.4.2 / §9: each address-list envelope member is either the
+  // bare atom `NIL` (its header is absent) or a parenthesized `1*address`
+  // list — never `(NIL)`. `formatAddressList` already returns bare "NIL" for
+  // an empty/absent list, so only the populated case gets the parentheses.
+  const addressList = (list: string) => (list === "NIL" ? "NIL" : `(${list})`);
+
+  return `(${date} ${subject} ${addressList(from)} ${addressList(sender)} ${addressList(replyTo)} ${addressList(to)} ${addressList(cc)} ${addressList(bcc)} ${inReplyTo} ${messageId})`;
 };
 
 export const formatBodyStructure = (mail: Partial<MailType>): string => {
