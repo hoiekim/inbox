@@ -350,6 +350,81 @@ describe("parseSearchCriteria", () => {
         expect(criterion.right.type).toBe("DELETED");
       }
     });
+
+    // Regression: an operator followed by MORE top-level keys used to be
+    // rejected because NOT/OR recursed into the unbounded criteria parser,
+    // which greedily consumed every remaining key into the operand and then
+    // failed the operand-length guard (#637).
+    it("parses NOT SEEN followed by another ANDed key", () => {
+      const c = ctx("NOT SEEN SINCE 1-Jan-2026");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+      expect(result.value?.[1]?.type).toBe("SINCE");
+    });
+
+    it("parses NOT SEEN FROM bob (NOT bounds to one key)", () => {
+      const c = ctx("NOT SEEN FROM bob");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+      expect(result.value?.[1]).toEqual({ type: "FROM", value: "bob" });
+    });
+
+    it("parses OR SEEN ANSWERED followed by another ANDed key", () => {
+      const c = ctx("OR SEEN ANSWERED FROM bob");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]).toEqual({
+        type: "OR",
+        left: { type: "SEEN" },
+        right: { type: "ANSWERED" },
+      });
+      expect(result.value?.[1]).toEqual({ type: "FROM", value: "bob" });
+    });
+
+    it("parses an operator that appears before other keys (SINCE … NOT SEEN)", () => {
+      const c = ctx("SINCE 1-Jan-2026 NOT SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(2);
+      expect(result.value?.[0]?.type).toBe("SINCE");
+      expect(result.value?.[1]).toEqual({
+        type: "NOT",
+        criterion: { type: "SEEN" },
+      });
+    });
+
+    it("parses nested NOT NOT SEEN", () => {
+      const c = ctx("NOT NOT SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "NOT",
+        criterion: { type: "NOT", criterion: { type: "SEEN" } },
+      });
+    });
+
+    it("parses OR with a NOT operand (OR NOT SEEN FLAGGED)", () => {
+      const c = ctx("OR NOT SEEN FLAGGED");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value?.length).toBe(1);
+      expect(result.value?.[0]).toEqual({
+        type: "OR",
+        left: { type: "NOT", criterion: { type: "SEEN" } },
+        right: { type: "FLAGGED" },
+      });
+    });
   });
 
   describe("multiple criteria", () => {
@@ -385,6 +460,25 @@ describe("parseSearchCriteria", () => {
   describe("empty input", () => {
     it("returns empty criteria for empty string", () => {
       const c = ctx("");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value).toEqual([]);
+    });
+  });
+
+  // An atom that matches no known search-key is skipped and the loop continues
+  // (historical lenient behavior). Pins that invariant plus the no-infinite-loop
+  // guarantee — parseSearchKey must advance past the unknown atom.
+  describe("unknown search key", () => {
+    it("skips an unknown atom and continues to the next key", () => {
+      const c = ctx("FOO SEEN");
+      const result = parseSearchCriteria(c);
+      expect(result.success).toBe(true);
+      expect(result.value).toEqual([{ type: "SEEN" }]);
+    });
+
+    it("returns empty (still success) for a sole unknown atom", () => {
+      const c = ctx("FOO");
       const result = parseSearchCriteria(c);
       expect(result.success).toBe(true);
       expect(result.value).toEqual([]);
