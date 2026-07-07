@@ -34,7 +34,6 @@ export const getSpamHeaders = async (
         : undefined,
       read: m.read,
       saved: m.saved,
-      is_spam: m.is_spam,
       insight: m.insight as Insight | undefined,
     });
   });

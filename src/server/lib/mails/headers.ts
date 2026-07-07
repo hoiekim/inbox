@@ -54,7 +54,6 @@ const toMailHeaderData = (m: MailHeaderResult): MailHeaderData =>
     read: m.read,
     saved: m.saved,
     sent: m.sent,
-    is_spam: m.is_spam,
     insight: m.insight as Insight | undefined,
   });
 

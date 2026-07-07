@@ -552,12 +552,9 @@ const Accounts = ({
                 />
               </div>
             ) : null}
-            {(() => {
-              if (showSortOptions) return null;
-              return accountComponents?.length
-                ? accountComponents
-                : "This category is empty";
-            })()}
+            {!showSortOptions && accountComponents?.length
+              ? accountComponents
+              : "This category is empty"}
           </div>
         </div>
       </div>

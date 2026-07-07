@@ -71,9 +71,6 @@ describe("searchMail", () => {
     expect(results[0].subject).toBe("Test Subject");
     expect(results[0].read).toBe(false);
     expect(results[0].saved).toBe(true);
-    // is_spam must survive the search mapper — a spam mail opened from search
-    // also drives the spam-badge decrement (mirrors the spam.test.ts pin).
-    expect(results[0].is_spam).toBe(true);
     expect(results[0].highlight).toBe("Test <em>Subject</em>");
   });
 

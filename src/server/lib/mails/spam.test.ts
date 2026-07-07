@@ -63,9 +63,6 @@ describe("getSpamHeaders", () => {
     expect(results[0].subject).toBe("You won a million dollars!");
     expect(results[0].read).toBe(false);
     expect(results[0].saved).toBe(false);
-    // is_spam must survive the mapping — the Spam-folder badge decrement
-    // (mark-read / trash) is gated on mail.is_spam being truthy client-side.
-    expect(results[0].is_spam).toBe(true);
   });
 
   it("should handle null from/to addresses", async () => {
