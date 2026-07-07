@@ -352,6 +352,81 @@ describe("COPY COPYUID positional pairing — out-of-order set (#624, RFC 4315 �
   });
 });
 
+describe("COPY overlapping ranges — dedupe by source UID (#626, RFC 4315 §3)", () => {
+  it("clones each distinct source UID once and keeps COPYUID src/dest set lengths equal", async () => {
+    // `UID COPY 3:5,4:6` — the ranges overlap on UIDs 4 and 5. The handler
+    // calls getMessages once per range, so an overlapping UID is materialized
+    // twice. Without the dedupe, each such UID is cloned twice (a duplicate
+    // stored message) AND the COPYUID response desyncs: `formatUidSet`
+    // collapses the source set via `new Set` but the dest set keeps every
+    // clone, so srcSet.length < destSet.length and the positional pairing is
+    // unparseable. The fix drops repeats so each distinct source UID is
+    // copied exactly once.
+    const all = [
+      sourceMail({ domain: 3, account: 30 }),
+      sourceMail({ domain: 4, account: 40 }),
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 6, account: 60 }),
+    ];
+    const { store, stored } = makeCopyStore(["Archive"], all);
+    // Range-aware getMessages so only the overlap (4,5) is returned twice —
+    // faithfully modeling the wire behavior rather than duplicating everything.
+    store.getMessages = async (
+      _box: never,
+      start: never,
+      end: never
+    ) => {
+      const map = new Map<number, Partial<MailType>>();
+      all
+        .filter((m) => m.uid!.domain >= (start as number) && m.uid!.domain <= (end as number))
+        .forEach((m, i) => map.set(i, m));
+      return map as never;
+    };
+
+    const lines = await runCopy(
+      copyReq("Archive", {
+        type: "uid",
+        ranges: [
+          { start: 3, end: 5 },
+          { start: 4, end: 6 },
+        ],
+      }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+
+    // One clone per distinct source UID — pre-#626 stored 6 (4,5 twice).
+    expect(stored.length).toBe(4);
+    const storedSubjects = stored.map((c) => c.subject).sort();
+    expect(storedSubjects).toEqual(["src-3", "src-4", "src-5", "src-6"]);
+
+    const tagged = lines.find((l) => l.startsWith("A1 OK [COPYUID"))!;
+    const m = tagged.match(/\[COPYUID \d+ ([\d,:]+) ([\d,:]+)\]/)!;
+    const expand = (set: string): number[] =>
+      set.split(",").flatMap((part) => {
+        if (!part.includes(":")) return [Number(part)];
+        const [a, b] = part.split(":").map(Number);
+        const out: number[] = [];
+        for (let i = a; i <= b; i++) out.push(i);
+        return out;
+      });
+    const srcSet = expand(m[1]);
+    const destSet = expand(m[2]);
+    // Pre-#626: srcSet dedupes to 4, destSet keeps 6 → lengths diverge.
+    expect(srcSet.length).toBe(destSet.length);
+    expect(srcSet.length).toBe(4);
+
+    // Positional COPYUID mapping resolves to the real stored dest UID.
+    const claimedPairing = new Map<number, number>();
+    srcSet.forEach((s, i) => claimedPairing.set(s, destSet[i]));
+    const actualDestOf = (srcUid: number): number =>
+      stored.find((c) => c.subject === `src-${srcUid}`)!.uid!.account;
+    [3, 4, 5, 6].forEach((u) =>
+      expect(claimedPairing.get(u)).toBe(actualDestOf(u))
+    );
+  });
+});
+
 describe("COPY dispatch — sequence vs UID semantics (#520)", () => {
   it("UID COPY consumes the sequenceSet as UIDs (no seqState lookup)", async () => {
     const ctx = buildStore({ existsBoxes: ["Archive"] });
