@@ -237,7 +237,12 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
     // A <0.10> partial returns exactly 10 octets — no trailing CRLF.
     expect(part!.length).toBe(10);
-    expect(part!.header).toContain("<0.10>");
+    // inbox #640: the response partial marker is the single origin octet only
+    // (RFC 3501 §9 / §7.4.2 `"BODY" section ["<" number ">"]`). The request's
+    // `<start.length>` form must NOT be echoed into the response.
+    expect(part!.header).toContain("<0>");
+    expect(part!.header).not.toContain("<0.10>");
+    expect(part!.header).not.toMatch(/<\d+\.\d+>/);
     expect(part!.content.endsWith("\r\n")).toBe(false);
   });
 
@@ -255,7 +260,10 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     if (part!.type !== "literal") throw new Error("expected literal part");
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
     expect(part!.length).toBe(8);
-    expect(part!.header).toContain("<5.8>");
+    // inbox #640: single origin octet only — not the request's `<start.length>`.
+    expect(part!.header).toContain("<5>");
+    expect(part!.header).not.toContain("<5.8>");
+    expect(part!.header).not.toMatch(/<\d+\.\d+>/);
   });
 });
 

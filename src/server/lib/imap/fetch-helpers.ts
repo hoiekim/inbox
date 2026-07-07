@@ -292,12 +292,16 @@ export async function buildBodyResponsePart(
       finalContent = applyPartialFetch(content, partial);
       length = Buffer.byteLength(finalContent, "utf8");
     }
-    header += `<${start}.${Math.min(partialLength, length)}>`;
+    // Response partial marker is the single origin octet only — RFC 3501 §9
+    // `msg-att-static` / §7.4.2 allow `"BODY" section ["<" number ">"]`. The
+    // `<start.length>` form is request-only grammar (`fetch-att`); echoing the
+    // length back is non-conformant. The `{length}` literal already tells the
+    // client how many octets follow.
+    header += `<${start}>`;
     // A partial fetch returns exactly the requested substring — no trailing
     // CRLF. (The non-partial branch below appends one and recounts `length`;
     // doing that here would emit 2 octets more than the `{length}` literal
-    // and the `<start.length>` annotation both advertise, desyncing clients
-    // that read exactly `length` octets.)
+    // advertises, desyncing clients that read exactly `length` octets.)
   } else if (section.type !== "HEADER") {
     finalContent += "\r\n";
     length = Buffer.byteLength(finalContent, "utf8");
