@@ -607,6 +607,19 @@ export const getAccountUidNext = async (
   }
 };
 
+// Received-account address expansion. Unions to/cc/bcc + envelope_to (the
+// SMTP-level delivery address) so sub-addressed / listserv-routed mail resolves
+// to the receiving account even when the MIME to/cc/bcc omits it (see the long
+// comment in getAccountStats and PR #525). Shared by getAccountStats and
+// searchAccountStats so the two never drift.
+const RECEIVED_ADDRESS_EXPANSION = `jsonb_array_elements(
+  COALESCE(to_address, '[]'::jsonb) ||
+  COALESCE(cc_address, '[]'::jsonb) ||
+  COALESCE(bcc_address, '[]'::jsonb) ||
+  COALESCE(envelope_to, '[]'::jsonb)
+)->>'address' as address`;
+const RECEIVED_ADDRESS_NOT_NULL = `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL OR envelope_to IS NOT NULL)`;
+
 export const getAccountStats = async (
   user_id: string,
   sent: boolean,
@@ -633,16 +646,11 @@ export const getAccountStats = async (
     // FE shows 0 / badge shows N.
     const addressExpansion = sent
       ? `jsonb_array_elements(from_address)->>'address' as address`
-      : `jsonb_array_elements(
-          COALESCE(to_address, '[]'::jsonb) ||
-          COALESCE(cc_address, '[]'::jsonb) ||
-          COALESCE(bcc_address, '[]'::jsonb) ||
-          COALESCE(envelope_to, '[]'::jsonb)
-        )->>'address' as address`;
+      : RECEIVED_ADDRESS_EXPANSION;
 
     const addressNotNull = sent
       ? `from_address IS NOT NULL`
-      : `(to_address IS NOT NULL OR cc_address IS NOT NULL OR bcc_address IS NOT NULL OR envelope_to IS NOT NULL)`;
+      : RECEIVED_ADDRESS_NOT_NULL;
 
     // Use address matching (from_address for sent, to/cc/bcc for received) rather
     // than the `sent` boolean flag, so self-emails appear in both views correctly.
@@ -692,6 +700,69 @@ export const getAccountStats = async (
     }));
   } catch (error) {
     logger.error("Failed to get account stats", {}, error);
+    return [];
+  }
+};
+
+// Received accounts that own at least one mail matching a full-text search
+// term. Mirrors getAccountStats' received path (same address expansion +
+// envelope_to union + domain filter) with the full-text predicate from
+// searchMails added, so the search side-tab lists exactly the accounts whose
+// mails appear in the search results — including sub-addressed deliveries the
+// client payload can't see (envelope_to is server-only). counts/unread/saved
+// reflect only the matching mails.
+export const searchAccountStats = async (
+  user_id: string,
+  searchTerm: string,
+  domainFilter?: string
+): Promise<
+  {
+    address: string;
+    count: number;
+    unread: number;
+    saved: number;
+    latest: Date;
+  }[]
+> => {
+  try {
+    const domainCondition = domainFilter ? `AND address ILIKE '%@' || $3` : "";
+    const sql = `
+      WITH expanded_mails AS (
+        SELECT DISTINCT
+          mail_id, read, saved, date,
+          ${RECEIVED_ADDRESS_EXPANSION}
+        FROM mails
+        WHERE user_id = $1
+          AND expunged = FALSE
+          AND draft = FALSE
+          AND ${RECEIVED_ADDRESS_NOT_NULL}
+          AND search_vector @@ plainto_tsquery('english', $2)
+      )
+      SELECT
+        address,
+        COUNT(*) as count,
+        SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
+        SUM(CASE WHEN saved = TRUE THEN 1 ELSE 0 END) as saved_count,
+        MAX(date) as latest
+      FROM expanded_mails
+      WHERE address IS NOT NULL
+      ${domainCondition}
+      GROUP BY address
+      ORDER BY latest DESC
+    `;
+    const values: ParamValue[] = domainFilter
+      ? [user_id, searchTerm, domainFilter]
+      : [user_id, searchTerm];
+    const result = await pool.query(sql, values);
+    return result.rows.map((row: Record<string, unknown>) => ({
+      address: row.address as string,
+      count: parseInt(row.count as string, 10),
+      unread: parseInt(row.unread as string, 10),
+      saved: parseInt(row.saved_count as string, 10),
+      latest: new Date(row.latest as string),
+    }));
+  } catch (error) {
+    logger.error("Failed to search account stats", {}, error);
     return [];
   }
 };

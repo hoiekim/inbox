@@ -244,31 +244,52 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
   });
 
   it("received-branch address expansion unions envelope_to with to/cc/bcc", () => {
-    // Locate the addressExpansion ternary's received branch — everything
-    // between `addressExpansion = sent ? <sent SQL>` and the final `;`,
-    // dropping the sent SQL portion via the backtick boundary.
-    const exprMatch = fnSource.match(
-      /const\s+addressExpansion\s*=\s*sent\s*\?\s*`[^`]*`\s*:\s*`([^`]*)`\s*;/
+    // The received-branch expansion lives in the shared
+    // RECEIVED_ADDRESS_EXPANSION constant (reused by getAccountStats and
+    // searchAccountStats so the two never drift). getAccountStats' received
+    // branch must reference it.
+    const constMatch = mailsSource.match(
+      /const\s+RECEIVED_ADDRESS_EXPANSION\s*=\s*`([^`]*)`/
     );
-    if (!exprMatch) throw new Error("addressExpansion ternary not found");
-    const receivedSql = exprMatch[1];
+    if (!constMatch) throw new Error("RECEIVED_ADDRESS_EXPANSION not found");
+    const receivedSql = constMatch[1];
     expect(receivedSql).toContain("to_address");
     expect(receivedSql).toContain("cc_address");
     expect(receivedSql).toContain("bcc_address");
     expect(receivedSql).toContain("envelope_to");
+    expect(fnSource).toContain("RECEIVED_ADDRESS_EXPANSION");
   });
 
   it("received-branch null-check includes envelope_to", () => {
     // Otherwise rows with only envelope_to populated (no MIME recipient
     // headers, which happens for some listserv-style senders) would be
-    // filtered out before the address expansion even fires.
-    const exprMatch = fnSource.match(
-      /const\s+addressNotNull\s*=\s*sent\s*\?\s*`[^`]*`\s*:\s*`([^`]*)`\s*;/
+    // filtered out before the address expansion even fires. Also a shared
+    // constant so searchAccountStats inherits the same null-check.
+    const constMatch = mailsSource.match(
+      /const\s+RECEIVED_ADDRESS_NOT_NULL\s*=\s*`([^`]*)`/
     );
-    if (!exprMatch) throw new Error("addressNotNull ternary not found");
-    const receivedSql = exprMatch[1];
+    if (!constMatch) throw new Error("RECEIVED_ADDRESS_NOT_NULL not found");
+    const receivedSql = constMatch[1];
     expect(receivedSql).toContain("to_address IS NOT NULL");
     expect(receivedSql).toContain("envelope_to IS NOT NULL");
+    expect(fnSource).toContain("RECEIVED_ADDRESS_NOT_NULL");
+  });
+
+  it("searchAccountStats reuses the shared received-address constants + full-text predicate", () => {
+    // The search side-tab must list exactly the accounts whose mail appears in
+    // the search results, so searchAccountStats' account attribution has to
+    // match getAccountStats' received path (same envelope_to union) AND filter
+    // to the search term via the same tsquery searchMails uses.
+    const fnMatch = mailsSource.match(
+      /export const searchAccountStats[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("searchAccountStats not found in mails.ts");
+    const src = fnMatch[0];
+    expect(src).toContain("RECEIVED_ADDRESS_EXPANSION");
+    expect(src).toContain("RECEIVED_ADDRESS_NOT_NULL");
+    expect(src).toContain("search_vector @@ plainto_tsquery('english', $2)");
+    expect(src).toContain("expunged = FALSE");
+    expect(src).toContain("draft = FALSE");
   });
 
   it("sent-branch address expansion remains from_address only", () => {

@@ -2,9 +2,11 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
+const mockSearchAccountStats = mock(() => Promise.resolve([]));
 
 mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
+  searchAccountStats: mockSearchAccountStats,
 }));
 
 // Mock getUserDomain from "server" — only mock what accounts.ts actually imports
@@ -13,7 +15,7 @@ mock.module("server", () => ({
     username === "admin" ? "example.com" : `${username}.example.com`,
 }));
 
-import { getAccounts } from "./accounts";
+import { getAccounts, searchAccounts } from "./accounts";
 
 const mockUser = new SignedUser({
   id: "user-123",
@@ -124,5 +126,55 @@ describe("getAccounts", () => {
     expect(result.sent).toHaveLength(1);
     expect(result.received[0].key).toBe("recv@example.com");
     expect(result.sent[0].key).toBe("sent@example.com");
+  });
+});
+
+describe("searchAccounts", () => {
+  beforeEach(() => {
+    mockSearchAccountStats.mockClear();
+    mockSearchAccountStats.mockResolvedValue([]);
+  });
+
+  it("should short-circuit an empty/whitespace term without querying", async () => {
+    expect(await searchAccounts(mockUser, "")).toEqual([]);
+    expect(await searchAccounts(mockUser, "   ")).toEqual([]);
+    expect(mockSearchAccountStats).not.toHaveBeenCalled();
+  });
+
+  it("should query with the trimmed term, user id, and user domain", async () => {
+    await searchAccounts(mockUser, "  invoice  ");
+    expect(mockSearchAccountStats).toHaveBeenCalledWith(
+      "user-123",
+      "invoice",
+      "testuser.example.com"
+    );
+  });
+
+  it("should use the base domain for the admin user", async () => {
+    await searchAccounts(adminUser, "invoice");
+    expect(mockSearchAccountStats).toHaveBeenCalledWith(
+      "admin-1",
+      "invoice",
+      "example.com"
+    );
+  });
+
+  it("should map matching stats to Account objects", async () => {
+    mockSearchAccountStats.mockResolvedValueOnce([
+      { address: "shop@testuser.example.com", count: 4, unread: 2, saved: 1, latest: "2024-02-01" },
+    ]);
+
+    const result = await searchAccounts(mockUser, "invoice");
+    expect(result).toHaveLength(1);
+    expect(result[0].key).toBe("shop@testuser.example.com");
+    expect(result[0].doc_count).toBe(4);
+    expect(result[0].unread_doc_count).toBe(2);
+    expect(result[0].saved_doc_count).toBe(1);
+    expect(result[0].updated).toBe("2024-02-01");
+  });
+
+  it("should return an empty array when no account matches", async () => {
+    const result = await searchAccounts(mockUser, "nomatch");
+    expect(result).toEqual([]);
   });
 });

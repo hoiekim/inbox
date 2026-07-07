@@ -10,7 +10,7 @@ import {
 import { QueryClientProvider } from "react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
-import { Account, SignedUser, ReplyData } from "common";
+import { SignedUser, ReplyData } from "common";
 import { DomainGetResponse } from "server";
 
 import {
@@ -57,8 +57,6 @@ export interface ContextType {
   setSelectedCategory: Dispatch<
     SetStateAction<ContextType["selectedCategory"]>
   >;
-  searchHistory: Account[];
-  setSearchHistory: Dispatch<SetStateAction<ContextType["searchHistory"]>>;
   newMailsTotal: number;
   setNewMailsTotal: Dispatch<SetStateAction<ContextType["newMailsTotal"]>>;
 }
@@ -102,9 +100,6 @@ const App = ({ user: session }: Props) => {
     // the account address as the search term, producing confusing sort order.
     (v) => (v === Category.Search ? Category.AllMails : v)
   );
-  const [searchHistory, setSearchHistory] = useState<
-    ContextType["searchHistory"]
-  >([]);
   const [newMailsTotal, setNewMailsTotal] = useState(0);
 
   // On mount: if the app reloaded while in search mode, exit search state.
@@ -179,7 +174,6 @@ const App = ({ user: session }: Props) => {
       setIsWriterOpen(false);
       setIsAccountsOpen(window.innerWidth > 750);
       setReplyData({});
-      setSearchHistory([]);
       setNewMailsTotal(0);
     } else {
       // Register the SW for every authenticated session, not just push opt-ins,
@@ -194,7 +188,6 @@ const App = ({ user: session }: Props) => {
     setIsWriterOpen,
     setIsAccountsOpen,
     setReplyData,
-    setSearchHistory,
     setNewMailsTotal
   ]);
 
@@ -214,8 +207,6 @@ const App = ({ user: session }: Props) => {
     setSelectedAccount,
     selectedCategory,
     setSelectedCategory,
-    searchHistory,
-    setSearchHistory,
     newMailsTotal,
     setNewMailsTotal
   };
