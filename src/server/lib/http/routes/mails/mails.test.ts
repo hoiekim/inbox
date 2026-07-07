@@ -209,6 +209,26 @@ describe("getHeadersRoute", () => {
     expect(callArgs[2]).toMatchObject({ sent: true, new: true, saved: false });
   });
 
+  it("passes the ?spam= flag to getMailHeaders (per-account spam folder)", async () => {
+    const { getHeadersRoute } = await import("./get-headers");
+
+    mockGetMailHeaders.mockResolvedValueOnce([]);
+    mockAddressToUsername.mockReturnValueOnce("alice");
+
+    const req = makeReq({
+      method: "GET",
+      session: { user: makeUser("alice") },
+      params: { account: "alice@example.com" },
+      query: { spam: "1" },
+    });
+    const res = makeRes();
+
+    await getHeadersRoute.callback(req, res, noopStream);
+
+    const callArgs = mockGetMailHeaders.mock.calls[0];
+    expect(callArgs[2]).toMatchObject({ spam: true, sent: false });
+  });
+
   it("without ?since= falls back to the full-list path (backwards-compat)", async () => {
     const { getHeadersRoute } = await import("./get-headers");
 

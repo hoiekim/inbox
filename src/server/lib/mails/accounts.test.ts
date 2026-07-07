@@ -35,21 +35,41 @@ describe("getAccounts", () => {
     mockGetAccountStats.mockResolvedValue([]);
   });
 
-  it("should call getAccountStats twice (received and sent)", async () => {
+  it("should call getAccountStats three times (received, sent, spam)", async () => {
     await getAccounts(mockUser);
-    expect(mockGetAccountStats).toHaveBeenCalledTimes(2);
+    expect(mockGetAccountStats).toHaveBeenCalledTimes(3);
   });
 
-  it("should call getAccountStats with correct userId and sent flags", async () => {
+  it("should call getAccountStats with correct userId, sent, and spam flags", async () => {
     await getAccounts(mockUser);
     expect(mockGetAccountStats).toHaveBeenCalledWith("user-123", false, "testuser.example.com");
     expect(mockGetAccountStats).toHaveBeenCalledWith("user-123", true, "testuser.example.com");
+    // Spam groups by receiving account, so it queries received-style with the
+    // spamOnly flag set.
+    expect(mockGetAccountStats).toHaveBeenCalledWith("user-123", false, "testuser.example.com", true);
   });
 
-  it("should return empty received and sent arrays when no stats", async () => {
+  it("should return empty received, sent, and spam arrays when no stats", async () => {
     const result = await getAccounts(mockUser);
     expect(result.received).toEqual([]);
     expect(result.sent).toEqual([]);
+    expect(result.spam).toEqual([]);
+  });
+
+  it("should map spam stats to per-account Account objects", async () => {
+    const spamStats = [
+      { address: "inbox@testuser.example.com", count: 6, unread: 4, saved: 0, latest: "2024-01-20" },
+    ];
+    mockGetAccountStats
+      .mockResolvedValueOnce([]) // received
+      .mockResolvedValueOnce([]) // sent
+      .mockResolvedValueOnce(spamStats); // spam
+
+    const result = await getAccounts(mockUser);
+    expect(result.spam).toHaveLength(1);
+    expect(result.spam[0].key).toBe("inbox@testuser.example.com");
+    expect(result.spam[0].doc_count).toBe(6);
+    expect(result.spam[0].unread_doc_count).toBe(4);
   });
 
   it("should map received stats to Account objects", async () => {
@@ -109,23 +129,29 @@ describe("getAccounts", () => {
     expect(mockGetAccountStats).toHaveBeenCalledWith("admin-1", true, "example.com");
   });
 
-  it("should return both received and sent in the same response", async () => {
+  it("should return received, sent, and spam in the same response", async () => {
     const receivedStats = [
       { address: "recv@example.com", count: 3, unread: 1, saved: 0, latest: "2024-01-05" },
     ];
     const sentStats = [
       { address: "sent@example.com", count: 7, unread: 0, saved: 2, latest: "2024-01-06" },
     ];
+    const spamStats = [
+      { address: "recv@example.com", count: 2, unread: 2, saved: 0, latest: "2024-01-07" },
+    ];
 
     mockGetAccountStats
       .mockResolvedValueOnce(receivedStats)
-      .mockResolvedValueOnce(sentStats);
+      .mockResolvedValueOnce(sentStats)
+      .mockResolvedValueOnce(spamStats);
 
     const result = await getAccounts(mockUser);
     expect(result.received).toHaveLength(1);
     expect(result.sent).toHaveLength(1);
+    expect(result.spam).toHaveLength(1);
     expect(result.received[0].key).toBe("recv@example.com");
     expect(result.sent[0].key).toBe("sent@example.com");
+    expect(result.spam[0].key).toBe("recv@example.com");
   });
 });
 
