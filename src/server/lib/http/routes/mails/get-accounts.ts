@@ -5,6 +5,7 @@ import { Route } from "../route";
 export interface AccountsGetResponse {
   received: Account[];
   sent: Account[];
+  spam: Account[];
 }
 
 export const getAccountsRoute = new Route<AccountsGetResponse>(

@@ -8,39 +8,42 @@ import { getUserDomain } from "server";
 export interface AccountsGetResponse {
   received: Account[];
   sent: Account[];
+  // Spam is grouped per receiving account, like received/sent — each entry
+  // carries that account's spam doc/unread counts for the sidebar list + badge.
+  spam: Account[];
 }
+
+const toAccount = (stat: {
+  address: string;
+  count: number;
+  unread: number;
+  saved: number;
+  latest: Date;
+}): Account =>
+  new Account({
+    key: stat.address,
+    doc_count: stat.count,
+    unread_doc_count: stat.unread,
+    saved_doc_count: stat.saved,
+    updated: stat.latest,
+  });
 
 export const getAccounts = async (
   user: SignedUser
 ): Promise<AccountsGetResponse> => {
   const userDomain = getUserDomain(user.username);
 
-  const [receivedStats, sentStats] = await Promise.all([
+  const [receivedStats, sentStats, spamStats] = await Promise.all([
     getAccountStats(user.id, false, userDomain),
     getAccountStats(user.id, true, userDomain),
+    getAccountStats(user.id, false, userDomain, true),
   ]);
 
-  const received = receivedStats.map((stat) => {
-    return new Account({
-      key: stat.address,
-      doc_count: stat.count,
-      unread_doc_count: stat.unread,
-      saved_doc_count: stat.saved,
-      updated: stat.latest,
-    });
-  });
-
-  const sent = sentStats.map((stat) => {
-    return new Account({
-      key: stat.address,
-      doc_count: stat.count,
-      unread_doc_count: stat.unread,
-      saved_doc_count: stat.saved,
-      updated: stat.latest,
-    });
-  });
-
-  return { received, sent };
+  return {
+    received: receivedStats.map(toAccount),
+    sent: sentStats.map(toAccount),
+    spam: spamStats.map(toAccount),
+  };
 };
 
 // Received accounts that own at least one mail matching `value`. Backs the

@@ -59,6 +59,7 @@ describe("searchMail", () => {
       bcc_text: null,
       read: false,
       saved: true,
+      is_spam: true,
       insight: null,
       highlight: "Test <em>Subject</em>",
     };

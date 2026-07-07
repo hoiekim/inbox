@@ -149,6 +149,14 @@ const Accounts = ({
     { enabled: !!searchValue, cacheTime: 0, retry: false }
   );
 
+  // Spam is grouped per account (like received/sent); the category-tab badge
+  // sums unread across the spam accounts, mirroring how newMailsTotal sums the
+  // received accounts. Both ride the accounts payload — no extra fetch.
+  const spamUnread = (query.data?.spam ?? []).reduce(
+    (acc, e) => acc + e.unread_doc_count,
+    0
+  );
+
   useEffect(() => {
     if (searchInputDom && isAccountsOpen && !isWriterOpen)
       searchInputDom.focus();
@@ -190,6 +198,7 @@ const Accounts = ({
             <SkeletonCategory />
             <SkeletonCategory />
             <SkeletonCategory />
+            <SkeletonCategory />
           </div>
           <div>
             <SkeletonCategory />
@@ -222,7 +231,7 @@ const Accounts = ({
   }
 
   if (query.isSuccess) {
-    const { received = [], sent = [] } = query.data || {};
+    const { received = [], sent = [], spam = [] } = query.data || {};
 
     const renderAccount = (data: Account, i: number) => {
       const accountName = data.key;
@@ -277,6 +286,8 @@ const Accounts = ({
       sortedAccountData = mergeSavedAccounts(received, sent);
     } else if (selectedCategory === Category.SentMails) {
       sortedAccountData = sent;
+    } else if (selectedCategory === Category.SpamMails) {
+      sortedAccountData = spam;
     } else if (selectedCategory === Category.Search) {
       sortedAccountData = searchAccountsQuery.data || [];
     }
@@ -332,6 +343,7 @@ const Accounts = ({
         if (e === Category.SentMails) targetAccounts = sent;
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
         else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
+        else if (e === Category.SpamMails) targetAccounts = spam;
         else targetAccounts = received;
 
         setSelectedCategory(e);
@@ -360,9 +372,9 @@ const Accounts = ({
           ) : (
             <div>
               {e.split(" ")[0]}
-              {e === Category.NewMails &&
-              e !== selectedCategory &&
-              newMailsTotal ? (
+              {e !== selectedCategory &&
+              ((e === Category.NewMails && newMailsTotal) ||
+                (e === Category.SpamMails && spamUnread)) ? (
                 <div className="numberBall" />
               ) : (
                 <></>

@@ -296,13 +296,26 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
     // Don't accidentally widen the sent view — envelope_from has its own
     // semantics (bounce path) and isn't symmetric with envelope_to here.
     const exprMatch = fnSource.match(
-      /const\s+addressExpansion\s*=\s*sent\s*\?\s*`([^`]*)`/
+      /const\s+addressExpansion\s*=\s*useSentExpansion\s*\?\s*`([^`]*)`/
     );
     if (!exprMatch) throw new Error("sent branch not found");
     const sentSql = exprMatch[1];
     expect(sentSql).toContain("from_address");
     expect(sentSql).not.toContain("envelope_to");
     expect(sentSql).not.toContain("envelope_from");
+  });
+
+  it("spamOnly forces the received expansion and filters is_spam", () => {
+    // Spam is received mail grouped per receiving account, so spamOnly must
+    // never take the sent (from_address) expansion, and must restrict to
+    // is_spam received rows so the per-account spam counts match the folder.
+    expect(fnSource).toContain("const useSentExpansion = sent && !spamOnly;");
+    const spamMatch = fnSource.match(
+      /const\s+spamCondition\s*=\s*spamOnly\s*\?\s*`([^`]*)`/
+    );
+    if (!spamMatch) throw new Error("spamCondition not found");
+    expect(spamMatch[1]).toContain("is_spam = TRUE");
+    expect(spamMatch[1]).toContain("sent = FALSE");
   });
 });
 

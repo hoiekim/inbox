@@ -17,6 +17,7 @@ export interface GetMailsOptions {
   sent: boolean;
   new: boolean;
   saved: boolean;
+  spam: boolean;
   pagination?: Pagination;
 }
 
@@ -70,6 +71,7 @@ export const getMailHeaders = async (
     sent: options.sent,
     new: options.new,
     saved: options.saved,
+    spam: options.spam,
     from,
     size,
   };
@@ -95,6 +97,7 @@ export const getMailHeadersDelta = async (
     sent: options.sent,
     new: options.new,
     saved: options.saved,
+    spam: options.spam,
   };
 
   const { as_of, headers, expunged_ids } = await pgGetMailHeadersDelta(

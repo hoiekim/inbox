@@ -52,6 +52,7 @@ describe("getSpamHeaders", () => {
       bcc_text: null,
       read: false,
       saved: false,
+      is_spam: true,
       insight: null,
     };
     mockGetSpamMails.mockResolvedValue([spamModel]);

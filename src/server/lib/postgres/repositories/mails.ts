@@ -23,6 +23,7 @@ import {
   BCC_ADDRESS,
   BCC_TEXT,
   SENT,
+  IS_SPAM,
   INSIGHT,
   ENVELOPE_TO,
   DELETED,
@@ -54,6 +55,7 @@ export interface MailHeaderResult {
   read: boolean;
   saved: boolean;
   sent: boolean;
+  is_spam: boolean;
   insight: object | null;
 }
 
@@ -253,6 +255,9 @@ export interface GetMailHeadersOptions {
   sent: boolean;
   new: boolean;
   saved: boolean;
+  // Restrict to spam-flagged received mail. Spam is a per-account folder like
+  // received/sent, so it rides the same address-scoped query path.
+  spam?: boolean;
   from?: number;
   size?: number;
   // ISO timestamp; when set, restrict to rows whose `updated` is newer than
@@ -305,7 +310,7 @@ export const getMailHeaders = async (
       TO_ADDRESS, TO_TEXT,
       CC_ADDRESS, CC_TEXT,
       BCC_ADDRESS, BCC_TEXT,
-      READ, SAVED, SENT, INSIGHT,
+      READ, SAVED, SENT, IS_SPAM, INSIGHT,
     ].join(", ");
     let sql = `
       SELECT ${headerColumns} FROM mails 
@@ -321,6 +326,12 @@ export const getMailHeaders = async (
       sql += ` AND read = FALSE`;
     } else if (options.saved) {
       sql += ` AND saved = TRUE`;
+    }
+
+    if (options.spam) {
+      // Spam mail is always received, never sent — matches the (sent = FALSE)
+      // guard the standalone spam query carried before spam became per-account.
+      sql += ` AND is_spam = TRUE AND sent = FALSE`;
     }
 
     if (options.since !== undefined) {
@@ -405,11 +416,17 @@ export const getMailHeadersDelta = async (
 
     const addressJson = JSON.stringify([{ address }]);
     const addressCondition = buildHeaderAddressCondition(options);
+    // A row leaves the spam folder either by expunge OR by being un-marked
+    // (is_spam flips to FALSE); both must tombstone so a cached client evicts
+    // it. Non-spam views only evict on expunge.
+    const evictionCondition = options.spam
+      ? `(expunged = TRUE OR is_spam = FALSE)`
+      : `expunged = TRUE`;
     const expungedSql = `
       SELECT ${MAIL_ID} FROM mails
       WHERE user_id = $1
         AND ${addressCondition}
-        AND expunged = TRUE
+        AND ${evictionCondition}
         AND updated > $3
     `;
 
@@ -420,6 +437,7 @@ export const getMailHeadersDelta = async (
         sent: options.sent,
         new: options.new,
         saved: options.saved,
+        spam: options.spam,
         since,
       }),
       pool.query<{ mail_id: string }>(expungedSql, [user_id, addressJson, since]),
@@ -623,7 +641,12 @@ const RECEIVED_ADDRESS_NOT_NULL = `(to_address IS NOT NULL OR cc_address IS NOT 
 export const getAccountStats = async (
   user_id: string,
   sent: boolean,
-  domainFilter?: string
+  domainFilter?: string,
+  // Restrict to spam-flagged mail, so the per-account spam folder gets the same
+  // address-grouped counts/badges as received. Spam is always received, so this
+  // uses the received (to/cc/bcc/envelope_to) address expansion regardless of
+  // `sent`.
+  spamOnly = false
 ): Promise<
   {
     address: string;
@@ -644,13 +667,19 @@ export const getAccountStats = async (
     // delivered via sub-addressing don't surface in the per-account
     // received view at all — but the push badge counts them, causing
     // FE shows 0 / badge shows N.
-    const addressExpansion = sent
+    // Spam is received mail, so it always groups by the received address set.
+    const useSentExpansion = sent && !spamOnly;
+
+    const addressExpansion = useSentExpansion
       ? `jsonb_array_elements(from_address)->>'address' as address`
       : RECEIVED_ADDRESS_EXPANSION;
 
-    const addressNotNull = sent
+    const addressNotNull = useSentExpansion
       ? `from_address IS NOT NULL`
       : RECEIVED_ADDRESS_NOT_NULL;
+
+    // Match the per-account spam-folder query (is_spam received mail only).
+    const spamCondition = spamOnly ? `AND is_spam = TRUE AND sent = FALSE` : "";
 
     // Use address matching (from_address for sent, to/cc/bcc for received) rather
     // than the `sent` boolean flag, so self-emails appear in both views correctly.
@@ -673,6 +702,7 @@ export const getAccountStats = async (
         WHERE user_id = $1
           AND expunged = FALSE
           AND draft = FALSE
+          ${spamCondition}
           AND ${addressNotNull}
       )
       SELECT

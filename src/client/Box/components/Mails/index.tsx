@@ -43,6 +43,7 @@ import {
   useIsOnline
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
+import { getMailsQueryUrl } from "./mailsQuery";
 
 import "./index.scss";
 
@@ -58,28 +59,6 @@ const GettingStarted = () => {
       <div dangerouslySetInnerHTML={{ __html: query.data || "" }} />
     </div>
   );
-};
-
-const getMailsQueryUrl = (account: string, category: Category) => {
-  let queryOption: string;
-
-  switch (category) {
-    case Category.Search:
-      return `/api/mails/search/${encodeURIComponent(account)}`;
-    case Category.SentMails:
-      queryOption = "?sent=1";
-      break;
-    case Category.NewMails:
-      queryOption = "?new=1";
-      break;
-    case Category.SavedMails:
-      queryOption = "?saved=1";
-      break;
-    default:
-      queryOption = "";
-  }
-
-  return `/api/mails/headers/${account}${queryOption}`;
 };
 
 export class MailsCache extends QueryCache<MailHeaderData[]> {
@@ -234,10 +213,14 @@ const RenderedMail = ({
 
         const newData = { ...oldData };
 
-        // Only update the array that matches the current view (received vs sent),
-        // so an address present in both arrays isn't double-decremented.
+        // Only update the array that matches the current view (received / sent /
+        // spam), so an address present in more than one isn't double-decremented.
         const arrayKey =
-          selectedCategory === Category.SentMails ? "sent" : "received";
+          selectedCategory === Category.SentMails
+            ? "sent"
+            : selectedCategory === Category.SpamMails
+            ? "spam"
+            : "received";
         newData[arrayKey].find((account) => {
           const { key, unread_doc_count } = account;
           const found = key === selectedAccount;
@@ -565,10 +548,14 @@ const RenderedMails = ({ page }: { page: number }) => {
 
       const newData = { ...oldData };
 
-      // Only update the array that matches the current view (received vs sent),
-      // so an address present in both arrays isn't double-decremented.
+      // Only update the array that matches the current view (received / sent /
+      // spam), so an address present in more than one isn't double-decremented.
       const arrayKey =
-        selectedCategory === Category.SentMails ? "sent" : "received";
+        selectedCategory === Category.SentMails
+          ? "sent"
+          : selectedCategory === Category.SpamMails
+          ? "spam"
+          : "received";
       newData[arrayKey].find((account) => {
         const { key, unread_doc_count } = account;
         const found = key === selectedAccount;
@@ -664,6 +651,8 @@ const RenderedMails = ({ page }: { page: number }) => {
             return "No saved emails.";
           case Category.SentMails:
             return "No sent emails.";
+          case Category.SpamMails:
+            return "No spam — nice.";
           case Category.Search:
             return "No results found.";
           default:
