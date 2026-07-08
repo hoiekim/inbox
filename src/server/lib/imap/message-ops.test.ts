@@ -94,9 +94,8 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
-const { appendMessage, storeFlagsTyped, resolveSeqSearchKeys } = await import(
-  "./message-ops"
-);
+const { appendMessage, storeFlagsTyped, resolveSeqSearchKeys, searchTyped } =
+  await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
@@ -538,5 +537,55 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
       seqState
     );
     expect(out.map((c) => c.type)).toEqual(["SEEN", "UID"]);
+  });
+});
+
+// #658 (reviewoie MED): a multi-element bare set (`SEARCH 1,3`) resolves to a
+// multi-range UID criterion that store.search ANDs, not ORs (#659) — a silent
+// empty result. Until #659 lands, searchTyped rejects it loudly for a plain
+// SEARCH rather than answer wrong. Single-range sets still run.
+describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
+  const seqState: SequenceState = {
+    seqToUid: [11395, 11396, 11400],
+    uidToSeq: new Map([
+      [11395, 1],
+      [11396, 2],
+      [11400, 3],
+    ]),
+  };
+  const fakeStore = { search: async () => [] } as unknown as Store;
+  const seqReq = (ranges: { start: number; end?: number }[]) => ({
+    criteria: [{ type: "SEQ" as const, sequenceSet: { type: "sequence" as const, ranges } }],
+  });
+  const capture = async (
+    tag: string,
+    req: { criteria: unknown[] },
+    isUid: boolean
+  ): Promise<string> => {
+    let out = "";
+    await searchTyped(
+      tag,
+      req as Parameters<typeof searchTyped>[1],
+      isUid,
+      fakeStore,
+      "INBOX",
+      seqState,
+      (d: string) => {
+        out += d;
+        return true;
+      }
+    );
+    return out;
+  };
+
+  it("rejects a multi-element plain-SEARCH bare set with NO", async () => {
+    const out = await capture("t1", seqReq([{ start: 1 }, { start: 3 }]), false);
+    expect(out).toBe("t1 NO Not supported\r\n");
+  });
+
+  it("runs a single-range plain-SEARCH bare set (no gate)", async () => {
+    const out = await capture("t2", seqReq([{ start: 1, end: 3 }]), false);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
   });
 });
