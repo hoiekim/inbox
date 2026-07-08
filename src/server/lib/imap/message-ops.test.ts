@@ -94,7 +94,8 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
-const { appendMessage, storeFlagsTyped } = await import("./message-ops");
+const { appendMessage, storeFlagsTyped, resolveSeqSearchKeys, searchTyped } =
+  await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
@@ -458,5 +459,145 @@ describe("appendMessage flag defaults (#548)", () => {
     expect(mail.saved).toBe(false);
     expect(mail.deleted).toBe(false);
     expect(mail.answered).toBe(false);
+  });
+});
+
+// #649: a bare sequence-set (SEQ) search key names message sequence numbers in
+// a plain SEARCH and UIDs in a UID SEARCH. resolveSeqSearchKeys rewrites SEQ to
+// a UID criterion so store.search (which has no seqState) can run it, resolving
+// against the seq→uid map for a plain SEARCH. A mailbox where seq != uid pins
+// the axis: seq 1→uid 11395, seq 2→uid 11396, seq 3→uid 11400 (expunge gap).
+describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
+  const seqState: SequenceState = {
+    seqToUid: [11395, 11396, 11400],
+    uidToSeq: new Map([
+      [11395, 1],
+      [11396, 2],
+      [11400, 3],
+    ]),
+  };
+
+  it("plain SEARCH resolves a SEQ range to the matching UID range", () => {
+    const out = resolveSeqSearchKeys(
+      [{ type: "SEQ", sequenceSet: { type: "sequence", ranges: [{ start: 1, end: 3 }] } }],
+      false,
+      seqState
+    );
+    // seq 1:3 → uid 11395:11400 (NOT 1:3 — that would match the wrong axis).
+    expect(out).toEqual([
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 11395, end: 11400 }] } },
+    ]);
+  });
+
+  it("plain SEARCH resolves a single bare seq number to its UID", () => {
+    const out = resolveSeqSearchKeys(
+      [{ type: "SEQ", sequenceSet: { type: "sequence", ranges: [{ start: 2 }] } }],
+      false,
+      seqState
+    );
+    expect(out).toEqual([
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 11396, end: 11396 }] } },
+    ]);
+  });
+
+  it("UID SEARCH keeps the set as UIDs, only relabeling SEQ→UID", () => {
+    const set = { type: "sequence" as const, ranges: [{ start: 11395, end: 11400 }] };
+    const out = resolveSeqSearchKeys([{ type: "SEQ", sequenceSet: set }], true, seqState);
+    expect(out).toEqual([{ type: "UID", sequenceSet: set }]);
+  });
+
+  it("a plain-SEARCH SEQ set past the end of the mailbox matches nothing", () => {
+    const out = resolveSeqSearchKeys(
+      [{ type: "SEQ", sequenceSet: { type: "sequence", ranges: [{ start: 5, end: 7 }] } }],
+      false,
+      seqState
+    );
+    // Must NOT vanish from the AND (which would match everything); pin to an
+    // impossible UID range so the search returns the empty set.
+    expect(out).toEqual([
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: -1, end: -1 }] } },
+    ]);
+  });
+
+  it("leaves non-SEQ criteria (flags, explicit UID) untouched", () => {
+    const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
+      { type: "SEEN" },
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 42 }] } },
+    ];
+    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual(criteria);
+  });
+
+  it("resolves a SEQ set alongside a flag key (SEEN 1:3)", () => {
+    const out = resolveSeqSearchKeys(
+      [
+        { type: "SEEN" },
+        { type: "SEQ", sequenceSet: { type: "sequence", ranges: [{ start: 1, end: 3 }] } },
+      ],
+      false,
+      seqState
+    );
+    expect(out.map((c) => c.type)).toEqual(["SEEN", "UID"]);
+  });
+});
+
+// #658 (reviewoie MED): a multi-element bare set (`SEARCH 1,3`) resolves to a
+// multi-range UID criterion that store.search ANDs, not ORs (#659) — a silent
+// empty result. Until #659 lands, searchTyped rejects it loudly on both the
+// plain and UID SEARCH forms rather than answer wrong. Single-range sets still
+// run on both.
+describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
+  const seqState: SequenceState = {
+    seqToUid: [11395, 11396, 11400],
+    uidToSeq: new Map([
+      [11395, 1],
+      [11396, 2],
+      [11400, 3],
+    ]),
+  };
+  const fakeStore = { search: async () => [] } as unknown as Store;
+  const seqReq = (ranges: { start: number; end?: number }[]) => ({
+    criteria: [{ type: "SEQ" as const, sequenceSet: { type: "sequence" as const, ranges } }],
+  });
+  const capture = async (
+    tag: string,
+    req: { criteria: unknown[] },
+    isUid: boolean
+  ): Promise<string> => {
+    let out = "";
+    await searchTyped(
+      tag,
+      req as Parameters<typeof searchTyped>[1],
+      isUid,
+      fakeStore,
+      "INBOX",
+      seqState,
+      (d: string) => {
+        out += d;
+        return true;
+      }
+    );
+    return out;
+  };
+
+  it("rejects a multi-element plain-SEARCH bare set with NO", async () => {
+    const out = await capture("t1", seqReq([{ start: 1 }, { start: 3 }]), false);
+    expect(out).toBe("t1 NO Not supported\r\n");
+  });
+
+  it("runs a single-range plain-SEARCH bare set (no gate)", async () => {
+    const out = await capture("t2", seqReq([{ start: 1, end: 3 }]), false);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
+  });
+
+  it("rejects a multi-element UID-SEARCH bare set with NO", async () => {
+    const out = await capture("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
+    expect(out).toBe("t3 NO Not supported\r\n");
+  });
+
+  it("runs a single-range UID-SEARCH bare set (no gate)", async () => {
+    const out = await capture("t4", seqReq([{ start: 1, end: 3 }]), true);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
   });
 });

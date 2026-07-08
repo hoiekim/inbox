@@ -97,10 +97,13 @@ const parseSearchKey = (
     consumed: context.position - start
   });
 
-  // Try to parse as sequence set first
+  // Try to parse as sequence set first. A bare sequence-set is the SEQ search
+  // key (RFC 3501 §6.4.4) — it refers to message sequence numbers, NOT UIDs, so
+  // it gets its own type. The explicit `UID <set>` keyword (below) stays UID.
+  // The handler resolves SEQ against the mailbox's seq→uid map per command.
   const sequenceSet = parseSequenceSet(context);
   if (sequenceSet.success) {
-    return ok({ type: "UID", sequenceSet: sequenceSet.value! });
+    return ok({ type: "SEQ", sequenceSet: sequenceSet.value! });
   }
   // reset position if sequence set parse failed
   context.position = start;
