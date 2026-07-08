@@ -223,6 +223,44 @@ describe("buildBodyResponsePart header terminators (inbox #645)", () => {
     });
     expect(content).toBe("\r\n");
   });
+
+  it("BODY[HEADER.FIELDS.NOT (...)] ends in exactly one delimiting blank line", async () => {
+    // HEADER.FIELDS.NOT excludes the named fields and keeps the rest; it goes
+    // through the same self-terminating HEADER_FIELDS branch, so it must also
+    // end in exactly one blank line.
+    const content = await contentOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "HEADER_FIELDS", fields: ["Subject"], not: true }
+    });
+    expect(content).not.toContain("Subject: Hello"); // excluded
+    expect(content).toContain("From: alice@example.com"); // kept
+    expect(content.endsWith("\r\n\r\n")).toBe(true);
+    expect(content.endsWith("\r\n\r\n\r\n")).toBe(false);
+  });
+
+  it("partial fetch on BODY[HEADER] keeps {N} literal == emitted octets", async () => {
+    // The partial branch slices `content` (which already carries the delimiting
+    // blank line) and recomputes `length`, so the header path must not desync
+    // the literal from the wire bytes.
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "HEADER" },
+        partial: { start: 0, length: 10 }
+      },
+      docId,
+      mailbox
+    );
+    expect(part).not.toBeNull();
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    expect(part!.length).toBe(10);
+    expect(part!.header).toContain("<0>");
+    expect(part!.header).not.toMatch(/<\d+\.\d+>/);
+  });
 });
 
 describe("buildFetchResponsePart ENVELOPE", () => {
