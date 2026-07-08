@@ -59,7 +59,12 @@ export function getBodyContent(
     }
 
     case "HEADER":
-      return formatHeaders(mail, docId) + "\r\n";
+      // RFC 3501 §6.4.5: a HEADER fetch includes the RFC-2822 delimiting blank
+      // line between the header block and the body. `formatHeaders` joins the
+      // header lines with `\r\n` and adds no trailing CRLF, so the first `\r\n`
+      // terminates the last header line and the second is the delimiting blank
+      // line.
+      return formatHeaders(mail, docId) + "\r\n\r\n";
 
     case "HEADER_FIELDS": {
       const allHeaders = formatHeaders(mail, docId);
@@ -302,7 +307,12 @@ export async function buildBodyResponsePart(
     // CRLF. (The non-partial branch below appends one and recounts `length`;
     // doing that here would emit 2 octets more than the `{length}` literal
     // advertises, desyncing clients that read exactly `length` octets.)
-  } else if (section.type !== "HEADER") {
+  } else if (section.type !== "HEADER" && section.type !== "HEADER_FIELDS") {
+    // Body sections (FULL / TEXT / MIME_PART) get a trailing CRLF here. Header
+    // sections already carry their own delimiting blank line from
+    // `getBodyContent` (HEADER: `\r\n\r\n`; HEADER_FIELDS: last-field `\r\n` +
+    // blank line), so appending another `\r\n` would emit a spurious second
+    // blank line.
     finalContent += "\r\n";
     length = Buffer.byteLength(finalContent, "utf8");
   }

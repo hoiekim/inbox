@@ -162,6 +162,69 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
   });
 });
 
+describe("buildBodyResponsePart header terminators (inbox #645)", () => {
+  // RFC 3501 §6.4.5: every header fetch ends with exactly one RFC-2822
+  // delimiting blank line after the last header field — i.e. `…field\r\n\r\n`.
+  // The no-match HEADER.FIELDS case is the sole exception: a single `\r\n`.
+  const mail: Partial<MailType> = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<term@local>",
+    date: new Date("2026-07-03T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "Hello",
+    text: "body line",
+    html: "",
+    attachments: []
+  };
+  const docId = "doc-term";
+  const mailbox = "INBOX";
+
+  const contentOf = async (fetch: BodyFetch): Promise<string> => {
+    const part = await buildBodyResponsePart(mail, fetch, docId, mailbox);
+    expect(part).not.toBeNull();
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    // The advertised {N} literal must equal the emitted octets.
+    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    return part!.content;
+  };
+
+  it("BODY[HEADER] ends in exactly one delimiting blank line", async () => {
+    const content = await contentOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "HEADER" }
+    });
+    // last field's CRLF + one blank line, and NOT a spurious second blank line.
+    expect(content.endsWith("\r\n\r\n")).toBe(true);
+    expect(content.endsWith("\r\n\r\n\r\n")).toBe(false);
+    // sanity: the last header line is present immediately before the blank line.
+    expect(content).toContain("Content-Transfer-Encoding: base64\r\n\r\n");
+  });
+
+  it("BODY[HEADER.FIELDS (...)] ends in exactly one delimiting blank line", async () => {
+    const content = await contentOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "HEADER_FIELDS", fields: ["From", "Subject"], not: false }
+    });
+    expect(content).toContain("From: alice@example.com");
+    expect(content).toContain("Subject: Hello");
+    expect(content).not.toContain("To: bob@example.com"); // not requested
+    expect(content.endsWith("\r\n\r\n")).toBe(true);
+    expect(content.endsWith("\r\n\r\n\r\n")).toBe(false);
+  });
+
+  it("BODY[HEADER.FIELDS (no match)] is exactly a single blank line", async () => {
+    const content = await contentOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "HEADER_FIELDS", fields: ["X-Nonexistent"], not: false }
+    });
+    expect(content).toBe("\r\n");
+  });
+});
+
 describe("buildFetchResponsePart ENVELOPE", () => {
   const mail: Partial<MailType> = {
     date: "2024-01-15T10:30:00Z",
