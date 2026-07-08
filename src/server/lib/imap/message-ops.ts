@@ -248,15 +248,16 @@ export async function searchTyped(
     return;
   }
 
-  // A multi-element bare set (e.g. `SEARCH 1,3`) resolves to a multi-range UID
-  // criterion, which store.search currently ANDs rather than ORs (#659) —
-  // silently returning the empty set. Until #659 fixes the OR-combination,
-  // reject a multi-range plain-SEARCH set loudly rather than answer wrong.
-  // Single-range sets (`SEARCH 1:3`, the common client form) are unaffected.
+  // A multi-element bare set (`SEARCH 1,3` or `UID SEARCH 1,3`) resolves to a
+  // multi-range UID criterion, which store.search currently ANDs rather than
+  // ORs (#659) — silently returning the empty set. Until #659 fixes the
+  // OR-combination, reject a multi-range bare set loudly on both the plain and
+  // UID SEARCH forms rather than answer wrong. Single-range sets (`SEARCH 1:3`,
+  // the common client form) are unaffected.
   const hasMultiRangeSeq = searchRequest.criteria.some(
     (c) => c.type === "SEQ" && c.sequenceSet.ranges.length > 1
   );
-  if (!isUidCommand && hasMultiRangeSeq) {
+  if (hasMultiRangeSeq) {
     write(`${tag} NO Not supported\r\n`);
     return;
   }

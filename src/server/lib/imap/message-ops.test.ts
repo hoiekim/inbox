@@ -542,8 +542,9 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
 
 // #658 (reviewoie MED): a multi-element bare set (`SEARCH 1,3`) resolves to a
 // multi-range UID criterion that store.search ANDs, not ORs (#659) — a silent
-// empty result. Until #659 lands, searchTyped rejects it loudly for a plain
-// SEARCH rather than answer wrong. Single-range sets still run.
+// empty result. Until #659 lands, searchTyped rejects it loudly on both the
+// plain and UID SEARCH forms rather than answer wrong. Single-range sets still
+// run on both.
 describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
   const seqState: SequenceState = {
     seqToUid: [11395, 11396, 11400],
@@ -585,6 +586,17 @@ describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
 
   it("runs a single-range plain-SEARCH bare set (no gate)", async () => {
     const out = await capture("t2", seqReq([{ start: 1, end: 3 }]), false);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
+  });
+
+  it("rejects a multi-element UID-SEARCH bare set with NO", async () => {
+    const out = await capture("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
+    expect(out).toBe("t3 NO Not supported\r\n");
+  });
+
+  it("runs a single-range UID-SEARCH bare set (no gate)", async () => {
+    const out = await capture("t4", seqReq([{ start: 1, end: 3 }]), true);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
   });
