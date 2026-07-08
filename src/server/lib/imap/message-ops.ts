@@ -17,6 +17,7 @@ import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
   SearchRequest,
+  SearchCriterion,
   StoreRequest,
   CopyRequest,
   MoveRequest,
@@ -197,6 +198,34 @@ async function _processFetchMessages(
 // SEARCH
 // ---------------------------------------------------------------------------
 
+// A bare message sequence-set is a top-level SEARCH key (RFC 3501 §6.4.4),
+// parsed as a SEQ criterion. In a plain SEARCH it names message sequence
+// numbers, so resolve it against the mailbox's seq→uid map before querying; in
+// a UID SEARCH the same set already names UIDs, so relabel it as UID untouched.
+// (`store.search` only understands UID/flag/text/date criteria — it has no
+// access to seqState — so the resolution has to happen here.)
+export function resolveSeqSearchKeys(
+  criteria: SearchCriterion[],
+  isUidCommand: boolean,
+  seqState: SequenceState
+): SearchCriterion[] {
+  return criteria.map((criterion) => {
+    if (criterion.type !== "SEQ") return criterion;
+    if (isUidCommand) {
+      return { type: "UID", sequenceSet: criterion.sequenceSet };
+    }
+    const uidRanges = convertSequenceSet(criterion.sequenceSet)
+      .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
+      .filter((r): r is { uidStart: number; uidEnd: number } => r !== undefined)
+      .map(({ uidStart, uidEnd }) => ({ start: uidStart, end: uidEnd }));
+    // A set whose sequence numbers all lie past the end of the mailbox matches
+    // no messages. It must return the empty set — not vanish from the AND and
+    // match everything — so pin it to an impossible UID range (UIDs are ≥ 1).
+    if (uidRanges.length === 0) uidRanges.push({ start: -1, end: -1 });
+    return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
+  });
+}
+
 export async function searchTyped(
   tag: string,
   searchRequest: SearchRequest,
@@ -211,14 +240,22 @@ export async function searchTyped(
     return;
   }
 
+  // The explicit `UID <set>` keyword is only valid under the UID command; a
+  // bare sequence-set (SEQ) is valid in both and is resolved below.
   const hasUidCriteria = searchRequest.criteria.some((c) => c.type === "UID");
   if (!isUidCommand && hasUidCriteria) {
     write(`${tag} NO Not supported\r\n`);
     return;
   }
 
+  const criteria = resolveSeqSearchKeys(
+    searchRequest.criteria,
+    isUidCommand,
+    seqState
+  );
+
   try {
-    const uids = await store.search(selectedMailbox, searchRequest.criteria);
+    const uids = await store.search(selectedMailbox, criteria);
 
     let result: number[];
     if (isUidCommand) {

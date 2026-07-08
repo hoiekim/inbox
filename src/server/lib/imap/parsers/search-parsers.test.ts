@@ -307,6 +307,38 @@ describe("parseSearchCriteria", () => {
     });
   });
 
+  // #649: a bare sequence-set is the SEQ search key (message sequence numbers),
+  // distinct from the explicit UID keyword. It must not be labeled UID (which
+  // the non-UID SEARCH handler rejects and which would match the wrong axis).
+  describe("bare sequence-set (SEQ) key (#649)", () => {
+    it("parses a bare range as SEQ, not UID", () => {
+      const result = parseSearchCriteria(ctx("1:3"));
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]).toEqual({
+        type: "SEQ",
+        sequenceSet: { type: "sequence", ranges: [{ start: 1, end: 3 }] }
+      });
+    });
+
+    it("parses a bare single number as SEQ", () => {
+      const result = parseSearchCriteria(ctx("11324"));
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]?.type).toBe("SEQ");
+    });
+
+    it("parses a bare comma set as SEQ", () => {
+      const result = parseSearchCriteria(ctx("2,4"));
+      expect(result.success).toBe(true);
+      expect(result.value?.[0]?.type).toBe("SEQ");
+    });
+
+    it("combines a flag key with a bare SEQ set (SEEN 1:3)", () => {
+      const result = parseSearchCriteria(ctx("SEEN 1:3"));
+      expect(result.success).toBe(true);
+      expect(result.value?.map((c) => c.type)).toEqual(["SEEN", "SEQ"]);
+    });
+  });
+
   describe("logical operators", () => {
     it("parses NOT with single criterion", () => {
       const c = ctx("NOT SEEN");

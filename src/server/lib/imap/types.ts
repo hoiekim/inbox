@@ -242,6 +242,7 @@ export type SearchCriterion =
   | TextCriterion
   | HeaderCriterion
   | UidCriterion
+  | SeqCriterion
   | LargerCriterion
   | SmallerCriterion
   | NotCriterion
@@ -361,6 +362,15 @@ export interface HeaderCriterion {
 
 export interface UidCriterion {
   type: "UID";
+  sequenceSet: SequenceSet;
+}
+
+// A bare message sequence-set used as a top-level SEARCH key (RFC 3501 §6.4.4).
+// Distinct from UidCriterion: in a plain SEARCH the set refers to message
+// sequence numbers, not UIDs, so it must be resolved against the mailbox's
+// seq→uid map before querying. In a UID SEARCH the same set refers to UIDs.
+export interface SeqCriterion {
+  type: "SEQ";
   sequenceSet: SequenceSet;
 }
 
