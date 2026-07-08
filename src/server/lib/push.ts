@@ -145,19 +145,18 @@ export const createPush = (
         if (!notification) return;
         const badgeCount = notification.count || 0;
         const badgeLatest = notification.latest;
-        const incrementedBadgeCount = badgeCount + 1;
 
         if (badgeLatest && badgeLatest <= lastNotified) return;
 
         const message =
           badgeCount > 1
-            ? `You have ${incrementedBadgeCount} new mails`
+            ? `You have ${badgeCount} new mails`
             : "You have a new mail";
 
         const notificationPayload = {
           title: message,
           icon: "/icons/logo192.png",
-          badge_count: incrementedBadgeCount,
+          badge_count: badgeCount,
           push_subscription_id,
         };
 
