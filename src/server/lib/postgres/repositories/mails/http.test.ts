@@ -339,3 +339,49 @@ describe("getMailHeaders — saved query spans both folders (#568)", () => {
     expect(expr).toContain(": receivedCondition");
   });
 });
+
+describe("spam-exclusion invariant — non-spam views hide is_spam mail (#461)", () => {
+  // The spam folder is a per-account view of is_spam = TRUE received mail. Its
+  // complement — every non-spam view (New / All / Saved / Sent) — must hide any
+  // is_spam mail, whether auto-classified on receipt or user-marked via
+  // /spam/mark. Without this the "Mark as spam" button is cosmetic (the row
+  // reappears on the next refetch) and auto-classified spam leaks into the
+  // inbox. Source-scan style, matching the delta / draft-exclusion guards above.
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(import.meta.dir)).sort()
+          .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, f), "utf8"))
+      )
+    ).join("\n");
+  });
+
+  it("getMailHeaders excludes is_spam mail from non-spam views", () => {
+    const fnMatch = mailsSource.match(/export const getMailHeaders[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("getMailHeaders not found in mails/*.ts");
+    const src = fnMatch[0];
+    // Spam view includes is_spam = TRUE; the else (every other view) excludes it.
+    expect(src).toMatch(/if \(options\.spam\)[\s\S]*is_spam = TRUE[\s\S]*else[\s\S]*is_spam = FALSE/);
+  });
+
+  it("getMailHeadersDelta evicts a mail from a non-spam view when it becomes spam", () => {
+    const fnMatch = mailsSource.match(
+      /export const getMailHeadersDelta[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getMailHeadersDelta not found in mails/*.ts");
+    const src = fnMatch[0];
+    // Non-spam eviction mirrors the spam side: tombstone on expunge OR when the
+    // row is marked spam (is_spam flips to TRUE), so delta-sync clients evict it.
+    const evictMatch = src.match(
+      /evictionCondition\s*=\s*options\.spam[\s\S]*?:\s*`([^`]*)`/
+    );
+    if (!evictMatch) throw new Error("evictionCondition not found");
+    expect(evictMatch[1]).toContain("expunged = TRUE");
+    expect(evictMatch[1]).toContain("is_spam = TRUE");
+  });
+});
