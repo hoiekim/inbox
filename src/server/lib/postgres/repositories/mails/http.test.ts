@@ -385,3 +385,40 @@ describe("spam-exclusion invariant — non-spam views hide is_spam mail (#461)",
     expect(evictMatch[1]).toContain("is_spam = TRUE");
   });
 });
+
+describe("getAccountStats + getUnreadNotifications — mirror the is_spam exclusion (#461)", () => {
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(import.meta.dir)).sort()
+          .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, f), "utf8"))
+      )
+    ).join("\n");
+  });
+
+  it("getAccountStats excludes is_spam from the non-spam (received/sent) counts", () => {
+    // The sidebar count must match the spam-excluding headers list, or an
+    // account with spam would show a doc_count higher than its listed mails.
+    const fnMatch = mailsSource.match(/export const getAccountStats[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("getAccountStats not found in mails/*.ts");
+    const src = fnMatch[0];
+    const spamMatch = src.match(
+      /const\s+spamCondition\s*=\s*spamOnly[\s\S]*?:\s*`([^`]*)`/
+    );
+    if (!spamMatch) throw new Error("spamCondition not found");
+    expect(spamMatch[1]).toContain("is_spam = FALSE");
+  });
+
+  it("getUnreadNotifications excludes is_spam so spam does not ring the new-mail badge", () => {
+    const fnMatch = mailsSource.match(
+      /export const getUnreadNotifications[\s\S]*?\n};/
+    );
+    if (!fnMatch) throw new Error("getUnreadNotifications not found in mails/*.ts");
+    expect(fnMatch[0]).toContain("is_spam = FALSE");
+  });
+});
