@@ -16,7 +16,9 @@ import {
   MarkMailPostBody,
   MarkMailPostResponse,
   SearchGetResponse,
-  MailDeleteResponse
+  MailDeleteResponse,
+  SpamMarkPostBody,
+  SpamMarkPostResponse
 } from "server";
 
 import {
@@ -30,7 +32,9 @@ import {
   TrashIcon,
   EmptyStarIcon,
   SolidStarIcon,
-  RobotIcon
+  RobotIcon,
+  BanIcon,
+  CircleCheckIcon
 } from "./components";
 
 import {
@@ -80,6 +84,10 @@ interface RenderedMailProps {
   requestDeleteMail: (
     mail: MailHeaderData
   ) => Promise<ApiResponse<MailDeleteResponse>>;
+  requestMarkSpam: (
+    mail: MailHeaderData,
+    isSpam: boolean
+  ) => Promise<ApiResponse<SpamMarkPostResponse>>;
   selectedAccount: string;
   domainName: string;
   accountsCache: AccountsCache;
@@ -101,6 +109,7 @@ const RenderedMail = ({
   markReadInQueryData,
   setReplyData,
   requestDeleteMail,
+  requestMarkSpam,
   selectedAccount,
   domainName,
   accountsCache,
@@ -254,6 +263,66 @@ const RenderedMail = ({
     markSavedInQueryData(mail, !mail.saved);
   };
 
+  const isSpamView = selectedCategory === Category.SpamMails;
+
+  const onClickSpam = () => {
+    if (!isOnline) return;
+
+    // In the spam view the button un-marks (Not Spam); everywhere else it
+    // marks as spam. Either way the mail leaves the current list.
+    const nextIsSpam = !isSpamView;
+
+    requestMarkSpam(mail, nextIsSpam)
+      .then(({ status, message }) => {
+        if (status !== "success") throw new Error(message);
+      })
+      .catch(() => {
+        // The optimistic removal below already took the row out of the view.
+        // If the server rejected the mark, re-fetch so the row comes back
+        // rather than silently vanishing.
+        queryClient.invalidateQueries(
+          getMailsQueryUrl(selectedAccount, selectedCategory)
+        );
+      });
+
+    // Optimistically evict from the current view, mirroring onClickTrash:
+    // decrement the matching account bucket, then splice the row out of this
+    // category's cached list.
+    accountsCache.set((oldData) => {
+      if (!oldData) return oldData;
+
+      const newData = { ...oldData };
+
+      const arrayKey =
+        selectedCategory === Category.SentMails
+          ? "sent"
+          : isSpamView
+          ? "spam"
+          : "received";
+      newData[arrayKey].find((account) => {
+        const { key, unread_doc_count } = account;
+        const found = key === selectedAccount;
+        if (found) {
+          if (!mail.read && unread_doc_count) account.unread_doc_count -= 1;
+          account.doc_count -= 1;
+        }
+        return found;
+      });
+
+      return newData;
+    });
+
+    const mailsCache = new MailsCache(selectedAccount, selectedCategory);
+
+    mailsCache.set((oldData) => {
+      if (!oldData) return oldData;
+      const newData = [...oldData];
+      newData.splice(i, 1);
+      if (!newData.length) removeAccountFromQueryData();
+      return newData;
+    });
+  };
+
   const onClickRobot = () => {
     setIsSummaryOpen((v) => !v);
   };
@@ -388,6 +457,18 @@ const RenderedMail = ({
               <ShareIcon />
             </div>
             <div
+              key="spam"
+              className={"iconBox cursor" + offlineClass}
+              title={
+                offlineTitle ?? (isSpamView ? "Not spam" : "Mark as spam")
+              }
+              onClick={onClickSpam}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseEnter={() => setOpenedKebab(mail.id)}
+            >
+              {isSpamView ? <CircleCheckIcon /> : <BanIcon />}
+            </div>
+            <div
               key="trash"
               className={"iconBox cursor" + offlineClass}
               title={offlineTitle}
@@ -496,6 +577,13 @@ const RenderedMails = ({ page }: { page: number }) => {
     return call.delete<MailDeleteResponse>(`/api/mails/${mail.id}`);
   };
 
+  const requestMarkSpam = (mail: MailHeaderData, isSpam: boolean) => {
+    type Response = SpamMarkPostResponse;
+    type Body = SpamMarkPostBody;
+    const body: Body = { mail_id: mail.id, is_spam: isSpam };
+    return call.post<Response, Body>("/api/mails/spam/mark", body);
+  };
+
   const requestMarkRead = async (mail: MailHeaderData) => {
     type Response = MarkMailPostResponse;
     type Body = MarkMailPostBody;
@@ -515,7 +603,12 @@ const RenderedMails = ({ page }: { page: number }) => {
       if (!oldData) return oldData;
 
       const newData = { ...oldData };
-      const key = selectedCategory === Category.SentMails ? "sent" : "received";
+      const key =
+        selectedCategory === Category.SentMails
+          ? "sent"
+          : selectedCategory === Category.SpamMails
+          ? "spam"
+          : "received";
       newData[key].find((account, i) => {
         const found = account.key === selectedAccount;
         if (found) newData[key].splice(i, 1);
@@ -628,6 +721,7 @@ const RenderedMails = ({ page }: { page: number }) => {
           markReadInQueryData={markReadInQueryData}
           setReplyData={setReplyData}
           requestDeleteMail={requestDeleteMail}
+          requestMarkSpam={requestMarkSpam}
           selectedAccount={selectedAccount}
           domainName={domainName}
           accountsCache={accountsCache}
