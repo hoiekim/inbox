@@ -272,17 +272,35 @@ const RenderedMail = ({
     // marks as spam. Either way the mail leaves the current list.
     const nextIsSpam = !isSpamView;
 
+    const listUrl = getMailsQueryUrl(selectedAccount, selectedCategory);
+    // Where the mail lands: the Spam view when marking, the All Mails view
+    // when un-marking. Refreshing it on navigation avoids a stale destination.
+    const destUrl = getMailsQueryUrl(
+      selectedAccount,
+      nextIsSpam ? Category.SpamMails : Category.AllMails
+    );
+
     requestMarkSpam(mail, nextIsSpam)
       .then(({ status, message }) => {
         if (status !== "success") throw new Error(message);
+        // The mail moved buckets — refresh the destination list so it shows
+        // up fresh instead of relying on whatever was cached there.
+        queryClient.invalidateQueries(destUrl);
       })
       .catch(() => {
         // The optimistic removal below already took the row out of the view.
         // If the server rejected the mark, re-fetch so the row comes back
         // rather than silently vanishing.
-        queryClient.invalidateQueries(
-          getMailsQueryUrl(selectedAccount, selectedCategory)
-        );
+        queryClient.invalidateQueries(listUrl);
+      })
+      .finally(() => {
+        // Spam is a MOVE between account buckets, not a delete. The optimistic
+        // update below only decrements the source bucket; rather than
+        // hand-maintain the destination's spam count (and create a spam
+        // account row when the account had none), reconcile the whole sidebar
+        // from the authoritative accounts payload. Also restores the source
+        // count if the mark failed. Cheap — accounts is one small response.
+        queryClient.invalidateQueries(accountsCache.key);
       });
 
     // Optimistically evict from the current view, mirroring onClickTrash:
