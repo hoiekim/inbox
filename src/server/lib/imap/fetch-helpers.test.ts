@@ -162,6 +162,70 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
   });
 });
 
+describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)", () => {
+  const docId = "doc-654";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<size@local>",
+    date: new Date("2026-07-07T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "size check",
+  };
+
+  // Each shape exercises a different buildFullMessage branch (single part,
+  // multipart/alternative, attachments). RFC 3501 §2.3.4: RFC822.SIZE must
+  // equal the octet count BODY[] returns for the same message.
+  const shapes: Array<[string, Partial<MailType>]> = [
+    ["text only", { ...base, text: "line one\r\nline two", html: "", attachments: [] }],
+    ["html only", { ...base, text: "", html: "<p>hi there</p>", attachments: [] }],
+    [
+      "multipart/alternative (text+html)",
+      { ...base, text: "plain body", html: "<p>rich body</p>", attachments: [] },
+    ],
+    [
+      "with attachment",
+      {
+        ...base,
+        text: "see attached",
+        html: "",
+        attachments: [
+          {
+            filename: "a.txt",
+            contentType: "text/plain",
+            size: 11,
+            content: { data: "aGVsbG8gd29ybGQ=" },
+          },
+        ] as unknown as MailType["attachments"],
+      },
+    ],
+  ];
+
+  for (const [label, mail] of shapes) {
+    it(`RFC822.SIZE equals BODY[] length for ${label}`, async () => {
+      const size = await buildFetchResponsePart(
+        mail,
+        { type: "RFC822.SIZE" },
+        docId,
+        mailbox
+      );
+      const body = await buildFetchResponsePart(
+        mail,
+        { type: "BODY", peek: true, section: { type: "FULL" } },
+        docId,
+        mailbox
+      );
+      expect(size!.type).toBe("simple");
+      expect(body!.type).toBe("literal");
+      if (size!.type === "simple" && body!.type === "literal") {
+        const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+        expect(reported).toBe(body!.length);
+      }
+    });
+  }
+});
+
 describe("buildBodyResponsePart header terminators (inbox #645)", () => {
   // RFC 3501 §6.4.5: every header fetch ends with exactly one RFC-2822
   // delimiting blank line after the last header field — i.e. `…field\r\n\r\n`.

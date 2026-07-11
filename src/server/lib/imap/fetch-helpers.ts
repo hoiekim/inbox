@@ -8,7 +8,6 @@
 import { MailType } from "common";
 import { logger } from "server";
 import {
-  encodeText,
   formatBodyStructure,
   formatEnvelope,
   formatFlags,
@@ -345,15 +344,21 @@ export async function buildFetchResponsePart(
     }
 
     case "RFC822.SIZE": {
-      const encodedText = encodeText(mail.text || "");
-      const textSize = Buffer.byteLength(encodedText, "utf-8");
-      const encodedHtml = encodeText(mail.html || "");
-      const htmlSize = Buffer.byteLength(encodedHtml, "utf-8");
-      const attachmentSize = (mail.attachments ?? []).reduce(
-        (acc, { size }) => acc + (size ? Math.ceil(size / 3) * 4 : 0),
-        0
+      // RFC 3501 §2.3.4: RFC822.SIZE is the octet count of the message in RFC
+      // 2822 format — i.e. it must equal the number of octets BODY[] / RFC822
+      // returns for the same message. Deriving it from the same FULL-body
+      // serializer BODY[] uses (buildBodyResponsePart) makes the two agree by
+      // construction, including the RFC-2822 header block, all MIME framing,
+      // and the exact base64 encoding of every part. The previous ad-hoc
+      // formula summed only the base64 body parts (no headers, no boundaries),
+      // so it under-reported and drifted from BODY[] in both directions.
+      const fullBody = await buildBodyResponsePart(
+        mail,
+        { type: "BODY", peek: true, section: { type: "FULL" } },
+        docId,
+        selectedMailbox
       );
-      const size = textSize + htmlSize + attachmentSize;
+      const size = fullBody?.type === "literal" ? fullBody.length : 0;
       return { type: "simple", content: `RFC822.SIZE ${size}` };
     }
 
