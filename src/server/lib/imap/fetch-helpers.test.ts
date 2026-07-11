@@ -96,6 +96,33 @@ describe("getRequestedFields", () => {
       expect(rfc.has("text")).toBe(true);
     });
   });
+
+  describe("RFC822.SIZE (inbox #654)", () => {
+    it("requests the full-message columns its size computation serializes", () => {
+      // RFC822.SIZE is derived from the FULL-body serializer, so a bare
+      // `FETCH n RFC822.SIZE` must load the header columns too — otherwise
+      // formatHeaders omits those lines and the size under-reports vs BODY[].
+      const size = getRequestedFields([{ type: "RFC822.SIZE" }]);
+      const body = getRequestedFields([
+        { type: "BODY", peek: true, section: { type: "FULL" } }
+      ]);
+      expect([...size].sort()).toEqual([...body].sort());
+      for (const f of [
+        "text",
+        "html",
+        "subject",
+        "from",
+        "to",
+        "cc",
+        "bcc",
+        "date",
+        "messageId",
+        "attachments",
+      ] as const) {
+        expect(size.has(f)).toBe(true);
+      }
+    });
+  });
 });
 
 describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {

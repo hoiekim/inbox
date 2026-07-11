@@ -145,10 +145,12 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
         fields.add("date");
         break;
 
+      // RFC822.SIZE is derived from the full-message serializer (it must equal
+      // len(BODY[]) per §2.3.4), so it needs every column that serializer
+      // reads — headers included, not just the body parts. Request the same
+      // columns a FULL body fetch does.
       case "RFC822.SIZE":
-        fields.add("text");
-        fields.add("html");
-        fields.add("attachments");
+        addBodyFields({ type: "BODY", peek: true, section: { type: "FULL" } }, fields);
         break;
 
       // RFC822* alias the matching BODY[...] sections (§6.4.5); request the
