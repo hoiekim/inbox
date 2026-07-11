@@ -451,6 +451,7 @@ const Accounts = ({
         "subject",
         "sender",
         "initialContent",
+        "originalMessage",
         "isCcOpen"
       ].forEach((key) => localStorage.removeItem(key));
       setUserInfo(undefined);
