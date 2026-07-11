@@ -97,18 +97,21 @@ const Writer = () => {
     "initialContent",
     ""
   );
-  const [originalMessage, setOriginalMessage] = useLocalStorage(
-    "originalMessage",
-    {
-      id: "",
-      messageId: "",
-      subject: "",
-      html: "",
-      prefix: ""
-    }
-  );
+  const [originalMessage, setOriginalMessage] = useState<OriginalMessage>({
+    id: "",
+    messageId: "",
+    subject: "",
+    html: "",
+    prefix: ""
+  });
   const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
+
+  // Reclaim quota for browsers that already have a large stale value stored
+  // under this key from before originalMessage moved off localStorage.
+  useEffect(() => {
+    localStorage.removeItem("originalMessage");
+  }, []);
 
   const editor = useEditor({
     extensions: [
