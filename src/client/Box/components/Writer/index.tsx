@@ -2,6 +2,7 @@ import {
   useContext,
   useState,
   useEffect,
+  useMemo,
   useRef,
   useCallback,
   MouseEventHandler
@@ -12,7 +13,12 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 
-import { ApiResponse, SendMailPostBody, SendMailPostResponse } from "server";
+import {
+  ApiResponse,
+  BodyGetResponse,
+  SendMailPostBody,
+  SendMailPostResponse
+} from "server";
 
 import {
   Context,
@@ -38,6 +44,18 @@ interface OriginalMessage {
   html: string;
 }
 
+type OriginalMessageMeta = Omit<OriginalMessage, "html">;
+
+const EMPTY_ORIGINAL_META: OriginalMessageMeta = {
+  id: "",
+  messageId: "",
+  subject: "",
+  prefix: ""
+};
+
+const wrapQuoteHtml = (html: string) =>
+  `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html || ""}</blockquote>`;
+
 const replyDataToOriginalMessage = (replyData: ReplyData): OriginalMessage => {
   if (!replyData || !replyData.id) {
     return {
@@ -55,14 +73,13 @@ const replyDataToOriginalMessage = (replyData: ReplyData): OriginalMessage => {
 
   const fromText = from?.text || "Unknown";
   const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
-  const newHtml = `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html || ""}</blockquote>`;
 
   return {
     id: id || "",
     messageId: messageId || "",
     subject: subject || "",
     prefix,
-    html: newHtml
+    html: wrapQuoteHtml(html || "")
   };
 };
 
@@ -97,20 +114,59 @@ const Writer = () => {
     "initialContent",
     ""
   );
-  const [originalMessage, setOriginalMessage] = useState<OriginalMessage>({
-    id: "",
-    messageId: "",
-    subject: "",
-    html: "",
-    prefix: ""
-  });
+  // Persist only the mail identifier + small labels. The quoted HTML
+  // stays in-memory (see `originalMessageHtml` below) — it's re-fetched
+  // on mount from `/api/mails/body/{id}` if a reply was in progress
+  // when the tab closed. This is the resolution of #668: the previous
+  // fix stopped persisting `originalMessage` altogether (so a close-
+  // reopen dropped the reply target too); now the id survives while
+  // the payload stays off localStorage.
+  const [originalMessageMeta, setOriginalMessageMeta] =
+    useLocalStorage<OriginalMessageMeta>(
+      "originalMessageMeta",
+      EMPTY_ORIGINAL_META
+    );
+  const [originalMessageHtml, setOriginalMessageHtml] = useState<string>("");
+  const originalMessage = useMemo<OriginalMessage>(
+    () => ({ ...originalMessageMeta, html: originalMessageHtml }),
+    [originalMessageMeta, originalMessageHtml]
+  );
+  const setOriginalMessage = useCallback(
+    (m: OriginalMessage) => {
+      const { html, ...meta } = m;
+      setOriginalMessageMeta(meta);
+      setOriginalMessageHtml(html);
+    },
+    [setOriginalMessageMeta]
+  );
+
   const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
 
   // Reclaim quota for browsers that already have a large stale value stored
-  // under this key from before originalMessage moved off localStorage.
+  // under `originalMessage` from before the payload moved off localStorage
+  // (#668). The new `originalMessageMeta` key holds only small strings.
   useEffect(() => {
     localStorage.removeItem("originalMessage");
+  }, []);
+
+  // Rehydrate the quoted HTML on mount when a reply was in progress.
+  // `originalMessageMeta.id` survives close/reopen via localStorage; the
+  // HTML gets pulled from the mail body endpoint so we don't need to
+  // store it. Silent no-op if the mail is gone (deleted server-side) or
+  // the fetch fails offline — the compose form still opens with the
+  // draft fields; only the quoted block is missing until the user
+  // reconnects and reloads.
+  useEffect(() => {
+    if (!originalMessageMeta.id || originalMessageHtml) return;
+    call
+      .get<BodyGetResponse>(`/api/mails/body/${originalMessageMeta.id}`)
+      .then((r) => {
+        if (r.status === "success" && r.body?.html) {
+          setOriginalMessageHtml(wrapQuoteHtml(r.body.html));
+        }
+      })
+      .catch(console.error);
   }, []);
 
   const editor = useEditor({
