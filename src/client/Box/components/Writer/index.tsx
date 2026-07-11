@@ -97,16 +97,13 @@ const Writer = () => {
     "initialContent",
     ""
   );
-  const [originalMessage, setOriginalMessage] = useLocalStorage(
-    "originalMessage",
-    {
-      id: "",
-      messageId: "",
-      subject: "",
-      html: "",
-      prefix: ""
-    }
-  );
+  const [originalMessage, setOriginalMessage] = useState<OriginalMessage>({
+    id: "",
+    messageId: "",
+    subject: "",
+    html: "",
+    prefix: ""
+  });
   const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
 
