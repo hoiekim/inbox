@@ -57,13 +57,18 @@ const expandFetchMacro = (name: string): FetchDataItem[] | null => {
         { type: 'RFC822.SIZE' },
       ];
     // FULL = (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
+    // The BODY here is the non-extensible BODYSTRUCTURE (a compact structure
+    // line), NOT BODY[] (the full message content) — RFC 3501 §6.4.5 defines
+    // the bare `BODY` data item as "Non-extensible form of BODYSTRUCTURE".
+    // Expanding it to BODY[] would make `FETCH 1:* FULL` stream every message's
+    // entire body, which is the opposite of the lightweight listing FULL is for.
     case 'FULL':
       return [
         { type: 'FLAGS' },
         { type: 'INTERNALDATE' },
         { type: 'RFC822.SIZE' },
         { type: 'ENVELOPE' },
-        { type: 'BODY', peek: false, section: { type: 'FULL' } },
+        { type: 'BODYSTRUCTURE' },
       ];
     default:
       return null;

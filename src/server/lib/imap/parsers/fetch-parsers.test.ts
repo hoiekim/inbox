@@ -232,20 +232,20 @@ describe("fetch-parsers > macros", () => {
     ]);
   });
 
-  it("should expand FULL to (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)", () => {
+  it("should expand FULL to (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE)", () => {
     const data = parseFetch("2 FULL");
+    // Per RFC 3501 §6.4.5, FULL's BODY is the non-extensible BODYSTRUCTURE (a
+    // compact structure line), NOT BODY[] (full content). Expanding to a
+    // content BODY would make `FETCH 1:* FULL` stream every message's body.
     expect(data.dataItems.map((i) => i.type)).toEqual([
       "FLAGS",
       "INTERNALDATE",
       "RFC822.SIZE",
       "ENVELOPE",
-      "BODY",
+      "BODYSTRUCTURE",
     ]);
-    // FULL's BODY item is the full, non-peek message body.
-    const body = data.dataItems[4];
-    if (body.type !== "BODY") throw new Error("expected BODY item");
-    expect(body.peek).toBe(false);
-    expect(body.section.type).toBe("FULL");
+    // Guard against a regression back to the full-content BODY[] shape.
+    expect(data.dataItems.some((i) => i.type === "BODY")).toBe(false);
   });
 
   it("should be case-insensitive (fast / all / full)", () => {
