@@ -227,6 +227,18 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
         ] as unknown as MailType["attachments"],
       },
     ],
+    // Multibyte UTF-8: octet count != character count, so any path that
+    // measured string `.length` instead of `Buffer.byteLength` would diverge.
+    [
+      "multibyte utf-8 (octet != char count)",
+      {
+        ...base,
+        subject: "größe 日本語 ✉",
+        text: "café ☕ 日本語 — first line\r\nemoji 😀 tail",
+        html: "",
+        attachments: [],
+      },
+    ],
   ];
 
   for (const [label, mail] of shapes) {
