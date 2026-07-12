@@ -23,7 +23,6 @@ import {
 import {
   Context,
   useLocalStorage,
-  getDateForMailHeader,
   processHtmlToSendMail,
   call,
   useIsOnline
@@ -32,64 +31,16 @@ import {
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
 
+import {
+  OriginalMessage,
+  OriginalMessageMeta,
+  EMPTY_ORIGINAL_META,
+  wrapQuoteHtml,
+  replyDataToOriginalMessage,
+  getReplyContainerHtml
+} from "./lib";
+
 import "./index.scss";
-
-import { ReplyData } from "common";
-
-interface OriginalMessage {
-  id: string;
-  messageId: string;
-  subject: string;
-  prefix: string;
-  html: string;
-}
-
-type OriginalMessageMeta = Omit<OriginalMessage, "html">;
-
-const EMPTY_ORIGINAL_META: OriginalMessageMeta = {
-  id: "",
-  messageId: "",
-  subject: "",
-  prefix: ""
-};
-
-const wrapQuoteHtml = (html: string) =>
-  `<blockquote style="border-left: 1px solid #cccccc; padding: 0 0 0 0.5rem; margin: 0 0 0 0.5rem;">${html || ""}</blockquote>`;
-
-const replyDataToOriginalMessage = (replyData: ReplyData): OriginalMessage => {
-  if (!replyData || !replyData.id) {
-    return {
-      id: "",
-      messageId: "",
-      subject: "",
-      prefix: "",
-      html: ""
-    };
-  }
-  const { id, messageId, date, subject, from, html } = replyData;
-
-  const parsedDate = date ? new Date(date) : new Date();
-  const { date: localeDate, time: localeTime } = getDateForMailHeader(parsedDate);
-
-  const fromText = from?.text || "Unknown";
-  const prefix = `On ${localeDate} at ${localeTime}, ${fromText} wrote:`;
-
-  return {
-    id: id || "",
-    messageId: messageId || "",
-    subject: subject || "",
-    prefix,
-    html: wrapQuoteHtml(html || "")
-  };
-};
-
-const getReplyContainerHtml = (originalMessage: OriginalMessage) => {
-  const inner =
-    `<p>${originalMessage.prefix
-      .replace("<", "&lt;")
-      .replace(">", "&gt;")}</p>` + originalMessage.html;
-  return `<div class="replace_with_details">${inner}</div>`;
-};
 
 const Writer = () => {
   const {
@@ -140,6 +91,11 @@ const Writer = () => {
     [setOriginalMessageMeta]
   );
 
+  // Always-current id, read inside the async re-fetch below to drop a stale
+  // resolve (the user may switch replies / clear the form mid-fetch).
+  const latestMetaId = useRef(originalMessageMeta.id);
+  latestMetaId.current = originalMessageMeta.id;
+
   const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
 
@@ -150,24 +106,30 @@ const Writer = () => {
     localStorage.removeItem("originalMessage");
   }, []);
 
-  // Rehydrate the quoted HTML on mount when a reply was in progress.
-  // `originalMessageMeta.id` survives close/reopen via localStorage; the
-  // HTML gets pulled from the mail body endpoint so we don't need to
-  // store it. Silent no-op if the mail is gone (deleted server-side) or
-  // the fetch fails offline — the compose form still opens with the
-  // draft fields; only the quoted block is missing until the user
-  // reconnects and reloads.
+  // Rehydrate the quoted HTML when a reply was in progress.
+  // `originalMessageMeta.id` survives close/reopen via localStorage; the HTML is
+  // pulled from the mail body endpoint so it never has to sit in storage. Re-runs
+  // when the id changes or the user reconnects, so an offline reopen fills the
+  // quote once back online — otherwise a Send before then ships the attribution
+  // line over an empty blockquote (Send only gates on `isOnline`, not the fetch).
+  // Silent no-op if the mail is gone server-side; the compose form still opens
+  // with the draft fields, only the quoted block is missing.
   useEffect(() => {
-    if (!originalMessageMeta.id || originalMessageHtml) return;
+    const id = originalMessageMeta.id;
+    if (!id || originalMessageHtml || !isOnline) return;
     call
-      .get<BodyGetResponse>(`/api/mails/body/${originalMessageMeta.id}`)
+      .get<BodyGetResponse>(`/api/mails/body/${id}`)
       .then((r) => {
+        // Drop a stale resolve: the user may have switched to a different reply
+        // or cleared the form while this fetch was in flight — applying this
+        // body over another reply's meta/prefix would mismatch the quote.
+        if (latestMetaId.current !== id) return;
         if (r.status === "success" && r.body?.html) {
           setOriginalMessageHtml(wrapQuoteHtml(r.body.html));
         }
       })
       .catch(console.error);
-  }, []);
+  }, [originalMessageMeta.id, originalMessageHtml, isOnline]);
 
   const editor = useEditor({
     extensions: [
