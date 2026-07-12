@@ -50,6 +50,9 @@ export const EXPUNGED = "expunged";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
 export const UID_ACCOUNT = "uid_account";
+// Per-message mod-sequence for CONDSTORE (RFC 7162). Monotonically increasing
+// within a mailbox; every flag/expunge mutation and new-message insert bumps it.
+export const MODSEQ = "modseq";
 // mail_uid_counters columns
 export const UID_KIND = "uid_kind";
 export const UID_SCOPE = "uid_scope";
