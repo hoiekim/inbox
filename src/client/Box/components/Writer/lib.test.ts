@@ -88,7 +88,7 @@ describe("getReplyContainerHtml", () => {
     expect(out.endsWith("</div>")).toBe(true);
   });
 
-  it("escapes the first angle brackets in the prefix so a name like <x> can't inject markup", () => {
+  it("escapes the first < and > in the prefix", () => {
     const out = getReplyContainerHtml({
       ...EMPTY_ORIGINAL_META,
       prefix: "On day, <mailer> wrote:",
