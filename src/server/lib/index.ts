@@ -39,7 +39,6 @@ export {
   validateMailData,
   MailValidationError,
   MailSendingError,
-  getSpamHeaders,
   markSpam,
 } from "./mails";
 export type { AccountsGetResponse, GetMailsOptions, MailHeadersDelta, ValidationResult, SaveMailHandlerOptions } from "./mails";

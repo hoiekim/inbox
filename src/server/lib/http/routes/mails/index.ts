@@ -10,7 +10,6 @@ import { getSearchAccountsRoute } from "./get-search-accounts";
 import { postMarkMailRoute } from "./post-mark";
 import { postSendMailRoute } from "./post-send";
 import { deleteMailRoute } from "./delete";
-import { getSpamMailsRoute } from "./get-spam";
 import { postMarkSpamMailRoute } from "./post-spam-mark";
 import { getSpamAllowlistRoute } from "./get-allowlist";
 import { postSpamAllowlistRoute } from "./post-allowlist";
@@ -35,7 +34,6 @@ const routes = [
   postMarkMailRoute,
   postSendMailRoute,
   deleteMailRoute,
-  getSpamMailsRoute,
   postMarkSpamMailRoute,
   getSpamAllowlistRoute,
   postSpamAllowlistRoute,
@@ -56,7 +54,6 @@ export * from "./get-search-accounts";
 export * from "./post-mark";
 export * from "./post-send";
 export * from "./delete";
-export * from "./get-spam";
 export * from "./post-spam-mark";
 export * from "./get-allowlist";
 export * from "./post-allowlist";

@@ -325,9 +325,11 @@ describe("draft-exclusion invariant — user-facing read paths hide drafts (#611
   // lists, per-account counts, search results, push badge, spam list). The
   // invariant is enforced query-side with `AND draft = FALSE`. getMailHeaders
   // and getAccountStats already carried it; searchMails / getUnreadNotifications
-  // / getSpamMails dropped it (#611) so a draft showed in search but in no
-  // folder/count. These source-scan guards pin the filter on every path so they
-  // cannot re-drift independently. Source-text scanning (not a live query) is
+  // dropped it (#611) so a draft showed in search but in no folder/count. The
+  // spam list is now a per-account getMailHeaders query (`?spam=1`), so its
+  // draft filter is covered by the getMailHeaders guard below. These source-scan
+  // guards pin the filter on every path so they cannot re-drift independently.
+  // Source-text scanning (not a live query) is
   // used here because module-mock interactions make pool.query mocking fragile
   // in the full suite — same rationale as the getAccountStats guard above.
   let mailsSource: string;
@@ -354,7 +356,6 @@ describe("draft-exclusion invariant — user-facing read paths hide drafts (#611
     "getAccountStats",
     "searchMails",
     "getUnreadNotifications",
-    "getSpamMails",
   ];
 
   for (const name of draftHidingPaths) {

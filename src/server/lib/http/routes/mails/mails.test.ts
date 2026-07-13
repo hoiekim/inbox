@@ -1,7 +1,7 @@
 /**
  * Tests for mails route handlers:
  *   get-headers, get-accounts, get-body, delete, post-mark,
- *   get-search, get-spam, get-domain, get-allowlist, post-allowlist,
+ *   get-search, get-domain, get-allowlist, post-allowlist,
  *   delete-allowlist, post-send, post-spam-mark, get-attachment
  */
 import { describe, it, expect, mock, beforeEach } from "bun:test";
@@ -22,7 +22,6 @@ const mockGetUser = mock(async () => null as unknown);
 
 // New mocks for additional routes
 const mockSearchMail = mock(async () => []);
-const mockGetSpamHeaders = mock(async () => []);
 const mockGetDomain = mock(() => "example.com");
 const mockGetAllowlistForUser = mock(async () => []);
 const mockAddAllowlistEntry = mock(async () => null as unknown);
@@ -57,7 +56,6 @@ mock.module("server", () => ({
   getUser: mockGetUser,
   logger: { error: mock(() => {}), info: mock(() => {}), warn: mock(() => {}) },
   searchMail: mockSearchMail,
-  getSpamHeaders: mockGetSpamHeaders,
   getDomain: mockGetDomain,
   getAllowlistForUser: mockGetAllowlistForUser,
   addAllowlistEntry: mockAddAllowlistEntry,
@@ -577,24 +575,6 @@ describe("getSearchRoute", () => {
       "100% off",
       undefined
     );
-  });
-});
-
-// ── get-spam route ────────────────────────────────────────────────────────────
-
-describe("getSpamMailsRoute", () => {
-  beforeEach(() => mockGetSpamHeaders.mockClear());
-
-  it("returns spam headers for authenticated user", async () => {
-    const { getSpamMailsRoute } = await import("./get-spam");
-    const spamMails = [{ id: "s1" }];
-    mockGetSpamHeaders.mockResolvedValueOnce(spamMails as never);
-
-    const req = makeReq();
-    const result = await getSpamMailsRoute.callback(req, makeRes(), noopStream);
-
-    expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect((result as ApiResponse<unknown>).body).toEqual(spamMails);
   });
 });
 

@@ -1672,27 +1672,6 @@ export const expungeMailsByUid = async (
 };
 
 /**
- * Get all spam-flagged mails for a user.
- * Returns mails where is_spam = true, sorted by date descending.
- */
-export const getSpamMails = async (user_id: string): Promise<MailModel[]> => {
-  try {
-    const sql = `
-      SELECT * FROM mails
-      -- draft = FALSE mirrors the other user-facing read paths: a draft belongs
-      -- to the Drafts folder, never to the spam list, even if flagged is_spam.
-      WHERE user_id = $1 AND is_spam = TRUE AND sent = FALSE AND expunged = FALSE AND draft = FALSE
-      ORDER BY date DESC
-    `;
-    const result = await pool.query(sql, [user_id]);
-    return result.rows.map((row: Record<string, unknown>) => new MailModel(row));
-  } catch (error) {
-    logger.error("Failed to get spam mails", {}, error);
-    return [];
-  }
-};
-
-/**
  * Mark or unmark a mail as spam.
  *
  * Returns:
