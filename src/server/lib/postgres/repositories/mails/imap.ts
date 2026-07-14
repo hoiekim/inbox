@@ -14,6 +14,7 @@ import {
   SENT,
   DELETED,
   EXPUNGED,
+  DB_NOW,
 } from "../../models";
 import { getNextModseq } from "./counters";
 
@@ -660,7 +661,7 @@ export const expungeDeletedMails = async (
         { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
-        { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
+        { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
         [`${uidField} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -687,7 +688,7 @@ export const expungeDeletedMails = async (
       { [MAIL_ID]: { op: "IN", value: mailIds } },
       // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
       // resyncing CONDSTORE/QRESYNC client detects the removal.
-      { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
+      { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
       [`${uidField} as uid`]
     );
     return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -726,7 +727,7 @@ export const expungeMailsByUid = async (
         },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
-        { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
+        { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
         [`${uidField} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -759,7 +760,7 @@ export const expungeMailsByUid = async (
       { [MAIL_ID]: { op: "IN", value: mailIds } },
       // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
       // resyncing CONDSTORE/QRESYNC client detects the removal.
-      { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
+      { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
       [`${uidField} as uid`]
     );
     return rows.map((row: Record<string, unknown>) => row.uid as number);

@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { logger } from "../../../logger";
 import { pool } from "../../client";
 import { ParamValue } from "../../database";
-import { MailModel, mailsTable, MAIL_ID, USER_ID, ENVELOPE_TO } from "../../models";
+import { MailModel, mailsTable, MAIL_ID, USER_ID, ENVELOPE_TO, DB_NOW } from "../../models";
 import { getNextModseq } from "./counters";
 
 export interface SaveMailInput {
@@ -158,7 +158,7 @@ export const markMailRead = async (
   try {
     const rows = await mailsTable.updateWhere(
       { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-      { read: true, updated: new Date() },
+      { read: true, updated: DB_NOW },
       [MAIL_ID]
     );
     return rows.length > 0;
@@ -176,7 +176,7 @@ export const markMailSaved = async (
   try {
     const rows = await mailsTable.updateWhere(
       { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-      { saved, updated: new Date() },
+      { saved, updated: DB_NOW },
       [MAIL_ID]
     );
     return rows.length > 0;

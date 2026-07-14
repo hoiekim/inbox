@@ -256,12 +256,14 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
   });
 });
 
-describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
+describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
   // Static source check: the expunge write paths must go through
-  // mailsTable.updateWhere with `updated: new Date()` in the data bag so the
-  // framework's own auto-`updated` is not bypassed. Source-text scanning is
-  // robust against module-mock interactions in the full suite — the
-  // alternative (mock pool.query) fails when other tests load the mails repository first.
+  // mailsTable.updateWhere with `updated: DB_NOW` in the data bag so the
+  // framework bumps `updated` from the DB clock (CURRENT_TIMESTAMP), not the
+  // app clock — one timeline for the delta cursor (#614). Source-text scanning
+  // is robust against module-mock interactions in the full suite — the
+  // alternative (mock pool.query) fails when other tests load the mails
+  // repository first.
   let mailsSource: string;
   let fnSource: string;
 
@@ -289,11 +291,15 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
     expect(fnSource).not.toMatch(/SET\s+expunged/);
   });
 
-  it("domain-wide branch uses mailsTable.updateWhere with `updated`", () => {
+  it("domain-wide branch uses mailsTable.updateWhere with DB-clock `updated`", () => {
     // The `account === null` branch must use updateWhere with equality filters.
     expect(fnSource).toContain("mailsTable.updateWhere(");
     expect(fnSource).toMatch(/\[EXPUNGED\]:\s*true/);
-    expect(fnSource).toMatch(/updated:\s*new Date\(\)/);
+    // #614: `updated` is stamped from the DB clock via the DB_NOW sentinel,
+    // never the app clock (`new Date()`), so it stays on the delta cursor's
+    // timeline.
+    expect(fnSource).toMatch(/updated:\s*DB_NOW/);
+    expect(fnSource).not.toMatch(/updated:\s*new Date\(\)/);
   });
 
   it("account-specific branch uses mailsTable.updateWhere with IN filter", () => {
