@@ -442,7 +442,9 @@ const Accounts = ({
       // Tear down the SW + Cache Storage so the logged-out browser holds no
       // cached app shell / assets from this session (#458).
       await unregisterServiceWorker();
-      // Clear compose draft data so it doesn't leak to the next user on this browser
+      // Clear compose draft data so it doesn't leak to the next user on this browser.
+      // `originalMessage` is a legacy key removed in #668; `originalMessageMeta` is
+      // the new small-payload key that holds only the reply target's id + labels.
       [
         "name",
         "to",
@@ -452,6 +454,7 @@ const Accounts = ({
         "sender",
         "initialContent",
         "originalMessage",
+        "originalMessageMeta",
         "isCcOpen"
       ].forEach((key) => localStorage.removeItem(key));
       setUserInfo(undefined);
