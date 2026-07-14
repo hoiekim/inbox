@@ -35,12 +35,68 @@ export const parseFetch = (context: ParseContext): ParseResult<ImapRequest> => {
 };
 
 /**
+ * Expand a bare FETCH macro name (RFC 3501 §6.4.5) into its data-item list.
+ * Macros only appear as the entire data-item spec, never inside a
+ * parenthesized list. Returns null for any non-macro atom.
+ */
+const expandFetchMacro = (name: string): FetchDataItem[] | null => {
+  switch (name) {
+    // ALL  = (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)
+    case 'ALL':
+      return [
+        { type: 'FLAGS' },
+        { type: 'INTERNALDATE' },
+        { type: 'RFC822.SIZE' },
+        { type: 'ENVELOPE' },
+      ];
+    // FAST = (FLAGS INTERNALDATE RFC822.SIZE)
+    case 'FAST':
+      return [
+        { type: 'FLAGS' },
+        { type: 'INTERNALDATE' },
+        { type: 'RFC822.SIZE' },
+      ];
+    // FULL = (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
+    // The BODY here is the non-extensible BODYSTRUCTURE (a compact structure
+    // line), NOT BODY[] (the full message content) — RFC 3501 §6.4.5 defines
+    // the bare `BODY` data item as "Non-extensible form of BODYSTRUCTURE".
+    // Expanding it to BODY[] would make `FETCH 1:* FULL` stream every message's
+    // entire body, which is the opposite of the lightweight listing FULL is for.
+    case 'FULL':
+      return [
+        { type: 'FLAGS' },
+        { type: 'INTERNALDATE' },
+        { type: 'RFC822.SIZE' },
+        { type: 'ENVELOPE' },
+        { type: 'BODYSTRUCTURE' },
+      ];
+    default:
+      return null;
+  }
+};
+
+/**
  * Parse FETCH data items (parenthesized list or single item)
  */
 export const parseFetchDataItems = (context: ParseContext): ParseResult<FetchDataItem[]> => {
   const items: FetchDataItem[] = [];
 
   skipWhitespace(context);
+
+  // A bare macro (ALL / FAST / FULL) stands in for the whole data-item spec.
+  // Expand it before the parenthesized-list / single-item handling below.
+  if (peek(context) !== '(') {
+    const macroStart = context.position;
+    const macroAtom = parseAtom(context);
+    if (macroAtom.success) {
+      const expanded = expandFetchMacro(macroAtom.value!.toUpperCase());
+      if (expanded) {
+        return { success: true, value: expanded, consumed: context.position };
+      }
+    }
+    // Not a macro — rewind and fall through to normal single-item parsing.
+    context.position = macroStart;
+  }
 
   // Check if it's a parenthesized list
   if (peek(context) === '(') {

@@ -207,3 +207,84 @@ describe("fetch-parsers > real-world FETCH patterns", () => {
     expect(types).toContain("FLAGS");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Macros — ALL / FAST / FULL (RFC 3501 §6.4.5), inbox #650
+// ---------------------------------------------------------------------------
+
+describe("fetch-parsers > macros", () => {
+  it("should expand FAST to (FLAGS INTERNALDATE RFC822.SIZE)", () => {
+    const data = parseFetch("2 FAST");
+    expect(data.dataItems.map((i) => i.type)).toEqual([
+      "FLAGS",
+      "INTERNALDATE",
+      "RFC822.SIZE",
+    ]);
+  });
+
+  it("should expand ALL to (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE)", () => {
+    const data = parseFetch("2 ALL");
+    expect(data.dataItems.map((i) => i.type)).toEqual([
+      "FLAGS",
+      "INTERNALDATE",
+      "RFC822.SIZE",
+      "ENVELOPE",
+    ]);
+  });
+
+  it("should expand FULL to (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE)", () => {
+    const data = parseFetch("2 FULL");
+    // Per RFC 3501 §6.4.5, FULL's BODY is the non-extensible BODYSTRUCTURE (a
+    // compact structure line), NOT BODY[] (full content). Expanding to a
+    // content BODY would make `FETCH 1:* FULL` stream every message's body.
+    expect(data.dataItems.map((i) => i.type)).toEqual([
+      "FLAGS",
+      "INTERNALDATE",
+      "RFC822.SIZE",
+      "ENVELOPE",
+      "BODYSTRUCTURE",
+    ]);
+    // Guard against a regression back to the full-content BODY[] shape.
+    expect(data.dataItems.some((i) => i.type === "BODY")).toBe(false);
+  });
+
+  it("should be case-insensitive (fast / all / full)", () => {
+    expect(parseFetch("2 fast").dataItems).toHaveLength(3);
+    expect(parseFetch("2 all").dataItems).toHaveLength(4);
+    expect(parseFetch("2 full").dataItems).toHaveLength(5);
+  });
+
+  it("should expand macros under UID FETCH too", () => {
+    const result = parseCommand("A001 UID FETCH 2 FAST");
+    // UID FETCH wraps the inner FETCH request under a UID envelope.
+    if (
+      !result.success ||
+      result.value?.request.type !== "UID" ||
+      (result.value.request.data as { request: { type: string } }).request
+        .type !== "FETCH"
+    ) {
+      throw new Error(`UID FETCH parse failed: ${result.error}`);
+    }
+    const inner = (
+      result.value.request.data as { request: { data: { dataItems: FetchDataItem[] } } }
+    ).request.data;
+    expect(inner.dataItems.map((i) => i.type)).toEqual([
+      "FLAGS",
+      "INTERNALDATE",
+      "RFC822.SIZE",
+    ]);
+  });
+
+  it("should not treat a non-macro single item as a macro (regression)", () => {
+    // FLAGS/RFC822.SIZE/BODY[] must still parse as their single selves.
+    expect(parseFetch("1 FLAGS").dataItems.map((i) => i.type)).toEqual([
+      "FLAGS",
+    ]);
+    expect(parseFetch("1 RFC822.SIZE").dataItems.map((i) => i.type)).toEqual([
+      "RFC822.SIZE",
+    ]);
+    expect(parseFetch("1 BODY[]").dataItems.map((i) => i.type)).toEqual([
+      "BODY",
+    ]);
+  });
+});
