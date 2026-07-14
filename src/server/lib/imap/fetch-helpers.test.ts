@@ -96,6 +96,33 @@ describe("getRequestedFields", () => {
       expect(rfc.has("text")).toBe(true);
     });
   });
+
+  describe("RFC822.SIZE (inbox #654)", () => {
+    it("requests the full-message columns its size computation serializes", () => {
+      // RFC822.SIZE is derived from the FULL-body serializer, so a bare
+      // `FETCH n RFC822.SIZE` must load the header columns too — otherwise
+      // formatHeaders omits those lines and the size under-reports vs BODY[].
+      const size = getRequestedFields([{ type: "RFC822.SIZE" }]);
+      const body = getRequestedFields([
+        { type: "BODY", peek: true, section: { type: "FULL" } }
+      ]);
+      expect([...size].sort()).toEqual([...body].sort());
+      for (const f of [
+        "text",
+        "html",
+        "subject",
+        "from",
+        "to",
+        "cc",
+        "bcc",
+        "date",
+        "messageId",
+        "attachments",
+      ] as const) {
+        expect(size.has(f)).toBe(true);
+      }
+    });
+  });
 });
 
 describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
@@ -160,6 +187,82 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
       expect(rfc!.header).toBe("RFC822.TEXT");
     }
   });
+});
+
+describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)", () => {
+  const docId = "doc-654";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<size@local>",
+    date: new Date("2026-07-07T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "size check",
+  };
+
+  // Each shape exercises a different buildFullMessage branch (single part,
+  // multipart/alternative, attachments). RFC 3501 §2.3.4: RFC822.SIZE must
+  // equal the octet count BODY[] returns for the same message.
+  const shapes: Array<[string, Partial<MailType>]> = [
+    ["text only", { ...base, text: "line one\r\nline two", html: "", attachments: [] }],
+    ["html only", { ...base, text: "", html: "<p>hi there</p>", attachments: [] }],
+    [
+      "multipart/alternative (text+html)",
+      { ...base, text: "plain body", html: "<p>rich body</p>", attachments: [] },
+    ],
+    [
+      "with attachment",
+      {
+        ...base,
+        text: "see attached",
+        html: "",
+        attachments: [
+          {
+            filename: "a.txt",
+            contentType: "text/plain",
+            size: 11,
+            content: { data: "aGVsbG8gd29ybGQ=" },
+          },
+        ] as unknown as MailType["attachments"],
+      },
+    ],
+    // Multibyte UTF-8: octet count != character count, so any path that
+    // measured string `.length` instead of `Buffer.byteLength` would diverge.
+    [
+      "multibyte utf-8 (octet != char count)",
+      {
+        ...base,
+        subject: "größe 日本語 ✉",
+        text: "café ☕ 日本語 — first line\r\nemoji 😀 tail",
+        html: "",
+        attachments: [],
+      },
+    ],
+  ];
+
+  for (const [label, mail] of shapes) {
+    it(`RFC822.SIZE equals BODY[] length for ${label}`, async () => {
+      const size = await buildFetchResponsePart(
+        mail,
+        { type: "RFC822.SIZE" },
+        docId,
+        mailbox
+      );
+      const body = await buildFetchResponsePart(
+        mail,
+        { type: "BODY", peek: true, section: { type: "FULL" } },
+        docId,
+        mailbox
+      );
+      expect(size!.type).toBe("simple");
+      expect(body!.type).toBe("literal");
+      if (size!.type === "simple" && body!.type === "literal") {
+        const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+        expect(reported).toBe(body!.length);
+      }
+    });
+  }
 });
 
 describe("buildBodyResponsePart header terminators (inbox #645)", () => {
