@@ -312,6 +312,17 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
       (fnSource.match(/mailsTable\.updateWhere\(/g) ?? []).length;
     expect(updateWhereCount).toBe(2);
   });
+
+  it("no mutation path in mails.ts stamps `updated` from the app clock", () => {
+    // #614 acceptance, whole-file: not just expunge — markMailRead,
+    // markMailSaved, and the MOVE-path expungeMailsByUid must all use the
+    // DB_NOW sentinel too, so every `updated` write is on the DB clock. This
+    // guards against any future `updateWhere({ updated: new Date() })` sneaking
+    // back in.
+    expect(mailsSource).not.toMatch(/updated:\s*new Date\(\)/);
+    // And the sentinel is actually the shape in use.
+    expect(mailsSource).toMatch(/updated:\s*DB_NOW/);
+  });
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {
