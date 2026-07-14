@@ -50,6 +50,14 @@ export const EXPUNGED = "expunged";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
 export const UID_ACCOUNT = "uid_account";
+// Per-message mod-sequence for CONDSTORE (RFC 7162). Monotonically increasing
+// within a mailbox. Bumped by the IMAP write paths — new-message insert
+// (saveMail, incl. APPEND/COPY), STORE (setMailFlags), and EXPUNGE/MOVE.
+// The web-REST single-mail mutators (markMailRead / markMailSaved / markMailSpam)
+// deliberately do NOT bump it in phase 1: no client can observe modseq until
+// phase 3 (FETCH CHANGEDSINCE) lands, so there is no reader to desync. That
+// wiring is a phase-3 task — see the CONDSTORE phase-3 issue.
+export const MODSEQ = "modseq";
 // mail_uid_counters columns
 export const UID_KIND = "uid_kind";
 export const UID_SCOPE = "uid_scope";

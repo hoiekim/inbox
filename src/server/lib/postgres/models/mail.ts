@@ -29,6 +29,7 @@ import {
   INSIGHT,
   UID_DOMAIN,
   UID_ACCOUNT,
+  MODSEQ,
   UPDATED,
   MAILS,
   SPAM_SCORE,
@@ -79,6 +80,7 @@ export interface MailJSON {
   insight: object | null;
   uid_domain: number;
   uid_account: number;
+  modseq: number;
   spam_score: number;
   spam_reasons: string[] | null;
   is_spam: boolean;
@@ -115,6 +117,12 @@ const mailSchema = {
   [INSIGHT]: "JSONB",
   [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
   [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
+  // DEFAULT 1 doubles as the single-pass backfill: the auto-migration's ADD
+  // COLUMN stamps every existing row with modseq=1, so each mailbox's initial
+  // HIGHESTMODSEQ is 1 and the counter (getNextModseq) seeds from MAX(modseq)+1.
+  // New rows are assigned an explicit counter value (>1); the DEFAULT is only a
+  // safety net for a write path that forgets to set it.
+  [MODSEQ]: "BIGINT NOT NULL DEFAULT 1",
   [SPAM_SCORE]: "INTEGER NOT NULL DEFAULT 0",
   [SPAM_REASONS]: "JSONB",
   [IS_SPAM]: "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -155,6 +163,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   declare insight: object | null;
   declare uid_domain: number;
   declare uid_account: number;
+  declare modseq: number;
   declare spam_score: number;
   declare spam_reasons: string[] | null;
   declare is_spam: boolean;
@@ -191,6 +200,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     insight: isNullableObject,
     uid_domain: isNumber,
     uid_account: isNumber,
+    modseq: isNumber,
     spam_score: isNumber,
     spam_reasons: isNullableArray,
     is_spam: isBoolean,
@@ -234,6 +244,7 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       insight: this.insight,
       uid_domain: this.uid_domain,
       uid_account: this.uid_account,
+      modseq: this.modseq,
       spam_score: this.spam_score,
       spam_reasons: this.spam_reasons,
       is_spam: this.is_spam,
@@ -291,6 +302,7 @@ export class PartialMailModel {
   readonly insight?: object | null;
   readonly uid_domain?: number;
   readonly uid_account?: number;
+  readonly modseq?: number;
   readonly spam_score?: number;
   readonly spam_reasons?: string[] | null;
   readonly is_spam?: boolean;
@@ -344,6 +356,7 @@ export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
     { column: SAVED },
     { column: UID_DOMAIN },
     { column: UID_ACCOUNT },
+    { column: MODSEQ },
     { column: IS_SPAM },
     { column: EXPUNGED },
   ],

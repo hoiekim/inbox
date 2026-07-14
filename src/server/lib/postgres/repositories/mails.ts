@@ -12,6 +12,7 @@ import {
   SAVED,
   UID_DOMAIN,
   UID_ACCOUNT,
+  MODSEQ,
   TO_ADDRESS,
   FROM_ADDRESS,
   SUBJECT,
@@ -99,6 +100,10 @@ export const saveMail = async (
 ): Promise<{ _id: string } | undefined> => {
   try {
     const mail_id = crypto.randomUUID();
+    // Stamp the new message with a fresh mod-sequence so it advances the
+    // mailbox's HIGHESTMODSEQ (CONDSTORE, RFC 7162). Reserved before the INSERT,
+    // like uid_domain/uid_account are in convertMail.
+    const modseq = await getNextModseq(input.user_id);
     const data: Record<string, ParamValue | object | null> = {
       mail_id,
       user_id: input.user_id,
@@ -134,6 +139,7 @@ export const saveMail = async (
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
       uid_account: input.uid_account ?? 0,
+      modseq,
       spam_score: input.spam_score ?? 0,
       spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
       is_spam: input.is_spam ?? false,
@@ -625,6 +631,89 @@ export const getAccountUidNext = async (
   }
 };
 
+/**
+ * Per-user mod-sequence reservation query (CONDSTORE, RFC 7162 §3.1).
+ *
+ * Reuses the same atomic `mail_uid_counters` upsert as UID assignment — a single
+ * counter row keyed by kind="modseq" (scope="", sent=false, both unused for this
+ * kind). RFC 7162 permits one mod-sequence namespace shared across a user's
+ * mailboxes: any single mailbox still sees a strictly-increasing subsequence,
+ * which is all the RFC requires. Using the atomic INSERT … ON CONFLICT … DO
+ * UPDATE (rather than a bare `MAX(modseq)+1` read) makes concurrent flag/receipt
+ * mutations race-free, exactly as it does for UIDs (#617).
+ *
+ * The counter seeds once from the live `MAX(modseq)` across all the user's mail,
+ * so a deployment where the DEFAULT-1 backfill already set every existing row to
+ * modseq=1 gets its first reservation at 2 — strictly greater than the initial
+ * HIGHESTMODSEQ of 1. Pure (no DB) so the SQL shape is unit-testable.
+ */
+export const buildModseqQuery = (
+  user_id: string
+): { sql: string; values: ParamValue[] } => {
+  const seedSql = `
+      SELECT COALESCE(MAX(${MODSEQ}), 0) + 1 FROM mails
+      WHERE ${USER_ID} = $1
+    `;
+  return buildReserveUidQuery(user_id, "modseq", "", false, seedSql, []);
+};
+
+// Reserve the next mod-sequence for a user's next mailbox mutation. Every
+// insert/flag-change/expunge that alters a mailbox stamps the value returned
+// here so HIGHESTMODSEQ (getHighestModseq) advances monotonically.
+export const getNextModseq = async (user_id: string): Promise<number> => {
+  try {
+    return await reserveNextUid(buildModseqQuery(user_id));
+  } catch (error) {
+    logger.error("Error reserving next modseq", {}, error);
+    throw error;
+  }
+};
+
+/**
+ * HIGHESTMODSEQ for a mailbox (RFC 7162 §3.1.2.1) — the largest mod-sequence of
+ * any message routed to it. Computed on demand as `MAX(modseq)` over the same
+ * mailbox-routing predicate the UID queries use (option (a) from #607); no
+ * materialized per-mailbox counter, so nothing to keep in sync on every write.
+ *
+ * Expunged rows are INTENTIONALLY included: an EXPUNGE bumps a message's modseq
+ * before it vanishes, and HIGHESTMODSEQ must reflect that so a resyncing client
+ * (QRESYNC, later phases) detects the removal. Returns 1 for an empty mailbox
+ * (the DEFAULT-1 floor), never 0 — a 0 HIGHESTMODSEQ signals "no persistent
+ * mod-sequences", which this store does support.
+ */
+export const getHighestModseq = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean
+): Promise<number> => {
+  try {
+    let sql: string;
+    let values: ParamValue[];
+    if (account === null) {
+      sql = `
+        SELECT COALESCE(MAX(${MODSEQ}), 1) AS highest FROM mails
+        WHERE ${USER_ID} = $1 AND ${SENT} = $2
+      `;
+      values = [user_id, sent];
+    } else {
+      const addressJson = JSON.stringify([{ address: account }]);
+      const addressCondition = sent
+        ? `${FROM_ADDRESS} @> $3::jsonb`
+        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      sql = `
+        SELECT COALESCE(MAX(${MODSEQ}), 1) AS highest FROM mails
+        WHERE ${USER_ID} = $1 AND ${SENT} = $2 AND ${addressCondition}
+      `;
+      values = [user_id, sent, addressJson];
+    }
+    const result = await pool.query(sql, values);
+    return parseInt(result.rows[0]?.highest ?? "1", 10);
+  } catch (error) {
+    logger.error("Failed to get highest modseq", {}, error);
+    return 1;
+  }
+};
+
 // Received-account address expansion. Unions to/cc/bcc + envelope_to (the
 // SMTP-level delivery address) so sub-addressed / listserv-routed mail resolves
 // to the receiving account even when the MIME to/cc/bcc omits it (see the long
@@ -1031,6 +1120,11 @@ export const setMailFlags = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
     const setClause = buildFlagSetClause(operation, flags);
+    // One fresh mod-sequence for this STORE, stamped on every matched row so a
+    // CONDSTORE client sees one modseq for the whole flag change (RFC 7162 §3.1
+    // — a batch mutation may share a single mod-sequence). Reserved atomically so
+    // concurrent STOREs get strictly-distinct, monotonic values.
+    const modseq = await getNextModseq(user_id);
 
     let sql: string;
     let values: ParamValue[];
@@ -1038,16 +1132,16 @@ export const setMailFlags = async (
     if (account === null) {
       if (useUid) {
         sql = `
-          UPDATE mails 
-          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          UPDATE mails
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
           WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [user_id, sent, start, end];
+        values = [user_id, sent, start, end, modseq];
       } else {
         sql = `
-          UPDATE mails 
-          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          UPDATE mails
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
           WHERE mail_id IN (
             SELECT mail_id FROM mails
             WHERE user_id = $1 AND sent = $2
@@ -1056,7 +1150,7 @@ export const setMailFlags = async (
           )
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [user_id, sent, start];
+        values = [user_id, sent, start, modseq];
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
@@ -1066,16 +1160,16 @@ export const setMailFlags = async (
       if (useUid) {
         sql = `
           UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
           WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
             AND ${uidField} >= $4 AND ${uidField} <= $5
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [user_id, sent, addressJson, start, end];
+        values = [user_id, sent, addressJson, start, end, modseq];
       } else {
         sql = `
-          UPDATE mails 
-          SET ${setClause}, updated = CURRENT_TIMESTAMP
+          UPDATE mails
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
           WHERE mail_id IN (
             SELECT mail_id FROM mails
             WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
@@ -1084,7 +1178,7 @@ export const setMailFlags = async (
           )
           RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
         `;
-        values = [user_id, sent, addressJson, start];
+        values = [user_id, sent, addressJson, start, modseq];
       }
     }
 
@@ -1466,7 +1560,9 @@ export const expungeDeletedMails = async (
       // updateWhere so `updated` is bumped via the standard data-bag pattern.
       const rows = await mailsTable.updateWhere(
         { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
-        { [EXPUNGED]: true, updated: new Date() },
+        // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
+        // resyncing CONDSTORE/QRESYNC client detects the removal.
+        { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
         [`${uidField} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -1491,7 +1587,9 @@ export const expungeDeletedMails = async (
 
     const rows = await mailsTable.updateWhere(
       { [MAIL_ID]: { op: "IN", value: mailIds } },
-      { [EXPUNGED]: true, updated: new Date() },
+      // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
+      // resyncing CONDSTORE/QRESYNC client detects the removal.
+      { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
       [`${uidField} as uid`]
     );
     return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -1528,7 +1626,9 @@ export const expungeMailsByUid = async (
           [EXPUNGED]: false,
           [uidField]: { op: "IN", value: uids },
         },
-        { [EXPUNGED]: true, updated: new Date() },
+        // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
+        // resyncing CONDSTORE/QRESYNC client detects the removal.
+        { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
         [`${uidField} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
@@ -1559,7 +1659,9 @@ export const expungeMailsByUid = async (
 
     const rows = await mailsTable.updateWhere(
       { [MAIL_ID]: { op: "IN", value: mailIds } },
-      { [EXPUNGED]: true, updated: new Date() },
+      // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
+      // resyncing CONDSTORE/QRESYNC client detects the removal.
+      { [EXPUNGED]: true, updated: new Date(), [MODSEQ]: await getNextModseq(user_id) },
       [`${uidField} as uid`]
     );
     return rows.map((row: Record<string, unknown>) => row.uid as number);
