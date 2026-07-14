@@ -115,7 +115,7 @@ export const saveMail = async (
         ];
         await mailsTable.updateWhere(
           { user_id: input.user_id, message_id: input.message_id },
-          { [ENVELOPE_TO]: JSON.stringify(merged) }
+          { [ENVELOPE_TO]: JSON.stringify(merged), updated: DB_NOW }
         );
       }
 

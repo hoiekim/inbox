@@ -323,6 +323,21 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     // And the sentinel is actually the shape in use.
     expect(mailsSource).toMatch(/updated:\s*DB_NOW/);
   });
+
+  it("saveMail envelope_to merge (23505 conflict) stamps DB-clock `updated`", () => {
+    // #614: the unique-violation merge branch mutates envelope_to, which feeds
+    // the received per-account address expansion in getMailHeadersDelta — so it
+    // is a delta-synced mutation. Without bumping `updated` the merge never
+    // advances the delta cursor: a client already holding the mail never
+    // re-fetches the newly-merged sub-address, so the mail silently misses that
+    // account's received view until a full resync.
+    const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
+    if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
+    const saveSource = saveMatch[0];
+    expect(saveSource).toContain("mailsTable.updateWhere(");
+    expect(saveSource).toMatch(/\[ENVELOPE_TO\]:/);
+    expect(saveSource).toMatch(/updated:\s*DB_NOW/);
+  });
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {
