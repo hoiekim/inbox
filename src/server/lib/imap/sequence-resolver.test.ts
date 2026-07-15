@@ -127,6 +127,33 @@ describe("resolveSeqRangeToUids (inbox #588)", () => {
   it("returns undefined on an empty mailbox", () => {
     expect(resolveSeqRangeToUids([], 1, 10)).toBeUndefined();
   });
+
+  // inbox #660: a bare `*` (both endpoints MAX_SAFE_INTEGER) targets the last
+  // message, not nothing. The `*` sentinel start is exempt from the
+  // out-of-range guard; a concrete past-end start still matches nothing.
+  it("resolves a bare `*` (start and end are `*`) to the last message", () => {
+    expect(
+      resolveSeqRangeToUids(uids, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+    ).toEqual({ uidStart: 50, uidEnd: 50 });
+  });
+
+  it("resolves `*` to the last message on a single-message mailbox", () => {
+    expect(
+      resolveSeqRangeToUids([10], Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+    ).toEqual({ uidStart: 10, uidEnd: 10 });
+  });
+
+  it("returns undefined for `*` on an empty mailbox", () => {
+    expect(
+      resolveSeqRangeToUids([], Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+    ).toBeUndefined();
+  });
+
+  it("still returns undefined for a concrete past-end start (not the `*` sentinel)", () => {
+    // `6:*` on a 5-message mailbox: the start (6) is a real number past the
+    // end, so it matches nothing — only `*` itself is treated as the last msg.
+    expect(resolveSeqRangeToUids(uids, 6, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+  });
 });
 
 describe("uidToSeqNumber", () => {

@@ -64,6 +64,12 @@ export function seqToUidNumber(seqToUid: number[], seq: number): number | undefi
  * messages match) or the mailbox is empty. '*' (MAX_SAFE_INTEGER) clamps to the
  * last message. Endpoint ordering is left as-is; descending ranges are handled
  * separately in convertSequenceSet (issue #582).
+ *
+ * '*' means "the highest message in the mailbox" (RFC 3501 §9), so a `*` start
+ * clamps to the last message like `end` does — `SEARCH *` / `FETCH *` target
+ * the final message. This is exempt from the out-of-range guard: a *concrete*
+ * sequence number past the end (e.g. `SEARCH 99999` on a 3-message mailbox)
+ * must still match nothing, so only the sentinel is let through (issue #660).
  */
 export function resolveSeqRangeToUids(
   seqToUid: number[],
@@ -71,7 +77,8 @@ export function resolveSeqRangeToUids(
   end: number
 ): { uidStart: number; uidEnd: number } | undefined {
   const maxSeq = seqToUid.length;
-  if (maxSeq === 0 || start > maxSeq) return undefined;
+  if (maxSeq === 0) return undefined;
+  if (start !== Number.MAX_SAFE_INTEGER && start > maxSeq) return undefined;
   const uidStart = seqToUidNumber(seqToUid, Math.min(start, maxSeq));
   const uidEnd = seqToUidNumber(seqToUid, Math.min(end, maxSeq));
   if (uidStart === undefined || uidEnd === undefined) return undefined;
