@@ -601,3 +601,87 @@ describe("convertSequenceSet normalizes descending ranges (#582)", () => {
     ]);
   });
 });
+
+describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
+  // BODY[<part>.HEADER]/.MIME must return the part's MIME header fields; .TEXT
+  // (and a bare part number) the header-less body. Before the fix all three
+  // returned the base64 part body and the response was keyed BODY[<part>].
+  const mail: Partial<MailType> = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<mp@local>",
+    date: new Date("2026-07-08T00:00:00Z"),
+    text: "Plain body",
+    html: "<p>HTML body</p>",
+    attachments: []
+  };
+  const docId = "doc-mp";
+  const mailbox = "INBOX";
+
+  const partOf = async (fetch: BodyFetch) => {
+    const part = await buildBodyResponsePart(mail, fetch, docId, mailbox);
+    expect(part).not.toBeNull();
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    // The advertised {N} literal must equal the emitted octets.
+    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    return part!;
+  };
+
+  it("BODY[1.MIME] returns part 1 MIME header block, keyed BODY[1.MIME]", async () => {
+    const part = await partOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" }
+    });
+    expect(part.header).toBe("BODY[1.MIME]");
+    expect(part.content).toContain("Content-Type: text/plain; charset=utf-8");
+    expect(part.content).toContain("Content-Transfer-Encoding: base64");
+    // header block, not the base64 body
+    expect(part.content).not.toContain(
+      Buffer.from("Plain body", "utf8").toString("base64")
+    );
+    // exactly one delimiting blank line, no spurious second CRLF
+    expect(part.content.endsWith("\r\n\r\n")).toBe(true);
+    expect(part.content.endsWith("\r\n\r\n\r\n")).toBe(false);
+  });
+
+  it("BODY[1.HEADER] returns part 1 MIME header block, keyed BODY[1.HEADER]", async () => {
+    const part = await partOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "MIME_PART", partNumber: "1", subSection: "HEADER" }
+    });
+    expect(part.header).toBe("BODY[1.HEADER]");
+    expect(part.content).toContain("Content-Type: text/plain; charset=utf-8");
+  });
+
+  it("BODY[2.MIME] returns part 2 (html) MIME header block", async () => {
+    const part = await partOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "MIME_PART", partNumber: "2", subSection: "MIME" }
+    });
+    expect(part.header).toBe("BODY[2.MIME]");
+    expect(part.content).toContain("Content-Type: text/html; charset=utf-8");
+  });
+
+  it("BODY[1.TEXT] returns the header-less base64 body (same as BODY[1])", async () => {
+    const b64 = Buffer.from("Plain body", "utf8").toString("base64");
+    const withText = await partOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "MIME_PART", partNumber: "1", subSection: "TEXT" }
+    });
+    expect(withText.header).toBe("BODY[1.TEXT]");
+    expect(withText.content).toContain(b64);
+    expect(withText.content).not.toContain("Content-Type:");
+
+    const bare = await partOf({
+      type: "BODY",
+      peek: true,
+      section: { type: "MIME_PART", partNumber: "1" }
+    });
+    // Same body bytes, bare part is keyed without the sub-section.
+    expect(bare.header).toBe("BODY[1]");
+    expect(bare.content).toBe(withText.content);
+  });
+});

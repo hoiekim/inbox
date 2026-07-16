@@ -19,6 +19,7 @@ import {
   applyPartialFetch,
   buildFullMessage,
   getBodyPart,
+  getBodyPartHeaders,
   getBodySectionKey,
 } from "./session-utils";
 import {
@@ -97,7 +98,20 @@ export function getBodyContent(
     }
 
     case "MIME_PART":
-      return getBodyPart(mail, section.partNumber);
+      // RFC 3501 §6.4.5: `.HEADER`/`.MIME` return the part's MIME header fields;
+      // `.TEXT` (and a bare part number) return the part body without them. For
+      // this codebase's synthetic parts `getBodyPart` already yields the body
+      // sans MIME header, so `.TEXT` and no-subsection resolve identically.
+      switch (section.subSection) {
+        case "HEADER":
+        case "MIME": {
+          const headers = getBodyPartHeaders(mail, section.partNumber);
+          return headers === null ? null : headers + "\r\n\r\n";
+        }
+        case "TEXT":
+        default:
+          return getBodyPart(mail, section.partNumber);
+      }
 
     default:
       return null;
@@ -269,6 +283,18 @@ export function convertSequenceSet(
 // Response builders
 // ---------------------------------------------------------------------------
 
+// Sections whose `getBodyContent` output already ends in its own delimiting
+// blank line, so the builder must not append another trailing CRLF. Covers
+// HEADER, HEADER.FIELDS, and a MIME part's `.HEADER`/`.MIME` sub-section.
+function isHeaderLikeSection(section: BodySection): boolean {
+  return (
+    section.type === "HEADER" ||
+    section.type === "HEADER_FIELDS" ||
+    (section.type === "MIME_PART" &&
+      (section.subSection === "HEADER" || section.subSection === "MIME"))
+  );
+}
+
 export async function buildBodyResponsePart(
   mail: Partial<MailType>,
   bodyFetch: BodyFetch,
@@ -312,12 +338,12 @@ export async function buildBodyResponsePart(
     // CRLF. (The non-partial branch below appends one and recounts `length`;
     // doing that here would emit 2 octets more than the `{length}` literal
     // advertises, desyncing clients that read exactly `length` octets.)
-  } else if (section.type !== "HEADER" && section.type !== "HEADER_FIELDS") {
-    // Body sections (FULL / TEXT / MIME_PART) get a trailing CRLF here. Header
-    // sections already carry their own delimiting blank line from
+  } else if (!isHeaderLikeSection(section)) {
+    // Body sections (FULL / TEXT / bare MIME_PART) get a trailing CRLF here.
+    // Header sections already carry their own delimiting blank line from
     // `getBodyContent` (HEADER: `\r\n\r\n`; HEADER_FIELDS: last-field `\r\n` +
-    // blank line), so appending another `\r\n` would emit a spurious second
-    // blank line.
+    // blank line; MIME_PART `.HEADER`/`.MIME`: `\r\n\r\n`), so appending another
+    // `\r\n` would emit a spurious second blank line.
     finalContent += "\r\n";
     length = Buffer.byteLength(finalContent, "utf8");
   }
