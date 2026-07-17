@@ -361,31 +361,39 @@ export async function storeFlagsTyped(
         continue;
       }
 
-      if (!silent && !operation.includes("SILENT")) {
+      // A .SILENT store suppresses the FLAGS echo, but RFC 4551 §3.3.2
+      // (Example 14) requires a CONDSTORE session to still receive the new
+      // mod-sequence — `* n FETCH (MODSEQ (m))` with no FLAGS — so its cache
+      // stays in sync. So emit whenever FLAGS is due OR CONDSTORE is on.
+      const isSilent = silent || operation.includes("SILENT");
+      const emitFlags = !isSilent;
+      if (emitFlags || condstoreEnabled) {
         for (const mail of updatedMails) {
           const seq = uidToSeqNumber(
             seqState.seqToUid,
             seqState.uidToSeq,
             mail.uid
           );
-          if (seq !== undefined) {
+          if (seq === undefined) continue;
+
+          const items: string[] = [];
+          if (emitFlags) {
             const currentFlags: string[] = [];
             if (mail.read) currentFlags.push("\\Seen");
             if (mail.saved) currentFlags.push("\\Flagged");
             if (mail.deleted) currentFlags.push("\\Deleted");
             if (mail.draft) currentFlags.push("\\Draft");
             if (mail.answered) currentFlags.push("\\Answered");
-
-            const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
-            // RFC 4551 §3.3.2: once CONDSTORE is enabled, the untagged FETCH a
-            // STORE generates carries the new mod-sequence too.
-            const modseqItem = condstoreEnabled
-              ? ` MODSEQ (${mail.modseq})`
-              : "";
-            write(
-              `* ${seq} FETCH (${uidItem}FLAGS (${currentFlags.join(" ")})${modseqItem})\r\n`
-            );
+            items.push(`FLAGS (${currentFlags.join(" ")})`);
           }
+          if (condstoreEnabled && mail.modseq !== undefined) {
+            items.push(`MODSEQ (${mail.modseq})`);
+          }
+          // Nothing to say (silent store, CONDSTORE off) — stay quiet.
+          if (items.length === 0) continue;
+
+          const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
+          write(`* ${seq} FETCH (${uidItem}${items.join(" ")})\r\n`);
         }
       }
     }

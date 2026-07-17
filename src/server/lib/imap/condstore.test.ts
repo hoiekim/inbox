@@ -75,7 +75,7 @@ const { getCapabilities } = await import("./capabilities");
 const { parseCommand } = await import("./parsers");
 const { buildFetchResponse } = await import("./fetch-helpers");
 const { selectMailbox, statusMailbox } = await import("./mailbox-ops");
-const { storeFlagsTyped } = await import("./message-ops");
+const { storeFlagsTyped, fetchMessagesTyped } = await import("./message-ops");
 const { ImapSession } = await import("./session");
 const { resetPool } = await import("../postgres/client");
 
@@ -363,20 +363,26 @@ const seqStateFor = (uids: number[]): SequenceState => {
   return { seqToUid: uids, uidToSeq };
 };
 
-const uidStoreRequest = (uid: number): StoreRequest => ({
+const uidStoreRequest = (
+  uid: number,
+  operation: StoreRequest["operation"] = "+FLAGS",
+  silent = false
+): StoreRequest => ({
   sequenceSet: { type: "uid", ranges: [{ start: uid }] },
-  operation: "+FLAGS",
+  operation,
   flags: ["\\Seen"],
+  silent,
 });
 
-const runStore = async (condstoreEnabled: boolean) => {
+const runStore = async (
+  condstoreEnabled: boolean,
+  request: StoreRequest = uidStoreRequest(8)
+) => {
   const lines: string[] = [];
-  const store = makeFlagStore([
-    { uid: 8, read: true, modseq: 77 },
-  ]);
+  const store = makeFlagStore([{ uid: 8, read: true, modseq: 77 }]);
   await storeFlagsTyped(
     "A1",
-    uidStoreRequest(8),
+    request,
     true,
     store,
     "INBOX",
@@ -402,6 +408,95 @@ describe("CONDSTORE — STORE flag echo carries MODSEQ", () => {
   it("omits MODSEQ from the flag echo when CONDSTORE is not enabled", async () => {
     const out = await runStore(false);
     expect(out).toContain("* 1 FETCH (UID 8 FLAGS (\\Seen))\r\n");
+    expect(out).not.toContain("MODSEQ");
+  });
+
+  // RFC 4551 §3.3.2 Example 14: a .SILENT store still owes a CONDSTORE session
+  // the new mod-sequence — MODSEQ only, no FLAGS — so its cache stays in sync.
+  it("emits a MODSEQ-only echo for a .SILENT store when CONDSTORE is enabled", async () => {
+    const out = await runStore(
+      true,
+      uidStoreRequest(8, "+FLAGS.SILENT", true)
+    );
+    expect(out).toContain("* 1 FETCH (UID 8 MODSEQ (77))\r\n");
+    expect(out).not.toContain("FLAGS (");
+  });
+
+  it("stays silent for a .SILENT store when CONDSTORE is not enabled", async () => {
+    const out = await runStore(
+      false,
+      uidStoreRequest(8, "+FLAGS.SILENT", true)
+    );
+    expect(out).not.toContain("FETCH");
+    expect(out).toBe("A1 OK STORE completed\r\n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FETCH — the modseq column is only pulled from the store when needed
+// ---------------------------------------------------------------------------
+
+const recordingFetchStore = (captured: { fields: string[] }): Store =>
+  ({
+    getMessages: async (
+      _box: string,
+      _start: number,
+      _end: number,
+      fields: string[]
+    ) => {
+      captured.fields = fields;
+      const m = new Map<string, Partial<MailType>>();
+      m.set("doc1", {
+        uid: { domain: 8, account: 8 },
+        modseq: 5,
+        read: false,
+        saved: false,
+        deleted: false,
+        draft: false,
+        answered: false,
+      });
+      return m;
+    },
+    getUser: () => ({ id: "user-123", username: "admin" } as SignedUser),
+  }) as unknown as Store;
+
+const runFetch = async (
+  dataItems: FetchDataItem[],
+  condstoreEnabled: boolean
+) => {
+  const captured = { fields: [] as string[] };
+  const lines: string[] = [];
+  await fetchMessagesTyped(
+    "A1",
+    { sequenceSet: { type: "uid", ranges: [{ start: 8 }] }, dataItems },
+    true,
+    recordingFetchStore(captured),
+    "INBOX",
+    seqStateFor([8]),
+    (data: string) => {
+      lines.push(data);
+      return true;
+    },
+    condstoreEnabled
+  );
+  return { captured, out: lines.join("") };
+};
+
+describe("CONDSTORE — FETCH pulls the modseq column only when needed", () => {
+  it("requests the modseq column when CONDSTORE is enabled", async () => {
+    const { captured, out } = await runFetch([{ type: "FLAGS" }], true);
+    expect(captured.fields).toContain("modseq");
+    expect(out).toContain("MODSEQ (5)");
+  });
+
+  it("requests the modseq column when MODSEQ is asked for explicitly", async () => {
+    const { captured } = await runFetch([{ type: "MODSEQ" }], false);
+    expect(captured.fields).toContain("modseq");
+  });
+
+  it("does NOT request modseq when neither enabled nor requested", async () => {
+    const { captured, out } = await runFetch([{ type: "FLAGS" }], false);
+    expect(captured.fields).not.toContain("modseq");
     expect(out).not.toContain("MODSEQ");
   });
 });
