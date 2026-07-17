@@ -168,6 +168,10 @@ export interface UpdatedMailFlags {
   deleted: boolean;
   draft: boolean;
   answered: boolean;
+  // The mod-sequence stamped by this STORE (shared across every row it matched).
+  // Backs the MODSEQ item on the untagged FETCH a CONDSTORE client gets from a
+  // flag change (RFC 4551 §3.3.2).
+  modseq: number;
 }
 
 /**
@@ -244,7 +248,7 @@ export const setMailFlags = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
     const setClause = buildFlagSetClause(operation, flags);
-    const returningCols = `${uidField} as uid, read, saved, deleted, draft, answered`;
+    const returningCols = `${uidField} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
 
     // Build the row-matching predicate + its bound params once, shared by the
     // real-change UPDATE and the no-op SELECT below. `$`-indices are 1-based and
@@ -323,6 +327,9 @@ const toUpdatedMailFlags = (row: Record<string, unknown>): UpdatedMailFlags => (
   deleted: row.deleted as boolean,
   draft: row.draft as boolean,
   answered: row.answered as boolean,
+  // INT8 arrives already numeric via the pool's type parser (client.ts); Number
+  // is a no-op today, robust if that parser is ever removed.
+  modseq: Number(row.modseq),
 });
 
 /**

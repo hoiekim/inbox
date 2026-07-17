@@ -365,8 +365,9 @@ export class ImapRequestHandler {
           break;
 
         case "ENABLE":
-          // RFC 5161: acknowledge requested capabilities; we don't activate any extensions
-          this.session.write(`* ENABLED\r\n${tag} OK ENABLE completed\r\n`);
+          // RFC 5161 / RFC 4551 §3.7: enable CONDSTORE (the one extension we
+          // support enabling) and echo back what was activated.
+          this.session.enable(tag, request.data.capabilities);
           break;
 
         case "UNSELECT":

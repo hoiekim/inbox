@@ -122,7 +122,8 @@ export type FetchDataItem =
   | Rfc822Fetch
   | Rfc822HeaderFetch
   | Rfc822SizeFetch
-  | Rfc822TextFetch;
+  | Rfc822TextFetch
+  | ModseqFetch;
 
 export interface EnvelopeFetch {
   type: "ENVELOPE";
@@ -162,6 +163,13 @@ export interface Rfc822SizeFetch {
 
 export interface Rfc822TextFetch {
   type: "RFC822.TEXT";
+}
+
+// RFC 4551 CONDSTORE: the per-message mod-sequence data item. Requested
+// explicitly as `MODSEQ`, and emitted implicitly on every FETCH response once
+// the client has issued `ENABLE CONDSTORE`.
+export interface ModseqFetch {
+  type: "MODSEQ";
 }
 
 // Body fetch requests with all variations
@@ -433,7 +441,8 @@ export type StatusItem =
   | "RECENT"
   | "UIDNEXT"
   | "UIDVALIDITY"
-  | "UNSEEN";
+  | "UNSEEN"
+  | "HIGHESTMODSEQ";
 
 // Authentication
 export interface LoginRequest {

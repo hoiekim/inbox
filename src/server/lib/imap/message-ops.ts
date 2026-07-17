@@ -48,7 +48,8 @@ export async function fetchMessagesTyped(
   store: Store,
   selectedMailbox: string,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean = false
 ): Promise<void> {
   const isFlagsOnly = fetchRequest.dataItems.every(
     (item) =>
@@ -82,7 +83,8 @@ export async function fetchMessagesTyped(
       isUidCommand,
       store,
       selectedMailbox,
-      seqState
+      seqState,
+      condstoreEnabled
     );
     await _processFetchMessages(
       messages,
@@ -91,7 +93,8 @@ export async function fetchMessagesTyped(
       store,
       selectedMailbox,
       seqState,
-      write
+      write,
+      condstoreEnabled
     );
     write(`${tag} OK FETCH completed\r\n`);
   } catch (error) {
@@ -105,10 +108,20 @@ async function _fetchMessages(
   isUidCommand: boolean,
   store: Store,
   selectedMailbox: string,
-  seqState: SequenceState
+  seqState: SequenceState,
+  condstoreEnabled: boolean
 ): Promise<Map<string, Partial<MailType>>> {
   const ranges = convertSequenceSet(fetchRequest.sequenceSet);
   const requestedFields = getRequestedFields(fetchRequest.dataItems);
+  // MODSEQ is needed either when explicitly requested or, per RFC 4551 §3.3.2,
+  // implicitly on every FETCH response once CONDSTORE is enabled. Pull the
+  // column in the same range query rather than issuing a second lookup.
+  if (
+    condstoreEnabled ||
+    fetchRequest.dataItems.some((item) => item.type === "MODSEQ")
+  ) {
+    requestedFields.add("modseq");
+  }
   const isUidFetch =
     fetchRequest.sequenceSet.type === "uid" || isUidCommand;
 
@@ -156,7 +169,8 @@ async function _processFetchMessages(
   store: Store,
   selectedMailbox: string,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean
 ): Promise<void> {
   const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
   const isUidFetch =
@@ -181,7 +195,8 @@ async function _processFetchMessages(
         id,
         uid,
         isUidFetch,
-        selectedMailbox
+        selectedMailbox,
+        condstoreEnabled
       );
       writeFetchResponse(write, seqNum, response);
 
@@ -288,7 +303,8 @@ export async function storeFlagsTyped(
   selectedMailbox: string,
   mailboxReadOnly: boolean,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean = false
 ): Promise<void> {
   if (mailboxReadOnly) {
     write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
@@ -361,8 +377,13 @@ export async function storeFlagsTyped(
             if (mail.answered) currentFlags.push("\\Answered");
 
             const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
+            // RFC 4551 §3.3.2: once CONDSTORE is enabled, the untagged FETCH a
+            // STORE generates carries the new mod-sequence too.
+            const modseqItem = condstoreEnabled
+              ? ` MODSEQ (${mail.modseq})`
+              : "";
             write(
-              `* ${seq} FETCH (${uidItem}FLAGS (${currentFlags.join(" ")}))\r\n`
+              `* ${seq} FETCH (${uidItem}FLAGS (${currentFlags.join(" ")})${modseqItem})\r\n`
             );
           }
         }

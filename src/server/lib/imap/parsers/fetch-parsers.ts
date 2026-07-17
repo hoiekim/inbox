@@ -170,6 +170,8 @@ export const parseFetchDataItem = (context: ParseContext): ParseResult<FetchData
       return { success: true, value: { type: 'UID' }, consumed: context.position - start };
     case 'BODYSTRUCTURE':
       return { success: true, value: { type: 'BODYSTRUCTURE', extensible: true }, consumed: context.position - start };
+    case 'MODSEQ':
+      return { success: true, value: { type: 'MODSEQ' }, consumed: context.position - start };
   }
   
   // Handle BODY items
