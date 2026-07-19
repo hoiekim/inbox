@@ -648,6 +648,89 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
   });
 });
 
+describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
+  // A UID sequence-set's ranges are alternatives, so they must OR among
+  // themselves. Before #659 store.ts emitted one criterion per range and
+  // searchMailsByUid ANDed them, so `1,3` became `uid = 1 AND uid = 3` — an
+  // always-empty set. Now the whole set renders as a single OR-of-ranges.
+
+  it("renders a single exact element without an OR wrapper", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "UID_SET", value: [{ start: 5 }] },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("uid_account = $1");
+    expect(values).toEqual([5]);
+  });
+
+  it("ORs disjoint exact elements (`1,3`) instead of ANDing to empty", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "UID_SET", value: [{ start: 1 }, { start: 3 }] },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("(uid_account = $1 OR uid_account = $2)");
+    expect(values).toEqual([1, 3]);
+  });
+
+  it("ORs mixed exact + range elements (`2:3,5:7`) with parenthesised ranges", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "UID_SET", value: [{ start: 2, end: 3 }, { start: 5, end: 7 }] },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe(
+      "((uid_account >= $1 AND uid_account <= $2) OR (uid_account >= $3 AND uid_account <= $4))"
+    );
+    expect(values).toEqual([2, 3, 5, 7]);
+  });
+
+  it("renders a lone range without an OR wrapper (common `1:3` client form)", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    const frag = buildCriterionClause(
+      { type: "UID_SET", value: [{ start: 1, end: 3 }] },
+      "uid_account",
+      values as never
+    );
+    expect(frag).toBe("(uid_account >= $1 AND uid_account <= $2)");
+    expect(values).toEqual([1, 3]);
+  });
+
+  it("ANDs correctly against a sibling flag key (`SEEN 1,3`)", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    // Sibling keys are joined with AND by searchMailsByUid; the set stays a
+    // single OR-group so the intersection is `read AND (uid∈{1,3})`.
+    const values: unknown[] = [];
+    const flag = buildCriterionClause({ type: "SEEN" }, "uid_account", values as never);
+    const set = buildCriterionClause(
+      { type: "UID_SET", value: [{ start: 1 }, { start: 3 }] },
+      "uid_account",
+      values as never
+    );
+    expect([flag, set].join(" AND ")).toBe(
+      "read = TRUE AND (uid_account = $1 OR uid_account = $2)"
+    );
+    expect(values).toEqual([1, 3]);
+  });
+
+  it("imposes no constraint for an empty set (caller skips it)", async () => {
+    const { buildCriterionClause } = await import("./mails");
+    const values: unknown[] = [];
+    expect(
+      buildCriterionClause({ type: "UID_SET", value: [] }, "uid_account", values as never)
+    ).toBeNull();
+    expect(values).toHaveLength(0);
+  });
+});
+
 describe("searchMailsByUid — no result cap (#553)", () => {
   // A `LIMIT 10000` with `ORDER BY uid ASC` made SEARCH/UID SEARCH drop
   // the NEWEST messages once a mailbox exceeded 10000 — the worst-possible

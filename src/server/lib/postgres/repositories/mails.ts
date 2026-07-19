@@ -1344,14 +1344,22 @@ export const buildCriterionClause = (
     case "SMALLER":
       return null;
 
-    // UID ranges (already split from UidCriterion in store.ts)
-    case "UID_EXACT":
-      values.push(criterion.value as number);
-      return `${uidField} = $${values.length}`;
-    case "UID_RANGE": {
-      const range = criterion.value as { start: number; end: number };
-      values.push(range.start, range.end);
-      return `${uidField} >= $${values.length - 1} AND ${uidField} <= $${values.length}`;
+    // A UID sequence-set: its ranges are alternatives, so OR them among
+    // themselves (a message matches if it falls in ANY range) while the whole
+    // set still ANDs against sibling keys. An empty set imposes no constraint
+    // (caller skips it). See #659.
+    case "UID_SET": {
+      const ranges = criterion.value as { start: number; end?: number }[];
+      const parts = ranges.map((range) => {
+        if (range.end === undefined) {
+          values.push(range.start);
+          return `${uidField} = $${values.length}`;
+        }
+        values.push(range.start, range.end);
+        return `(${uidField} >= $${values.length - 1} AND ${uidField} <= $${values.length})`;
+      });
+      if (parts.length === 0) return null;
+      return parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`;
     }
 
     // Unsupported criterion — impose no constraint (caller skips it).

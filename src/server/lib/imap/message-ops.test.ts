@@ -39,7 +39,7 @@ import {
 import { restoreLeaves } from "test-helpers";
 import type { MailType } from "common";
 import type { Store } from "./store";
-import type { StoreRequest, AppendRequest } from "./types";
+import type { StoreRequest, AppendRequest, SearchCriterion } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
 const STORED_UIDVALIDITY = 1716512400;
@@ -540,12 +540,11 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
   });
 });
 
-// #658 (reviewoie MED): a multi-element bare set (`SEARCH 1,3`) resolves to a
-// multi-range UID criterion that store.search ANDs, not ORs (#659) — a silent
-// empty result. Until #659 lands, searchTyped rejects it loudly on both the
-// plain and UID SEARCH forms rather than answer wrong. Single-range sets still
-// run on both.
-describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
+// #659: a multi-element bare set (`SEARCH 1,3`) resolves to a multi-range UID
+// criterion. store.search once ANDed its ranges (silent empty result), so #658
+// gated it with `NO Not supported`. Now the ranges OR among themselves, so the
+// set executes on both the plain and UID SEARCH forms — the gate is gone.
+describe("searchTyped — multi-element bare set executes (#659)", () => {
   const seqState: SequenceState = {
     seqToUid: [11395, 11396, 11400],
     uidToSeq: new Map([
@@ -554,21 +553,27 @@ describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
       [11400, 3],
     ]),
   };
-  const fakeStore = { search: async () => [] } as unknown as Store;
   const seqReq = (ranges: { start: number; end?: number }[]) => ({
     criteria: [{ type: "SEQ" as const, sequenceSet: { type: "sequence" as const, ranges } }],
   });
-  const capture = async (
+  const run = async (
     tag: string,
     req: { criteria: unknown[] },
     isUid: boolean
-  ): Promise<string> => {
+  ): Promise<{ out: string; passed: SearchCriterion[] | null }> => {
     let out = "";
+    let passed: SearchCriterion[] | null = null;
+    const store = {
+      search: async (_box: string, criteria: SearchCriterion[]) => {
+        passed = criteria;
+        return [];
+      },
+    } as unknown as Store;
     await searchTyped(
       tag,
       req as Parameters<typeof searchTyped>[1],
       isUid,
-      fakeStore,
+      store,
       "INBOX",
       seqState,
       (d: string) => {
@@ -576,27 +581,46 @@ describe("searchTyped — multi-element bare-set gate (#658/#659)", () => {
         return true;
       }
     );
-    return out;
+    return { out, passed };
   };
 
-  it("rejects a multi-element plain-SEARCH bare set with NO", async () => {
-    const out = await capture("t1", seqReq([{ start: 1 }, { start: 3 }]), false);
-    expect(out).toBe("t1 NO Not supported\r\n");
+  it("runs a multi-element plain-SEARCH bare set, resolving both seq→uid ranges", async () => {
+    const { out, passed } = await run("t1", seqReq([{ start: 1 }, { start: 3 }]), false);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
+    // seq 1 → uid 11395, seq 3 → uid 11400: both ranges reach store.search.
+    expect(passed).toEqual([
+      {
+        type: "UID",
+        sequenceSet: {
+          type: "sequence",
+          ranges: [
+            { start: 11395, end: 11395 },
+            { start: 11400, end: 11400 },
+          ],
+        },
+      },
+    ]);
   });
 
-  it("runs a single-range plain-SEARCH bare set (no gate)", async () => {
-    const out = await capture("t2", seqReq([{ start: 1, end: 3 }]), false);
+  it("runs a single-range plain-SEARCH bare set", async () => {
+    const { out } = await run("t2", seqReq([{ start: 1, end: 3 }]), false);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
   });
 
-  it("rejects a multi-element UID-SEARCH bare set with NO", async () => {
-    const out = await capture("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
-    expect(out).toBe("t3 NO Not supported\r\n");
+  it("runs a multi-element UID-SEARCH bare set, keeping both ranges as UIDs", async () => {
+    const { out, passed } = await run("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
+    expect(out).toContain("OK SEARCH completed");
+    expect(out).not.toContain("NO Not supported");
+    // UID SEARCH: the set already names UIDs, so relabel untouched.
+    expect(passed).toEqual([
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 1 }, { start: 3 }] } },
+    ]);
   });
 
-  it("runs a single-range UID-SEARCH bare set (no gate)", async () => {
-    const out = await capture("t4", seqReq([{ start: 1, end: 3 }]), true);
+  it("runs a single-range UID-SEARCH bare set", async () => {
+    const { out } = await run("t4", seqReq([{ start: 1, end: 3 }]), true);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
   });
