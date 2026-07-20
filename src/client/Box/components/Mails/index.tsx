@@ -44,7 +44,8 @@ import {
   call,
   isSentMail,
   processHtmlForViewer,
-  useIsOnline
+  useIsOnline,
+  matchCacheCatalog
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
@@ -580,7 +581,16 @@ const RenderedMails = ({ page }: { page: number }) => {
       return body?.map((d) => new MailHeaderData(d)) || [];
     } else throw new Error(message);
   };
-  const query = useQuery<MailHeaderData[]>(queryUrl, getMails);
+  // Header lists are seeded from IndexedDB before first render (#618), so a hard
+  // reload paints last session's cache without hitting the network. Revalidate
+  // those seeded keys on mount so the paint can't stay stale inside the count-
+  // heuristic's blind spot (a net-zero count change — read-elsewhere, or a
+  // delete + new arrival) until the 10-min interval fires. Search results aren't
+  // seeded, so they keep the global refetchOnMount: false. (#622)
+  const revalidateOnMount = matchCacheCatalog(queryUrl) ? "always" : false;
+  const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
+    refetchOnMount: revalidateOnMount
+  });
 
   if (query.isLoading) {
     return (
