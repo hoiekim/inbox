@@ -585,7 +585,8 @@ const RenderedMails = ({ page }: { page: number }) => {
   // reload paints last session's cache without hitting the network. Revalidate
   // those seeded keys on mount so the paint can't stay stale inside the count-
   // heuristic's blind spot (a net-zero count change — read-elsewhere, or a
-  // delete + new arrival) until the 10-min interval fires. Search results aren't
+  // delete + new arrival) until the 10-min interval fires. A failed revalidation
+  // keeps the seeded paint (see the render guards below). Search results aren't
   // seeded, so they keep the global refetchOnMount: false. (#622)
   const revalidateOnMount = matchCacheCatalog(queryUrl) ? "always" : false;
   const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
@@ -602,7 +603,12 @@ const RenderedMails = ({ page }: { page: number }) => {
     );
   }
 
-  if (query.error) {
+  // A failed revalidation must not blow away the IndexedDB-seeded paint
+  // (#618/#622): with retry:false + refetchOnReconnect:false, an offline or
+  // transient-error refetch sets query.error while the seeded query.data
+  // survives, so only surface the error screen when there's no cached list to
+  // fall back on.
+  if (query.error && !query.data) {
     return (
       <div className="mails_container error">Mails List Request Failed</div>
     );
@@ -740,7 +746,12 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  if (query.isSuccess) {
+  // Render whatever list we have — a fresh success, OR the IndexedDB-seeded /
+  // last-good data retained through a failed background revalidation (v3 keeps
+  // query.data on error; only a genuine no-data error reaches the screen above).
+  // Gating on isSuccess alone would blank the pane the instant a revalidation
+  // failed, defeating the offline-read paint. (#618/#622)
+  if (query.isSuccess || query.data) {
     const mails = Array.isArray(query.data) ? query.data : [];
     const pagedMails = mails.slice(0, 4 + 8 * page);
 
