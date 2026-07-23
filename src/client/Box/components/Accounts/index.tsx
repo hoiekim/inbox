@@ -37,6 +37,7 @@ import {
   onKeyboardActivate,
   clearCachedQueries,
   unregisterServiceWorker,
+  getLocalStorageItem,
   useIsOnline
 } from "client";
 import { MailsSynchronizer } from "client/Box";
@@ -432,6 +433,15 @@ const Accounts = ({
     const onClickLogout = async () => {
       const confirmed = window.confirm("Are you sure you want to log out?");
       if (!confirmed) return;
+      // Drop the server-side push subscription while the session is still live
+      // (the unsubscribe route is authenticated). The SW teardown below removes
+      // the browser-side subscription; without this the server row is orphaned
+      // on every logout-without-relogin (#635). Best-effort — call.delete never
+      // throws, and a stale row self-heals on the next login's re-subscribe.
+      const pushSubscriptionId = getLocalStorageItem("push_subscription_id");
+      if (pushSubscriptionId) {
+        await call.delete("/api/push/subscribe/" + pushSubscriptionId);
+      }
       const response = await call.delete<LoginDeleteResponse>(
         "/api/users/login"
       );
@@ -442,9 +452,11 @@ const Accounts = ({
       // Tear down the SW + Cache Storage so the logged-out browser holds no
       // cached app shell / assets from this session (#458).
       await unregisterServiceWorker();
-      // Clear compose draft data so it doesn't leak to the next user on this browser.
-      // `originalMessage` is a legacy key removed in #668; `originalMessageMeta` is
-      // the new small-payload key that holds only the reply target's id + labels.
+      // Clear per-session localStorage: compose draft data (so it doesn't leak
+      // to the next user on this browser) plus the stale push subscription
+      // handle (#635). `originalMessage` is a legacy key removed in #668;
+      // `originalMessageMeta` is the new small-payload key that holds only the
+      // reply target's id + labels.
       [
         "name",
         "to",
@@ -455,7 +467,8 @@ const Accounts = ({
         "initialContent",
         "originalMessage",
         "originalMessageMeta",
-        "isCcOpen"
+        "isCcOpen",
+        "push_subscription_id"
       ].forEach((key) => localStorage.removeItem(key));
       setUserInfo(undefined);
       setSelectedAccount("");

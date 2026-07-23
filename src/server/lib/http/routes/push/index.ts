@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authRequired } from "../route";
+import { deleteSubscribeRoute } from "./delete-subscribe";
 import { getPublicKeyRoute } from "./get-public-key";
 import { getRefreshRoute } from "./get-refresh";
 import { postSubscribeRoute } from "./post-subscribe";
@@ -15,12 +16,18 @@ pushRouter.use((req, res, next) => {
   return authRequired(req, res, next);
 });
 
-const routes = [getPublicKeyRoute, getRefreshRoute, postSubscribeRoute];
+const routes = [
+  getPublicKeyRoute,
+  getRefreshRoute,
+  postSubscribeRoute,
+  deleteSubscribeRoute,
+];
 
 routes.forEach((r) => r.register(pushRouter));
 
 export default pushRouter;
 
+export * from "./delete-subscribe";
 export * from "./get-public-key";
 export * from "./get-refresh";
 export * from "./post-subscribe";

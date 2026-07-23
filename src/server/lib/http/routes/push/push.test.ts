@@ -6,6 +6,7 @@ import type { ApiResponse } from "../route";
 const mockGetPushPublicKey = mock(() => "test-vapid-public-key");
 const mockStoreSubscription = mock(async () => null as unknown);
 const mockRefreshSubscription = mock(async () => null as unknown);
+const mockDeleteSubscription = mock(async () => false as unknown);
 
 // Include base set of server exports so this mock doesn't break test files
 // that run after this one (Bun's mock.module is global within a coverage run).
@@ -14,6 +15,7 @@ mock.module("server", () => ({
     getPushPublicKey: mockGetPushPublicKey,
     storeSubscription: mockStoreSubscription,
     refreshSubscription: mockRefreshSubscription,
+    deleteSubscription: mockDeleteSubscription,
     decrementBadgeCount: mock(async () => {}),
   },
   // Base exports needed by users/mails test files
@@ -129,5 +131,29 @@ describe("postSubscribeRoute", () => {
     const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/Failed to store subscription/i);
+  });
+});
+
+// ── delete-subscribe ──────────────────────────────────────────────────────────
+
+describe("deleteSubscribeRoute", () => {
+  beforeEach(() => mockDeleteSubscription.mockClear());
+
+  it("deletes the subscription by id and returns success", async () => {
+    const { deleteSubscribeRoute } = await import("./delete-subscribe");
+    mockDeleteSubscription.mockResolvedValueOnce(true);
+    const req = makeReq({ params: { id: "sub1" } });
+    const result = await deleteSubscribeRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockDeleteSubscription).toHaveBeenCalledWith("sub1");
+  });
+
+  it("returns failed when no subscription matched the id", async () => {
+    const { deleteSubscribeRoute } = await import("./delete-subscribe");
+    mockDeleteSubscription.mockResolvedValueOnce(false);
+    const req = makeReq({ params: { id: "nonexistent" } });
+    const result = await deleteSubscribeRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toMatch(/No subscription found/i);
   });
 });
