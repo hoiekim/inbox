@@ -61,6 +61,29 @@ export const deleteSubscription = async (
 };
 
 /**
+ * Deletes a push subscription scoped to its owner, so a user can only remove
+ * their own row (the id alone is a bearer capability). Use this for
+ * user-initiated deletes; the by-id `deleteSubscription` above is for
+ * server-internal cleanup of expired subscriptions.
+ * @returns Success boolean
+ */
+export const deleteSubscriptionForUser = async (
+  push_subscription_id: string,
+  user_id: string
+): Promise<boolean> => {
+  try {
+    const deleted = await pushSubscriptionsTable.deleteWhere({
+      [PUSH_SUBSCRIPTION_ID]: push_subscription_id,
+      [USER_ID]: user_id,
+    });
+    return deleted > 0;
+  } catch (error) {
+    logger.error("Failed to delete push subscription", {}, error);
+    return false;
+  }
+};
+
+/**
  * Cleans old push subscriptions (older than 7 days)
  */
 export const cleanSubscriptions = async (): Promise<number> => {

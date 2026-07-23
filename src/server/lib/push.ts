@@ -74,6 +74,13 @@ export const createPush = (
     });
   };
 
+  const deleteSubscriptionForUser = (
+    push_subscription_id: string,
+    user_id: string,
+  ) => {
+    return repo.deleteSubscriptionForUser(push_subscription_id, user_id);
+  };
+
   // Send one notification and absorb the "subscription expired" (HTTP 410)
   // case by deleting the dead subscription. Returns whether the send
   // succeeded so callers can gate follow-up writes (e.g. updateLastNotified)
@@ -211,6 +218,7 @@ export const createPush = (
     isPushEnabled,
     storeSubscription,
     deleteSubscription,
+    deleteSubscriptionForUser,
     cleanSubscriptions,
     getSubscriptions,
     refreshSubscription,
