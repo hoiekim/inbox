@@ -176,10 +176,16 @@ describe("IMAP util", () => {
       expect(result).toMatch(/^\d{2}-\w{3}-\d{4} \d{2}:\d{2}:\d{2} [+-]\d{4}$/);
     });
 
-    it("should pad single-digit day", () => {
+    it("should space-pad single-digit day (RFC 3501 date-day-fixed)", () => {
       const date = new Date("2024-01-05T10:30:45Z");
       const result = formatInternalDate(date);
-      expect(result).toMatch(/^05-Jan-/);
+      expect(result).toMatch(/^ 5-Jan-/);
+    });
+
+    it("should render two-digit day without padding", () => {
+      const date = new Date("2024-01-15T10:30:45Z");
+      const result = formatInternalDate(date);
+      expect(result).toMatch(/^15-Jan-/);
     });
 
     it("should use correct month abbreviation", () => {

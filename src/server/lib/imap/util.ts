@@ -344,7 +344,9 @@ export const formatInternalDate = (d: Date): string => {
   ];
   const pad = (n: number) => String(n).padStart(2, "0");
 
-  const day = pad(d.getDate());
+  // RFC 3501 §9 date-day-fixed: single-digit days are space-padded (" 9"),
+  // not zero-padded. Only the day uses this rule; time fields are 2DIGIT.
+  const day = String(d.getDate()).padStart(2, " ");
   const month = months[d.getMonth()];
   const year = d.getFullYear();
   const time = [d.getHours(), d.getMinutes(), d.getSeconds()]
