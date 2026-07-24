@@ -177,13 +177,15 @@ describe("IMAP util", () => {
     });
 
     it("should space-pad single-digit day (RFC 3501 date-day-fixed)", () => {
-      const date = new Date("2024-01-05T10:30:45Z");
+      // Local-constructor form so the asserted day is timezone-invariant
+      // (formatInternalDate reads local getDate()).
+      const date = new Date(2024, 0, 5, 10, 30, 45);
       const result = formatInternalDate(date);
       expect(result).toMatch(/^ 5-Jan-/);
     });
 
     it("should render two-digit day without padding", () => {
-      const date = new Date("2024-01-15T10:30:45Z");
+      const date = new Date(2024, 0, 15, 10, 30, 45);
       const result = formatInternalDate(date);
       expect(result).toMatch(/^15-Jan-/);
     });
