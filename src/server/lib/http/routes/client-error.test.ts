@@ -128,4 +128,29 @@ describe("POST /api/client-error location enrichment (issue #631)", () => {
     const detail = mockSendAlarm.mock.calls[0][1] as string;
     expect(detail).toContain("**Source:** https://cdn.example.com/vendor.js");
   });
+
+  it("renders filename:lineno when the column is absent", async () => {
+    const res = await postClientError("203.0.113.13", {
+      message: "Script error.",
+      filename: "app.js",
+      lineno: 12,
+    });
+    expect(res.status).toBe(200);
+    const detail = mockSendAlarm.mock.calls[0][1] as string;
+    expect(detail).toContain("**Source:** app.js:12");
+    expect(detail).not.toContain("app.js:12:");
+  });
+
+  it("drops a column with no line (a bare column is meaningless without a line)", async () => {
+    const res = await postClientError("203.0.113.14", {
+      message: "Script error.",
+      filename: "app.js",
+      colno: 7,
+    });
+    expect(res.status).toBe(200);
+    const detail = mockSendAlarm.mock.calls[0][1] as string;
+    // No line → the column is discarded rather than rendered as `app.js:7`.
+    expect(detail).toContain("**Source:** app.js");
+    expect(detail).not.toContain("app.js:7");
+  });
 });

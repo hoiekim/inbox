@@ -47,9 +47,13 @@ clientErrorRouter.post("/", clientErrorLimiter.middleware, async (req, res) => {
   // When the message is the opaque "Script error." (cross-origin throw), the
   // source location is the only way to tell an extension/CDN chunk from our
   // own code — surface it so the alarm is actionable.
+  // Only append the column once a line is known — `filename::7` / a bare column
+  // in the line slot would misread as a line number.
   const location = filename
-    ? `${filename}${lineno !== undefined ? `:${lineno}` : ""}${
-        colno !== undefined ? `:${colno}` : ""
+    ? `${filename}${
+        lineno !== undefined
+          ? `:${lineno}${colno !== undefined ? `:${colno}` : ""}`
+          : ""
       }`
     : "";
 
