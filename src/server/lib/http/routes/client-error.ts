@@ -16,6 +16,9 @@ type ClientErrorBody = {
   message?: string;
   stack?: string;
   url?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
 };
 
 /**
@@ -37,12 +40,25 @@ clientErrorRouter.post("/", clientErrorLimiter.middleware, async (req, res) => {
   const message = typeof body.message === "string" ? body.message : "(no message)";
   const stack = typeof body.stack === "string" ? body.stack : "";
   const url = typeof body.url === "string" ? body.url : "";
+  const filename = typeof body.filename === "string" ? body.filename : "";
+  const lineno = typeof body.lineno === "number" ? body.lineno : undefined;
+  const colno = typeof body.colno === "number" ? body.colno : undefined;
 
-  console.error("Client error reported:", { url, message });
+  // When the message is the opaque "Script error." (cross-origin throw), the
+  // source location is the only way to tell an extension/CDN chunk from our
+  // own code — surface it so the alarm is actionable.
+  const location = filename
+    ? `${filename}${lineno !== undefined ? `:${lineno}` : ""}${
+        colno !== undefined ? `:${colno}` : ""
+      }`
+    : "";
+
+  console.error("Client error reported:", { url, message, location });
 
   const detail = [
     url ? `**URL:** ${url}` : null,
     `**Message:** ${message}`,
+    location ? `**Source:** ${location}` : null,
     stack ? `\`\`\`\n${stack.slice(0, 1000)}\n\`\`\`` : null,
   ]
     .filter(Boolean)

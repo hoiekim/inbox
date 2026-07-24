@@ -92,3 +92,40 @@ describe("POST /api/client-error rate limiting (issue #517)", () => {
     expect(args[2]).toBe("client-error");
   });
 });
+
+describe("POST /api/client-error location enrichment (issue #631)", () => {
+  it("surfaces filename:lineno:colno so opaque 'Script error.' reports are actionable", async () => {
+    const res = await postClientError("203.0.113.10", {
+      message: "Script error.",
+      url: "https://mail.hoie.kim/",
+      filename: "chrome-extension://abcdef/inject.js",
+      lineno: 42,
+      colno: 7,
+    });
+    expect(res.status).toBe(200);
+    expect(mockSendAlarm).toHaveBeenCalledTimes(1);
+    const detail = mockSendAlarm.mock.calls[0][1] as string;
+    expect(detail).toContain("chrome-extension://abcdef/inject.js:42:7");
+    expect(detail).toContain("Script error.");
+  });
+
+  it("omits the Source line when no location is provided", async () => {
+    const res = await postClientError("203.0.113.11", {
+      message: "boom",
+      url: "https://mail.hoie.kim/",
+    });
+    expect(res.status).toBe(200);
+    const detail = mockSendAlarm.mock.calls[0][1] as string;
+    expect(detail).not.toContain("**Source:**");
+  });
+
+  it("tolerates a filename without line/column numbers", async () => {
+    const res = await postClientError("203.0.113.12", {
+      message: "Script error.",
+      filename: "https://cdn.example.com/vendor.js",
+    });
+    expect(res.status).toBe(200);
+    const detail = mockSendAlarm.mock.calls[0][1] as string;
+    expect(detail).toContain("**Source:** https://cdn.example.com/vendor.js");
+  });
+});
