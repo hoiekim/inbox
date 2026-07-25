@@ -180,3 +180,48 @@ describe("Store.getFirstUnseenUid", () => {
     expect(await store.getFirstUnseenUid("INBOX")).toBeNull();
   });
 });
+
+describe("Store.getMessages — replyTo mapping (#667)", () => {
+  beforeEach(() => {
+    mockGetMailsByRange.mockClear();
+    mockGetMailsByRange.mockResolvedValue(new Map());
+  });
+
+  it("maps reply_to_address/reply_to_text onto mail.replyTo", async () => {
+    const replyToValue = [{ address: "noreply@vendor.example", name: "Vendor" }];
+    mockGetMailsByRange.mockResolvedValue(
+      new Map([
+        [
+          "doc-1",
+          {
+            message_id: "<m1>",
+            from_address: [{ address: "sender@vendor.example", name: "Vendor" }],
+            from_text: "Vendor <sender@vendor.example>",
+            reply_to_address: replyToValue,
+            reply_to_text: "Vendor <noreply@vendor.example>",
+          },
+        ],
+      ]) as never
+    );
+
+    const store = new Store(makeUser());
+    const mails = await store.getMessages("INBOX", 1, 1, ["replyTo", "from"]);
+    const mail = mails.get("doc-1");
+
+    expect(mail?.replyTo).toEqual({
+      value: replyToValue,
+      text: "Vendor <noreply@vendor.example>",
+    });
+  });
+
+  it("leaves replyTo undefined when the column is absent (no spurious NIL-vs-value flip)", async () => {
+    mockGetMailsByRange.mockResolvedValue(
+      new Map([["doc-2", { message_id: "<m2>", from_address: [] }]]) as never
+    );
+
+    const store = new Store(makeUser());
+    const mails = await store.getMessages("INBOX", 1, 1, ["from"]);
+
+    expect(mails.get("doc-2")?.replyTo).toBeUndefined();
+  });
+});

@@ -52,6 +52,41 @@ describe("getRequestedFields", () => {
       expect(fields.has("from")).toBe(true);
       expect(fields.has("messageId")).toBe(true);
     });
+
+    // #667: the reply-to member of the §7.4.2 envelope needs its column
+    // selected, else it always renders NIL.
+    it("requests replyTo so the envelope reply-to member is populated", () => {
+      expect(getRequestedFields([{ type: "ENVELOPE" }]).has("replyTo")).toBe(true);
+    });
+  });
+
+  // #667: the served RFC-2822 header block must carry Reply-To when present,
+  // so every body fetch that serializes headers selects the replyTo column.
+  describe("replyTo column selection (#667)", () => {
+    it("BODY[] (FULL) requests replyTo", () => {
+      const fields = getRequestedFields([
+        { type: "BODY", peek: false, section: { type: "FULL" } },
+      ]);
+      expect(fields.has("replyTo")).toBe(true);
+    });
+
+    it("BODY[HEADER] requests replyTo", () => {
+      const fields = getRequestedFields([
+        { type: "BODY", peek: true, section: { type: "HEADER" } },
+      ]);
+      expect(fields.has("replyTo")).toBe(true);
+    });
+
+    it("HEADER.FIELDS.NOT includes replyTo in the 'all-except' set", () => {
+      const fields = getRequestedFields([
+        {
+          type: "BODY",
+          peek: true,
+          section: { type: "HEADER_FIELDS", not: true, fields: ["SUBJECT"] },
+        },
+      ]);
+      expect(fields.has("replyTo")).toBe(true);
+    });
   });
 
   it("always includes uid", () => {

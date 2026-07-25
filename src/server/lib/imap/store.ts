@@ -386,6 +386,12 @@ export class Store {
             text: model.bcc_text || "",
           };
         }
+        if (model.reply_to_address) {
+          mail.replyTo = {
+            value: model.reply_to_address as MailAddressValueType[],
+            text: model.reply_to_text || "",
+          };
+        }
         if (model.envelope_from) {
           mail.envelopeFrom = model.envelope_from as MailAddressValueType[];
         }
