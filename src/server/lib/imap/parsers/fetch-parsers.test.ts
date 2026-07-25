@@ -192,6 +192,10 @@ describe("fetch-parsers > real-world FETCH patterns", () => {
     expect(types).toContain("FLAGS");
     expect(types).toContain("ENVELOPE");
     expect(types).toContain("BODYSTRUCTURE");
+    // The BODYSTRUCTURE token is the extensible form (carries the extension data).
+    const structure = data.dataItems.find((i) => i.type === "BODYSTRUCTURE");
+    if (structure?.type !== "BODYSTRUCTURE") throw new Error("expected BODYSTRUCTURE");
+    expect(structure.extensible).toBe(true);
   });
 
   it("should parse (UID BODY.PEEK[]) — full message fetch", () => {
