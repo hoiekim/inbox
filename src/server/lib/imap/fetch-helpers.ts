@@ -370,8 +370,11 @@ export async function buildFetchResponsePart(
     }
 
     case "BODYSTRUCTURE": {
-      const bodyStructure = formatBodyStructure(mail);
-      return { type: "simple", content: `BODYSTRUCTURE ${bodyStructure}` };
+      // extensible=false is the bare `BODY` data item: non-extensible structure
+      // labelled `BODY` (RFC 3501 §6.4.5). extensible=true is full BODYSTRUCTURE.
+      const bodyStructure = formatBodyStructure(mail, item.extensible);
+      const label = item.extensible ? "BODYSTRUCTURE" : "BODY";
+      return { type: "simple", content: `${label} ${bodyStructure}` };
     }
 
     case "BODY":

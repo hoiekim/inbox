@@ -189,6 +189,57 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
   });
 });
 
+describe("buildFetchResponsePart bare BODY vs BODYSTRUCTURE (#666)", () => {
+  const mail: Partial<MailType> = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    text: "Hello",
+    attachments: [
+      {
+        content: { data: "att1" },
+        filename: "document.pdf",
+        size: 1024,
+        contentType: "application/pdf"
+      }
+    ] as unknown as MailType["attachments"]
+  };
+  const docId = "doc-666";
+  const mailbox = "INBOX";
+
+  it("bare BODY emits a `BODY (...)` structure line, not BODY[] content", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "BODYSTRUCTURE", extensible: false },
+      docId,
+      mailbox
+    );
+    expect(part).not.toBeNull();
+    // A structure line is a simple part, not a literal content download.
+    expect(part!.type).toBe("simple");
+    if (part!.type === "simple") {
+      expect(part!.content.startsWith("BODY ")).toBe(true);
+      expect(part!.content.startsWith("BODY[")).toBe(false);
+      // Non-extensible: extension data dropped.
+      expect(part!.content).not.toContain('"ATTACHMENT"');
+      expect(part!.content).toContain('"mixed")');
+    }
+  });
+
+  it("BODYSTRUCTURE emits a `BODYSTRUCTURE (...)` line with the extension data", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "BODYSTRUCTURE", extensible: true },
+      docId,
+      mailbox
+    );
+    expect(part!.type).toBe("simple");
+    if (part!.type === "simple") {
+      expect(part!.content.startsWith("BODYSTRUCTURE ")).toBe(true);
+      expect(part!.content).toContain('"ATTACHMENT"');
+      expect(part!.content).toContain('"mixed" NIL NIL NIL NIL)');
+    }
+  });
+});
+
 describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)", () => {
   const docId = "doc-654";
   const mailbox = "INBOX";

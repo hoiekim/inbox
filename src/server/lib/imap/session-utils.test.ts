@@ -178,6 +178,13 @@ describe("shouldMarkAsRead", () => {
     expect(shouldMarkAsRead(items)).toBe(false);
   });
 
+  it("returns false for the bare BODY structure item (non-destructive, #666)", () => {
+    // Bare `BODY` parses to a non-extensible BODYSTRUCTURE, not a content BODY,
+    // so it must not set \Seen — unlike the old `{type:'BODY', peek:false}` shape.
+    const items: FetchDataItem[] = [{ type: "BODYSTRUCTURE", extensible: false }];
+    expect(shouldMarkAsRead(items)).toBe(false);
+  });
+
   it("returns false when BODY item has peek=true", () => {
     const items: FetchDataItem[] = [
       {
