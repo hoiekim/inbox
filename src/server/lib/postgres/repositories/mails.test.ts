@@ -166,6 +166,93 @@ describe("STORE operation types", () => {
   });
 });
 
+describe("buildFlagSetClause — empty/unknown-only STORE is a no-op (#671)", () => {
+  // A +FLAGS/-FLAGS that touches no recognized flag must yield NO SET
+  // assignment (empty string), not the old `updated = updated` sentinel that
+  // collided with the trailing `updated = CURRENT_TIMESTAMP` → Postgres
+  // "multiple assignments to same column". setMailFlags treats "" as the
+  // legal no-op path (RFC 3501 §6.4.6).
+  const load = async () => (await import("./mails")).buildFlagSetClause;
+
+  it("returns '' for +FLAGS with an empty flag list", async () => {
+    const buildFlagSetClause = await load();
+    expect(buildFlagSetClause("+FLAGS", [])).toBe("");
+  });
+
+  it("returns '' for -FLAGS with an empty flag list", async () => {
+    const buildFlagSetClause = await load();
+    expect(buildFlagSetClause("-FLAGS", [])).toBe("");
+  });
+
+  it("returns '' for +FLAGS with only unknown/custom keywords", async () => {
+    const buildFlagSetClause = await load();
+    expect(buildFlagSetClause("+FLAGS", ["\\CustomKeyword", "Foo"])).toBe("");
+  });
+
+  it("never emits the `updated = updated` double-assignment sentinel", async () => {
+    const buildFlagSetClause = await load();
+    for (const op of ["+FLAGS", "-FLAGS"] as const) {
+      for (const flags of [[], ["Foo"], ["\\Seen"]]) {
+        expect(buildFlagSetClause(op, flags)).not.toContain("updated");
+      }
+    }
+  });
+
+  it("still emits real column assignments when a flag is recognized", async () => {
+    const buildFlagSetClause = await load();
+    expect(buildFlagSetClause("+FLAGS", ["\\Seen"])).toBe("read = TRUE");
+    expect(buildFlagSetClause("+FLAGS", ["\\Seen", "\\Deleted"])).toBe(
+      "read = TRUE, deleted = TRUE"
+    );
+    expect(buildFlagSetClause("-FLAGS", ["\\Flagged"])).toBe("saved = FALSE");
+  });
+
+  it("FLAGS replace mode is always a full (non-empty) assignment", async () => {
+    const buildFlagSetClause = await load();
+    // Even `FLAGS ()` (clear all) is a real change, never a no-op.
+    const clause = buildFlagSetClause("FLAGS", []);
+    expect(clause).toContain("read = false");
+    expect(clause).toContain("answered = false");
+  });
+});
+
+describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #671)", () => {
+  // Static source check (robust against module-mock interactions in the full
+  // suite — see the #456 block above for the rationale): the no-op branch must
+  // read current flags via SELECT without bumping `updated` or reserving a
+  // mod-sequence, and the old colliding sentinel must be gone.
+  let fnSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const mailsSource = await fs.readFile(
+      path.join(import.meta.dir, "mails.ts"),
+      "utf8"
+    );
+    const fnMatch = mailsSource.match(/export const setMailFlags[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("setMailFlags not found in mails.ts");
+    fnSource = fnMatch[0];
+  });
+
+  it("no longer contains the `updated = updated` sentinel", () => {
+    expect(fnSource).not.toContain("updated = updated");
+  });
+
+  it("has a no-op branch guarded on an empty setClause", () => {
+    expect(fnSource).toMatch(/if\s*\(!setClause\)/);
+  });
+
+  it("no-op branch uses SELECT, not UPDATE, so `updated`/modseq are untouched", () => {
+    // The `!setClause` block runs a bare SELECT of the current flags.
+    const noopBlock = fnSource.match(/if\s*\(!setClause\)\s*\{[\s\S]*?\n {4}\}/);
+    expect(noopBlock).not.toBeNull();
+    expect(noopBlock![0]).toContain("SELECT");
+    expect(noopBlock![0]).not.toContain("UPDATE");
+    expect(noopBlock![0]).not.toContain("getNextModseq");
+  });
+});
+
 describe("expungeDeletedMails — `updated` column refresh (regression for #456)", () => {
   // Static source check: the expunge write paths must go through
   // mailsTable.updateWhere with `updated: new Date()` in the data bag so the
