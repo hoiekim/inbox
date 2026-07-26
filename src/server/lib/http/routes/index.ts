@@ -11,6 +11,7 @@ import healthRouter from "./health";
 import clientErrorRouter from "./client-error";
 import { getClientIp } from "server";
 import { sendAlarm } from "../../alarm";
+import { postMailgunEventsRoute } from "./mailgun-events";
 
 const apiRouter = Router();
 
@@ -46,6 +47,11 @@ apiRouter.use("/users", usersRouter);
 apiRouter.use("/mails", mailsRouter);
 apiRouter.use("/push", pushRouter);
 
+// Mailgun events webhook — public (HMAC-signed by Mailgun, verified in the
+// route handler). Mounted at the /api root so the path Mailgun POSTs to is
+// exactly `/api/mailgun-events`.
+postMailgunEventsRoute.register(apiRouter);
+
 // Unmatched /api/* requests get a JSON 404 rather than falling through to the
 // SPA index.html catch-all in http/index.ts. Without this, an authenticated
 // GET to e.g. /api/mails/unknown-route returns 200 + text/html, which silently
@@ -75,3 +81,4 @@ export default apiRouter;
 export * from "./users";
 export * from "./mails";
 export * from "./push";
+export * from "./mailgun-events";
