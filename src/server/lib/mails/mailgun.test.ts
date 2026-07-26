@@ -87,20 +87,15 @@ describe("sendMailgunMail", () => {
     expect(toList).toContain("b@yahoo.com");
   });
 
-  it("should always include the original h:To header", async () => {
-    const toValue = "a@gmail.com, b@yahoo.com";
-    const mail = new MailDataToSend({ ...baseMail, to: toValue });
+  // Mailgun renders a `To:` header from the `to:` parameter on its own.
+  // Passing `h:To` as well appends a SECOND `To:` header to the RFC 5322
+  // message, which Gmail rejects with `5.7.1 … multiple To headers`. Keep
+  // the envelope-only shape.
+  it("should not set the h:To custom header (would duplicate the To: header)", async () => {
+    const mail = new MailDataToSend({ ...baseMail, to: "a@gmail.com, b@yahoo.com" });
     await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData["h:To"]).toBe(toValue);
-  });
-
-  it("should include the original To header for all recipients", async () => {
-    const toValue = "external@gmail.com, internal@mydomain";
-    const mail = new MailDataToSend({ ...baseMail, to: toValue });
-    await sendMailgunMail("admin", mail);
-    const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData["h:To"]).toBe(toValue);
+    expect(msgData["h:To"]).toBeUndefined();
   });
 
   it("should format from address with senderFullName when provided", async () => {
