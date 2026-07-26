@@ -14,6 +14,7 @@ import {
   spamAllowlistTable,
   spamTrainingTable,
   mailUidCountersTable,
+  mailgunEventsTable,
 } from "./models";
 
 export const version = "1";
@@ -28,6 +29,7 @@ const tables: Table<unknown, Schema>[] = [
   spamAllowlistTable,
   spamTrainingTable,
   mailUidCountersTable,
+  mailgunEventsTable,
 ];
 
 export const postgresIsAvailable = async (): Promise<void> => {

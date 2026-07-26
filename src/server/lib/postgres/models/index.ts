@@ -8,3 +8,4 @@ export * from "./push_subscription";
 export * from "./spam_allowlist";
 export * from "./spam_training";
 export * from "./mail_uid_counter";
+export * from "./mailgun_event";
