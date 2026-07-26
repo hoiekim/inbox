@@ -171,12 +171,17 @@ describe("postMailgunEventsRoute", () => {
     expect(key).toBe("mailgun-permanent_fail");
   });
 
-  it("alarms on failed and on complained", async () => {
-    await call(signed(buildEvent({ event: "failed", severity: "temporary" })));
+  it("alarms on `failed` with severity=permanent, and on `complained`", async () => {
+    await call(signed(buildEvent({ event: "failed", severity: "permanent" })));
     await call(signed(buildEvent({ event: "complained" })));
     expect(sendAlarmSpy.mock.calls.length).toBe(2);
     expect(sendAlarmSpy.mock.calls[0][0]).toBe("Mailgun: failed");
     expect(sendAlarmSpy.mock.calls[1][0]).toBe("Mailgun: complained");
+  });
+
+  it("does NOT alarm on `failed` with severity=temporary (greylist/DNS retry noise)", async () => {
+    await call(signed(buildEvent({ event: "failed", severity: "temporary" })));
+    expect(sendAlarmSpy.mock.calls.length).toBe(0);
   });
 
   it("does not alarm on opened/clicked/accepted/unsubscribed", async () => {
@@ -184,6 +189,18 @@ describe("postMailgunEventsRoute", () => {
       await call(signed(buildEvent({ event })));
     }
     expect(sendAlarmSpy.mock.calls.length).toBe(0);
+  });
+
+  it("accepts events with a non-finite timestamp without throwing (attacker-crafted event-data)", async () => {
+    // event-data is NOT covered by Mailgun's HMAC — only signature.{timestamp,token}
+    // is. An attacker with a captured signature can craft arbitrary event-data
+    // within the replay window. `new Date(Infinity * 1000).toISOString()` throws
+    // RangeError; safeOccurredAt falls back to `now` instead so the handler
+    // returns success and Mailgun doesn't push into hours-long retries.
+    const result = await call(
+      signed(buildEvent({ event: "delivered", timestamp: Number.POSITIVE_INFINITY })),
+    );
+    expect(result.status).toBe("success");
   });
 
   it("returns 200 (success) even when the DB insert throws (Mailgun should not retry)", async () => {
