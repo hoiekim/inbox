@@ -1055,10 +1055,7 @@ export type StoreOperationType = "FLAGS" | "+FLAGS" | "-FLAGS";
  *
  * Returns `""` when the operation touches no recognized flag — an empty
  * `+FLAGS ()`/`-FLAGS ()` or a list of only non-standard keywords. That is a
- * legal no-op (§6.4.6), and `setMailFlags` handles it without an UPDATE.
- * (The `""` replaces an earlier `"updated = updated"` sentinel that collided
- * with the trailing `updated = CURRENT_TIMESTAMP` → "multiple assignments to
- * same column" — issue #671.)
+ * legal no-op (§6.4.6), which `setMailFlags` serves without an UPDATE.
  */
 export function buildFlagSetClause(
   operation: StoreOperationType,
@@ -1160,7 +1157,7 @@ export const setMailFlags = async (
     // keywords): RFC 3501 §6.4.6 makes this a legal no-op. Return the matched
     // rows' CURRENT flags without an UPDATE — a no-op must not bump `updated`
     // (delta-sync cursor) or reserve a new mod-sequence (RFC 7162: modseq only
-    // advances when flags actually change). Issue #671.
+    // advances when flags actually change).
     if (!setClause) {
       const result = await pool.query(
         `SELECT ${returningCols} FROM mails WHERE ${whereClause}`,
