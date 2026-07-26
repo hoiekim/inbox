@@ -119,6 +119,7 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
         fields.add("to");
         fields.add("cc");
         fields.add("bcc");
+        fields.add("replyTo");
         fields.add("date");
         fields.add("messageId");
         break;
@@ -185,6 +186,7 @@ export function addBodyFields(
       fields.add("to");
       fields.add("cc");
       fields.add("bcc");
+      fields.add("replyTo");
       fields.add("date");
       fields.add("messageId");
       fields.add("attachments");
@@ -202,6 +204,7 @@ export function addBodyFields(
       fields.add("to");
       fields.add("cc");
       fields.add("bcc");
+      fields.add("replyTo");
       fields.add("date");
       fields.add("messageId");
       break;
@@ -224,6 +227,7 @@ export function addBodyFields(
         fields.add("to");
         fields.add("cc");
         fields.add("bcc");
+        fields.add("replyTo");
         fields.add("date");
         fields.add("messageId");
       } else {
