@@ -69,7 +69,6 @@ export const sendMailgunMail = async (
     html,
     text,
     attachment: getAttachments(files),
-    "h:To": to,
     "h:In-Reply-To": inReplyTo
   };
 
