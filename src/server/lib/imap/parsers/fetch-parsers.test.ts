@@ -99,13 +99,16 @@ describe("fetch-parsers > parenthesized lists", () => {
 // ---------------------------------------------------------------------------
 
 describe("fetch-parsers > BODY data items", () => {
-  it("should parse BODY as full body fetch", () => {
+  it("should parse bare BODY as the non-extensible BODYSTRUCTURE, not content (#666)", () => {
+    // RFC 3501 §6.4.5: `BODY` (no section, no .PEEK) is the non-extensible form
+    // of BODYSTRUCTURE — a structure line, NOT BODY[] content. It must not parse
+    // to a content BODY item (which would stream the whole message and set \Seen).
     const data = parseFetch("1 BODY");
     expect(data.dataItems).toHaveLength(1);
-    expect(data.dataItems[0].type).toBe("BODY");
-    const bodyItem = data.dataItems[0];
-    if (bodyItem.type !== "BODY") throw new Error("expected BODY");
-    expect(bodyItem.peek).toBe(false);
+    const item = data.dataItems[0];
+    expect(item.type).toBe("BODYSTRUCTURE");
+    if (item.type !== "BODYSTRUCTURE") throw new Error("expected BODYSTRUCTURE");
+    expect(item.extensible).toBe(false);
   });
 
   it("should parse BODY[] as full body fetch", () => {
@@ -189,6 +192,10 @@ describe("fetch-parsers > real-world FETCH patterns", () => {
     expect(types).toContain("FLAGS");
     expect(types).toContain("ENVELOPE");
     expect(types).toContain("BODYSTRUCTURE");
+    // The BODYSTRUCTURE token is the extensible form (carries the extension data).
+    const structure = data.dataItems.find((i) => i.type === "BODYSTRUCTURE");
+    if (structure?.type !== "BODYSTRUCTURE") throw new Error("expected BODYSTRUCTURE");
+    expect(structure.extensible).toBe(true);
   });
 
   it("should parse (UID BODY.PEEK[]) — full message fetch", () => {
@@ -246,6 +253,10 @@ describe("fetch-parsers > macros", () => {
     ]);
     // Guard against a regression back to the full-content BODY[] shape.
     expect(data.dataItems.some((i) => i.type === "BODY")).toBe(false);
+    // FULL's structure item is the non-extensible form (labelled `BODY`).
+    const structure = data.dataItems.find((i) => i.type === "BODYSTRUCTURE");
+    if (structure?.type !== "BODYSTRUCTURE") throw new Error("expected BODYSTRUCTURE");
+    expect(structure.extensible).toBe(false);
   });
 
   it("should be case-insensitive (fast / all / full)", () => {

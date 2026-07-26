@@ -2,7 +2,7 @@
  * FETCH command parsing
  */
 
-import { ParseContext, ParseResult, ImapRequest, FetchDataItem, BodyFetch, BodySection, PartialRange } from '../types';
+import { ParseContext, ParseResult, ImapRequest, FetchDataItem, BodyFetch, BodyStructureFetch, BodySection, PartialRange } from '../types';
 import { parseSequenceSet, skipWhitespace, peek, parseAtom } from './primitive-parsers';
 
 /**
@@ -57,18 +57,18 @@ const expandFetchMacro = (name: string): FetchDataItem[] | null => {
         { type: 'RFC822.SIZE' },
       ];
     // FULL = (FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODY)
-    // The BODY here is the non-extensible BODYSTRUCTURE (a compact structure
-    // line), NOT BODY[] (the full message content) — RFC 3501 §6.4.5 defines
-    // the bare `BODY` data item as "Non-extensible form of BODYSTRUCTURE".
-    // Expanding it to BODY[] would make `FETCH 1:* FULL` stream every message's
-    // entire body, which is the opposite of the lightweight listing FULL is for.
+    // The trailing BODY is the bare `BODY` data item — the non-extensible form
+    // of BODYSTRUCTURE (RFC 3501 §6.4.5), a compact structure line labelled
+    // `BODY`, NOT BODY[] (the full message content). Expanding it to BODY[]
+    // would make `FETCH 1:* FULL` stream every message's entire body, the
+    // opposite of the lightweight listing FULL is for.
     case 'FULL':
       return [
         { type: 'FLAGS' },
         { type: 'INTERNALDATE' },
         { type: 'RFC822.SIZE' },
         { type: 'ENVELOPE' },
-        { type: 'BODYSTRUCTURE' },
+        { type: 'BODYSTRUCTURE', extensible: false },
       ];
     default:
       return null;
@@ -169,7 +169,7 @@ export const parseFetchDataItem = (context: ParseContext): ParseResult<FetchData
     case 'UID':
       return { success: true, value: { type: 'UID' }, consumed: context.position - start };
     case 'BODYSTRUCTURE':
-      return { success: true, value: { type: 'BODYSTRUCTURE' }, consumed: context.position - start };
+      return { success: true, value: { type: 'BODYSTRUCTURE', extensible: true }, consumed: context.position - start };
   }
   
   // Handle BODY items
@@ -219,17 +219,15 @@ export const parseFetchDataItem = (context: ParseContext): ParseResult<FetchData
 /**
  * Parse BODY fetch expressions
  */
-export const parseBodyFetch = (bodyExpr: string, _context: ParseContext): ParseResult<BodyFetch> => {
-  // Handle BODY (without section)
+export const parseBodyFetch = (bodyExpr: string, _context: ParseContext): ParseResult<BodyFetch | BodyStructureFetch> => {
+  // Bare `BODY` (no `[section]`, no `.PEEK`) is the non-extensible form of
+  // BODYSTRUCTURE (RFC 3501 §6.4.5) — a structure line labelled `BODY`, NOT
+  // BODY[] content. It is non-destructive: it never sets \Seen.
   if (bodyExpr === 'BODY') {
-    return { 
-      success: true, 
-      value: { 
-        type: 'BODY', 
-        peek: false, 
-        section: { type: 'FULL' } 
-      }, 
-      consumed: 0 
+    return {
+      success: true,
+      value: { type: 'BODYSTRUCTURE', extensible: false },
+      consumed: 0
     };
   }
   

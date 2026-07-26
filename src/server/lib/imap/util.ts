@@ -126,11 +126,19 @@ export const formatEnvelope = (mail: Partial<MailType>): string => {
   return `(${date} ${subject} ${addressList(from)} ${addressList(sender)} ${addressList(replyTo)} ${addressList(to)} ${addressList(cc)} ${addressList(bcc)} ${inReplyTo} ${messageId})`;
 };
 
-export const formatBodyStructure = (mail: Partial<MailType>): string => {
+export const formatBodyStructure = (
+  mail: Partial<MailType>,
+  extensible = true
+): string => {
   /**
    * IMAP BODYSTRUCTURE format:
    * For single part: (type subtype (param-list) id description encoding size [lines] [md5] [disposition] [language] [location])
    * For multipart: ((part1)(part2)...(partN) subtype (param-list) [disposition] [language] [location])
+   *
+   * The bracketed tail (md5/disposition/language/location on single parts,
+   * param-list/disposition/language/location on multiparts) is the extension
+   * data — present only in BODYSTRUCTURE. The bare `BODY` data item is the
+   * non-extensible form (RFC 3501 §6.4.5): pass extensible=false to drop it.
    */
 
   const buildTextPart = (
@@ -176,17 +184,27 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
       "NIL", // body ID
       "NIL", // body description
       "BASE64", // encoding
-      size.toString(),
-      "NIL", // MD5
-      `("${disposition.type}" (${Object.entries(disposition.params)
-        .map(([k, v]) => `"${k}" "${v}"`)
-        .join(" ")}))`,
-      "NIL", // language
-      "NIL" // location
+      size.toString()
     ];
+
+    if (extensible) {
+      parts.push(
+        "NIL", // MD5
+        `("${disposition.type}" (${Object.entries(disposition.params)
+          .map(([k, v]) => `"${k}" "${v}"`)
+          .join(" ")}))`,
+        "NIL", // language
+        "NIL" // location
+      );
+    }
 
     return `(${parts.join(" ")})`;
   };
+
+  // Multipart wrapper tail: `subtype` alone (non-extensible) or `subtype` plus
+  // the extension data — body-fld-param, disposition, language, location.
+  const multipartTail = (subtype: string): string =>
+    extensible ? `"${subtype}" NIL NIL NIL NIL` : `"${subtype}"`;
 
   const hasText = mail.text && mail.text.trim().length > 0;
   const hasHtml = mail.html && mail.html.trim().length > 0;
@@ -206,7 +224,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
   if (hasText && hasHtml && !hasAttachments) {
     const textPart = buildTextPart("plain", mail.text!);
     const htmlPart = buildTextPart("html", mail.html!);
-    return `(${textPart} ${htmlPart} "alternative" NIL NIL NIL NIL)`;
+    return `(${textPart} ${htmlPart} ${multipartTail("alternative")})`;
   }
 
   // Case 4: Content with attachments (multipart/mixed)
@@ -217,7 +235,9 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
     if (hasText && hasHtml) {
       const textPart = buildTextPart("plain", mail.text!);
       const htmlPart = buildTextPart("html", mail.html!);
-      const alternativePart = `(${textPart} ${htmlPart} "alternative" NIL NIL NIL NIL)`;
+      const alternativePart = `(${textPart} ${htmlPart} ${multipartTail(
+        "alternative"
+      )})`;
       bodyParts.push(alternativePart);
     } else if (hasText) {
       bodyParts.push(buildTextPart("plain", mail.text!));
@@ -230,7 +250,7 @@ export const formatBodyStructure = (mail: Partial<MailType>): string => {
       bodyParts.push(buildAttachmentPart(attachment));
     });
 
-    return `(${bodyParts.join(" ")} "mixed" NIL NIL NIL NIL)`;
+    return `(${bodyParts.join(" ")} ${multipartTail("mixed")})`;
   }
 
   // Default case: empty text part

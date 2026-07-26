@@ -134,6 +134,10 @@ export interface FlagsFetch {
 
 export interface BodyStructureFetch {
   type: "BODYSTRUCTURE";
+  // false is the bare `BODY` data item — the non-extensible form of BODYSTRUCTURE
+  // (RFC 3501 §6.4.5): labelled `BODY` and omitting the extension fields
+  // (body-fld-md5/disposition/language/location). true is the full BODYSTRUCTURE.
+  extensible: boolean;
 }
 
 export interface UidFetch {

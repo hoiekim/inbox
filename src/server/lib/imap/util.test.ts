@@ -428,5 +428,52 @@ describe("IMAP util", () => {
       expect(result).toContain("TEXT");
       expect(result).toContain("PLAIN");
     });
+
+    // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
+    // extension data: md5/disposition/language/location on single parts and
+    // param-list/disposition/language/location on the multipart wrappers (#666).
+    describe("non-extensible form (extensible=false)", () => {
+      it("leaves a leaf text part identical (it carries no extension data)", () => {
+        const mail: Partial<MailType> = { text: "Hello, World!" };
+        expect(formatBodyStructure(mail, false)).toBe(
+          formatBodyStructure(mail, true)
+        );
+      });
+
+      it("drops the multipart/alternative extension tail", () => {
+        const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
+        const ext = formatBodyStructure(mail, true);
+        const nonExt = formatBodyStructure(mail, false);
+        expect(ext).toContain('"alternative" NIL NIL NIL NIL)');
+        expect(nonExt).toContain('"alternative")');
+        expect(nonExt).not.toContain('"alternative" NIL');
+      });
+
+      it("drops md5/disposition/language/location from an attachment part and the mixed tail", () => {
+        const mail: Partial<MailType> = {
+          text: "Hello",
+          attachments: [
+            {
+              content: { data: "att1" },
+              filename: "document.pdf",
+              size: 1024,
+              contentType: "application/pdf"
+            }
+          ]
+        };
+        const ext = formatBodyStructure(mail, true);
+        const nonExt = formatBodyStructure(mail, false);
+        // Extension data present in BODYSTRUCTURE, absent in the bare BODY form.
+        expect(ext).toContain('"ATTACHMENT"');
+        expect(ext).toContain('"mixed" NIL NIL NIL NIL)');
+        expect(nonExt).not.toContain('"ATTACHMENT"');
+        expect(nonExt).toContain('"mixed")');
+        expect(nonExt).not.toContain('"mixed" NIL');
+        // The attachment part itself now ends at the size field (BASE64 <size>).
+        const attachmentSize = Math.ceil(1024 / 3) * 4;
+        expect(nonExt).toContain(`"application" "pdf"`);
+        expect(nonExt).toContain(`BASE64 ${attachmentSize})`);
+      });
+    });
   });
 });
