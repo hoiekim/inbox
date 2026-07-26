@@ -1048,29 +1048,22 @@ export interface UpdatedMailFlags {
 export type StoreOperationType = "FLAGS" | "+FLAGS" | "-FLAGS";
 
 /**
- * Build SET clause for flag updates based on operation type.
- * Per RFC 3501 Section 6.4.6:
- * - FLAGS: Replace all flags with the provided list
- * - +FLAGS: Add the specified flags to existing flags
- * - -FLAGS: Remove the specified flags from existing flags
+ * Build the `SET`-column assignments for a flag update, per RFC 3501 §6.4.6:
+ * - FLAGS: replace all flags with the provided list
+ * - +FLAGS: add the specified flags to existing flags
+ * - -FLAGS: remove the specified flags from existing flags
+ *
+ * Returns `""` when the operation touches no recognized flag — an empty
+ * `+FLAGS ()`/`-FLAGS ()` or a list of only non-standard keywords. That is a
+ * legal no-op (§6.4.6), which `setMailFlags` serves without an UPDATE.
  */
-function buildFlagSetClause(
+export function buildFlagSetClause(
   operation: StoreOperationType,
   flags: string[]
 ): string {
   const hasFlag = (flag: string) => flags.includes(flag);
 
   switch (operation) {
-    case "FLAGS":
-      // Replace mode: set all flags based on presence in flags array
-      return `
-        read = ${hasFlag("\\Seen")},
-        saved = ${hasFlag("\\Flagged")},
-        deleted = ${hasFlag("\\Deleted")},
-        draft = ${hasFlag("\\Draft")},
-        answered = ${hasFlag("\\Answered")}
-      `;
-
     case "+FLAGS": {
       // Add mode: only set flags that are in the array to true
       const addClauses: string[] = [];
@@ -1079,8 +1072,7 @@ function buildFlagSetClause(
       if (hasFlag("\\Deleted")) addClauses.push("deleted = TRUE");
       if (hasFlag("\\Draft")) addClauses.push("draft = TRUE");
       if (hasFlag("\\Answered")) addClauses.push("answered = TRUE");
-      // If no flags specified, return a no-op that still works
-      return addClauses.length > 0 ? addClauses.join(", ") : "updated = updated";
+      return addClauses.join(", ");
     }
 
     case "-FLAGS": {
@@ -1091,12 +1083,13 @@ function buildFlagSetClause(
       if (hasFlag("\\Deleted")) removeClauses.push("deleted = FALSE");
       if (hasFlag("\\Draft")) removeClauses.push("draft = FALSE");
       if (hasFlag("\\Answered")) removeClauses.push("answered = FALSE");
-      // If no flags specified, return a no-op that still works
-      return removeClauses.length > 0 ? removeClauses.join(", ") : "updated = updated";
+      return removeClauses.join(", ");
     }
 
+    case "FLAGS":
     default:
-      // Default to replace mode
+      // Replace mode: set every flag based on presence in the flags array.
+      // Always a full assignment, so never a no-op.
       return `
         read = ${hasFlag("\\Seen")},
         saved = ${hasFlag("\\Flagged")},
@@ -1120,37 +1113,25 @@ export const setMailFlags = async (
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
     const setClause = buildFlagSetClause(operation, flags);
-    // One fresh mod-sequence for this STORE, stamped on every matched row so a
-    // CONDSTORE client sees one modseq for the whole flag change (RFC 7162 §3.1
-    // — a batch mutation may share a single mod-sequence). Reserved atomically so
-    // concurrent STOREs get strictly-distinct, monotonic values.
-    const modseq = await getNextModseq(user_id);
+    const returningCols = `${uidField} as uid, read, saved, deleted, draft, answered`;
 
-    let sql: string;
-    let values: ParamValue[];
-
+    // Build the row-matching predicate + its bound params once, shared by the
+    // real-change UPDATE and the no-op SELECT below. `$`-indices are 1-based and
+    // never include the mod-sequence (appended by the UPDATE branch only).
+    let whereClause: string;
+    let whereValues: ParamValue[];
     if (account === null) {
       if (useUid) {
-        sql = `
-          UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
-          WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
-        values = [user_id, sent, start, end, modseq];
+        whereClause = `user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4`;
+        whereValues = [user_id, sent, start, end];
       } else {
-        sql = `
-          UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
-          WHERE mail_id IN (
-            SELECT mail_id FROM mails
-            WHERE user_id = $1 AND sent = $2
-            ORDER BY ${uidField} ASC
-            OFFSET $3 LIMIT 1
-          )
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
-        values = [user_id, sent, start, modseq];
+        whereClause = `mail_id IN (
+          SELECT mail_id FROM mails
+          WHERE user_id = $1 AND sent = $2
+          ORDER BY ${uidField} ASC
+          OFFSET $3 LIMIT 1
+        )`;
+        whereValues = [user_id, sent, start];
       }
     } else {
       const addressJson = JSON.stringify([{ address: account }]);
@@ -1158,44 +1139,60 @@ export const setMailFlags = async (
         ? `${FROM_ADDRESS} @> $3::jsonb`
         : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
       if (useUid) {
-        sql = `
-          UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-            AND ${uidField} >= $4 AND ${uidField} <= $5
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
-        values = [user_id, sent, addressJson, start, end, modseq];
+        whereClause = `user_id = $1 AND sent = $2 AND ${addressCondition}
+          AND ${uidField} >= $4 AND ${uidField} <= $5`;
+        whereValues = [user_id, sent, addressJson, start, end];
       } else {
-        sql = `
-          UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
-          WHERE mail_id IN (
-            SELECT mail_id FROM mails
-            WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-            ORDER BY ${uidField} ASC
-            OFFSET $4 LIMIT 1
-          )
-          RETURNING ${uidField} as uid, read, saved, deleted, draft, answered
-        `;
-        values = [user_id, sent, addressJson, start, modseq];
+        whereClause = `mail_id IN (
+          SELECT mail_id FROM mails
+          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
+          ORDER BY ${uidField} ASC
+          OFFSET $4 LIMIT 1
+        )`;
+        whereValues = [user_id, sent, addressJson, start];
       }
     }
 
-    const result = await pool.query(sql, values);
-    return result.rows.map((row: Record<string, unknown>) => ({
-      uid: row.uid as number,
-      read: row.read as boolean,
-      saved: row.saved as boolean,
-      deleted: row.deleted as boolean,
-      draft: row.draft as boolean,
-      answered: row.answered as boolean,
-    }));
+    // No recognized flag change (empty `+FLAGS ()` / `-FLAGS ()` or unknown-only
+    // keywords): RFC 3501 §6.4.6 makes this a legal no-op. Return the matched
+    // rows' CURRENT flags without an UPDATE — a no-op must not bump `updated`
+    // (delta-sync cursor) or reserve a new mod-sequence (RFC 7162: modseq only
+    // advances when flags actually change).
+    if (!setClause) {
+      const result = await pool.query(
+        `SELECT ${returningCols} FROM mails WHERE ${whereClause}`,
+        whereValues
+      );
+      return result.rows.map(toUpdatedMailFlags);
+    }
+
+    // One fresh mod-sequence for this STORE, stamped on every matched row so a
+    // CONDSTORE client sees one modseq for the whole flag change (RFC 7162 §3.1
+    // — a batch mutation may share a single mod-sequence). Reserved atomically so
+    // concurrent STOREs get strictly-distinct, monotonic values.
+    const modseq = await getNextModseq(user_id);
+    const result = await pool.query(
+      `UPDATE mails
+       SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $${whereValues.length + 1}
+       WHERE ${whereClause}
+       RETURNING ${returningCols}`,
+      [...whereValues, modseq]
+    );
+    return result.rows.map(toUpdatedMailFlags);
   } catch (error) {
     logger.error("Failed to set mail flags", {}, error);
     return [];
   }
 };
+
+const toUpdatedMailFlags = (row: Record<string, unknown>): UpdatedMailFlags => ({
+  uid: row.uid as number,
+  read: row.read as boolean,
+  saved: row.saved as boolean,
+  deleted: row.deleted as boolean,
+  draft: row.draft as boolean,
+  answered: row.answered as boolean,
+});
 
 /**
  * Builds the SQL boolean fragment for a single IMAP SEARCH criterion, pushing any
