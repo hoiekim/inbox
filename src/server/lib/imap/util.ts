@@ -305,6 +305,20 @@ export const isInbox = (box: string): boolean => {
   return box.toUpperCase() === "INBOX";
 };
 
+/**
+ * Returns true for the domain-scoped mailboxes — INBOX and the unified
+ * "Sent Messages" folder — whose UID space is `uid_domain` rather than
+ * `uid_account`. This mirrors `Store.resolveBox` (both resolve to
+ * `accountName === null`). FETCH / COPY / MOVE / APPEND must select the emitted
+ * UID with this predicate, not `isInbox` alone: the unified Sent folder is
+ * domain-scoped too, so keying its emitted UID off `uid_account` makes
+ * `uidToSeqNumber` miss (messages silently dropped from FETCH, wrong COPYUID
+ * source UIDs). See #702.
+ */
+export const isDomainScoped = (box: string): boolean => {
+  return isInbox(box) || box === SENT_MESSAGES_FOLDER;
+};
+
 /** Returns true for the accounts/ parent folder itself (non-selectable). */
 export const isAccountsFolder = (box: string): boolean => {
   return box === ACCOUNTS_FOLDER;

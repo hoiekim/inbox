@@ -7,11 +7,33 @@ import {
   formatFlags,
   accountToBox,
   boxToAccount,
-  formatInternalDate
+  formatInternalDate,
+  isDomainScoped
 } from "./util";
 import type { MailType, MailAddressValueType } from "common";
 
 describe("IMAP util", () => {
+  // #702 bug 2: domain-scoped boxes (INBOX + unified "Sent Messages") draw
+  // their UID space from uid.domain; everything else is account-scoped.
+  describe("isDomainScoped", () => {
+    it("is true for INBOX in any casing", () => {
+      expect(isDomainScoped("INBOX")).toBe(true);
+      expect(isDomainScoped("inbox")).toBe(true);
+      expect(isDomainScoped("Inbox")).toBe(true);
+    });
+
+    it("is true for the unified Sent Messages folder", () => {
+      expect(isDomainScoped("Sent Messages")).toBe(true);
+    });
+
+    it("is false for account-scoped and user mailboxes", () => {
+      expect(isDomainScoped("Sent Messages/accounts/foo")).toBe(false);
+      expect(isDomainScoped("INBOX/accounts/foo")).toBe(false);
+      expect(isDomainScoped("Archive")).toBe(false);
+      expect(isDomainScoped("")).toBe(false);
+    });
+  });
+
   describe("encodeText", () => {
     it("should encode simple text to base64", () => {
       expect(encodeText("Hello")).toBe("SGVsbG8=");

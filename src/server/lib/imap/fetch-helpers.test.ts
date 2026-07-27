@@ -685,3 +685,39 @@ describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
     expect(bare.content).toBe(withText.content);
   });
 });
+
+// #702 bug 2: the UID data item must draw from the domain-scoped UID space
+// (uid.domain) for INBOX AND the unified "Sent Messages" folder — both resolve
+// to accountName=null in resolveBox. Emitting uid.account for the unified Sent
+// folder made uidToSeqNumber miss and silently dropped messages from FETCH.
+describe("buildFetchResponsePart UID data item — domain-scoped UID space (#702)", () => {
+  const mail: Partial<MailType> = {
+    uid: { account: 7, domain: 42 } as MailType["uid"],
+  };
+  const docId = "doc-uid";
+
+  it("emits uid.domain for INBOX", async () => {
+    const part = await buildFetchResponsePart(mail, { type: "UID" }, docId, "INBOX");
+    expect(part).toEqual({ type: "simple", content: "UID 42" });
+  });
+
+  it("emits uid.domain for the unified Sent Messages folder", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "UID" },
+      docId,
+      "Sent Messages"
+    );
+    expect(part).toEqual({ type: "simple", content: "UID 42" });
+  });
+
+  it("emits uid.account for an account-scoped mailbox", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "UID" },
+      docId,
+      "Sent Messages/accounts/foo"
+    );
+    expect(part).toEqual({ type: "simple", content: "UID 7" });
+  });
+});
