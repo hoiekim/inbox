@@ -13,6 +13,10 @@ import {
   UID_KIND,
   UID_SCOPE,
   LAST_UID,
+  MAIL_MAILBOX_UID,
+  MAILBOX,
+  MAIL_ID,
+  UID,
 } from "../../models";
 
 /**
@@ -121,6 +125,36 @@ export const getAccountUidNext = async (
   } catch (error) {
     logger.error("Error getting account UID next", {}, error);
     throw error;
+  }
+};
+
+/**
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping. `ON
+ * CONFLICT DO NOTHING` — a re-emit for a (user, mailbox, mail) already
+ * mapped is a no-op, not an error (COPY into a mailbox where this mail
+ * already has a UID). Insert failure is logged rather than thrown while
+ * `mails.uid_account` is the authoritative UID source; when the mapping
+ * table becomes authoritative, this path needs to abort on failure.
+ */
+export const writeMailboxUid = async (
+  user_id: string,
+  mailbox: string,
+  mail_id: string,
+  uid: number
+): Promise<void> => {
+  try {
+    await pool.query(
+      `INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID}) DO NOTHING`,
+      [user_id, mailbox, mail_id, uid]
+    );
+  } catch (error) {
+    logger.warn(
+      "Failed to record mail_mailbox_uid mapping",
+      { user_id, mailbox, mail_id, uid },
+      error
+    );
   }
 };
 
