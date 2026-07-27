@@ -121,12 +121,11 @@ export class ImapRequestHandler {
               mailbox: session.selectedMailbox
             });
 
-            // Pace pipelined bursts instead of dropping commands. Every
-            // command must eventually receive a tagged completion (RFC 3501
-            // §7) — the old path wrote an untagged NO and skipped the
-            // command, which left pipelining clients (iOS Mail sends STATUS
-            // for every mailbox in one burst after LIST) hanging on tags
-            // that never arrived, rendering mailboxes empty.
+            // Pace pipelined bursts. RFC 3501 §7 requires a tagged
+            // completion for every command, so over-limit commands are
+            // delayed, never skipped — clients pipeline heavily during
+            // folder sync (iOS Mail sends STATUS for every mailbox in one
+            // burst after LIST).
             await session.waitForCommandSlot();
 
             // Detect APPEND command with a literal size indicator {N} or {N+}

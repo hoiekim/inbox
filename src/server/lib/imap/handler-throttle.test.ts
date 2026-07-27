@@ -1,15 +1,11 @@
 /**
- * Regression tests for command-burst handling (throttler backpressure).
+ * Command-burst pacing tests (throttler backpressure).
  *
- * The per-connection throttler used to DROP over-limit commands: it wrote an
- * untagged `* NO [TEMPORARY UNAVAILABLE]` and never executed the command, so
- * the client never received a tagged completion (RFC 3501 §7 violation).
- * Clients that pipeline aggressively during folder sync — iOS Mail sends
- * STATUS for every mailbox in one burst after LIST — hung waiting for tags
- * that never arrived and displayed every mailbox as empty.
- *
- * The fix paces over-limit bursts (waitForCommandSlot) instead of dropping
- * them: every pipelined command must eventually get its tagged response.
+ * RFC 3501 §7 requires a tagged completion for every command, and clients
+ * pipeline aggressively during folder sync — iOS Mail sends STATUS for every
+ * mailbox in one burst after LIST. Bursts beyond the per-second budget must
+ * therefore be paced into later windows with each command still answered,
+ * never refused or discarded.
  */
 
 import { describe, it, expect } from "bun:test";
@@ -91,8 +87,31 @@ describe("IMAP handler command bursts", () => {
       expect(answered).toBe(true);
     }
 
-    // The drop-path response must be gone for good.
+    // No command may be refused with an untagged busy response.
     const dropped = socket.writes.filter((w) => w.includes("TEMPORARY UNAVAILABLE"));
     expect(dropped.length).toBe(0);
   }, 10000);
+
+  it("stops pacing when the socket is destroyed mid-wait", async () => {
+    const handler = new ImapRequestHandler();
+    const socket = makeMockSocket();
+    handler.setSocket(socket as never);
+    const session = (
+      handler as unknown as {
+        session: { waitForCommandSlot: () => Promise<void> };
+      }
+    ).session;
+
+    // Exhaust the per-second budget so the next slot requires waiting out
+    // the window.
+    for (let i = 0; i < 100; i++) {
+      await session.waitForCommandSlot();
+    }
+
+    socket.destroyed = true;
+    const start = Date.now();
+    await session.waitForCommandSlot();
+    // Must bail immediately instead of waiting out the ~1s window.
+    expect(Date.now() - start).toBeLessThan(500);
+  });
 });

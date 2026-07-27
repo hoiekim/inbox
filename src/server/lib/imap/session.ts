@@ -53,9 +53,8 @@ export class ImapSession {
   private store: Store | null = null;
   // Mail clients pipeline aggressively during folder sync — iOS Mail sends
   // STATUS for every mailbox in one burst (hundreds of commands on accounts
-  // with many virtual folders). 100 commands/sec is far above any legitimate
-  // interactive rate but still bounds a runaway client; the handler paces
-  // over-limit bursts via waitForCommandSlot() instead of dropping them.
+  // with many virtual folders). 100 commands/sec stays far above any
+  // legitimate interactive rate while still bounding a runaway client.
   private throttler: Throttler = new Throttler(100, 1000);
   private authenticated: boolean = false;
   private isIdling: boolean = false;
@@ -108,18 +107,17 @@ export class ImapSession {
   };
 
   /**
-   * Backpressure for pipelined command bursts. Resolves when the connection
+   * Backpressure for pipelined command bursts: resolves once the connection
    * is within its command-rate budget, recording the command against the
-   * window. Never rejects and never skips — RFC 3501 §7 requires every
-   * command to end with a tagged completion, so over-limit commands are
-   * delayed, not dropped. (The previous implementation wrote an untagged
-   * `* NO` and discarded the command, which stalled clients that pipeline
-   * during folder sync — iOS Mail hung waiting for tagged responses that
-   * never came and displayed every mailbox as empty.)
+   * window. RFC 3501 §7 requires a tagged completion for every command, so
+   * over-limit commands are delayed, never dropped. Bails out early when the
+   * socket dies mid-wait — there is nobody left to answer, and pacing out
+   * the rest of a dead connection's queue would just burn timers.
    */
   waitForCommandSlot = async (): Promise<void> => {
     let wait = this.throttler.msUntilFree();
     while (wait > 0) {
+      if (this.socket.destroyed || !this.socket.writable) return;
       await new Promise((resolve) => setTimeout(resolve, wait));
       wait = this.throttler.msUntilFree();
     }
