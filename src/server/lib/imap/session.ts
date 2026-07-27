@@ -51,7 +51,12 @@ export class ImapSession {
   private selectedMailboxMessageCount: number = 0;
   public mailboxReadOnly: boolean = false;
   private store: Store | null = null;
-  private throttler: Throttler = new Throttler();
+  // Mail clients pipeline aggressively during folder sync — iOS Mail sends
+  // STATUS for every mailbox in one burst (hundreds of commands on accounts
+  // with many virtual folders). 100 commands/sec is far above any legitimate
+  // interactive rate but still bounds a runaway client; the handler paces
+  // over-limit bursts via waitForCommandSlot() instead of dropping them.
+  private throttler: Throttler = new Throttler(100, 1000);
   private authenticated: boolean = false;
   private isIdling: boolean = false;
   private idleTag: string | null = null;
@@ -102,9 +107,24 @@ export class ImapSession {
     }
   };
 
-  isThrottled(): boolean {
-    return this.throttler.isThrottled();
-  }
+  /**
+   * Backpressure for pipelined command bursts. Resolves when the connection
+   * is within its command-rate budget, recording the command against the
+   * window. Never rejects and never skips — RFC 3501 §7 requires every
+   * command to end with a tagged completion, so over-limit commands are
+   * delayed, not dropped. (The previous implementation wrote an untagged
+   * `* NO` and discarded the command, which stalled clients that pipeline
+   * during folder sync — iOS Mail hung waiting for tagged responses that
+   * never came and displayed every mailbox as empty.)
+   */
+  waitForCommandSlot = async (): Promise<void> => {
+    let wait = this.throttler.msUntilFree();
+    while (wait > 0) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      wait = this.throttler.msUntilFree();
+    }
+    this.throttler.record();
+  };
 
   // ---------------------------------------------------------------------------
   // Simple commands
