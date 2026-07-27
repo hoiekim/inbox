@@ -21,7 +21,8 @@ import {
   getBodySectionKey,
   shouldMarkAsRead,
   buildFullMessage,
-  getBodyPart
+  getBodyPart,
+  getBodyPartHeaders
 } from "./session-utils";
 import type {
   BodySection,
@@ -123,6 +124,35 @@ describe("getBodySectionKey", () => {
   it("returns BODY[nested partNumber] for nested MIME_PART section", () => {
     const section: BodySection = { type: "MIME_PART", partNumber: "1.2.3" };
     expect(getBodySectionKey(section)).toBe("BODY[1.2.3]");
+  });
+
+  // #657: the sub-section must survive in the response label, otherwise a
+  // client sees the reply keyed as BODY[1] for its BODY[1.HEADER] request.
+  it("returns BODY[1.HEADER] for MIME_PART with HEADER sub-section", () => {
+    const section: BodySection = {
+      type: "MIME_PART",
+      partNumber: "1",
+      subSection: "HEADER"
+    };
+    expect(getBodySectionKey(section)).toBe("BODY[1.HEADER]");
+  });
+
+  it("returns BODY[2.MIME] for MIME_PART with MIME sub-section", () => {
+    const section: BodySection = {
+      type: "MIME_PART",
+      partNumber: "2",
+      subSection: "MIME"
+    };
+    expect(getBodySectionKey(section)).toBe("BODY[2.MIME]");
+  });
+
+  it("returns BODY[1.2.TEXT] for nested MIME_PART with TEXT sub-section", () => {
+    const section: BodySection = {
+      type: "MIME_PART",
+      partNumber: "1.2",
+      subSection: "TEXT"
+    };
+    expect(getBodySectionKey(section)).toBe("BODY[1.2.TEXT]");
   });
 
   it("returns BODY[HEADER.FIELDS (...)] for HEADER_FIELDS section without not", () => {
@@ -530,5 +560,86 @@ describe("getBodyPart", () => {
     };
     // Part 3 would be attachment index 1 (0-based) but only 1 attachment exists
     expect(getBodyPart(mail, "3")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getBodyPartHeaders (#657)
+// ---------------------------------------------------------------------------
+
+describe("getBodyPartHeaders", () => {
+  const TEXT_HDR =
+    "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64";
+  const HTML_HDR =
+    "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64";
+
+  it("returns null for empty mail", () => {
+    expect(getBodyPartHeaders({}, "1")).toBeNull();
+  });
+
+  it("returns text/plain headers for single-text mail, part 1", () => {
+    expect(getBodyPartHeaders({ text: "Hello" }, "1")).toBe(TEXT_HDR);
+  });
+
+  it("returns text/html headers for html-only mail, part 1", () => {
+    expect(getBodyPartHeaders({ html: "<p>Hi</p>" }, "1")).toBe(HTML_HDR);
+  });
+
+  it("returns per-part headers for text+html multipart/alternative", () => {
+    const mail: Partial<MailType> = { text: "Plain", html: "<p>H</p>" };
+    expect(getBodyPartHeaders(mail, "1")).toBe(TEXT_HDR);
+    expect(getBodyPartHeaders(mail, "2")).toBe(HTML_HDR);
+    expect(getBodyPartHeaders(mail, "3")).toBeNull();
+  });
+
+  it("returns nested-part headers for text+html+attachment multipart/mixed", () => {
+    const mail: Partial<MailType> = {
+      text: "Body",
+      html: "<p>Body</p>",
+      attachments: [
+        {
+          content: { data: "att-1" },
+          contentType: "application/pdf",
+          filename: "doc.pdf",
+          size: 100
+        }
+      ]
+    };
+    expect(getBodyPartHeaders(mail, "1.1")).toBe(TEXT_HDR);
+    expect(getBodyPartHeaders(mail, "1.2")).toBe(HTML_HDR);
+  });
+
+  it("returns attachment MIME headers with Content-Disposition for part 2", () => {
+    const mail: Partial<MailType> = {
+      text: "Body",
+      attachments: [
+        {
+          content: { data: "att-file" },
+          contentType: "image/png",
+          filename: "photo.png",
+          size: 200
+        }
+      ]
+    };
+    expect(getBodyPartHeaders(mail, "2")).toBe(
+      'Content-Type: image/png\r\n' +
+        'Content-Transfer-Encoding: base64\r\n' +
+        'Content-Disposition: attachment; filename="photo.png"'
+    );
+  });
+
+  it("returns null for out-of-range attachment index", () => {
+    const mail: Partial<MailType> = {
+      text: "Body",
+      attachments: [
+        {
+          content: { data: "att-1" },
+          contentType: "text/plain",
+          filename: "file.txt",
+          size: 10
+        }
+      ]
+    };
+    expect(getBodyPartHeaders(mail, "3")).toBeNull();
   });
 });

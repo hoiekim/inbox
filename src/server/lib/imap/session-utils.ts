@@ -41,7 +41,9 @@ export const getBodySectionKey = (section: BodySection): string => {
     case "HEADER":
       return "BODY[HEADER]";
     case "MIME_PART":
-      return `BODY[${section.partNumber}]`;
+      return `BODY[${section.partNumber}${
+        section.subSection ? "." + section.subSection : ""
+      }]`;
     case "HEADER_FIELDS": {
       const hfs = section as HeaderFieldsSection;
       const fieldList = hfs.fields.join(" ");
@@ -239,6 +241,83 @@ export const getBodyPart = (
     const att = mail.attachments[attachmentIndex];
     const data = getAttachment(att.content.data);
     return data ? data.toString("base64") : null;
+  }
+
+  return null;
+};
+
+/**
+ * MIME header block for a specific body part (RFC 3501 §6.4.5 `BODY[<part>.MIME]`
+ * / `BODY[<part>.HEADER]`). Returns the part's `Content-Type` +
+ * `Content-Transfer-Encoding` (+ `Content-Disposition` for attachments) fields
+ * with no trailing CRLF — the caller appends the delimiting blank line. Mirrors
+ * `getBodyPart`'s part-numbering exactly so `BODY[1.MIME]` names the same part
+ * as `BODY[1]`.
+ */
+export const getBodyPartHeaders = (
+  mail: Partial<MailType>,
+  partNum: string
+): string | null => {
+  const parts = partNum.split(".");
+  const mainPart = parseInt(parts[0], 10);
+
+  const hasText = mail.text && mail.text.trim().length > 0;
+  const hasHtml = mail.html && mail.html.trim().length > 0;
+  const hasAttachments = mail.attachments && mail.attachments.length > 0;
+
+  if (!hasAttachments && !hasText && !hasHtml) {
+    return null;
+  }
+
+  const textHeaders =
+    "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64";
+  const htmlHeaders =
+    "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64";
+
+  if (!hasAttachments) {
+    if (hasText && hasHtml) {
+      // multipart/alternative
+      if (mainPart === 1) return textHeaders;
+      if (mainPart === 2) return htmlHeaders;
+    } else if (hasText && mainPart === 1) {
+      return textHeaders;
+    } else if (hasHtml && mainPart === 1) {
+      return htmlHeaders;
+    }
+    return null;
+  }
+
+  // multipart/mixed with attachments
+  let partIndex = 1;
+
+  // First part is the body content (possibly a nested multipart/alternative)
+  if (mainPart === partIndex) {
+    if (hasText && hasHtml) {
+      const subPart = parts[1] ? parseInt(parts[1], 10) : 1;
+      if (subPart === 1) return textHeaders;
+      if (subPart === 2) return htmlHeaders;
+    } else if (hasText) {
+      return textHeaders;
+    } else if (hasHtml) {
+      return htmlHeaders;
+    }
+  }
+
+  partIndex++;
+
+  // Subsequent parts are attachments
+  const attachmentIndex = mainPart - partIndex;
+  if (
+    mail.attachments &&
+    attachmentIndex >= 0 &&
+    attachmentIndex < mail.attachments.length
+  ) {
+    const att = mail.attachments[attachmentIndex];
+    return (
+      `Content-Type: ${att.contentType}\r\n` +
+      `Content-Transfer-Encoding: base64\r\n` +
+      `Content-Disposition: attachment; filename="${att.filename}"`
+    );
   }
 
   return null;
