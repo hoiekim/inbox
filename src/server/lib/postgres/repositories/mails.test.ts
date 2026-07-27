@@ -226,10 +226,13 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    const mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    const mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(/export const setMailFlags[\s\S]*?\n};/);
     if (!fnMatch) throw new Error("setMailFlags not found in mails.ts");
     fnSource = fnMatch[0];
@@ -265,10 +268,13 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(
       /export const expungeDeletedMails[\s\S]*?\n};/
     );
@@ -319,10 +325,13 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(
       /export const getAccountStats[\s\S]*?\n};/
     );
@@ -424,10 +433,13 @@ describe("draft-exclusion invariant — user-facing read paths hide drafts (#611
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
   });
 
   const bodyOf = (name: string): string => {
@@ -522,10 +534,13 @@ describe("buildHeaderAddressCondition — envelope_to in received-branch address
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(
       /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
@@ -569,10 +584,13 @@ describe("getMailHeaders / getMailHeadersDelta — `?since=` delta path (#457)",
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
   });
 
   it("getMailHeaders filters on `updated >` when options.since is set", () => {
@@ -830,10 +848,13 @@ describe("searchMailsByUid — no result cap (#553)", () => {
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    const mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    const mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(
       /export const searchMailsByUid[\s\S]*?\n};/
     );
@@ -897,10 +918,13 @@ describe("getMailHeaders — saved query spans both folders (#568)", () => {
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    const mailsSource = await fs.readFile(
-      path.join(import.meta.dir, "mails.ts"),
-      "utf8"
-    );
+    const mailsSource = (
+      await Promise.all(
+        (await fs.readdir(path.join(import.meta.dir, "mails"))).sort()
+          .filter((f) => f.endsWith(".ts"))
+          .map((f) => fs.readFile(path.join(import.meta.dir, "mails", f), "utf8"))
+      )
+    ).join("\n");
     const fnMatch = mailsSource.match(
       /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
