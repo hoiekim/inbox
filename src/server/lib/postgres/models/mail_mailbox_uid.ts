@@ -22,21 +22,16 @@ export interface MailMailboxUidJSON {
 //
 // A single mail can appear in multiple mailbox views (to/cc/bcc/envelope_to
 // OR-containment across account inboxes; plus INBOX, Sent Messages, and any
-// future custom mailbox), so a single scalar `uid_account` on the mail row
-// assigned at receive time — scoped to `envelope_to` only — collided within
-// a single mailbox view when a mail surfaced in a folder that wasn't its
-// envelope_to account (issue #702 bug 1). Splitting the assignment out to
-// its own per-(user, mailbox, mail) row lets a mail carry a distinct UID
-// in every mailbox it appears in, and lets those UIDs be allocated lazily
-// on first FETCH of the folder instead of eagerly on receive.
+// user-defined mailbox). Per-view UID assignment via this table lets a mail
+// carry a distinct UID in every mailbox it appears in, and lets those UIDs
+// be allocated lazily on first FETCH of the folder rather than eagerly on
+// receive.
 //
-// `mailbox` holds the full IMAP path — `INBOX`, `Sent Messages`,
-// `INBOX/accounts/<name>`, and any user-defined path in the future — so
-// extending to custom mailboxes needs no schema change.
+// `mailbox` holds the full IMAP path so extending to user-defined mailboxes
+// needs no schema change.
 //
-// The counter (mail_uid_counters, kind + scope + sent) stays as the
-// authoritative UID source; this table records the per-mail assignment
-// consumed from it.
+// UID reservation goes through `mail_uid_counters` (the authoritative
+// counter); this table records the per-mail assignment consumed from it.
 const mailMailboxUidSchema = {
   [USER_ID]: "UUID NOT NULL",
   [MAILBOX]: "TEXT NOT NULL",
@@ -92,12 +87,14 @@ export const mailMailboxUidTable = createTable({
     // ON CONFLICT DO NOTHING — a losing racer that reserved a duplicate UID
     // falls through and re-reads.
     `UNIQUE (${USER_ID}, ${MAILBOX}, ${UID})`,
-    // Cascade delete when the mail row is expunged so the mapping doesn't
-    // leak. mails PK is `mail_id`; the (user_id, mail_id) pair is
-    // consistent by transitive relation through the mail row.
+    // Cascade delete when the mail row is deleted so the mapping doesn't
+    // leak. Postgres does not auto-index the referencing column, so the
+    // `indexes` entry below stands the FK check up as a lookup instead of
+    // a seq scan; the same index also serves the "given a mail_id, list
+    // the mailbox views it's mapped in" reverse lookup (COPY/MOVE dest).
     `FOREIGN KEY (${MAIL_ID}) REFERENCES ${MAILS}(${MAIL_ID}) ON DELETE CASCADE`,
   ],
-  indexes: [],
+  indexes: [{ column: MAIL_ID }],
   ModelClass: MailMailboxUidModel,
   supportsSoftDelete: false,
 });
