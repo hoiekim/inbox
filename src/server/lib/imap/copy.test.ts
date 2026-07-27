@@ -304,6 +304,28 @@ describe("COPY happy path (#520)", () => {
       `A1 OK [COPYUID ${STORED_UIDVALIDITY} 5,7 101,103] COPY completed\r\n`,
     ]);
   });
+
+  it("copies to the unified Sent folder with domain-space dest UIDs (#702)", async () => {
+    // The unified "Sent Messages" folder is domain-scoped (resolveBox →
+    // accountName=null → uid_domain). COPYUID's dest-set must therefore report
+    // the DOMAIN counter (100, 102), not the account counter (101, 103) — the
+    // isDomainScoped fix. Source is INBOX (also domain-scoped) → source-set is
+    // the source domain UIDs 5,7.
+    const mails = [
+      sourceMail({ domain: 5, account: 50 }),
+      sourceMail({ domain: 7, account: 70 }),
+    ];
+    const { store, stored } = makeCopyStore(["Sent Messages"], mails);
+    const lines = await runCopy(
+      copyReq("Sent Messages", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+    expect(stored.length).toBe(2);
+    expect(lines).toEqual([
+      `A1 OK [COPYUID ${STORED_UIDVALIDITY} 5,7 100,102] COPY completed\r\n`,
+    ]);
+  });
 });
 
 describe("COPY COPYUID positional pairing — out-of-order set (#624, RFC 4315 §3)", () => {
