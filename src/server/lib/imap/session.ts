@@ -15,7 +15,11 @@ import {
   AppendRequest,
   StatusItem,
 } from "./types";
-import { idleManager } from "./idle-manager";
+import {
+  idleManager,
+  IDLE_SOCKET_TIMEOUT_MS,
+  SOCKET_TIMEOUT_MS,
+} from "./idle-manager";
 import { getCapabilities } from "./capabilities";
 import { ImapRequestHandler } from "./handler";
 
@@ -482,6 +486,11 @@ export class ImapSession {
     this.isIdling = true;
     this.idleTag = tag;
 
+    // A client in IDLE may send no traffic for the whole window; raise the
+    // raw-socket inactivity timeout past the idle-manager's force-terminate so
+    // the socket doesn't tear the connection down mid-IDLE. Reset on endIdle.
+    this.socket.setTimeout(IDLE_SOCKET_TIMEOUT_MS);
+
     const user = this.store.getUser();
     idleManager.addIdleSession(
       this.sessionId,
@@ -504,6 +513,8 @@ export class ImapSession {
     const tag = this.idleTag;
     this.idleTag = null;
     idleManager.removeIdleSession(this.sessionId);
+    // Back to normal command mode — restore the short inactivity timeout.
+    this.socket.setTimeout(SOCKET_TIMEOUT_MS);
     const suffix = reason ? ` (${reason})` : "";
     this.write(`${tag} OK IDLE terminated${suffix}\r\n`);
   };

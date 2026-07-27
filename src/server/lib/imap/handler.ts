@@ -6,6 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
+import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
 export class ImapRequestHandler {
@@ -203,7 +204,7 @@ export class ImapRequestHandler {
     });
 
     // Set socket timeout to prevent hanging connections
-    socket.setTimeout(300000); // 5 minutes
+    socket.setTimeout(SOCKET_TIMEOUT_MS);
     socket.on("timeout", () => {
       logger.info("IMAP socket timeout", { component: "imap" });
       session.write("* BYE Timeout\r\n");
