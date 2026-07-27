@@ -12,7 +12,7 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount, isInbox, isSentBox } from "./util";
+import { boxToAccount, isDomainScoped, isInbox, isSentBox } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -158,12 +158,12 @@ async function _processFetchMessages(
   seqState: SequenceState,
   write: (data: string) => boolean | undefined
 ): Promise<void> {
-  const isDomainInbox = isInbox(selectedMailbox);
+  const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
   const isUidFetch =
     fetchRequest.sequenceSet.type === "uid" || isUidCommand;
 
   for (const [id, mail] of Array.from(messages.entries())) {
-    const uid = isDomainInbox ? mail.uid!.domain : mail.uid!.account;
+    const uid = sourceIsDomainScoped ? mail.uid!.domain : mail.uid!.account;
     const seqNum = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
 
     if (seqNum === undefined) {
@@ -501,13 +501,18 @@ export async function copyMessageTyped(
     // synthetic address that drives the destination-mailbox query
     // (e.g. "Archive@<domain>").
     const destAccount = boxToAccount(user.username, destMailbox);
+    // `destIsInbox` drives address routing below (INBOX has no address
+    // filter); `destIsDomainScoped` drives the destination UID space for the
+    // COPYUID response (INBOX and the unified Sent folder both use uid.domain).
     const destIsInbox = isInbox(destMailbox);
+    const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
 
-    // Source-side UID extraction for the COPYUID response.
-    const sourceIsInbox = isInbox(selectedMailbox);
+    // Source-side UID extraction for the COPYUID response — domain-scoped for
+    // INBOX and the unified Sent folder (both keyed on uid.domain).
+    const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
-      sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+      sourceIsDomainScoped ? mail.uid!.domain : mail.uid!.account;
 
     // RFC 4315 §3: the COPYUID source-set and dest-set must correspond
     // positionally (n-th source UID ↔ n-th dest UID). The two sets are
@@ -641,7 +646,7 @@ export async function copyMessageTyped(
       }
 
       sourceUids.push(srcUidOf(sourceMail));
-      destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
+      destUids.push(destIsDomainScoped ? newMail.uid.domain : newMail.uid.account);
     }
 
     // RFC 4315 §2: untagged or tagged OK with [COPYUID uidvalidity
@@ -785,11 +790,16 @@ export async function moveMessageTyped(
 
     const user = store.getUser();
     const destAccount = boxToAccount(user.username, destMailbox);
+    // `*IsInbox` drives address routing below (INBOX has no address filter);
+    // `*IsDomainScoped` drives the UID space (INBOX and the unified Sent folder
+    // both use uid.domain).
     const destIsInbox = isInbox(destMailbox);
+    const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
     const sourceIsInbox = isInbox(selectedMailbox);
+    const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
-      sourceIsInbox ? mail.uid!.domain : mail.uid!.account;
+      sourceIsDomainScoped ? mail.uid!.domain : mail.uid!.account;
 
     // RFC 4315 §3 (via RFC 6851 §4.3): keep the COPYUID source/dest sets
     // positionally aligned for out-of-order sequence-sets — assign dest
@@ -901,7 +911,7 @@ export async function moveMessageTyped(
       }
 
       sourceUids.push(srcUidOf(sourceMail));
-      destUids.push(destIsInbox ? newMail.uid.domain : newMail.uid.account);
+      destUids.push(destIsDomainScoped ? newMail.uid.domain : newMail.uid.account);
     }
 
     // === EXPUNGE phase ===
@@ -1020,7 +1030,7 @@ export async function appendMessage(
 
     const result = await store.storeMail(mail);
 
-    const uid = isInbox(targetMailbox) ? mail.uid.domain : mail.uid.account;
+    const uid = isDomainScoped(targetMailbox) ? mail.uid.domain : mail.uid.account;
 
     if (result) {
       if (selectedMailbox === targetMailbox) {
