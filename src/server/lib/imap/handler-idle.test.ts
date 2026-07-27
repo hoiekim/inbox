@@ -86,7 +86,7 @@ interface TestSession {
   store: unknown;
   startIdle: (tag: string) => Promise<unknown>;
   isInIdleMode: () => boolean;
-  endIdle: () => void;
+  endIdle: (reason?: string) => void;
 }
 
 async function makeIdlingSession() {
@@ -174,5 +174,17 @@ describe("IMAP IDLE socket inactivity timeout (#702)", () => {
     socket.emit("data", Buffer.from("DONE\r\n"));
     await flush();
     expect(socket.timeouts.at(-1)).toBe(SOCKET_TIMEOUT_MS);
+  });
+
+  it("restores the short socket timeout when the idle-manager force-terminates", async () => {
+    // heartbeatTick force-terminates a stale IDLE session via
+    // session.endIdle("timeout") — the same reset path DONE uses. Drive that
+    // call directly to pin that the raised timeout is restored on it too.
+    const { socket, session } = await makeIdlingSession();
+    expect(socket.timeouts.at(-1)).toBe(IDLE_SOCKET_TIMEOUT_MS);
+    session.endIdle("timeout");
+    expect(session.isInIdleMode()).toBe(false);
+    expect(socket.timeouts.at(-1)).toBe(SOCKET_TIMEOUT_MS);
+    expect(socket.writes.join("")).toContain("a3 OK IDLE terminated (timeout)\r\n");
   });
 });
