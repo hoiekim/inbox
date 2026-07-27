@@ -18,7 +18,11 @@ import { EventEmitter } from "events";
 // Importing push first forces the graph to initialize in production order so the
 // singleton is constructed before we spy on it. (Same guard as idle-manager.test.ts.)
 import "../push";
-import { idleManager } from "./idle-manager";
+import {
+  idleManager,
+  IDLE_SOCKET_TIMEOUT_MS,
+  SOCKET_TIMEOUT_MS,
+} from "./idle-manager";
 
 // session.ts registers/unregisters IDLE sessions on the real `idleManager`
 // singleton. Spy on just those two methods (restored in afterAll) rather than
@@ -50,21 +54,25 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 15));
 function makeMockSocket() {
   const socket = new EventEmitter() as EventEmitter & {
     writes: string[];
+    timeouts: number[];
     writable: boolean;
     destroyed: boolean;
     write: (data: string) => boolean;
-    setTimeout: () => void;
+    setTimeout: (ms: number) => void;
     destroy: () => void;
     end: () => void;
   };
   socket.writes = [];
+  socket.timeouts = [];
   socket.writable = true;
   socket.destroyed = false;
   socket.write = (data: string) => {
     socket.writes.push(data);
     return true;
   };
-  socket.setTimeout = () => {};
+  socket.setTimeout = (ms: number) => {
+    socket.timeouts.push(ms);
+  };
   socket.destroy = () => {
     socket.destroyed = true;
   };
@@ -144,5 +152,27 @@ describe("IMAP IDLE DONE handling (#546)", () => {
     await flush();
     expect(session.isInIdleMode()).toBe(true);
     expect(socket.writes.join("")).not.toContain("a5 OK NOOP completed");
+  });
+});
+
+describe("IMAP IDLE socket inactivity timeout (#702)", () => {
+  beforeEach(() => {
+    mockAddIdleSession.mockClear();
+    mockRemoveIdleSession.mockClear();
+  });
+
+  it("raises the socket timeout past the idle-manager force-terminate on IDLE", async () => {
+    const { socket } = await makeIdlingSession();
+    // Last setTimeout call reflects the current policy: the extended IDLE
+    // window (> IDLE_TIMEOUT_MS so the raw socket never preempts the manager).
+    expect(socket.timeouts.at(-1)).toBe(IDLE_SOCKET_TIMEOUT_MS);
+    expect(IDLE_SOCKET_TIMEOUT_MS).toBeGreaterThan(SOCKET_TIMEOUT_MS);
+  });
+
+  it("restores the short socket timeout when IDLE ends via DONE", async () => {
+    const { socket } = await makeIdlingSession();
+    socket.emit("data", Buffer.from("DONE\r\n"));
+    await flush();
+    expect(socket.timeouts.at(-1)).toBe(SOCKET_TIMEOUT_MS);
   });
 });

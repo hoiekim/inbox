@@ -19,6 +19,17 @@ interface IdleSession {
 export const IDLE_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 export const IDLE_TIMEOUT_MS = 25 * 60 * 1000;
 
+// Raw-socket inactivity timeouts (net.Socket.setTimeout). The default guards
+// against half-open/hung connections. During IMAP IDLE the client may
+// legitimately send nothing for the whole IDLE window (RFC 2177), so the socket
+// timeout is raised well past the idle-manager's own force-terminate
+// (IDLE_TIMEOUT_MS) — otherwise the raw socket tears the connection down
+// mid-IDLE. Prod saw constant `IMAP socket timeout` churn because the 5-minute
+// default equalled the keepalive interval and raced it. Reset to the default on
+// DONE / IDLE end. See #702.
+export const SOCKET_TIMEOUT_MS = 5 * 60 * 1000;
+export const IDLE_SOCKET_TIMEOUT_MS = 35 * 60 * 1000;
+
 export class IdleManager {
   private idleSessions: Map<string, IdleSession> = new Map();
   private heartbeatInterval: NodeJS.Timeout | null = null;
