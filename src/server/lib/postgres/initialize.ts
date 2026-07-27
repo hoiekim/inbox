@@ -14,6 +14,7 @@ import {
   spamAllowlistTable,
   spamTrainingTable,
   mailUidCountersTable,
+  mailMailboxUidTable,
   mailgunEventsTable,
 } from "./models";
 
@@ -29,6 +30,8 @@ const tables: Table<unknown, Schema>[] = [
   spamAllowlistTable,
   spamTrainingTable,
   mailUidCountersTable,
+  // Depends on mails (FK to mails.mail_id ON DELETE CASCADE).
+  mailMailboxUidTable,
   mailgunEventsTable,
 ];
 
