@@ -121,13 +121,12 @@ export class ImapRequestHandler {
               mailbox: session.selectedMailbox
             });
 
-            // Check throttling before processing
-            if (session.isThrottled()) {
-              session.write(
-                "* NO [TEMPORARY UNAVAILABLE] Server is busy. Please try again later.\r\n"
-              );
-              continue;
-            }
+            // Pace pipelined bursts. RFC 3501 §7 requires a tagged
+            // completion for every command, so over-limit commands are
+            // delayed, never skipped — clients pipeline heavily during
+            // folder sync (iOS Mail sends STATUS for every mailbox in one
+            // burst after LIST).
+            await session.waitForCommandSlot();
 
             // Detect APPEND command with a literal size indicator {N} or {N+}
             // e.g. "a001 APPEND INBOX (\Seen) {512}"
