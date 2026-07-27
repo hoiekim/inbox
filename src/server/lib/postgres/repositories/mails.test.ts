@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 describe("STORE operation types", () => {
   /**
    * Helper to simulate buildFlagSetClause behavior for testing.
-   * This mirrors the logic in mails.ts
+   * This mirrors the logic in the mails/ repository
    */
   function simulateFlagUpdate(
     operation: "FLAGS" | "+FLAGS" | "-FLAGS",
@@ -234,7 +234,7 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
       )
     ).join("\n");
     const fnMatch = mailsSource.match(/export const setMailFlags[\s\S]*?\n};/);
-    if (!fnMatch) throw new Error("setMailFlags not found in mails.ts");
+    if (!fnMatch) throw new Error("setMailFlags not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
@@ -261,7 +261,7 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
   // mailsTable.updateWhere with `updated: new Date()` in the data bag so the
   // framework's own auto-`updated` is not bypassed. Source-text scanning is
   // robust against module-mock interactions in the full suite — the
-  // alternative (mock pool.query) fails when other tests load mails.ts first.
+  // alternative (mock pool.query) fails when other tests load the mails repository first.
   let mailsSource: string;
   let fnSource: string;
 
@@ -278,7 +278,7 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456)
     const fnMatch = mailsSource.match(
       /export const expungeDeletedMails[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("expungeDeletedMails not found in mails.ts");
+    if (!fnMatch) throw new Error("expungeDeletedMails not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
@@ -335,7 +335,7 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
     const fnMatch = mailsSource.match(
       /export const getAccountStats[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("getAccountStats not found in mails.ts");
+    if (!fnMatch) throw new Error("getAccountStats not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
@@ -379,7 +379,7 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
     const fnMatch = mailsSource.match(
       /export const searchAccountStats[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("searchAccountStats not found in mails.ts");
+    if (!fnMatch) throw new Error("searchAccountStats not found in mails/*.ts");
     const src = fnMatch[0];
     expect(src).toContain("RECEIVED_ADDRESS_EXPANSION");
     expect(src).toContain("RECEIVED_ADDRESS_NOT_NULL");
@@ -445,7 +445,7 @@ describe("draft-exclusion invariant — user-facing read paths hide drafts (#611
   const bodyOf = (name: string): string => {
     const re = new RegExp(`export const ${name}[\\s\\S]*?\\n};`);
     const m = mailsSource.match(re);
-    if (!m) throw new Error(`${name} not found in mails.ts`);
+    if (!m) throw new Error(`${name} not found in mails/*.ts`);
     return m[0];
   };
 
@@ -544,7 +544,7 @@ describe("buildHeaderAddressCondition — envelope_to in received-branch address
     const fnMatch = mailsSource.match(
       /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails.ts");
+    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
@@ -858,7 +858,7 @@ describe("searchMailsByUid — no result cap (#553)", () => {
     const fnMatch = mailsSource.match(
       /export const searchMailsByUid[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("searchMailsByUid not found in mails.ts");
+    if (!fnMatch) throw new Error("searchMailsByUid not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
@@ -928,7 +928,7 @@ describe("getMailHeaders — saved query spans both folders (#568)", () => {
     const fnMatch = mailsSource.match(
       /export const buildHeaderAddressCondition[\s\S]*?\n};/
     );
-    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails.ts");
+    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found in mails/*.ts");
     fnSource = fnMatch[0];
   });
 
