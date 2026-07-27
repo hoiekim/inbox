@@ -585,7 +585,7 @@ export async function copyMessageTyped(
       // Routing: a mail surfaces in the destination's mailbox view via
       // `addressCondition`'s OR of `to_address` + `cc_address` +
       // `bcc_address` + `envelope_to` JSONB containment (see
-      // `repositories/mails.ts`). For per-account / user-created
+      // `repositories/mails/http.ts`). For per-account / user-created
       // destinations the copy must address ALL of these to the
       // destination account so it surfaces in the destination AND does
       // not stay surfaced in the source (the source's envelope_to / cc
