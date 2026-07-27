@@ -136,14 +136,29 @@ describe("simplifyCriterion — NOT/OR operand normalisation (regression for #55
     });
   });
 
-  it("drops an OR whose operand cannot be expressed as a single value (UID)", () => {
+  it("normalises a multi-element UID set into one UID_SET carrying every range (#659)", () => {
+    expect(
+      simplifyCriterion({
+        type: "UID",
+        sequenceSet: { ranges: [{ start: 1 }, { start: 3, end: 5 }] },
+      } as never)
+    ).toEqual({ type: "UID_SET", value: [{ start: 1 }, { start: 3, end: 5 }] });
+  });
+
+  it("normalises a nested UID operand of an OR into a UID_SET (#659)", () => {
     expect(
       simplifyCriterion({
         type: "OR",
         left: { type: "FROM", value: "alice" },
-        right: { type: "UID", sequenceSet: { ranges: [{ start: 1 }] } },
+        right: { type: "UID", sequenceSet: { ranges: [{ start: 1 }, { start: 3 }] } },
       } as never)
-    ).toBeNull();
+    ).toEqual({
+      type: "OR",
+      value: {
+        left: { type: "FROM", value: "alice" },
+        right: { type: "UID_SET", value: [{ start: 1 }, { start: 3 }] },
+      },
+    });
   });
 
   it("normalises HEADER's field/value into { field, text }", () => {

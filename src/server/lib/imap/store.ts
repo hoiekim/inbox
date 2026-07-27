@@ -47,9 +47,10 @@ type SimplifiedCriterion = { type: string; value?: unknown };
  * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
  * otherwise the SQL builder would read the wrong field off the raw parser shape
  * (e.g. `.date`/`.field` instead of `.value`) and silently mis-handle the nested
- * criterion. Returns null when the criterion imposes no constraint or can't be
- * expressed as a single flat value (UID, which expands to multiple entries, and is
- * handled by the caller). See #551.
+ * criterion. Returns null when the criterion imposes no constraint. A UID set
+ * normalises to one `UID_SET` entry carrying all its ranges, so the SQL builder
+ * ORs the ranges among themselves (a message is in the set if it falls in ANY
+ * range) — nested UID keys under NOT/OR resolve the same way. See #551, #659.
  */
 export const simplifyCriterion = (
   criterion: SearchCriterion
@@ -131,9 +132,12 @@ export const simplifyCriterion = (
       return null;
     }
 
-    // UID expands to multiple ranges; cannot collapse to a single value here.
-    case "UID":
-      return null;
+    // UID set: carry every range in one entry so the SQL builder ORs them —
+    // set membership means a message matches if it falls in ANY range (#659).
+    case "UID": {
+      const uidCriterion = criterion as UidCriterion;
+      return { type: "UID_SET", value: uidCriterion.sequenceSet.ranges };
+    }
 
     default:
       logger.warn("Unsupported search criterion", { component: "imap.store", type });
@@ -489,29 +493,12 @@ export class Store {
     try {
       const { accountName, isSent } = this.resolveBox(box);
 
-      // Convert criteria to a simpler flat format for searchMailsByUid.
-      // UID expands to one entry per range; everything else (including nested
-      // NOT/OR operands) normalises via simplifyCriterion.
+      // Convert criteria to a simpler flat format for searchMailsByUid. Every
+      // criterion — UID sets (one UID_SET entry per set), flags, text, dates,
+      // and nested NOT/OR operands — normalises through simplifyCriterion.
       const simplifiedCriteria: SimplifiedCriterion[] = [];
 
       for (const criterion of criteria) {
-        const type = criterion.type.toUpperCase();
-
-        if (type === "UID") {
-          const uidCriterion = criterion as UidCriterion;
-          for (const range of uidCriterion.sequenceSet.ranges) {
-            if (range.end === undefined) {
-              simplifiedCriteria.push({ type: "UID_EXACT", value: range.start });
-            } else {
-              simplifiedCriteria.push({
-                type: "UID_RANGE",
-                value: { start: range.start, end: range.end },
-              });
-            }
-          }
-          continue;
-        }
-
         const simplified = simplifyCriterion(criterion);
         if (simplified) simplifiedCriteria.push(simplified);
       }
