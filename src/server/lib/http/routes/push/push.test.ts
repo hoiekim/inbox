@@ -34,7 +34,6 @@ mock.module("server", () => ({
   markSaved: mock(async () => {}),
   addressToUsername: mock((addr: string) => addr.split("@")[0]),
   searchMail: mock(async () => []),
-  getSpamHeaders: mock(async () => []),
   getDomain: mock(() => "example.com"),
   getAllowlistForUser: mock(async () => []),
   addAllowlistEntry: mock(async () => null),
