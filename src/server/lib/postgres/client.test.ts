@@ -96,3 +96,21 @@ describe("lazy pool Proxy", () => {
     expect(ctorCalls.mock.calls.length).toBe(before + 1);
   });
 });
+
+describe("pool config", () => {
+  test("passes both a server-side (statement_timeout) and client-side (query_timeout) cap", () => {
+    resetPool();
+    // Force construction so FakePool captures the config we handed to `new Pool()`.
+    void pool.ending;
+    const cfg = (pool as unknown as { config: Record<string, unknown> }).config;
+    // Both caps are required. statement_timeout aborts on the server via
+    // Postgres 57014; query_timeout is node-postgres' backstop for when the
+    // TCP connection is silently wedged and the server never delivers the
+    // abort. A single cap leaves one of those failure modes uncovered —
+    // load-bearing because the #710 single-flight coalesce turns one hung
+    // query into blocked callers waiting on the shared promise, so an
+    // unbounded query pins the map entry for the whole failure window.
+    expect(cfg.statement_timeout).toBe(30_000);
+    expect(cfg.query_timeout).toBe(30_000);
+  });
+});

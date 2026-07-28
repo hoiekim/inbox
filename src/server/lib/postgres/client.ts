@@ -24,6 +24,13 @@ const config: PoolConfig = {
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
+  // Server-side cap: Postgres aborts the query with 57014 after 30s. Guards
+  // against runaway queries pinning a pool client (and, since #710, blocking
+  // every coalesced caller waiting on that client's inflight promise).
+  statement_timeout: 30_000,
+  // Client-side backstop: fires if statement_timeout can't — e.g. the TCP
+  // connection is silently wedged and the server never delivers the abort.
+  query_timeout: 30_000,
   types: {
     getTypeParser(id, format) {
       if (id === types.builtins.NUMERIC) return parseFloat;
