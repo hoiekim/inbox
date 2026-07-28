@@ -220,6 +220,60 @@ const resolveUidCriterionRanges = (
   return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
 };
 
+// Resolve one criterion, recursing into NOT/OR operands — store.ts's
+// simplifyCriterion recurses the same way, so a UID/SEQ set nested under
+// NOT/OR (e.g. `UID SEARCH NOT UID *`, `UID SEARCH OR UID 1000:* SEEN`) must
+// be resolved here too, or its `*` sentinel reaches buildCriterionClause
+// unresolved and overflows the int4 uid column exactly like the top-level
+// case (#678).
+const resolveOneSearchKey = (
+  criterion: SearchCriterion,
+  isUidCommand: boolean,
+  seqState: SequenceState
+): SearchCriterion => {
+  if (criterion.type === "NOT") {
+    const notCriterion = criterion as { type: "NOT"; criterion: SearchCriterion };
+    return {
+      type: "NOT",
+      criterion: resolveOneSearchKey(notCriterion.criterion, isUidCommand, seqState),
+    };
+  }
+  if (criterion.type === "OR") {
+    const orCriterion = criterion as {
+      type: "OR";
+      left: SearchCriterion;
+      right: SearchCriterion;
+    };
+    return {
+      type: "OR",
+      left: resolveOneSearchKey(orCriterion.left, isUidCommand, seqState),
+      right: resolveOneSearchKey(orCriterion.right, isUidCommand, seqState),
+    };
+  }
+  // Explicit `UID <set>` keyword — already UID-axis, but `*` still needs
+  // resolving before it reaches the SQL layer and overflows a Postgres
+  // `integer` bind parameter (#678).
+  if (criterion.type === "UID") {
+    return resolveUidCriterionRanges(criterion as UidCriterion, seqState);
+  }
+  if (criterion.type !== "SEQ") return criterion;
+  if (isUidCommand) {
+    return resolveUidCriterionRanges(
+      { type: "UID", sequenceSet: criterion.sequenceSet } as UidCriterion,
+      seqState
+    );
+  }
+  const uidRanges = convertSequenceSet(criterion.sequenceSet)
+    .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
+    .filter((r): r is { uidStart: number; uidEnd: number } => r !== undefined)
+    .map(({ uidStart, uidEnd }) => ({ start: uidStart, end: uidEnd }));
+  // A set whose sequence numbers all lie past the end of the mailbox matches
+  // no messages. It must return the empty set — not vanish from the AND and
+  // match everything — so pin it to an impossible UID range (UIDs are ≥ 1).
+  if (uidRanges.length === 0) uidRanges.push({ start: -1, end: -1 });
+  return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
+};
+
 // A bare message sequence-set is a top-level SEARCH key (RFC 3501 §6.4.4),
 // parsed as a SEQ criterion. In a plain SEARCH it names message sequence
 // numbers, so resolve it against the mailbox's seq→uid map before querying; in
@@ -232,30 +286,9 @@ export function resolveSeqSearchKeys(
   isUidCommand: boolean,
   seqState: SequenceState
 ): SearchCriterion[] {
-  return criteria.map((criterion) => {
-    // Explicit `UID <set>` keyword — already UID-axis, but `*` still needs
-    // resolving before it reaches the SQL layer and overflows a Postgres
-    // `integer` bind parameter (#678).
-    if (criterion.type === "UID") {
-      return resolveUidCriterionRanges(criterion as UidCriterion, seqState);
-    }
-    if (criterion.type !== "SEQ") return criterion;
-    if (isUidCommand) {
-      return resolveUidCriterionRanges(
-        { type: "UID", sequenceSet: criterion.sequenceSet } as UidCriterion,
-        seqState
-      );
-    }
-    const uidRanges = convertSequenceSet(criterion.sequenceSet)
-      .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
-      .filter((r): r is { uidStart: number; uidEnd: number } => r !== undefined)
-      .map(({ uidStart, uidEnd }) => ({ start: uidStart, end: uidEnd }));
-    // A set whose sequence numbers all lie past the end of the mailbox matches
-    // no messages. It must return the empty set — not vanish from the AND and
-    // match everything — so pin it to an impossible UID range (UIDs are ≥ 1).
-    if (uidRanges.length === 0) uidRanges.push({ start: -1, end: -1 });
-    return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
-  });
+  return criteria.map((criterion) =>
+    resolveOneSearchKey(criterion, isUidCommand, seqState)
+  );
 }
 
 export async function searchTyped(

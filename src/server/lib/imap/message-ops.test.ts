@@ -556,6 +556,54 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
     );
     expect(out.map((c) => c.type)).toEqual(["SEEN", "UID"]);
   });
+
+  // reviewoie finding on PR #708: store.simplifyCriterion recurses into
+  // NOT/OR operands, so a UID criterion nested under either must have its
+  // `*` sentinel resolved here too — otherwise `UID SEARCH NOT UID *` /
+  // `UID SEARCH OR UID 1000:* SEEN` still overflow the int4 uid column.
+  it("resolves a bare `*` nested under NOT (#678)", () => {
+    const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
+      {
+        type: "NOT",
+        criterion: {
+          type: "UID",
+          sequenceSet: { type: "sequence", ranges: [{ start: Number.MAX_SAFE_INTEGER }] },
+        },
+      },
+    ];
+    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual([
+      {
+        type: "NOT",
+        criterion: {
+          type: "UID",
+          sequenceSet: { type: "sequence", ranges: [{ start: 11400, end: 11400 }] },
+        },
+      },
+    ]);
+  });
+
+  it("resolves a bare `*` nested under OR, on both sides (#678)", () => {
+    const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
+      {
+        type: "OR",
+        left: {
+          type: "UID",
+          sequenceSet: { type: "sequence", ranges: [{ start: 1000, end: Number.MAX_SAFE_INTEGER }] },
+        },
+        right: { type: "SEEN" },
+      },
+    ];
+    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual([
+      {
+        type: "OR",
+        left: {
+          type: "UID",
+          sequenceSet: { type: "sequence", ranges: [{ start: 1000, end: 11400 }] },
+        },
+        right: { type: "SEEN" },
+      },
+    ]);
+  });
 });
 
 // #659: a multi-element bare set (`SEARCH 1,3`) resolves to a multi-range UID
