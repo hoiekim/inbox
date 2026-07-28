@@ -67,6 +67,27 @@ export const countMessages = async (
   }
 };
 
+/**
+ * IMAP-facing range read over the `mails` table.
+ *
+ * **Return-value sharing.** Coalesced callers (see below) receive the SAME
+ * `Map` reference AND the same `PartialMailModel` instances. Do not mutate
+ * either — treat the return as read-only. Load-bearing for the memory
+ * property below.
+ *
+ * **Single-flight coalescing.** Concurrent identical calls (same key: user
+ * + account + sent + range + field-set) share one in-flight promise. A
+ * misbehaving IMAP client that pipelines duplicate `UID FETCH <UID> BODY`
+ * requests would otherwise trigger N concurrent SQL loads of the same
+ * multi-MB body, multiplying container RSS by concurrent-inflight-count
+ * (the OOM path). Memory footprint is now
+ * `O(distinct-in-flight-queries)` instead of `O(callers)`.
+ *
+ * Key sorts the field list so different argument-order variants collapse
+ * to the same key — strict-subset field lists intentionally do NOT
+ * coalesce (different SELECT projections → different rows to construct
+ * `PartialMailModel` from).
+ */
 export const getMailsByRange = async (
   user_id: string,
   account: string | null,
@@ -76,16 +97,6 @@ export const getMailsByRange = async (
   useUid: boolean,
   fields: string[] = ["*"]
 ): Promise<Map<string, PartialMailModel>> => {
-  // Single-flight: a client-side retry storm on the same UID (observed as
-  // 208.82.98.54 issuing `UID FETCH 12365 BODY` 7x in ~10 s per socket,
-  // both sockets racing) previously ran N concurrent SQL loads of the same
-  // ~2 MB body, multiplying RSS per message by concurrent-inflight-count
-  // until the container OOM-killed at 256 MiB. The second caller now
-  // awaits the first's promise and every caller shares the same result
-  // Map — memory becomes O(distinct-in-flight-queries) not O(callers).
-  // Key includes the fields list (sorted, so different callers' array
-  // order collapses to the same key) so mismatched shapes don't
-  // erroneously share results.
   const sortedFields = [...fields].sort();
   const inflightKey = JSON.stringify([
     user_id,
