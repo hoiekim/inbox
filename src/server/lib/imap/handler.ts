@@ -42,28 +42,28 @@ export function describeImapCommand(request: ImapRequest): string {
       return summary(`MOVE ${rangesOf(request.data.sequenceSet.ranges)} ${request.data.mailbox}`);
     case "SELECT":
     case "EXAMINE":
-      return `${request.type} ${request.data.mailbox}`;
+      return summary(`${request.type} ${request.data.mailbox}`);
     case "LIST":
     case "LSUB":
-      return `${request.type} "${request.data.reference}" "${request.data.pattern}"`;
+      return summary(`${request.type} "${request.data.reference}" "${request.data.pattern}"`);
     case "STATUS":
-      return `STATUS ${request.data.mailbox} (${request.data.items.join(" ")})`;
+      return summary(`STATUS ${request.data.mailbox} (${request.data.items.join(" ")})`);
     case "APPEND":
-      return `APPEND ${request.data.mailbox} ${request.data.message?.length ?? 0}B`;
+      return summary(`APPEND ${request.data.mailbox} ${request.data.message?.length ?? 0}B`);
     case "CREATE":
     case "DELETE":
     case "RENAME":
     case "SUBSCRIBE":
     case "UNSUBSCRIBE":
     case "GETQUOTAROOT":
-      return `${request.type} ${JSON.stringify(request.data).slice(0, 160)}`;
+      return summary(`${request.type} ${JSON.stringify(request.data).slice(0, 160)}`);
     case "LOGIN":
       // NEVER emit the password.
-      return `LOGIN ${request.data.username}`;
+      return summary(`LOGIN ${request.data.username}`);
     case "AUTHENTICATE":
-      return `AUTHENTICATE ${request.data.mechanism}`;
+      return summary(`AUTHENTICATE ${request.data.mechanism}`);
     case "ENABLE":
-      return `ENABLE ${request.data.capabilities.join(" ")}`;
+      return summary(`ENABLE ${request.data.capabilities.join(" ")}`);
     default:
       return request.type;
   }
@@ -284,23 +284,24 @@ export class ImapRequestHandler {
     }
 
     // Per-command diagnostic: RSS delta + bytes emitted to the client + wall
-    // duration, attributable to a single command's execution. Load-bearing for
-    // OOM triage — a client-driven full-mailbox FETCH is a plausible OOM
-    // trigger, but without per-command stats we can only correlate the crash
-    // window to the /stats sample cadence (~20 s), not to the specific command.
-    // Wraps session.write for the duration of the request so pipelined commands
-    // still get their own byte counts (handleRequest is awaited serially per
-    // socket via the throttler's waitForCommandSlot). Cost per request: two
-    // process.memoryUsage() calls (µs) + one function replace/restore.
+    // duration, so a memory spike can be attributed to a specific command
+    // rather than only to a coarse metrics-poll window. Sampled from
+    // `session.bytesWritten` (session-scoped counter) rather than wrapping
+    // `session.write` — the wrap approach was racy under Node's data-event
+    // concurrency (the handler is an async function but the socket emits
+    // `data` events without awaiting), which could restore an orphan
+    // `originalWrite` from a nested handler and permanently break the wrap
+    // for the rest of the socket's lifetime. The delta is not a mutex —
+    // overlapping commands on the same session over-attribute to whichever
+    // completed first — but no orphan-restore risk.
+    //
+    // RSS is process-wide, not session-scoped: under multi-socket load two
+    // concurrent commands both see the same rssDelta. `remote` in the log
+    // lets triage disambiguate.
     const session = this.session;
-    const originalWrite = session.write;
     const startedAt = performance.now();
     const rssBefore = process.memoryUsage.rss();
-    let responseBytes = 0;
-    session.write = (data: string) => {
-      responseBytes += Buffer.byteLength(data, "utf8");
-      return originalWrite(data);
-    };
+    const bytesBefore = session.bytesWritten;
 
     try {
       switch (request.type) {
@@ -466,17 +467,18 @@ export class ImapRequestHandler {
       logger.error("Error handling IMAP request", { component: "imap", tag, type: request.type }, error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
     } finally {
-      session.write = originalWrite;
       const rssAfter = process.memoryUsage.rss();
+      const socket = session.socket;
       logger.info("IMAP command completed", {
         component: "imap",
         tag,
         cmd: describeImapCommand(request),
         mailbox: session.selectedMailbox,
+        remote: socket ? `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}` : "?",
         rssBeforeMB: Math.round(rssBefore / 1_048_576),
         rssAfterMB: Math.round(rssAfter / 1_048_576),
         rssDeltaMB: Math.round((rssAfter - rssBefore) / 1_048_576),
-        responseBytes,
+        responseBytes: session.bytesWritten - bytesBefore,
         durationMs: Math.round(performance.now() - startedAt),
       });
     }

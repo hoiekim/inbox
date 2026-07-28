@@ -88,8 +88,7 @@ describe("describeImapCommand", () => {
     expect(describeImapCommand(req)).toBe("APPEND Drafts 4096B");
   });
 
-  it("summary is capped so a pathological input can't blow log volume", () => {
-    // SEARCH criteria can be arbitrarily nested; force a huge input.
+  it("summary is capped so a pathological input can't blow log volume — SEARCH", () => {
     const req: ImapRequest = {
       type: "SEARCH",
       data: {
@@ -99,6 +98,27 @@ describe("describeImapCommand", () => {
     const out = describeImapCommand(req);
     expect(out.length).toBeLessThanOrEqual(200);
     expect(out.startsWith("SEARCH")).toBe(true);
+  });
+
+  // The 200-char cap must apply to EVERY branch. Earlier revisions applied
+  // `summary(...)` only to FETCH/STORE/SEARCH/COPY/MOVE, so a long mailbox
+  // path, LOGIN username, LIST pattern, or ENABLE capability list bypassed
+  // the cap silently. This locks in coverage across the branches that can
+  // take user-controlled strings of arbitrary length.
+  it.each([
+    ["LOGIN long username", { type: "LOGIN", data: { username: "u".repeat(10_000), password: "p" } }],
+    ["SELECT long mailbox", { type: "SELECT", data: { mailbox: "m".repeat(10_000) } }],
+    ["EXAMINE long mailbox", { type: "EXAMINE", data: { mailbox: "m".repeat(10_000) } }],
+    ["LIST long pattern", { type: "LIST", data: { reference: "", pattern: "*".repeat(10_000) } }],
+    ["LSUB long pattern", { type: "LSUB", data: { reference: "", pattern: "*".repeat(10_000) } }],
+    ["STATUS long mailbox", { type: "STATUS", data: { mailbox: "m".repeat(10_000), items: ["UIDNEXT"] } }],
+    ["APPEND long mailbox", { type: "APPEND", data: { mailbox: "m".repeat(10_000), message: "" } }],
+    ["CREATE long mailbox", { type: "CREATE", data: { mailbox: "m".repeat(10_000) } }],
+    ["ENABLE long capability list", { type: "ENABLE", data: { capabilities: ["CAP".repeat(5000)] } }],
+    ["AUTHENTICATE long mechanism", { type: "AUTHENTICATE", data: { mechanism: "X".repeat(10_000) } }],
+  ])("caps %s at 200 chars", (_label, req) => {
+    const out = describeImapCommand(req as ImapRequest);
+    expect(out.length).toBeLessThanOrEqual(200);
   });
 
   it("unknown / bare-tag types fall through to the type token (never throws)", () => {
