@@ -561,9 +561,14 @@ export class Store {
   };
 
   /**
-   * Store a new mail message
+   * Store a new mail message. `mailbox` is the destination path
+   * (`COPY dest`, `MOVE dest`, `APPEND target`) — passed through to
+   * `pgSaveMail` for the account-scoped `mail_mailbox_uid` mapping.
+   * Caller passes `undefined` for domain-scoped destinations (INBOX,
+   * unified `Sent Messages`) so the mapping only records account-space
+   * UIDs. Undefined here + `pgSaveMail`'s guard skips the mapping write.
    */
-  storeMail = async (mail: Mail): Promise<boolean> => {
+  storeMail = async (mail: Mail, mailbox?: string): Promise<boolean> => {
     try {
       const input: SaveMailInput = {
         user_id: this.user.id,
@@ -594,6 +599,7 @@ export class Store {
         insight: mail.insight,
         uid_domain: mail.uid?.domain,
         uid_account: mail.uid?.account,
+        mailbox,
       };
 
       const result = await pgSaveMail(input);
