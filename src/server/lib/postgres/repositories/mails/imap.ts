@@ -17,6 +17,7 @@ import {
   DB_NOW,
 } from "../../models";
 import { getNextModseq } from "./counters";
+import { singleFlight } from "./inflight";
 
 export const countMessages = async (
   user_id: string,
@@ -67,6 +68,27 @@ export const countMessages = async (
   }
 };
 
+/**
+ * IMAP-facing range read over the `mails` table.
+ *
+ * **Return-value sharing.** Coalesced callers (see below) receive the SAME
+ * `Map` reference AND the same `PartialMailModel` instances. Do not mutate
+ * either — treat the return as read-only. Load-bearing for the memory
+ * property below.
+ *
+ * **Single-flight coalescing.** Concurrent identical calls (same key: user
+ * + account + sent + range + field-set) share one in-flight promise. A
+ * misbehaving IMAP client that pipelines duplicate `UID FETCH <UID> BODY`
+ * requests would otherwise trigger N concurrent SQL loads of the same
+ * multi-MB body, multiplying container RSS by concurrent-inflight-count
+ * (the OOM path). Memory footprint is now
+ * `O(distinct-in-flight-queries)` instead of `O(callers)`.
+ *
+ * Key sorts the field list so different argument-order variants collapse
+ * to the same key — strict-subset field lists intentionally do NOT
+ * coalesce (different SELECT projections → different rows to construct
+ * `PartialMailModel` from).
+ */
 export const getMailsByRange = async (
   user_id: string,
   account: string | null,
@@ -75,6 +97,30 @@ export const getMailsByRange = async (
   end: number,
   useUid: boolean,
   fields: string[] = ["*"]
+): Promise<Map<string, PartialMailModel>> => {
+  const sortedFields = [...fields].sort();
+  const inflightKey = JSON.stringify([
+    user_id,
+    account,
+    sent,
+    start,
+    end,
+    useUid,
+    sortedFields,
+  ]);
+  return singleFlight(inflightKey, () => getMailsByRangeUncoalesced(
+    user_id, account, sent, start, end, useUid, fields
+  ));
+};
+
+const getMailsByRangeUncoalesced = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean,
+  start: number,
+  end: number,
+  useUid: boolean,
+  fields: string[]
 ): Promise<Map<string, PartialMailModel>> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
