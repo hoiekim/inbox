@@ -16,6 +16,7 @@ import {
   EXPUNGED,
 } from "../../models";
 import { getNextModseq } from "./counters";
+import { singleFlight } from "./inflight";
 
 export const countMessages = async (
   user_id: string,
@@ -74,6 +75,40 @@ export const getMailsByRange = async (
   end: number,
   useUid: boolean,
   fields: string[] = ["*"]
+): Promise<Map<string, PartialMailModel>> => {
+  // Single-flight: a client-side retry storm on the same UID (observed as
+  // 208.82.98.54 issuing `UID FETCH 12365 BODY` 7x in ~10 s per socket,
+  // both sockets racing) previously ran N concurrent SQL loads of the same
+  // ~2 MB body, multiplying RSS per message by concurrent-inflight-count
+  // until the container OOM-killed at 256 MiB. The second caller now
+  // awaits the first's promise and every caller shares the same result
+  // Map — memory becomes O(distinct-in-flight-queries) not O(callers).
+  // Key includes the fields list (sorted, so different callers' array
+  // order collapses to the same key) so mismatched shapes don't
+  // erroneously share results.
+  const sortedFields = [...fields].sort();
+  const inflightKey = JSON.stringify([
+    user_id,
+    account,
+    sent,
+    start,
+    end,
+    useUid,
+    sortedFields,
+  ]);
+  return singleFlight(inflightKey, () => getMailsByRangeUncoalesced(
+    user_id, account, sent, start, end, useUid, fields
+  ));
+};
+
+const getMailsByRangeUncoalesced = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean,
+  start: number,
+  end: number,
+  useUid: boolean,
+  fields: string[]
 ): Promise<Map<string, PartialMailModel>> => {
   try {
     const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
