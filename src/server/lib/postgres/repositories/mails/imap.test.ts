@@ -261,6 +261,65 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
   });
 });
 
+describe("account-scoped reads use the raw mailbox path (#702 PR 2b-2)", () => {
+  // The read cutover joins mail_mailbox_uid on `x.mailbox = $N` where `$N` is
+  // the mailbox path the caller passed in — the SAME string the write side
+  // stored via writeMailboxUid. An earlier revision derived the JOIN target
+  // as `INBOX/accounts/${localPart}` from a synthetic account address, which
+  // broke user-created mailboxes: `Archive` stores its rows with
+  // mail_mailbox_uid.mailbox = "Archive", but the derivation produced
+  // `INBOX/accounts/Archive` → JOIN returned 0 rows → mail invisible.
+  //
+  // Static source check to guard against future re-derivation. The reader
+  // must (a) accept a `mailbox` parameter (nullable for domain-scoped views),
+  // (b) bind that parameter directly onto `x.mailbox = $N`, and
+  // (c) NOT redefine the mailboxPathForAccount helper that used to derive it.
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
+  });
+
+  it("no longer defines the derived-path helper", () => {
+    expect(mailsSource).not.toContain("mailboxPathForAccount");
+  });
+
+  const fns = [
+    "countMessages",
+    "getMailsByRange",
+    "setMailFlags",
+    "searchMailsByUid",
+    "getAllUids",
+    "getFirstUnseenUid",
+    "expungeDeletedMails",
+    "expungeMailsByUid",
+  ];
+
+  it.each(fns)("%s takes `mailbox` (not `account`) as the mapping key", (fn) => {
+    // Extract the function's signature via the export line. Every refactored
+    // reader must name its per-mailbox arg `mailbox` so future edits can't
+    // rename it back to `account` (a legacy shape that implied a synthetic
+    // address input, which is the pattern that caused the user-created bug).
+    const sigMatch = mailsSource.match(
+      new RegExp(`export const ${fn}\\s*=\\s*async\\s*\\(([\\s\\S]*?)\\)`)
+    );
+    expect(sigMatch, `signature not found for ${fn}`).not.toBeNull();
+    expect(sigMatch![1]).toMatch(/\bmailbox\s*:\s*string\s*\|\s*null/);
+    expect(sigMatch![1]).not.toMatch(/\baccount\s*:\s*string\s*\|\s*null/);
+  });
+
+  it("every account-scoped JOIN binds `x.mailbox = $N` with N in scope", () => {
+    // Coarse but effective: each per-mailbox branch must contain the
+    // parameterised mailbox filter — never a derived literal.
+    const branches = mailsSource.match(/x\.\$\{MAILBOX\}\s*=\s*\$\d+/g) ?? [];
+    // 8 refactored sites; getMailsByRange has 2 (useUid + seq) and setMailFlags
+    // has 3 (useUid selectSql + updateSql + seq target subquery). Bound: ≥8.
+    expect(branches.length).toBeGreaterThanOrEqual(8);
+  });
+});
+
 describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
   // Static source check: the expunge write paths must go through
   // mailsTable.updateWhere with `updated: DB_NOW` in the data bag so the

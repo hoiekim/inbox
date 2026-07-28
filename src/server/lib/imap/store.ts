@@ -27,6 +27,7 @@ import {
   accountToBox,
   accountToSentBox,
   boxToAccount,
+  isDomainScoped,
   isInbox,
   isSentBox,
   isAccountsFolder,
@@ -197,6 +198,21 @@ export class Store {
   }
 
   /**
+   * Variant of `resolveBox` for the eight #702 mapping-aware read/write sites
+   * (countMessages/getMailsByRange/setMailFlags/getAllUids/getFirstUnseenUid/
+   * searchMailsByUid/expungeDeletedMails/expungeMailsByUid). `mailboxArg` is
+   * the raw box path — the same string the write side stores in
+   * `mail_mailbox_uid.mailbox` — for account-scoped, sent-account-scoped, AND
+   * user-created mailboxes (`Archive`, etc.). `null` for the two domain-scoped
+   * views (`INBOX`, unified `Sent Messages`), which stay on `mails.uid_domain`.
+   */
+  private resolveMappedBox(box: string): { mailboxArg: string | null; isSent: boolean } {
+    const isSent = isSentBox(box);
+    const mailboxArg = isDomainScoped(box) ? null : box;
+    return { mailboxArg, isSent };
+  }
+
+  /**
    * Build the listable mailbox set; propagate backend errors. `listMailboxes`
    * (below) wraps this in a fallback so the LIST command stays resilient,
    * but the existence gate (`mailboxExists`) needs to distinguish "the user
@@ -310,8 +326,8 @@ export class Store {
     box: string
   ): Promise<{ total: number; unread: number; maxUid: number } | null> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
-      return await countMessages(this.user.id, accountName, isSent);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await countMessages(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error counting messages", { component: "imap.store", box }, error);
       return null;
@@ -324,8 +340,8 @@ export class Store {
    */
   getAllUids = async (box: string): Promise<number[]> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
-      return await pgGetAllUids(this.user.id, accountName, isSent);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await pgGetAllUids(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
       return [];
@@ -338,8 +354,8 @@ export class Store {
    */
   getFirstUnseenUid = async (box: string): Promise<number | null> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
-      return await pgGetFirstUnseenUid(this.user.id, accountName, isSent);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await pgGetFirstUnseenUid(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error getting first unseen UID", { component: "imap.store", box }, error);
       return null;
@@ -371,10 +387,10 @@ export class Store {
     useUid: boolean = false
   ): Promise<Map<string, Partial<Mail>>> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
       const mailModels = await getMailsByRange(
         this.user.id,
-        accountName,
+        mailboxArg,
         isSent,
         start,
         end,
@@ -486,10 +502,10 @@ export class Store {
     operation: StoreOperationType = "FLAGS"
   ): Promise<UpdatedMailFlags[]> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
       return await setMailFlags(
         this.user.id,
-        accountName,
+        mailboxArg,
         isSent,
         start,
         end,
@@ -509,8 +525,8 @@ export class Store {
    */
   expunge = async (box: string): Promise<number[]> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
-      return await expungeDeletedMails(this.user.id, accountName, isSent);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await expungeDeletedMails(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error expunging messages", { component: "imap.store", box }, error);
       throw error;
@@ -527,8 +543,8 @@ export class Store {
    */
   expungeUids = async (box: string, uids: number[]): Promise<number[]> => {
     if (uids.length === 0) return [];
-    const { accountName, isSent } = this.resolveBox(box);
-    return await expungeMailsByUid(this.user.id, accountName, isSent, uids);
+    const { mailboxArg, isSent } = this.resolveMappedBox(box);
+    return await expungeMailsByUid(this.user.id, mailboxArg, isSent, uids);
   };
 
   search = async (
@@ -536,7 +552,7 @@ export class Store {
     criteria: SearchCriterion[]
   ): Promise<number[]> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
 
       // Convert criteria to a simpler flat format for searchMailsByUid. Every
       // criterion — UID sets (one UID_SET entry per set), flags, text, dates,
@@ -550,7 +566,7 @@ export class Store {
 
       return await searchMailsByUid(
         this.user.id,
-        accountName,
+        mailboxArg,
         isSent,
         simplifiedCriteria
       );

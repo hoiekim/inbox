@@ -20,34 +20,25 @@ import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
 
 /**
- * Derive the `mail_mailbox_uid.mailbox` path for an account-scoped view.
- * Local helper (not imported from `imap/util.ts`) to avoid a
- * repositories → imap layer inversion — the repositories layer depends
- * on nothing above it, and the two path shapes here are the exact
- * inverse of `accountToBox` / `accountToSentBox`. Callers pass a full
- * address like `claoie@hoie.kim`; the mapping table stores the local
- * part under the folder root, matching how the write-side dual-write
- * (saveMail / storeMail) records the row.
+ * Callers pass `mailbox` as the raw IMAP box path (e.g. `INBOX/accounts/amazon`,
+ * `Sent Messages/accounts/claoie`, or a user-created box like `Archive`) — the
+ * exact string the write side stores in `mail_mailbox_uid.mailbox`. `null` is
+ * reserved for domain-scoped views (`INBOX`, unified `Sent Messages`), which
+ * stay on `mails.uid_domain` and don't participate in the per-mailbox mapping.
  */
-const mailboxPathForAccount = (account: string, sent: boolean): string => {
-  const localPart = account.split("@")[0];
-  return sent
-    ? `Sent Messages/accounts/${localPart}`
-    : `INBOX/accounts/${localPart}`;
-};
 
 export const countMessages = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean
 ): Promise<{ total: number; unread: number; maxUid: number }> => {
   try {
     let sql: string;
     let values: ParamValue[];
 
-    if (account === null) {
+    if (mailbox === null) {
       // Domain-wide count (INBOX / unified Sent Messages) — still keyed on
-      // uid_domain, unchanged by #702's per-account mapping migration.
+      // uid_domain, unchanged by #702's per-mailbox mapping migration.
       sql = `
         SELECT
           COUNT(*) as total,
@@ -58,11 +49,14 @@ export const countMessages = async (
       `;
       values = [user_id, sent];
     } else {
-      // Account-scoped view — the `mail_mailbox_uid` mapping is now the
+      // Per-mailbox view — the `mail_mailbox_uid` mapping is the
       // authoritative membership + UID source. INNER JOIN encodes both:
       // a row exists iff the mail is in this mailbox, and its `uid`
-      // column is the per-account UID the client sees.
-      const mailbox = mailboxPathForAccount(account, sent);
+      // column is the per-mailbox UID the client sees. Legacy mails
+      // that predate the write-side dual-write (pre-#615) and never got
+      // backfilled — e.g. the 140 rows the one-shot script skipped over
+      // duplicate-UID collisions from a #617-era race — have no mapping
+      // row and are intentionally invisible to reads.
       sql = `
         SELECT
           COUNT(*) as total,
@@ -113,7 +107,7 @@ export const countMessages = async (
  */
 export const getMailsByRange = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean,
   start: number,
   end: number,
@@ -123,7 +117,7 @@ export const getMailsByRange = async (
   const sortedFields = [...fields].sort();
   const inflightKey = JSON.stringify([
     user_id,
-    account,
+    mailbox,
     sent,
     start,
     end,
@@ -131,13 +125,13 @@ export const getMailsByRange = async (
     sortedFields,
   ]);
   return singleFlight(inflightKey, () => getMailsByRangeUncoalesced(
-    user_id, account, sent, start, end, useUid, fields
+    user_id, mailbox, sent, start, end, useUid, fields
   ));
 };
 
 const getMailsByRangeUncoalesced = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean,
   start: number,
   end: number,
@@ -171,9 +165,9 @@ const getMailsByRangeUncoalesced = async (
       safeFields.unshift("mail_id");
     }
 
-    if (account === null) {
+    if (mailbox === null) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
-      // uid_domain, unchanged by the per-account mapping migration.
+      // uid_domain, unchanged by the per-mailbox mapping migration.
       const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
       if (useUid) {
         sql = `
@@ -193,11 +187,10 @@ const getMailsByRangeUncoalesced = async (
         values = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
-      // Account-scoped query — JOIN `mail_mailbox_uid` to fetch per-
-      // account UID and enforce mailbox membership. Fields on `mails`
+      // Per-mailbox query — JOIN `mail_mailbox_uid` to fetch the
+      // mailbox-specific UID and enforce membership. Fields on `mails`
       // are prefixed with `m.` so the SELECT is unambiguous across the
       // join.
-      const mailbox = mailboxPathForAccount(account, sent);
       const qualifiedFields = safeFields
         .map((f) => `m.${f}`)
         .join(", ");
@@ -318,7 +311,7 @@ export function buildFlagSetClause(
 
 export const setMailFlags = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean,
   start: number,
   end: number,
@@ -330,13 +323,13 @@ export const setMailFlags = async (
     const setClause = buildFlagSetClause(operation, flags);
 
     // Two flavors of query — domain-scoped stays on `mails.uid_domain`,
-    // account-scoped joins `mail_mailbox_uid`. RETURNING clauses select
+    // per-mailbox joins `mail_mailbox_uid`. RETURNING clauses select
     // the appropriate UID and the shared flag/modseq columns.
     let selectSql: string;
     let updateSql: string;
     let baseValues: ParamValue[];
 
-    if (account === null) {
+    if (mailbox === null) {
       const returningCols = `${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4`;
@@ -361,9 +354,8 @@ export const setMailFlags = async (
         baseValues = [user_id, sent, start];
       }
     } else {
-      const mailbox = mailboxPathForAccount(account, sent);
-      // Account-scoped: JOIN `mail_mailbox_uid` for both membership and
-      // UID. RETURNING `x.uid` (the per-account UID the client sees),
+      // Per-mailbox: JOIN `mail_mailbox_uid` for both membership and
+      // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees),
       // NOT `m.uid_account` — the column is scheduled for removal in
       // PR 3 and the JOIN is now the source of truth.
       const returningCols = `x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
@@ -670,16 +662,16 @@ export const buildCriterionClause = (
 
 export const searchMailsByUid = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean,
   criteria: { type: string; value?: unknown }[]
 ): Promise<number[]> => {
   try {
     // Column reference for the criterion clauses. Domain-scoped view
-    // uses the plain column on `mails`; account-scoped uses the
+    // uses the plain column on `mails`; per-mailbox uses the
     // JOIN-aliased mapping. `buildCriterionClause` emits fragments like
     // `${uidField} >= $N`, so the alias needs to be qualified.
-    const uidField = account === null ? UID_DOMAIN : `x.${UID}`;
+    const uidField = mailbox === null ? UID_DOMAIN : `x.${UID}`;
 
     // Always exclude expunged messages from search
     const conditions: string[] = ["m.user_id = $1", "m.sent = $2", "m.expunged = FALSE"];
@@ -687,10 +679,9 @@ export const searchMailsByUid = async (
 
     // Base table + optional mailbox join
     let fromClause: string;
-    if (account === null) {
+    if (mailbox === null) {
       fromClause = "mails m";
     } else {
-      const mailbox = mailboxPathForAccount(account, sent);
       // JOIN mapping — the mailbox condition IS the membership predicate.
       conditions.push(`x.${USER_ID} = m.${USER_ID}`);
       conditions.push(`x.${MAILBOX} = $3`);
@@ -733,14 +724,14 @@ export const searchMailsByUid = async (
  */
 export const getAllUids = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean
 ): Promise<number[]> => {
   try {
     let sql: string;
     let values: ParamValue[];
 
-    if (account === null) {
+    if (mailbox === null) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
@@ -748,7 +739,6 @@ export const getAllUids = async (
       `;
       values = [user_id, sent];
     } else {
-      const mailbox = mailboxPathForAccount(account, sent);
       sql = `
         SELECT x.${UID} as uid FROM mails m
         JOIN ${MAIL_MAILBOX_UID} x
@@ -777,14 +767,14 @@ export const getAllUids = async (
  */
 export const getFirstUnseenUid = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean
 ): Promise<number | null> => {
   try {
     let sql: string;
     let values: ParamValue[];
 
-    if (account === null) {
+    if (mailbox === null) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE
@@ -793,7 +783,6 @@ export const getFirstUnseenUid = async (
       `;
       values = [user_id, sent];
     } else {
-      const mailbox = mailboxPathForAccount(account, sent);
       sql = `
         SELECT x.${UID} as uid FROM mails m
         JOIN ${MAIL_MAILBOX_UID} x
@@ -823,11 +812,11 @@ export const getFirstUnseenUid = async (
  */
 export const expungeDeletedMails = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean
 ): Promise<number[]> => {
   try {
-    if (account === null) {
+    if (mailbox === null) {
       // Domain-wide expunge — still on uid_domain, unchanged.
       const rows = await mailsTable.updateWhere(
         { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
@@ -839,12 +828,11 @@ export const expungeDeletedMails = async (
       return rows.map((row: Record<string, unknown>) => row.uid as number);
     }
 
-    // Account-scoped expunge: JOIN `mail_mailbox_uid` to resolve the
+    // Per-mailbox expunge: JOIN `mail_mailbox_uid` to resolve the
     // mail_ids that belong to this mailbox, then framework updateWhere
     // with an IN filter so the data-bag pattern bumps `updated`. The
     // RETURNING side reads x.uid from a second SELECT that fetches the
-    // per-account UIDs for the just-expunged rows.
-    const mailbox = mailboxPathForAccount(account, sent);
+    // per-mailbox UIDs for the just-expunged rows.
     const selectSql = `
       SELECT m.${MAIL_ID} as mail_id, x.${UID} as uid FROM mails m
       JOIN ${MAIL_MAILBOX_UID} x
@@ -886,22 +874,22 @@ export const expungeDeletedMails = async (
 };
 
 /**
- * Soft-delete a specific set of UIDs in one mailbox (account / sent /
- * domain), regardless of their `\Deleted` flag. The MOVE command needs
- * this — RFC 6851 §3.3 forbids the COPY+STORE(\Deleted)+EXPUNGE pattern
- * the prior implementation used (it caused mailbox-wide collateral
+ * Soft-delete a specific set of UIDs in one mailbox (per-mailbox /
+ * sent-unified / domain), regardless of their `\Deleted` flag. The MOVE
+ * command needs this — RFC 6851 §3.3 forbids the COPY+STORE(\Deleted)+EXPUNGE
+ * pattern the prior implementation used (it caused mailbox-wide collateral
  * EXPUNGE of pre-existing \Deleted-flagged mails). Returns the UIDs
  * actually flipped, in case any were already expunged concurrently.
  */
 export const expungeMailsByUid = async (
   user_id: string,
-  account: string | null,
+  mailbox: string | null,
   sent: boolean,
   uids: number[]
 ): Promise<number[]> => {
   if (uids.length === 0) return [];
   try {
-    if (account === null) {
+    if (mailbox === null) {
       // Domain-wide: simple equality on user_id+sent + IN(uids).
       const rows = await mailsTable.updateWhere(
         {
@@ -918,11 +906,10 @@ export const expungeMailsByUid = async (
       return rows.map((row: Record<string, unknown>) => row.uid as number);
     }
 
-    // Account-scoped: JOIN `mail_mailbox_uid` to filter by (mailbox, uid IN),
+    // Per-mailbox: JOIN `mail_mailbox_uid` to filter by (mailbox, uid IN),
     // resolve the mail_ids, then updateWhere by mail_id IN so the data-bag
     // pattern bumps `updated`. Snapshot uid_by_mail_id so RETURNING can
-    // map the UPDATE's mail_id output back to the per-account UIDs.
-    const mailbox = mailboxPathForAccount(account, sent);
+    // map the UPDATE's mail_id output back to the per-mailbox UIDs.
     const uidPlaceholders = uids.map((_, i) => `$${i + 4}`).join(",");
     const selectSql = `
       SELECT m.${MAIL_ID} as mail_id, x.${UID} as uid FROM mails m
