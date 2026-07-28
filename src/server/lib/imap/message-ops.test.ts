@@ -519,12 +519,30 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
     ]);
   });
 
-  it("leaves non-SEQ criteria (flags, explicit UID) untouched", () => {
+  it("leaves flag criteria untouched; normalizes an explicit UID criterion's ranges", () => {
     const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
       { type: "SEEN" },
       { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 42 }] } },
     ];
-    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual(criteria);
+    // The explicit `UID <set>` keyword already names UIDs, but still passes
+    // through resolveUidCriterionRanges to normalize `*` (#678) — a
+    // single-value range without a `*` comes out with end filled in.
+    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual([
+      { type: "SEEN" },
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 42, end: 42 }] } },
+    ]);
+  });
+
+  it("resolves a bare `*` in an explicit UID criterion to the highest UID (#678)", () => {
+    const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
+      {
+        type: "UID",
+        sequenceSet: { type: "sequence", ranges: [{ start: Number.MAX_SAFE_INTEGER }] },
+      },
+    ];
+    expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual([
+      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 11400, end: 11400 }] } },
+    ]);
   });
 
   it("resolves a SEQ set alongside a flag key (SEEN 1:3)", () => {
@@ -613,9 +631,19 @@ describe("searchTyped — multi-element bare set executes (#659)", () => {
     const { out, passed } = await run("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
-    // UID SEARCH: the set already names UIDs, so relabel untouched.
+    // UID SEARCH: the set already names UIDs, so relabel (with `*`
+    // normalized, though neither range here uses it — #678).
     expect(passed).toEqual([
-      { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 1 }, { start: 3 }] } },
+      {
+        type: "UID",
+        sequenceSet: {
+          type: "sequence",
+          ranges: [
+            { start: 1, end: 1 },
+            { start: 3, end: 3 },
+          ],
+        },
+      },
     ]);
   });
 

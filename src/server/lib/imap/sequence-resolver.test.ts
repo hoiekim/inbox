@@ -4,6 +4,7 @@ import {
   seqToUidNumber,
   uidToSeqNumber,
   resolveSeqRangeToUids,
+  resolveUidRangeSentinel,
   countSequenceSetMessages,
   type SequenceState,
 } from "./sequence-resolver";
@@ -153,6 +154,54 @@ describe("resolveSeqRangeToUids (inbox #588)", () => {
     // `6:*` on a 5-message mailbox: the start (6) is a real number past the
     // end, so it matches nothing — only `*` itself is treated as the last msg.
     expect(resolveSeqRangeToUids(uids, 6, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+  });
+});
+
+describe("resolveUidRangeSentinel (inbox #678)", () => {
+  const uids = [10, 20, 30, 40, 50];
+
+  it("passes concrete UIDs through unchanged", () => {
+    expect(resolveUidRangeSentinel(uids, 20, 40)).toEqual({ uidStart: 20, uidEnd: 40 });
+  });
+
+  it("resolves a bare `*` (start and end are `*`) to the highest UID", () => {
+    expect(
+      resolveUidRangeSentinel(uids, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+    ).toEqual({ uidStart: 50, uidEnd: 50 });
+  });
+
+  it("resolves an open-ended `n:*` upper bound to the highest UID", () => {
+    expect(resolveUidRangeSentinel(uids, 30, Number.MAX_SAFE_INTEGER)).toEqual({
+      uidStart: 30,
+      uidEnd: 50,
+    });
+  });
+
+  // The regression this closes: `*` used to reach the SQL layer as the raw
+  // Number.MAX_SAFE_INTEGER sentinel and overflow a Postgres `integer` bind
+  // parameter (crashed hoie-inbox-1 via a `UID SEARCH *` retry loop, OOM'd
+  // after ~9 min of the resulting tight failure loop).
+  it("never leaves MAX_SAFE_INTEGER in the resolved pair", () => {
+    const { uidStart, uidEnd } = resolveUidRangeSentinel(
+      uids,
+      Number.MAX_SAFE_INTEGER,
+      Number.MAX_SAFE_INTEGER
+    );
+    expect(uidStart).toBeLessThan(2147483647); // Postgres `integer` max (int4)
+    expect(uidEnd).toBeLessThan(2147483647);
+  });
+
+  it("resolves `*` to -1 on an empty mailbox (no highest UID to resolve to)", () => {
+    expect(
+      resolveUidRangeSentinel([], Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
+    ).toEqual({ uidStart: -1, uidEnd: -1 });
+  });
+
+  it("a concrete out-of-range UID still passes through (matches nothing downstream)", () => {
+    expect(resolveUidRangeSentinel(uids, 999999, 999999)).toEqual({
+      uidStart: 999999,
+      uidEnd: 999999,
+    });
   });
 });
 

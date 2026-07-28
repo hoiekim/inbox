@@ -22,6 +22,7 @@ import {
   CopyRequest,
   MoveRequest,
   AppendRequest,
+  UidCriterion,
 } from "./types";
 import {
   buildFetchResponse,
@@ -31,6 +32,7 @@ import {
 } from "./fetch-helpers";
 import {
   resolveSeqRangeToUids,
+  resolveUidRangeSentinel,
   uidToSeqNumber,
   countSequenceSetMessages,
   buildSequenceMapping,
@@ -131,6 +133,10 @@ async function _fetchMessages(
         }
         uidStart = resolved.uidStart;
         uidEnd = resolved.uidEnd;
+      } else {
+        const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
       }
 
       const messages = await store.getMessages(
@@ -198,10 +204,27 @@ async function _processFetchMessages(
 // SEARCH
 // ---------------------------------------------------------------------------
 
+// Resolve a UID-axis sequence set's ranges to concrete UIDs, mapping the
+// `*` sentinel (Number.MAX_SAFE_INTEGER) to the mailbox's actual highest
+// UID. Shared by the bare-set and explicit-`UID <set>`-keyword cases below.
+const resolveUidCriterionRanges = (
+  criterion: UidCriterion,
+  seqState: SequenceState
+): SearchCriterion => {
+  const uidRanges = convertSequenceSet(criterion.sequenceSet).map(
+    ({ start, end }) => {
+      const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
+      return { start: resolved.uidStart, end: resolved.uidEnd };
+    }
+  );
+  return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
+};
+
 // A bare message sequence-set is a top-level SEARCH key (RFC 3501 §6.4.4),
 // parsed as a SEQ criterion. In a plain SEARCH it names message sequence
 // numbers, so resolve it against the mailbox's seq→uid map before querying; in
-// a UID SEARCH the same set already names UIDs, so relabel it as UID untouched.
+// a UID SEARCH the same set already names UIDs, so relabel it as UID and
+// resolve its `*` sentinel the same way an explicit `UID <set>` keyword does.
 // (`store.search` only understands UID/flag/text/date criteria — it has no
 // access to seqState — so the resolution has to happen here.)
 export function resolveSeqSearchKeys(
@@ -210,9 +233,18 @@ export function resolveSeqSearchKeys(
   seqState: SequenceState
 ): SearchCriterion[] {
   return criteria.map((criterion) => {
+    // Explicit `UID <set>` keyword — already UID-axis, but `*` still needs
+    // resolving before it reaches the SQL layer and overflows a Postgres
+    // `integer` bind parameter (#678).
+    if (criterion.type === "UID") {
+      return resolveUidCriterionRanges(criterion as UidCriterion, seqState);
+    }
     if (criterion.type !== "SEQ") return criterion;
     if (isUidCommand) {
-      return { type: "UID", sequenceSet: criterion.sequenceSet };
+      return resolveUidCriterionRanges(
+        { type: "UID", sequenceSet: criterion.sequenceSet } as UidCriterion,
+        seqState
+      );
     }
     const uidRanges = convertSequenceSet(criterion.sequenceSet)
       .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
@@ -316,6 +348,10 @@ export async function storeFlagsTyped(
           });
           continue;
         }
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
+      } else {
+        const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
         uidStart = resolved.uidStart;
         uidEnd = resolved.uidEnd;
       }
@@ -434,7 +470,7 @@ export async function copyMessageTyped(
     const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
     for (const { start, end } of ranges) {
       if (isUidCopy) {
-        uidRanges.push({ uidStart: start, uidEnd: end });
+        uidRanges.push(resolveUidRangeSentinel(seqState.seqToUid, start, end));
       } else {
         const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
         if (!resolved) continue;
@@ -739,7 +775,7 @@ export async function moveMessageTyped(
     const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
     for (const { start, end } of ranges) {
       if (isUidMove) {
-        uidRanges.push({ uidStart: start, uidEnd: end });
+        uidRanges.push(resolveUidRangeSentinel(seqState.seqToUid, start, end));
       } else {
         const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
         if (!resolved) continue;
