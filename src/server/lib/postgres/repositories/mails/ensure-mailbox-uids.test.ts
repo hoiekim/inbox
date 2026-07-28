@@ -54,11 +54,20 @@ describe("ensureMailboxUids source shape (#702 PR 2b-1)", () => {
     expect(fnSource).toMatch(/uid_account\s*>\s*0/);
   });
 
-  it("uses ON CONFLICT DO NOTHING so concurrent callers are idempotent", () => {
-    // Two ensureMailboxUids invocations racing on the same missing tuple:
-    // one wins the INSERT, the other's INSERT is a no-op, both read the
-    // winner's row on the subsequent SELECT.
-    expect(fnSource).toMatch(/ON CONFLICT.*DO NOTHING/);
+  it("uses bare ON CONFLICT DO NOTHING (no target) to swallow BOTH constraint violations", () => {
+    // `mail_mailbox_uid` has PRIMARY KEY (user_id, mailbox, mail_id) AND
+    // UNIQUE (user_id, mailbox, uid). A target-scoped clause `ON
+    // CONFLICT (user_id, mailbox, mail_id)` only catches the PK; a
+    // duplicate-UID collision from legacy pre-#617-fix data (two mails
+    // sharing the same uid_account for a mailbox) would still throw and
+    // abort the WHOLE INSERT batch — every backfilled row lost, not just
+    // the offender. Bare `ON CONFLICT DO NOTHING` swallows both, so good
+    // rows persist even when a poisoned pair sits inside the batch.
+    // Concurrent callers (two ensureMailboxUids racing on the same
+    // missing tuple) still see idempotency from the PK path.
+    expect(fnSource).toMatch(/ON CONFLICT\s+DO NOTHING/);
+    // Guard against future edits reintroducing a target-scoped clause.
+    expect(fnSource).not.toMatch(/ON CONFLICT\s*\([^)]+\)\s*DO NOTHING/);
   });
 
   it("re-reads the complete mapping so PR 2a rows AND fresh backfill rows land in the return Map", () => {

@@ -163,18 +163,27 @@ export const writeMailboxUid = async (
  * `mail_id` has a mapping row for `(user_id, mailbox, mail_id)` and
  * returns the full `mail_id → uid` map.
  *
- * The account-scoped read sites in `mails/imap.ts` join this mapping
- * instead of reading `mails.uid_account` directly. Rows written by
- * `saveMail` / `storeMail` (PR 2a) already have their mapping; mail
- * that predates that PR does not — this helper backfills those on
+ * Account-scoped IMAP reads join this mapping instead of reading
+ * `mails.uid_account` directly. Rows written by `saveMail` / `storeMail`
+ * (the write-side dual-write) already have their mapping; mail that
+ * predates the dual-write does not — this helper backfills those on
  * first access.
  *
- * Backfill shape: copy the mail's existing `uid_account` verbatim. The
- * UID was already reserved from `mail_uid_counters` at receive time, so
+ * Backfill copies the mail's existing `uid_account` verbatim. The UID
+ * was already reserved from `mail_uid_counters` at receive time, so
  * mirroring it preserves the per-account UID sequence without burning a
- * fresh counter tick. `ON CONFLICT DO NOTHING` makes a concurrent
- * ensureMailboxUids call idempotent — the loser reads the winner's row
- * on the second SELECT.
+ * fresh counter tick.
+ *
+ * `ON CONFLICT DO NOTHING` (with no explicit conflict target) is
+ * deliberate: `mail_mailbox_uid` has BOTH `PRIMARY KEY (user_id,
+ * mailbox, mail_id)` AND `UNIQUE (user_id, mailbox, uid)`. A
+ * target-scoped clause (`ON CONFLICT (user_id, mailbox, mail_id)`) only
+ * catches the PK collision; a duplicate-UID collision from legacy pre-
+ * atomic-reservation (#617) data would still throw and abort the whole
+ * INSERT batch, degrading `ensureMailboxUids` to zero backfill under
+ * try/catch. Bare `ON CONFLICT DO NOTHING` swallows both constraint
+ * violations, so good rows persist even when a poisoned pair sits
+ * inside the batch.
  *
  * Filters `uid_account > 0` so mails that were never assigned an
  * account UID (domain-only rows on a legacy path) don't emit a
@@ -192,7 +201,10 @@ export const ensureMailboxUids = async (
   // Backfill missing rows in one round-trip. INSERT … SELECT lets
   // Postgres do the "for each mail without a mapping, copy its
   // uid_account" work server-side; the anti-join (`WHERE NOT EXISTS`)
-  // narrows to the missing set.
+  // narrows to the missing set. Bare `ON CONFLICT DO NOTHING` (see
+  // docstring) swallows both the PK and the (user_id, mailbox, uid)
+  // UNIQUE — a target-scoped clause would leak the UNIQUE violation and
+  // abort the whole batch on pre-#617-fix legacy data.
   const backfillSql = `
     INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
     SELECT m.user_id, $2, m.mail_id, m.uid_account
@@ -206,7 +218,7 @@ export const ensureMailboxUids = async (
           AND x.${MAILBOX} = $2
           AND x.${MAIL_ID} = m.mail_id
       )
-    ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID}) DO NOTHING
+    ON CONFLICT DO NOTHING
   `;
   try {
     await pool.query(backfillSql, [user_id, mailbox, mail_ids]);
@@ -218,12 +230,12 @@ export const ensureMailboxUids = async (
     );
   }
 
-  // Read the complete set — includes rows PR 2a wrote at insert time,
-  // plus any rows the backfill above just created (or the concurrent
-  // caller's winner rows). Empty result for a given mail_id means it
-  // has no `uid_account` at all (never routed through an account UID
-  // space) — the caller filters those out via its own address
-  // predicate before they reach here.
+  // Read the complete set — rows the write-side dual-write laid down at
+  // insert time, plus any rows the backfill above just created (or a
+  // concurrent caller's winner rows). Empty result for a given mail_id
+  // means it has no `uid_account` at all (never routed through an
+  // account UID space) — the caller filters those out via its own
+  // address predicate before they reach here.
   try {
     const rows = await pool.query<{ mail_id: string; uid: number }>(
       `SELECT ${MAIL_ID} AS mail_id, ${UID} AS uid
