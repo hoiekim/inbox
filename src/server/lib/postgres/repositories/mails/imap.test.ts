@@ -650,3 +650,206 @@ describe("buildCriterionClause — BODY/TEXT search the message body (#552)", ()
     expect(frag).toContain("text ILIKE");
   });
 });
+
+describe("buildCriterionClause — unexpressible criteria fail closed (#672)", () => {
+  // Before this fix, any criterion the SQL backend couldn't express returned
+  // null ("no constraint") and was dropped from the WHERE clause, so it matched
+  // EVERY message (fail-open) — RFC 3501 §6.4.4 requires the exact match set,
+  // and fail-open is the dangerous direction (a filter that should match none
+  // returns all, and a client may bulk-move/flag/delete the whole mailbox).
+  // The fix returns a MATCH_NONE sentinel ("FALSE") so the criterion fails
+  // closed instead. KEYWORD/UNKEYWORD are exact evaluations (the server stores
+  // no custom keywords); LARGER/SMALLER/arbitrary-HEADER are fail-closed until
+  // backing data exists.
+  const build = async (
+    criterion: { type: string; value?: unknown },
+    values: unknown[] = [],
+  ) => {
+    const { buildCriterionClause } = await import(".");
+    return buildCriterionClause(criterion, "uid_account", values as never);
+  };
+
+  it("MATCH_NONE is a truthy SQL fragment so searchMailsByUid keeps it in the AND", async () => {
+    const { MATCH_NONE } = await import(".");
+    // searchMailsByUid does `if (frag) conditions.push(frag)`. The sentinel must
+    // stay truthy — an empty string would be dropped and re-open the fail-open hole.
+    expect(MATCH_NONE).toBe("FALSE");
+    expect(Boolean(MATCH_NONE)).toBe(true);
+  });
+
+  it("KEYWORD can never match (no custom keywords stored) → match-none", async () => {
+    const values: unknown[] = [];
+    expect(await build({ type: "KEYWORD", value: "Foo" }, values)).toBe("FALSE");
+    expect(values).toHaveLength(0); // no bound param
+  });
+
+  it("UNKEYWORD always matches (no message has the keyword) → match-all (null)", async () => {
+    expect(await build({ type: "UNKEYWORD", value: "Foo" })).toBeNull();
+  });
+
+  it("LARGER / SMALLER fail closed (RFC822.SIZE not persisted) → match-none", async () => {
+    const lv: unknown[] = [];
+    expect(await build({ type: "LARGER", value: 999999999 }, lv)).toBe("FALSE");
+    expect(lv).toHaveLength(0);
+    const sv: unknown[] = [];
+    expect(await build({ type: "SMALLER", value: 1 }, sv)).toBe("FALSE");
+    expect(sv).toHaveLength(0);
+  });
+
+  it("HEADER on an unsupported field fails closed → match-none", async () => {
+    const values: unknown[] = [];
+    expect(
+      await build({ type: "HEADER", value: { field: "X-Mailer", text: "z" } }, values),
+    ).toBe("FALSE");
+    expect(values).toHaveLength(0);
+  });
+
+  it("HEADER on a supported field still filters (control — not swept into fail-closed)", async () => {
+    const values: unknown[] = [];
+    expect(
+      await build({ type: "HEADER", value: { field: "Subject", text: "hi" } }, values),
+    ).toBe("subject ILIKE $1");
+    expect(values).toEqual(["%hi%"]);
+  });
+
+  it("an unknown criterion type fails closed → match-none", async () => {
+    expect(await build({ type: "SOMETHING-UNSUPPORTED" })).toBe("FALSE");
+  });
+
+  it("`SEEN AND KEYWORD` — the KEYWORD fragment is FALSE so the AND matches nothing", async () => {
+    // searchMailsByUid ANDs sibling fragments. SEEN → real column, KEYWORD → FALSE.
+    expect(await build({ type: "SEEN" })).toBe("read = TRUE");
+    expect(await build({ type: "KEYWORD", value: "Foo" })).toBe("FALSE");
+    // Joined: "read = TRUE AND FALSE" → empty set (was "read = TRUE" alone before).
+  });
+
+  it("`OR SEEN KEYWORD` reduces to the constrained side (X OR none = X)", async () => {
+    expect(
+      await build({
+        type: "OR",
+        value: { left: { type: "SEEN" }, right: { type: "KEYWORD", value: "Foo" } },
+      }),
+    ).toBe("read = TRUE");
+  });
+
+  it("`OR KEYWORD KEYWORD` (both match-none) stays match-none", async () => {
+    expect(
+      await build({
+        type: "OR",
+        value: {
+          left: { type: "KEYWORD", value: "A" },
+          right: { type: "KEYWORD", value: "B" },
+        },
+      }),
+    ).toBe("FALSE");
+  });
+
+  it("`OR SEEN ALL` still matches everything (match-all side wins — control)", async () => {
+    expect(
+      await build({
+        type: "OR",
+        value: { left: { type: "SEEN" }, right: { type: "ALL" } },
+      }),
+    ).toBeNull();
+  });
+
+  it("`NOT KEYWORD` = match-all (every message lacks the keyword)", async () => {
+    expect(await build({ type: "NOT", value: { type: "KEYWORD", value: "Foo" } })).toBeNull();
+  });
+
+  it("`NOT ALL` = match-none (double-checks NOT of match-all)", async () => {
+    expect(await build({ type: "NOT", value: { type: "ALL" } })).toBe("FALSE");
+  });
+});
+
+describe("buildCriterionClause — combinators don't orphan bound params (#672)", () => {
+  // Recursion pushes params onto the shared `values` as a side effect. When a
+  // reduction discards a side that already pushed a param (e.g. an OR that
+  // reduces to match-all because the OTHER side is ALL/UNKEYWORD), the discarded
+  // param must be rolled back — otherwise values.length exceeds the max `$N`
+  // referenced and Postgres rejects the Bind ("supplies N parameters, but
+  // prepared statement requires M"), so searchMailsByUid throws and returns [].
+  const build = async (
+    criterion: { type: string; value?: unknown },
+    values: unknown[],
+  ) => {
+    const { buildCriterionClause } = await import(".");
+    return buildCriterionClause(criterion, "uid_account", values as never);
+  };
+
+  it("`OR SUBJECT x ALL` → match-all, and rolls back SUBJECT's param", async () => {
+    const values: unknown[] = ["user-1", false]; // base user_id/sent seed
+    const frag = await build(
+      { type: "OR", value: { left: { type: "SUBJECT", value: "x" }, right: { type: "ALL" } } },
+      values,
+    );
+    expect(frag).toBeNull(); // X OR match-all = match-all
+    expect(values).toEqual(["user-1", false]); // %x% rolled back — no orphan
+  });
+
+  it("`OR SUBJECT x UNKEYWORD Foo` → match-all, param rolled back (was a hard throw)", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "UNKEYWORD" } },
+      },
+      values,
+    );
+    expect(frag).toBeNull();
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("`OR ALL SUBJECT x` (null on the left) also rolls back", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      { type: "OR", value: { left: { type: "ALL" }, right: { type: "SUBJECT", value: "x" } } },
+      values,
+    );
+    expect(frag).toBeNull();
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("`NOT (OR SUBJECT x ALL)` → match-none, nested param rolled back", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "NOT",
+        value: {
+          type: "OR",
+          value: { left: { type: "SUBJECT", value: "x" }, right: { type: "ALL" } },
+        },
+      },
+      values,
+    );
+    // inner OR = match-all (null) → NOT match-all = match-none.
+    expect(frag).toBe("FALSE");
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("a real OR with two param-pushing sides keeps BOTH params, contiguously numbered", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "FROM", value: "y" } },
+      },
+      values,
+    );
+    expect(frag).toBe("(subject ILIKE $3 OR from_text ILIKE $4)");
+    expect(values).toEqual(["user-1", false, "%x%", "%y%"]);
+  });
+
+  it("`X OR none` keeps X's param aligned (match-none side pushed nothing)", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "KEYWORD" } },
+      },
+      values,
+    );
+    expect(frag).toBe("subject ILIKE $3"); // KEYWORD = match-none → reduces to X
+    expect(values).toEqual(["user-1", false, "%x%"]);
+  });
+});

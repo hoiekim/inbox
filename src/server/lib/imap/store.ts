@@ -48,7 +48,9 @@ type SimplifiedCriterion = { type: string; value?: unknown };
  * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
  * otherwise the SQL builder would read the wrong field off the raw parser shape
  * (e.g. `.date`/`.field` instead of `.value`) and silently mis-handle the nested
- * criterion. Returns null when the criterion imposes no constraint. A UID set
+ * criterion. An unexpressible leaf is preserved as a bare `{ type }` (never
+ * dropped) so buildCriterionClause maps it to a match-none fragment — the SEARCH
+ * fails closed, never matching every message (#672). A UID set
  * normalises to one `UID_SET` entry carrying all its ranges, so the SQL builder
  * ORs the ranges among themselves (a message is in the set if it falls in ANY
  * range) — nested UID keys under NOT/OR resolve the same way. See #551, #659.
@@ -111,7 +113,12 @@ export const simplifyCriterion = (
       return { type, value: sizeCriterion.size };
     }
 
-    // Logical NOT: negate a single (normalised) criterion
+    // Logical NOT: negate a single (normalised) criterion. `inner` is never
+    // null in practice — no leaf returns null post-#672 (unexpressible leaves
+    // fail closed via the default case), so the null-guard here is defensively
+    // unreachable. If a null-returning leaf is ever reintroduced, route it
+    // through buildCriterionClause's match-none algebra rather than dropping
+    // the node — a dropped NOT fails OPEN (matches everything).
     case "NOT": {
       const notCriterion = criterion as { type: string; criterion: SearchCriterion };
       const inner = simplifyCriterion(notCriterion.criterion);
@@ -128,10 +135,22 @@ export const simplifyCriterion = (
       const left = simplifyCriterion(orCriterion.left);
       const right = simplifyCriterion(orCriterion.right);
       if (left && right) return { type: "OR", value: { left, right } };
-      // An OR with an unconstrained/unsupported side matches everything; drop it
-      // rather than over-narrow to the one expressible side.
+      // Defensively unreachable: neither side is null because no leaf returns
+      // null post-#672. Were a side ever null, dropping the OR fails OPEN
+      // (matches everything) — the opposite of the fail-closed direction the
+      // rest of the search path now takes. A reintroduced null-leaf should
+      // preserve the OR node and let buildCriterionClause reduce it instead.
       return null;
     }
+
+    // Custom keyword flags. The server stores only the system flag set
+    // (\Seen \Flagged \Deleted \Draft \Answered) and no custom keywords, so
+    // KEYWORD can never match and UNKEYWORD always matches — the flag value is
+    // irrelevant. Preserve the type (no value) and let buildCriterionClause map
+    // KEYWORD to match-none and UNKEYWORD to match-all.
+    case "KEYWORD":
+    case "UNKEYWORD":
+      return { type };
 
     // UID set: carry every range in one entry so the SQL builder ORs them —
     // set membership means a message matches if it falls in ANY range (#659).
@@ -140,9 +159,14 @@ export const simplifyCriterion = (
       return { type: "UID_SET", value: uidCriterion.sequenceSet.ranges };
     }
 
+    // Unsupported criterion: preserve the type (no value) rather than dropping
+    // it here. Dropping would leave it out of the WHERE clause entirely, which
+    // matches EVERY message (fail-open) — the dangerous direction for a filter.
+    // buildCriterionClause maps any type it can't express to a match-none
+    // fragment, so the criterion fails closed instead. (#672)
     default:
       logger.warn("Unsupported search criterion", { component: "imap.store", type });
-      return null;
+      return { type };
   }
 };
 
