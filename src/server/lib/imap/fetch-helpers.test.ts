@@ -27,10 +27,19 @@ import {
   buildFetchResponsePart,
   buildBodyResponsePart,
   convertSequenceSet,
+  FetchResponsePart,
 } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
 import { BodyFetch, SequenceSet } from "./types";
 import type { MailType } from "common";
+
+// Wire content is `string | Buffer` — large non-partial body payloads flow
+// through the shared body-buffer cache and land as Buffer. Every test in
+// this file reasons about them as UTF-8 text, so coerce at the boundary.
+const contentAsString = (
+  part: Extract<FetchResponsePart, { type: "literal" }>
+): string =>
+  Buffer.isBuffer(part.content) ? part.content.toString("utf8") : part.content;
 
 describe("getRequestedFields", () => {
   describe("FLAGS", () => {
@@ -186,7 +195,7 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     expect(rfc).not.toBeNull();
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.length).toBe(body!.length);
       expect(rfc!.header).toBe("RFC822");
       expect(body!.header).toBe("BODY[]");
@@ -203,7 +212,11 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     );
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      // Compare octets, not identity — the two paths now flow through a
+      // shared body-buffer cache keyed on section-label (RFC822.HEADER vs
+      // BODY[HEADER]), so they produce distinct Buffer instances that
+      // encode identical bytes.
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.header).toBe("RFC822.HEADER");
     }
   });
@@ -218,7 +231,7 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     );
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.header).toBe("RFC822.TEXT");
     }
   });
@@ -375,7 +388,7 @@ describe("buildBodyResponsePart header terminators (inbox #645)", () => {
     if (part!.type !== "literal") throw new Error("expected literal part");
     // The advertised {N} literal must equal the emitted octets.
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
-    return part!.content;
+    return contentAsString(part!);
   };
 
   it("BODY[HEADER] ends in exactly one delimiting blank line", async () => {
@@ -623,7 +636,12 @@ describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
     if (part!.type !== "literal") throw new Error("expected literal part");
     // The advertised {N} literal must equal the emitted octets.
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
-    return part!;
+    // Give tests a stringy `content` alongside the raw part — they all treat
+    // it as UTF-8 text.
+    return {
+      ...part,
+      content: contentAsString(part),
+    };
   };
 
   it("BODY[1.MIME] returns part 1 MIME header block, keyed BODY[1.MIME]", async () => {
@@ -719,5 +737,75 @@ describe("buildFetchResponsePart UID data item — domain-scoped UID space (#702
       "Sent Messages/accounts/foo"
     );
     expect(part).toEqual({ type: "simple", content: "UID 7" });
+  });
+});
+
+// The cached FULL/TEXT/MIME_PART path must preserve three distinct
+// response shapes: an empty body renders `BODY[TEXT] NIL` (not a 2-byte
+// CRLF literal), and a nonexistent part drops the response part entirely
+// (not a spurious `NIL` simple). A zero-length Buffer cannot distinguish
+// them, so the cache carries a tri-state result instead.
+describe("buildBodyResponsePart cached-path shape preservation", () => {
+  it("BODY[TEXT] on a mail with no text/html/attachments emits `BODY[TEXT] NIL`", async () => {
+    // No text, no html, no attachments — the source content is `""`, which
+    // RFC 3501 renders as `BODY[TEXT] NIL`, not a 2-byte `\r\n` literal.
+    const mail: Partial<MailType> = {
+      messageId: "<empty@local>",
+      text: "",
+      html: "",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      { type: "BODY", peek: false, section: { type: "TEXT" } },
+      "doc-empty-text",
+      "INBOX"
+    );
+    expect(part).toEqual({ type: "simple", content: "BODY[TEXT] NIL" });
+  });
+
+  it("BODY[99] on a message that has no such part is DROPPED (returns null)", async () => {
+    // Nonexistent MIME part → `getBodyPart` returns `null` →
+    // `getBodyContent` returns `null` → the whole response part is omitted
+    // from the FETCH tuple (not emitted as a spurious `BODY[99] NIL`).
+    const mail: Partial<MailType> = {
+      messageId: "<nopart@local>",
+      text: "some text",
+      html: "<p>some html</p>",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "99" },
+      },
+      "doc-nopart",
+      "INBOX"
+    );
+    expect(part).toBeNull();
+  });
+
+  it("BODY[2] on a text-only mail (no part 2) is DROPPED, not emitted as NIL", async () => {
+    // Text-only mail → only part 1 exists. Asking for part 2 must drop the
+    // response part entirely.
+    const mail: Partial<MailType> = {
+      messageId: "<textonly@local>",
+      text: "only text here",
+      html: "",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "2" },
+      },
+      "doc-textonly-part2",
+      "INBOX"
+    );
+    expect(part).toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import {
 } from "./idle-manager";
 import { getCapabilities } from "./capabilities";
 import { ImapRequestHandler } from "./handler";
+import { writeChunkedToSocket } from "./chunked-write";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -126,6 +127,36 @@ export class ImapSession {
       logger.error("Error writing to socket", { component: "imap" }, error);
       return false;
     }
+  };
+
+  /**
+   * Write a large Buffer with socket-level backpressure. Chunks the payload
+   * so the kernel/OS outbound queue doesn't have to buffer the entire
+   * multi-MB body in one shot, and awaits `drain` between chunks whenever
+   * `socket.write` reports its high-water mark reached. This is the write
+   * path FETCH BODY responses take once the payload is a shared Buffer
+   * from `getSharedBodyResult` — resolves after every chunk is queued and
+   * the socket is under its high-water mark again.
+   *
+   * The `payload` parameter is a Buffer specifically so V8 can GC the
+   * intermediate JS string that `buildFullMessage` produced, and so
+   * `socket.write` doesn't run a per-write UTF-8 conversion.
+   */
+  writeChunked = async (payload: Buffer): Promise<void> => {
+    if (this.socket.destroyed || !this.socket.writable) {
+      logger.warn("Attempted to writeChunked to destroyed/unwritable socket", {
+        component: "imap",
+      });
+      return;
+    }
+    const written = await writeChunkedToSocket(this.socket, payload, (error) =>
+      logger.error(
+        "Error in writeChunked socket.write",
+        { component: "imap" },
+        error
+      )
+    );
+    this.bytesWritten += written;
   };
 
   /**
@@ -344,6 +375,7 @@ export class ImapSession {
       this.selectedMailbox,
       this.seqState,
       this.write,
+      this.writeChunked,
       this.condstoreEnabled
     );
   };

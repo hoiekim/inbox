@@ -477,6 +477,9 @@ const runFetch = async (
       lines.push(data);
       return true;
     },
+    async (payload: Buffer) => {
+      lines.push(payload.toString("utf8"));
+    },
     condstoreEnabled
   );
   return { captured, out: lines.join("") };
