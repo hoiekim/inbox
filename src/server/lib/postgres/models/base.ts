@@ -10,6 +10,16 @@ import {
   QueryData,
 } from "../database";
 
+/**
+ * Sentinel for a data-bag value that must be stamped from the DB clock
+ * (`CURRENT_TIMESTAMP`) rather than a bound parameter. Keeps every mutation on
+ * one timeline: the `?since=` delta cursor reads `as_of` from the DB clock, so
+ * an app-clock write (`new Date()`) on a host whose clock lags the DB's could
+ * stamp `updated` below a cursor the client already holds and drop the
+ * tombstone. Pass in an updateWhere data bag: `updateWhere(f, { updated: DB_NOW })`.
+ */
+export const DB_NOW: unique symbol = Symbol("DB_NOW");
+
 export class ModelValidationError extends Error {
   public readonly errors: string[];
 
@@ -101,7 +111,7 @@ export type TypeSafeFilters<TSchema extends Schema> = {
  * If notNull is true, an extra "col IS NOT NULL" clause is prepended.
  *
  * Example: deleteWhere({ cookie_expires: { op: '<=', value: now, notNull: true } })
- * Example: updateWhere({ mail_id: { op: 'IN', value: ids } }, { expunged: true, updated: new Date() })
+ * Example: updateWhere({ mail_id: { op: 'IN', value: ids } }, { expunged: true, updated: DB_NOW })
  */
 export interface FilterCondition {
   op: "=" | "<" | "<=" | ">" | ">=" | "IN";
@@ -275,8 +285,15 @@ export abstract class Table<
       return [];
     }
     let paramIdx = 1;
-    const setClauses = dataEntries.map(([k]) => `${k} = $${paramIdx++}`);
-    const dataValues = dataEntries.map(([, v]) => v as ParamValue);
+    const dataValues: ParamValue[] = [];
+    const setClauses = dataEntries.map(([k, v]) => {
+      // DB_NOW stamps the column from the DB clock (`CURRENT_TIMESTAMP`) as a
+      // SQL literal, consuming no bound parameter — keeps every mutation on one
+      // timeline for the delta cursor (see DB_NOW).
+      if (v === DB_NOW) return `${k} = CURRENT_TIMESTAMP`;
+      dataValues.push(v as ParamValue);
+      return `${k} = $${paramIdx++}`;
+    });
     const { whereSql, values: whereValues } = buildFilterClauses(filterEntries, paramIdx);
     const returningClause = returning?.length ? ` RETURNING ${returning.join(", ")}` : "";
     const sql = `UPDATE ${this.name} SET ${setClauses.join(", ")} WHERE ${whereSql}${returningClause}`;
