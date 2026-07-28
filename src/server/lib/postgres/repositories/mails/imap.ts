@@ -7,17 +7,34 @@ import {
   MAIL_ID,
   USER_ID,
   UID_DOMAIN,
-  UID_ACCOUNT,
   MODSEQ,
-  TO_ADDRESS,
-  FROM_ADDRESS,
   SENT,
   DELETED,
   EXPUNGED,
   DB_NOW,
+  MAIL_MAILBOX_UID,
+  MAILBOX,
+  UID,
 } from "../../models";
 import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
+
+/**
+ * Derive the `mail_mailbox_uid.mailbox` path for an account-scoped view.
+ * Local helper (not imported from `imap/util.ts`) to avoid a
+ * repositories → imap layer inversion — the repositories layer depends
+ * on nothing above it, and the two path shapes here are the exact
+ * inverse of `accountToBox` / `accountToSentBox`. Callers pass a full
+ * address like `claoie@hoie.kim`; the mapping table stores the local
+ * part under the folder root, matching how the write-side dual-write
+ * (saveMail / storeMail) records the row.
+ */
+const mailboxPathForAccount = (account: string, sent: boolean): string => {
+  const localPart = account.split("@")[0];
+  return sent
+    ? `Sent Messages/accounts/${localPart}`
+    : `INBOX/accounts/${localPart}`;
+};
 
 export const countMessages = async (
   user_id: string,
@@ -27,33 +44,38 @@ export const countMessages = async (
   try {
     let sql: string;
     let values: ParamValue[];
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
 
     if (account === null) {
-      // Domain-wide count (exclude expunged messages)
-      sql = `
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
-          COALESCE(MAX(${uidField}), 0) as max_uid
-        FROM mails 
-        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
-      `;
-      values = [user_id, sent];
-    } else {
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      // Domain-wide count (INBOX / unified Sent Messages) — still keyed on
+      // uid_domain, unchanged by #702's per-account mapping migration.
       sql = `
         SELECT
           COUNT(*) as total,
           SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
-          COALESCE(MAX(${uidField}), 0) as max_uid
+          COALESCE(MAX(${UID_DOMAIN}), 0) as max_uid
         FROM mails
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
       `;
-      values = [user_id, sent, addressJson];
+      values = [user_id, sent];
+    } else {
+      // Account-scoped view — the `mail_mailbox_uid` mapping is now the
+      // authoritative membership + UID source. INNER JOIN encodes both:
+      // a row exists iff the mail is in this mailbox, and its `uid`
+      // column is the per-account UID the client sees.
+      const mailbox = mailboxPathForAccount(account, sent);
+      sql = `
+        SELECT
+          COUNT(*) as total,
+          SUM(CASE WHEN m.read = FALSE THEN 1 ELSE 0 END) as unread,
+          COALESCE(MAX(x.${UID}), 0) as max_uid
+        FROM mails m
+        JOIN ${MAIL_MAILBOX_UID} x
+          ON x.${USER_ID} = m.${USER_ID}
+          AND x.${MAILBOX} = $3
+          AND x.${MAIL_ID} = m.${MAIL_ID}
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+      `;
+      values = [user_id, sent, mailbox];
     }
 
     const result = await pool.query(sql, values);
@@ -123,8 +145,6 @@ const getMailsByRangeUncoalesced = async (
   fields: string[]
 ): Promise<Map<string, PartialMailModel>> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
     let sql: string;
     let values: ParamValue[];
 
@@ -150,49 +170,63 @@ const getMailsByRangeUncoalesced = async (
     if (!safeFields.includes("mail_id")) {
       safeFields.unshift("mail_id");
     }
-    const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
 
     if (account === null) {
-      // Domain-wide query (exclude expunged messages)
+      // Domain-wide query (INBOX / unified Sent Messages) — still on
+      // uid_domain, unchanged by the per-account mapping migration.
+      const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
       if (useUid) {
         sql = `
-          SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4
+          SELECT ${fieldList} FROM mails
+          WHERE user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4
             AND expunged = FALSE
-          ORDER BY ${uidField} ASC
+          ORDER BY ${UID_DOMAIN} ASC
         `;
         values = [user_id, sent, start, Math.min(end, 999999999)];
       } else {
         sql = `
-          SELECT ${fieldList} FROM mails 
+          SELECT ${fieldList} FROM mails
           WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
-          ORDER BY ${uidField} ASC
+          ORDER BY ${UID_DOMAIN} ASC
           OFFSET $3 LIMIT $4
         `;
         values = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
-      // Account-specific query (exclude expunged messages)
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      // Account-scoped query — JOIN `mail_mailbox_uid` to fetch per-
+      // account UID and enforce mailbox membership. Fields on `mails`
+      // are prefixed with `m.` so the SELECT is unambiguous across the
+      // join.
+      const mailbox = mailboxPathForAccount(account, sent);
+      const qualifiedFields = safeFields
+        .map((f) => `m.${f}`)
+        .join(", ");
+      const fieldList = qualifiedFields.length > 0 ? qualifiedFields : "m.*";
       if (useUid) {
         sql = `
-          SELECT ${fieldList} FROM mails
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-            AND ${uidField} >= $4 AND ${uidField} <= $5 AND expunged = FALSE
-          ORDER BY ${uidField} ASC
+          SELECT ${fieldList} FROM mails m
+          JOIN ${MAIL_MAILBOX_UID} x
+            ON x.${USER_ID} = m.${USER_ID}
+            AND x.${MAILBOX} = $3
+            AND x.${MAIL_ID} = m.${MAIL_ID}
+          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2
+            AND x.${UID} >= $4 AND x.${UID} <= $5
+            AND m.${EXPUNGED} = FALSE
+          ORDER BY x.${UID} ASC
         `;
-        values = [user_id, sent, addressJson, start, Math.min(end, 999999999)];
+        values = [user_id, sent, mailbox, start, Math.min(end, 999999999)];
       } else {
         sql = `
-          SELECT ${fieldList} FROM mails 
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
-          ORDER BY ${uidField} ASC
+          SELECT ${fieldList} FROM mails m
+          JOIN ${MAIL_MAILBOX_UID} x
+            ON x.${USER_ID} = m.${USER_ID}
+            AND x.${MAILBOX} = $3
+            AND x.${MAIL_ID} = m.${MAIL_ID}
+          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+          ORDER BY x.${UID} ASC
           OFFSET $4 LIMIT $5
         `;
-        values = [user_id, sent, addressJson, start - 1, end - start + 1];
+        values = [user_id, sent, mailbox, start - 1, end - start + 1];
       }
     }
 
@@ -293,45 +327,79 @@ export const setMailFlags = async (
   operation: StoreOperationType = "FLAGS"
 ): Promise<UpdatedMailFlags[]> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
     const setClause = buildFlagSetClause(operation, flags);
-    const returningCols = `${uidField} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
 
-    // Build the row-matching predicate + its bound params once, shared by the
-    // real-change UPDATE and the no-op SELECT below. `$`-indices are 1-based and
-    // never include the mod-sequence (appended by the UPDATE branch only).
-    let whereClause: string;
-    let whereValues: ParamValue[];
+    // Two flavors of query — domain-scoped stays on `mails.uid_domain`,
+    // account-scoped joins `mail_mailbox_uid`. RETURNING clauses select
+    // the appropriate UID and the shared flag/modseq columns.
+    let selectSql: string;
+    let updateSql: string;
+    let baseValues: ParamValue[];
+
     if (account === null) {
+      const returningCols = `${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
-        whereClause = `user_id = $1 AND sent = $2 AND ${uidField} >= $3 AND ${uidField} <= $4`;
-        whereValues = [user_id, sent, start, end];
+        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4`;
+        selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
+        updateSql = `UPDATE mails
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
+          WHERE ${whereClause}
+          RETURNING ${returningCols}`;
+        baseValues = [user_id, sent, start, end];
       } else {
-        whereClause = `mail_id IN (
+        const whereClause = `mail_id IN (
           SELECT mail_id FROM mails
           WHERE user_id = $1 AND sent = $2
-          ORDER BY ${uidField} ASC
+          ORDER BY ${UID_DOMAIN} ASC
           OFFSET $3 LIMIT 1
         )`;
-        whereValues = [user_id, sent, start];
+        selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
+        updateSql = `UPDATE mails
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
+          WHERE ${whereClause}
+          RETURNING ${returningCols}`;
+        baseValues = [user_id, sent, start];
       }
     } else {
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      const mailbox = mailboxPathForAccount(account, sent);
+      // Account-scoped: JOIN `mail_mailbox_uid` for both membership and
+      // UID. RETURNING `x.uid` (the per-account UID the client sees),
+      // NOT `m.uid_account` — the column is scheduled for removal in
+      // PR 3 and the JOIN is now the source of truth.
+      const returningCols = `x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
       if (useUid) {
-        whereClause = `user_id = $1 AND sent = $2 AND ${addressCondition}
-          AND ${uidField} >= $4 AND ${uidField} <= $5`;
-        whereValues = [user_id, sent, addressJson, start, end];
+        const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
+          AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
+          AND x.${UID} >= $4 AND x.${UID} <= $5`;
+        selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
+        // UPDATE ... FROM syntax joins the mapping to the target mails
+        // rows. Postgres semantics: rows matching the join get updated
+        // once. RETURNING refers to columns from either side.
+        updateSql = `UPDATE mails m
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
+          FROM ${MAIL_MAILBOX_UID} x
+          WHERE ${whereClause}
+          RETURNING ${returningCols}`;
+        baseValues = [user_id, sent, mailbox, start, end];
       } else {
-        whereClause = `mail_id IN (
-          SELECT mail_id FROM mails
-          WHERE user_id = $1 AND sent = $2 AND ${addressCondition}
-          ORDER BY ${uidField} ASC
+        // Sequence-number path: match a single row at the OFFSETth
+        // position in the mailbox's UID-ordered list.
+        const targetSubquery = `(
+          SELECT y.${MAIL_ID} FROM ${MAIL_MAILBOX_UID} y
+          WHERE y.${USER_ID} = $1 AND y.${MAILBOX} = $3
+          ORDER BY y.${UID} ASC
           OFFSET $4 LIMIT 1
         )`;
-        whereValues = [user_id, sent, addressJson, start];
+        const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
+          AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
+          AND m.${MAIL_ID} IN ${targetSubquery}`;
+        selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
+        updateSql = `UPDATE mails m
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
+          FROM ${MAIL_MAILBOX_UID} x
+          WHERE ${whereClause}
+          RETURNING ${returningCols}`;
+        baseValues = [user_id, sent, mailbox, start];
       }
     }
 
@@ -341,10 +409,7 @@ export const setMailFlags = async (
     // (delta-sync cursor) or reserve a new mod-sequence (RFC 7162: modseq only
     // advances when flags actually change).
     if (!setClause) {
-      const result = await pool.query(
-        `SELECT ${returningCols} FROM mails WHERE ${whereClause}`,
-        whereValues
-      );
+      const result = await pool.query(selectSql, baseValues);
       return result.rows.map(toUpdatedMailFlags);
     }
 
@@ -353,13 +418,7 @@ export const setMailFlags = async (
     // — a batch mutation may share a single mod-sequence). Reserved atomically so
     // concurrent STOREs get strictly-distinct, monotonic values.
     const modseq = await getNextModseq(user_id);
-    const result = await pool.query(
-      `UPDATE mails
-       SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $${whereValues.length + 1}
-       WHERE ${whereClause}
-       RETURNING ${returningCols}`,
-      [...whereValues, modseq]
-    );
+    const result = await pool.query(updateSql, [...baseValues, modseq]);
     return result.rows.map(toUpdatedMailFlags);
   } catch (error) {
     logger.error("Failed to set mail flags", {}, error);
@@ -616,24 +675,34 @@ export const searchMailsByUid = async (
   criteria: { type: string; value?: unknown }[]
 ): Promise<number[]> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
+    // Column reference for the criterion clauses. Domain-scoped view
+    // uses the plain column on `mails`; account-scoped uses the
+    // JOIN-aliased mapping. `buildCriterionClause` emits fragments like
+    // `${uidField} >= $N`, so the alias needs to be qualified.
+    const uidField = account === null ? UID_DOMAIN : `x.${UID}`;
 
     // Always exclude expunged messages from search
-    const conditions: string[] = ["user_id = $1", "sent = $2", "expunged = FALSE"];
+    const conditions: string[] = ["m.user_id = $1", "m.sent = $2", "m.expunged = FALSE"];
     const values: ParamValue[] = [user_id, sent];
-    let paramIdx = 3;
 
-    if (account !== null) {
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $${paramIdx}::jsonb`
-        : `(${TO_ADDRESS} @> $${paramIdx}::jsonb OR cc_address @> $${paramIdx}::jsonb OR bcc_address @> $${paramIdx}::jsonb OR envelope_to @> $${paramIdx}::jsonb)`;
-      conditions.push(addressCondition);
-      values.push(addressJson);
-      paramIdx++;
+    // Base table + optional mailbox join
+    let fromClause: string;
+    if (account === null) {
+      fromClause = "mails m";
+    } else {
+      const mailbox = mailboxPathForAccount(account, sent);
+      // JOIN mapping — the mailbox condition IS the membership predicate.
+      conditions.push(`x.${USER_ID} = m.${USER_ID}`);
+      conditions.push(`x.${MAILBOX} = $3`);
+      conditions.push(`x.${MAIL_ID} = m.${MAIL_ID}`);
+      values.push(mailbox);
+      fromClause = `mails m, ${MAIL_MAILBOX_UID} x`;
     }
 
     for (const criterion of criteria) {
+      // Criterion clauses reference columns on `mails` unqualified
+      // (`answered = TRUE`, `to_address @> …`) — those still work under
+      // the `m` alias since column names are unambiguous with the join.
       const frag = buildCriterionClause(criterion, uidField, values);
       if (frag) conditions.push(frag);
     }
@@ -643,7 +712,7 @@ export const searchMailsByUid = async (
     // newest messages on mailboxes larger than the cap. Consistent with
     // the unbounded getAllUids / getMailsByRange enumeration paths.
     const sql = `
-      SELECT ${uidField} as uid FROM mails
+      SELECT ${uidField} as uid FROM ${fromClause}
       WHERE ${conditions.join(" AND ")}
       ORDER BY ${uidField} ASC
     `;
@@ -668,31 +737,28 @@ export const getAllUids = async (
   sent: boolean
 ): Promise<number[]> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
     let sql: string;
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide query (exclude expunged messages)
       sql = `
-        SELECT ${uidField} as uid FROM mails 
+        SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
-        ORDER BY ${uidField} ASC
+        ORDER BY ${UID_DOMAIN} ASC
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific query (exclude expunged messages)
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      const mailbox = mailboxPathForAccount(account, sent);
       sql = `
-        SELECT ${uidField} as uid FROM mails
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE
-        ORDER BY ${uidField} ASC
+        SELECT x.${UID} as uid FROM mails m
+        JOIN ${MAIL_MAILBOX_UID} x
+          ON x.${USER_ID} = m.${USER_ID}
+          AND x.${MAILBOX} = $3
+          AND x.${MAIL_ID} = m.${MAIL_ID}
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+        ORDER BY x.${UID} ASC
       `;
-      values = [user_id, sent, addressJson];
+      values = [user_id, sent, mailbox];
     }
 
     const result = await pool.query(sql, values);
@@ -715,33 +781,30 @@ export const getFirstUnseenUid = async (
   sent: boolean
 ): Promise<number | null> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
     let sql: string;
     let values: ParamValue[];
 
     if (account === null) {
-      // Domain-wide query (exclude expunged messages)
       sql = `
-        SELECT ${uidField} as uid FROM mails
+        SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE
-        ORDER BY ${uidField} ASC
+        ORDER BY ${UID_DOMAIN} ASC
         LIMIT 1
       `;
       values = [user_id, sent];
     } else {
-      // Account-specific query (exclude expunged messages)
-      const addressJson = JSON.stringify([{ address: account }]);
-      const addressCondition = sent
-        ? `${FROM_ADDRESS} @> $3::jsonb`
-        : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+      const mailbox = mailboxPathForAccount(account, sent);
       sql = `
-        SELECT ${uidField} as uid FROM mails
-        WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND expunged = FALSE AND read = FALSE
-        ORDER BY ${uidField} ASC
+        SELECT x.${UID} as uid FROM mails m
+        JOIN ${MAIL_MAILBOX_UID} x
+          ON x.${USER_ID} = m.${USER_ID}
+          AND x.${MAILBOX} = $3
+          AND x.${MAIL_ID} = m.${MAIL_ID}
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE AND m.read = FALSE
+        ORDER BY x.${UID} ASC
         LIMIT 1
       `;
-      values = [user_id, sent, addressJson];
+      values = [user_id, sent, mailbox];
     }
 
     const result = await pool.query(sql, values);
@@ -764,46 +827,58 @@ export const expungeDeletedMails = async (
   sent: boolean
 ): Promise<number[]> => {
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
     if (account === null) {
-      // Domain-wide expunge: simple equality filters → use the framework's
-      // updateWhere so `updated` is bumped via the standard data-bag pattern.
+      // Domain-wide expunge — still on uid_domain, unchanged.
       const rows = await mailsTable.updateWhere(
         { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
         { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
-        [`${uidField} as uid`]
+        [`${UID_DOMAIN} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
     }
 
-    // Account-specific expunge: the address filter uses jsonb `@>` containment
-    // (with an OR across to/cc/bcc on the recv side), which WhereFilters cannot
-    // express. Two-step: raw SELECT to resolve mail_ids, then framework
-    // updateWhere with an IN filter so the data-bag pattern bumps `updated`.
-    const addressJson = JSON.stringify([{ address: account }]);
-    const addressCondition = sent
-      ? `${FROM_ADDRESS} @> $3::jsonb`
-      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+    // Account-scoped expunge: JOIN `mail_mailbox_uid` to resolve the
+    // mail_ids that belong to this mailbox, then framework updateWhere
+    // with an IN filter so the data-bag pattern bumps `updated`. The
+    // RETURNING side reads x.uid from a second SELECT that fetches the
+    // per-account UIDs for the just-expunged rows.
+    const mailbox = mailboxPathForAccount(account, sent);
     const selectSql = `
-      SELECT ${MAIL_ID} as mail_id FROM mails
-      WHERE user_id = $1 AND sent = $2 AND ${addressCondition} AND deleted = TRUE AND expunged = FALSE
+      SELECT m.${MAIL_ID} as mail_id, x.${UID} as uid FROM mails m
+      JOIN ${MAIL_MAILBOX_UID} x
+        ON x.${USER_ID} = m.${USER_ID}
+        AND x.${MAILBOX} = $3
+        AND x.${MAIL_ID} = m.${MAIL_ID}
+      WHERE m.${USER_ID} = $1 AND m.${SENT} = $2
+        AND m.${DELETED} = TRUE AND m.${EXPUNGED} = FALSE
     `;
-    const selectValues: ParamValue[] = [user_id, sent, addressJson];
-    const selectResult = await pool.query(selectSql, selectValues);
-    const mailIds = selectResult.rows.map((row: Record<string, unknown>) => row.mail_id as string);
-    if (mailIds.length === 0) return [];
+    const selectResult = await pool.query(selectSql, [user_id, sent, mailbox]);
+    if (selectResult.rows.length === 0) return [];
+    const mailIds = selectResult.rows.map(
+      (row: Record<string, unknown>) => row.mail_id as string
+    );
+    const uidsByMailId = new Map<string, number>(
+      selectResult.rows.map((row: Record<string, unknown>) => [
+        row.mail_id as string,
+        row.uid as number,
+      ])
+    );
 
     const rows = await mailsTable.updateWhere(
       { [MAIL_ID]: { op: "IN", value: mailIds } },
       // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
       // resyncing CONDSTORE/QRESYNC client detects the removal.
       { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
-      [`${uidField} as uid`]
+      [MAIL_ID]
     );
-    return rows.map((row: Record<string, unknown>) => row.uid as number);
+    // Map the UPDATE's returned mail_ids back to their per-account UIDs
+    // via the SELECT snapshot. This is the wire signal for EXPUNGE
+    // responses.
+    return rows
+      .map((row: Record<string, unknown>) => uidsByMailId.get(row[MAIL_ID] as string))
+      .filter((u): u is number => u !== undefined);
   } catch (error) {
     logger.error("Failed to expunge deleted mails", {}, error);
     return [];
@@ -826,8 +901,6 @@ export const expungeMailsByUid = async (
 ): Promise<number[]> => {
   if (uids.length === 0) return [];
   try {
-    const uidField = account === null ? UID_DOMAIN : UID_ACCOUNT;
-
     if (account === null) {
       // Domain-wide: simple equality on user_id+sent + IN(uids).
       const rows = await mailsTable.updateWhere(
@@ -835,34 +908,41 @@ export const expungeMailsByUid = async (
           [USER_ID]: user_id,
           [SENT]: sent,
           [EXPUNGED]: false,
-          [uidField]: { op: "IN", value: uids },
+          [UID_DOMAIN]: { op: "IN", value: uids },
         },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
         { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
-        [`${uidField} as uid`]
+        [`${UID_DOMAIN} as uid`]
       );
       return rows.map((row: Record<string, unknown>) => row.uid as number);
     }
 
-    // Account-specific: mirror `expungeDeletedMails`'s two-step pattern.
-    // SELECT mail_ids via the address-OR predicate + UID IN, then UPDATE
-    // by mail_id IN so the data-bag pattern bumps `updated`.
-    const addressJson = JSON.stringify([{ address: account }]);
-    const addressCondition = sent
-      ? `${FROM_ADDRESS} @> $3::jsonb`
-      : `(${TO_ADDRESS} @> $3::jsonb OR cc_address @> $3::jsonb OR bcc_address @> $3::jsonb OR envelope_to @> $3::jsonb)`;
+    // Account-scoped: JOIN `mail_mailbox_uid` to filter by (mailbox, uid IN),
+    // resolve the mail_ids, then updateWhere by mail_id IN so the data-bag
+    // pattern bumps `updated`. Snapshot uid_by_mail_id so RETURNING can
+    // map the UPDATE's mail_id output back to the per-account UIDs.
+    const mailbox = mailboxPathForAccount(account, sent);
     const uidPlaceholders = uids.map((_, i) => `$${i + 4}`).join(",");
     const selectSql = `
-      SELECT ${MAIL_ID} as mail_id FROM mails
-      WHERE user_id = $1
-        AND sent = $2
-        AND ${addressCondition}
-        AND ${uidField} IN (${uidPlaceholders})
-        AND expunged = FALSE
+      SELECT m.${MAIL_ID} as mail_id, x.${UID} as uid FROM mails m
+      JOIN ${MAIL_MAILBOX_UID} x
+        ON x.${USER_ID} = m.${USER_ID}
+        AND x.${MAILBOX} = $3
+        AND x.${MAIL_ID} = m.${MAIL_ID}
+      WHERE m.${USER_ID} = $1
+        AND m.${SENT} = $2
+        AND x.${UID} IN (${uidPlaceholders})
+        AND m.${EXPUNGED} = FALSE
     `;
-    const selectValues: ParamValue[] = [user_id, sent, addressJson, ...uids];
+    const selectValues: ParamValue[] = [user_id, sent, mailbox, ...uids];
     const selectResult = await pool.query(selectSql, selectValues);
+    const uidsByMailId = new Map<string, number>(
+      selectResult.rows.map((row: Record<string, unknown>) => [
+        row.mail_id as string,
+        row.uid as number,
+      ])
+    );
     const mailIds = selectResult.rows.map(
       (row: Record<string, unknown>) => row.mail_id as string
     );
@@ -873,9 +953,11 @@ export const expungeMailsByUid = async (
       // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
       // resyncing CONDSTORE/QRESYNC client detects the removal.
       { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
-      [`${uidField} as uid`]
+      [MAIL_ID]
     );
-    return rows.map((row: Record<string, unknown>) => row.uid as number);
+    return rows
+      .map((row: Record<string, unknown>) => uidsByMailId.get(row[MAIL_ID] as string))
+      .filter((u): u is number => u !== undefined);
   } catch (error) {
     logger.error("Failed to expunge mails by UID", { uids }, error);
     throw error;

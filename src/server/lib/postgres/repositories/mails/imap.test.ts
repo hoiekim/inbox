@@ -246,12 +246,17 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
     expect(fnSource).toMatch(/if\s*\(!setClause\)/);
   });
 
-  it("no-op branch uses SELECT, not UPDATE, so `updated`/modseq are untouched", () => {
-    // The `!setClause` block runs a bare SELECT of the current flags.
+  it("no-op branch runs the SELECT variant and never touches the UPDATE variant", () => {
+    // The `!setClause` block calls `selectSql`; the UPDATE variant lives
+    // in `updateSql` and is only reachable after the branch. #702 PR 2b-2
+    // split the two SQL strings apart (needed distinct query shapes for
+    // the account-scoped JOIN vs domain-scoped table access), so the
+    // no-op invariant is now "the no-op block references selectSql, not
+    // updateSql".
     const noopBlock = fnSource.match(/if\s*\(!setClause\)\s*\{[\s\S]*?\n {4}\}/);
     expect(noopBlock).not.toBeNull();
-    expect(noopBlock![0]).toContain("SELECT");
-    expect(noopBlock![0]).not.toContain("UPDATE");
+    expect(noopBlock![0]).toContain("selectSql");
+    expect(noopBlock![0]).not.toContain("updateSql");
     expect(noopBlock![0]).not.toContain("getNextModseq");
   });
 });
