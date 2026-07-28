@@ -6,6 +6,12 @@ export const PUSH_SUBSCRIPTIONS = "push_subscriptions";
 export const SPAM_ALLOWLIST = "spam_allowlist";
 export const SPAM_TRAINING = "spam_training";
 export const MAIL_UID_COUNTERS = "mail_uid_counters";
+export const MAIL_MAILBOX_UID = "mail_mailbox_uid";
+
+// Columns on mail_mailbox_uid. `mailbox` holds the full IMAP path (INBOX,
+// Sent Messages, INBOX/accounts/<name>, and any future user-defined path).
+export const MAILBOX = "mailbox";
+export const UID = "uid";
 
 // Common column names
 export const UPDATED = "updated";
