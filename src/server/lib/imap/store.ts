@@ -48,7 +48,9 @@ type SimplifiedCriterion = { type: string; value?: unknown };
  * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
  * otherwise the SQL builder would read the wrong field off the raw parser shape
  * (e.g. `.date`/`.field` instead of `.value`) and silently mis-handle the nested
- * criterion. Returns null when the criterion imposes no constraint. A UID set
+ * criterion. An unexpressible leaf is preserved as a bare `{ type }` (never
+ * dropped) so buildCriterionClause maps it to a match-none fragment — the SEARCH
+ * fails closed, never matching every message (#672). A UID set
  * normalises to one `UID_SET` entry carrying all its ranges, so the SQL builder
  * ORs the ranges among themselves (a message is in the set if it falls in ANY
  * range) — nested UID keys under NOT/OR resolve the same way. See #551, #659.
@@ -111,7 +113,12 @@ export const simplifyCriterion = (
       return { type, value: sizeCriterion.size };
     }
 
-    // Logical NOT: negate a single (normalised) criterion
+    // Logical NOT: negate a single (normalised) criterion. `inner` is never
+    // null in practice — no leaf returns null post-#672 (unexpressible leaves
+    // fail closed via the default case), so the null-guard here is defensively
+    // unreachable. If a null-returning leaf is ever reintroduced, route it
+    // through buildCriterionClause's match-none algebra rather than dropping
+    // the node — a dropped NOT fails OPEN (matches everything).
     case "NOT": {
       const notCriterion = criterion as { type: string; criterion: SearchCriterion };
       const inner = simplifyCriterion(notCriterion.criterion);
@@ -128,8 +135,11 @@ export const simplifyCriterion = (
       const left = simplifyCriterion(orCriterion.left);
       const right = simplifyCriterion(orCriterion.right);
       if (left && right) return { type: "OR", value: { left, right } };
-      // An OR with an unconstrained/unsupported side matches everything; drop it
-      // rather than over-narrow to the one expressible side.
+      // Defensively unreachable: neither side is null because no leaf returns
+      // null post-#672. Were a side ever null, dropping the OR fails OPEN
+      // (matches everything) — the opposite of the fail-closed direction the
+      // rest of the search path now takes. A reintroduced null-leaf should
+      // preserve the OR node and let buildCriterionClause reduce it instead.
       return null;
     }
 
