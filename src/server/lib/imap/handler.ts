@@ -9,6 +9,22 @@ import { parseCommand } from "./parsers";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
+// Per-command diagnostic log thresholds. A command is "interesting"
+// (logged at INFO) if ANY of these thresholds is exceeded. Otherwise
+// the payload drops to DEBUG — same shape, same fields, but suppressed
+// by prod's INFO-level filter so the noise floor doesn't drown the tail
+// during a client retry storm. Chosen so that:
+// - A `UID FETCH X (BODY)` on a multi-MB message ALWAYS logs (huge
+//   response, non-trivial duration, RSS delta).
+// - A `UID FETCH X (FLAGS)` under an idle-loop poll drops to DEBUG
+//   (0-byte-ish response, sub-ms, no RSS delta).
+// - Anything abnormally slow (`durationMs >= 100`) surfaces regardless
+//   of size — a slow FLAGS query is diagnosable evidence for a DB /
+//   pool issue.
+const INTERESTING_RSS_DELTA_MB = 1;
+const INTERESTING_DURATION_MS = 100;
+const INTERESTING_RESPONSE_BYTES = 4096;
+
 // Short human-readable summary of a request for the per-command diagnostic
 // log. Never emits mail contents. Cap at ~200 chars so a runaway pipeline of
 // FETCH commands doesn't blow the log volume; the sequence range + item
@@ -470,7 +486,26 @@ export class ImapRequestHandler {
     } finally {
       const rssAfter = process.memoryUsage.rss();
       const socket = session.socket;
-      logger.info("IMAP command completed", {
+      const rssDeltaMB = Math.round((rssAfter - rssBefore) / 1_048_576);
+      const responseBytes = session.bytesWritten - bytesBefore;
+      const durationMs = Math.round(performance.now() - startedAt);
+      // Threshold-gate the per-command line. Under a client retry storm
+      // (observed 2026-07-28: 208.82.98.54 issuing ~1700 UID FETCH FLAGS
+      // /min per socket → 1700 lines/min on inbox alone), the noise floor
+      // — commands with zero RSS delta AND sub-INTERESTING_DURATION_MS
+      // duration AND sub-INTERESTING_RESPONSE_BYTES response — drowns
+      // journald's 10k-line tail cap in ~6 min and starves triage of the
+      // interesting samples (the ones that actually moved RSS or ran
+      // slow). Keep the interesting ones at INFO where the alarm embed
+      // and default triage tail find them; drop the noise to DEBUG which
+      // prod's INFO-level filter suppresses. No traceability loss for
+      // OOM / latency triage — the samples that mattered are still logged
+      // fully.
+      const isInteresting =
+        Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
+        durationMs >= INTERESTING_DURATION_MS ||
+        responseBytes >= INTERESTING_RESPONSE_BYTES;
+      const payload = {
         component: "imap",
         tag,
         cmd: describeImapCommand(request),
@@ -478,10 +513,15 @@ export class ImapRequestHandler {
         remote: socket ? `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}` : "?",
         rssBeforeMB: Math.round(rssBefore / 1_048_576),
         rssAfterMB: Math.round(rssAfter / 1_048_576),
-        rssDeltaMB: Math.round((rssAfter - rssBefore) / 1_048_576),
-        responseBytes: session.bytesWritten - bytesBefore,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
+        rssDeltaMB,
+        responseBytes,
+        durationMs,
+      };
+      if (isInteresting) {
+        logger.info("IMAP command completed", payload);
+      } else {
+        logger.debug("IMAP command completed", payload);
+      }
     }
   }
 
