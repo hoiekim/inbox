@@ -9,6 +9,66 @@ import { parseCommand } from "./parsers";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
+// Short human-readable summary of a request for the per-command diagnostic
+// log. Never emits mail contents. Cap at ~200 chars so a runaway pipeline of
+// FETCH commands doesn't blow the log volume; the sequence range + item
+// names are enough to identify OOM-triggering shapes (full-mailbox FETCH,
+// BODY[] on a large range, etc.).
+export function describeImapCommand(request: ImapRequest): string {
+  const summary = (s: string) => (s.length > 180 ? s.slice(0, 177) + "..." : s);
+  const rangesOf = (rs: { start: number; end?: number }[]) =>
+    rs
+      .map((r) => (r.end === undefined ? String(r.start) : `${r.start}:${r.end}`))
+      .join(",");
+
+  switch (request.type) {
+    case "UID":
+      return `UID ${describeImapCommand(request.data.request)}`;
+    case "FETCH": {
+      const seq = rangesOf(request.data.sequenceSet.ranges);
+      const items = request.data.dataItems?.map((i) => i.type).join(" ") ?? "";
+      return summary(`FETCH ${seq} (${items})`);
+    }
+    case "STORE": {
+      const seq = rangesOf(request.data.sequenceSet.ranges);
+      return summary(`STORE ${seq} ${request.data.operation} ${request.data.flags.join(" ")}`);
+    }
+    case "SEARCH":
+      // SEARCH criteria can be arbitrarily nested; summarize root types only.
+      return summary(`SEARCH ${JSON.stringify(request.data.criteria ?? "").slice(0, 120)}`);
+    case "COPY":
+      return summary(`COPY ${rangesOf(request.data.sequenceSet.ranges)} ${request.data.mailbox}`);
+    case "MOVE":
+      return summary(`MOVE ${rangesOf(request.data.sequenceSet.ranges)} ${request.data.mailbox}`);
+    case "SELECT":
+    case "EXAMINE":
+      return summary(`${request.type} ${request.data.mailbox}`);
+    case "LIST":
+    case "LSUB":
+      return summary(`${request.type} "${request.data.reference}" "${request.data.pattern}"`);
+    case "STATUS":
+      return summary(`STATUS ${request.data.mailbox} (${request.data.items.join(" ")})`);
+    case "APPEND":
+      return summary(`APPEND ${request.data.mailbox} ${request.data.message?.length ?? 0}B`);
+    case "CREATE":
+    case "DELETE":
+    case "RENAME":
+    case "SUBSCRIBE":
+    case "UNSUBSCRIBE":
+    case "GETQUOTAROOT":
+      return summary(`${request.type} ${JSON.stringify(request.data).slice(0, 160)}`);
+    case "LOGIN":
+      // NEVER emit the password.
+      return summary(`LOGIN ${request.data.username}`);
+    case "AUTHENTICATE":
+      return summary(`AUTHENTICATE ${request.data.mechanism}`);
+    case "ENABLE":
+      return summary(`ENABLE ${request.data.capabilities.join(" ")}`);
+    default:
+      return request.type;
+  }
+}
+
 export class ImapRequestHandler {
   private session: ImapSession | null = null;
   private _pendingSaslTag: string | null = null;
@@ -223,6 +283,26 @@ export class ImapRequestHandler {
       return;
     }
 
+    // Per-command diagnostic: RSS delta + bytes emitted to the client + wall
+    // duration, so a memory spike can be attributed to a specific command
+    // rather than only to a coarse metrics-poll window. Sampled from
+    // `session.bytesWritten` (session-scoped counter) rather than wrapping
+    // `session.write` — the wrap approach was racy under Node's data-event
+    // concurrency (the handler is an async function but the socket emits
+    // `data` events without awaiting), which could restore an orphan
+    // `originalWrite` from a nested handler and permanently break the wrap
+    // for the rest of the socket's lifetime. The delta is not a mutex —
+    // overlapping commands on the same session over-attribute to whichever
+    // completed first — but no orphan-restore risk.
+    //
+    // RSS is process-wide, not session-scoped: under multi-socket load two
+    // concurrent commands both see the same rssDelta. `remote` in the log
+    // lets triage disambiguate.
+    const session = this.session;
+    const startedAt = performance.now();
+    const rssBefore = process.memoryUsage.rss();
+    const bytesBefore = session.bytesWritten;
+
     try {
       switch (request.type) {
         case "CAPABILITY":
@@ -386,6 +466,21 @@ export class ImapRequestHandler {
     } catch (error) {
       logger.error("Error handling IMAP request", { component: "imap", tag, type: request.type }, error);
       this.session.write(`${tag} BAD Internal server error\r\n`);
+    } finally {
+      const rssAfter = process.memoryUsage.rss();
+      const socket = session.socket;
+      logger.info("IMAP command completed", {
+        component: "imap",
+        tag,
+        cmd: describeImapCommand(request),
+        mailbox: session.selectedMailbox,
+        remote: socket ? `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}` : "?",
+        rssBeforeMB: Math.round(rssBefore / 1_048_576),
+        rssAfterMB: Math.round(rssAfter / 1_048_576),
+        rssDeltaMB: Math.round((rssAfter - rssBefore) / 1_048_576),
+        responseBytes: session.bytesWritten - bytesBefore,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
     }
   }
 
