@@ -159,6 +159,92 @@ export const writeMailboxUid = async (
 };
 
 /**
+ * Read-path counterpart to `writeMailboxUid`: guarantees every requested
+ * `mail_id` has a mapping row for `(user_id, mailbox, mail_id)` and
+ * returns the full `mail_id → uid` map.
+ *
+ * The account-scoped read sites in `mails/imap.ts` join this mapping
+ * instead of reading `mails.uid_account` directly. Rows written by
+ * `saveMail` / `storeMail` (PR 2a) already have their mapping; mail
+ * that predates that PR does not — this helper backfills those on
+ * first access.
+ *
+ * Backfill shape: copy the mail's existing `uid_account` verbatim. The
+ * UID was already reserved from `mail_uid_counters` at receive time, so
+ * mirroring it preserves the per-account UID sequence without burning a
+ * fresh counter tick. `ON CONFLICT DO NOTHING` makes a concurrent
+ * ensureMailboxUids call idempotent — the loser reads the winner's row
+ * on the second SELECT.
+ *
+ * Filters `uid_account > 0` so mails that were never assigned an
+ * account UID (domain-only rows on a legacy path) don't emit a
+ * zero-UID mapping. Callers that only need domain UIDs skip this
+ * helper entirely.
+ */
+export const ensureMailboxUids = async (
+  user_id: string,
+  mailbox: string,
+  mail_ids: string[]
+): Promise<Map<string, number>> => {
+  const result = new Map<string, number>();
+  if (mail_ids.length === 0) return result;
+
+  // Backfill missing rows in one round-trip. INSERT … SELECT lets
+  // Postgres do the "for each mail without a mapping, copy its
+  // uid_account" work server-side; the anti-join (`WHERE NOT EXISTS`)
+  // narrows to the missing set.
+  const backfillSql = `
+    INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
+    SELECT m.user_id, $2, m.mail_id, m.uid_account
+    FROM mails m
+    WHERE m.user_id = $1
+      AND m.mail_id = ANY($3::text[])
+      AND m.uid_account > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM ${MAIL_MAILBOX_UID} x
+        WHERE x.${USER_ID} = m.user_id
+          AND x.${MAILBOX} = $2
+          AND x.${MAIL_ID} = m.mail_id
+      )
+    ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID}) DO NOTHING
+  `;
+  try {
+    await pool.query(backfillSql, [user_id, mailbox, mail_ids]);
+  } catch (error) {
+    logger.warn(
+      "ensureMailboxUids backfill failed — proceeding with best-effort read",
+      { user_id, mailbox, mail_id_count: mail_ids.length },
+      error
+    );
+  }
+
+  // Read the complete set — includes rows PR 2a wrote at insert time,
+  // plus any rows the backfill above just created (or the concurrent
+  // caller's winner rows). Empty result for a given mail_id means it
+  // has no `uid_account` at all (never routed through an account UID
+  // space) — the caller filters those out via its own address
+  // predicate before they reach here.
+  try {
+    const rows = await pool.query<{ mail_id: string; uid: number }>(
+      `SELECT ${MAIL_ID} AS mail_id, ${UID} AS uid
+       FROM ${MAIL_MAILBOX_UID}
+       WHERE ${USER_ID} = $1 AND ${MAILBOX} = $2 AND ${MAIL_ID} = ANY($3::text[])`,
+      [user_id, mailbox, mail_ids]
+    );
+    for (const row of rows.rows) {
+      result.set(row.mail_id, Number(row.uid));
+    }
+  } catch (error) {
+    logger.error(
+      "ensureMailboxUids read failed",
+      { user_id, mailbox, mail_id_count: mail_ids.length },
+      error
+    );
+  }
+  return result;
+};
+
+/**
  * Per-user mod-sequence reservation query (CONDSTORE, RFC 7162 §3.1).
  *
  * Reuses the same atomic `mail_uid_counters` upsert as UID assignment — a single
