@@ -50,7 +50,8 @@ export async function fetchMessagesTyped(
   store: Store,
   selectedMailbox: string,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean = false
 ): Promise<void> {
   const isFlagsOnly = fetchRequest.dataItems.every(
     (item) =>
@@ -84,7 +85,8 @@ export async function fetchMessagesTyped(
       isUidCommand,
       store,
       selectedMailbox,
-      seqState
+      seqState,
+      condstoreEnabled
     );
     await _processFetchMessages(
       messages,
@@ -93,7 +95,8 @@ export async function fetchMessagesTyped(
       store,
       selectedMailbox,
       seqState,
-      write
+      write,
+      condstoreEnabled
     );
     write(`${tag} OK FETCH completed\r\n`);
   } catch (error) {
@@ -107,10 +110,20 @@ async function _fetchMessages(
   isUidCommand: boolean,
   store: Store,
   selectedMailbox: string,
-  seqState: SequenceState
+  seqState: SequenceState,
+  condstoreEnabled: boolean
 ): Promise<Map<string, Partial<MailType>>> {
   const ranges = convertSequenceSet(fetchRequest.sequenceSet);
   const requestedFields = getRequestedFields(fetchRequest.dataItems);
+  // MODSEQ is needed either when explicitly requested or, per RFC 4551 §3.3.2,
+  // implicitly on every FETCH response once CONDSTORE is enabled. Pull the
+  // column in the same range query rather than issuing a second lookup.
+  if (
+    condstoreEnabled ||
+    fetchRequest.dataItems.some((item) => item.type === "MODSEQ")
+  ) {
+    requestedFields.add("modseq");
+  }
   const isUidFetch =
     fetchRequest.sequenceSet.type === "uid" || isUidCommand;
 
@@ -162,7 +175,8 @@ async function _processFetchMessages(
   store: Store,
   selectedMailbox: string,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean
 ): Promise<void> {
   const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
   const isUidFetch =
@@ -187,7 +201,8 @@ async function _processFetchMessages(
         id,
         uid,
         isUidFetch,
-        selectedMailbox
+        selectedMailbox,
+        condstoreEnabled
       );
       writeFetchResponse(write, seqNum, response);
 
@@ -353,7 +368,8 @@ export async function storeFlagsTyped(
   selectedMailbox: string,
   mailboxReadOnly: boolean,
   seqState: SequenceState,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  condstoreEnabled: boolean = false
 ): Promise<void> {
   if (mailboxReadOnly) {
     write(`${tag} NO [READ-ONLY] Mailbox is read-only\r\n`);
@@ -414,26 +430,39 @@ export async function storeFlagsTyped(
         continue;
       }
 
-      if (!silent && !operation.includes("SILENT")) {
+      // A .SILENT store suppresses the FLAGS echo, but RFC 4551 §3.3.2
+      // (Example 14) requires a CONDSTORE session to still receive the new
+      // mod-sequence — `* n FETCH (MODSEQ (m))` with no FLAGS — so its cache
+      // stays in sync. So emit whenever FLAGS is due OR CONDSTORE is on.
+      const isSilent = silent || operation.includes("SILENT");
+      const emitFlags = !isSilent;
+      if (emitFlags || condstoreEnabled) {
         for (const mail of updatedMails) {
           const seq = uidToSeqNumber(
             seqState.seqToUid,
             seqState.uidToSeq,
             mail.uid
           );
-          if (seq !== undefined) {
+          if (seq === undefined) continue;
+
+          const items: string[] = [];
+          if (emitFlags) {
             const currentFlags: string[] = [];
             if (mail.read) currentFlags.push("\\Seen");
             if (mail.saved) currentFlags.push("\\Flagged");
             if (mail.deleted) currentFlags.push("\\Deleted");
             if (mail.draft) currentFlags.push("\\Draft");
             if (mail.answered) currentFlags.push("\\Answered");
-
-            const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
-            write(
-              `* ${seq} FETCH (${uidItem}FLAGS (${currentFlags.join(" ")}))\r\n`
-            );
+            items.push(`FLAGS (${currentFlags.join(" ")})`);
           }
+          if (condstoreEnabled && mail.modseq !== undefined) {
+            items.push(`MODSEQ (${mail.modseq})`);
+          }
+          // Nothing to say (silent store, CONDSTORE off) — stay quiet.
+          if (items.length === 0) continue;
+
+          const uidItem = isUidStore ? `UID ${mail.uid} ` : "";
+          write(`* ${seq} FETCH (${uidItem}${items.join(" ")})\r\n`);
         }
       }
     }

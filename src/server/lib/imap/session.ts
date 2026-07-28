@@ -61,6 +61,9 @@ export class ImapSession {
   // legitimate interactive rate while still bounding a runaway client.
   private throttler: Throttler = new Throttler(100, 1000);
   private authenticated: boolean = false;
+  // RFC 4551 CONDSTORE: once the client sends `ENABLE CONDSTORE`, MODSEQ is
+  // emitted on every subsequent FETCH response for the life of the session.
+  private condstoreEnabled: boolean = false;
   private isIdling: boolean = false;
   private idleTag: string | null = null;
   private sessionId: string;
@@ -159,6 +162,24 @@ export class ImapSession {
 
   check = async (tag: string) => {
     this.write(`${tag} OK CHECK completed\r\n`);
+  };
+
+  /**
+   * RFC 5161 ENABLE + RFC 4551 §3.7. Acknowledge the extensions we can turn on
+   * and echo them back in a single `* ENABLED` line (empty when none match).
+   * CONDSTORE is the only enable-able extension today; enabling it makes every
+   * later FETCH response carry MODSEQ.
+   */
+  enable = (tag: string, capabilities: string[]) => {
+    const enabled: string[] = [];
+    for (const cap of capabilities) {
+      if (cap.toUpperCase() === "CONDSTORE" && !this.condstoreEnabled) {
+        this.condstoreEnabled = true;
+        enabled.push("CONDSTORE");
+      }
+    }
+    const suffix = enabled.length > 0 ? ` ${enabled.join(" ")}` : "";
+    this.write(`* ENABLED${suffix}\r\n${tag} OK ENABLE completed\r\n`);
   };
 
   // ---------------------------------------------------------------------------
@@ -322,7 +343,8 @@ export class ImapSession {
       this.store,
       this.selectedMailbox,
       this.seqState,
-      this.write
+      this.write,
+      this.condstoreEnabled
     );
   };
 
@@ -367,7 +389,8 @@ export class ImapSession {
       this.selectedMailbox,
       this.mailboxReadOnly,
       this.seqState,
-      this.write
+      this.write,
+      this.condstoreEnabled
     );
   };
 

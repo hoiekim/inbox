@@ -8,6 +8,7 @@ export const getCapabilities = (isTls = false) => {
     "ENABLE",
     "IDLE",
     "MOVE",
+    "CONDSTORE",
     "AUTH=PLAIN"
   ];
 

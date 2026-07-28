@@ -17,6 +17,7 @@ import {
   expungeMailsByUid,
   getAllUids as pgGetAllUids,
   getFirstUnseenUid as pgGetFirstUnseenUid,
+  getHighestModseq as pgGetHighestModseq,
   SaveMailInput,
   UpdatedMailFlags,
   StoreOperationType,
@@ -321,6 +322,23 @@ export class Store {
     }
   };
 
+  /**
+   * HIGHESTMODSEQ for a mailbox (RFC 4551 §3.1.1) — the largest mod-sequence of
+   * any message routed to it. Backs the `* OK [HIGHESTMODSEQ N]` SELECT/EXAMINE
+   * response code and the STATUS HIGHESTMODSEQ item. Falls back to 1 (the
+   * DEFAULT-1 floor, never 0) on error so a transient DB hiccup doesn't signal
+   * "no persistent mod-sequences".
+   */
+  getHighestModseq = async (box: string): Promise<number> => {
+    try {
+      const { accountName, isSent } = this.resolveBox(box);
+      return await pgGetHighestModseq(this.user.id, accountName, isSent);
+    } catch (error) {
+      logger.error("Error getting highest modseq", { component: "imap.store", box }, error);
+      return 1;
+    }
+  };
+
   getMessages = async (
     box: string,
     start: number,
@@ -364,6 +382,9 @@ export class Store {
             domain: model.uid_domain,
             account: model.uid_account,
           };
+        }
+        if (model.modseq !== undefined) {
+          mail.modseq = model.modseq;
         }
 
         if (model.from_address) {

@@ -238,6 +238,13 @@ export async function statusMailbox(
       uidValidity = await getImapUidValidity(store.getUser().id);
     }
 
+    // RFC 4551 §3.1.2: STATUS may request HIGHESTMODSEQ. Resolve it once here
+    // (a single MAX(modseq) query) rather than per-item inside the loop.
+    let highestModseq: number | null = null;
+    if (items.includes("HIGHESTMODSEQ")) {
+      highestModseq = await store.getHighestModseq(mailbox);
+    }
+
     const statusItems: string[] = [];
     items.forEach((item) => {
       switch (item) {
@@ -255,6 +262,9 @@ export async function statusMailbox(
           break;
         case "RECENT":
           statusItems.push("RECENT", "0");
+          break;
+        case "HIGHESTMODSEQ":
+          statusItems.push("HIGHESTMODSEQ", highestModseq!.toString());
           break;
       }
     });
@@ -461,6 +471,11 @@ export async function selectMailbox(
         : countResult.maxUid + 1 || 1;
     write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
     write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
+    // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
+    // HIGHESTMODSEQ on SELECT/EXAMINE so the client can detect changes since
+    // its last-known mod-sequence without a full resync.
+    const highestModseq = await store.getHighestModseq(cleanName);
+    write(`* OK [HIGHESTMODSEQ ${highestModseq}] Highest mod-sequence\r\n`);
     write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
     write(
       `* OK [PERMANENTFLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered \\*)] Flags permitted\r\n`

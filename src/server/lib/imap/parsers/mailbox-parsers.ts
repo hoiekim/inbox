@@ -142,6 +142,7 @@ export const parseStatus = (
       case "UIDNEXT":
       case "UIDVALIDITY":
       case "UNSEEN":
+      case "HIGHESTMODSEQ":
         items.push(itemName as StatusItem);
         break;
       default:

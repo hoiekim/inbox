@@ -451,7 +451,8 @@ export async function buildFetchResponse(
   docId: string,
   uid: number,
   isUidFetch: boolean,
-  selectedMailbox: string
+  selectedMailbox: string,
+  condstoreEnabled: boolean = false
 ): Promise<FetchResponsePart[]> {
   const parts: FetchResponsePart[] = [];
 
@@ -461,8 +462,20 @@ export async function buildFetchResponse(
 
   for (const item of dataItems) {
     if (item.type === "UID" && isUidFetch) continue;
+    // MODSEQ is emitted once, centrally (below), so the per-item loop skips it —
+    // this dedups an explicit `(MODSEQ)` request against the implicit
+    // post-ENABLE emission and keeps a single `MODSEQ (n)` in the response.
+    if (item.type === "MODSEQ") continue;
     const part = await buildFetchResponsePart(mail, item, docId, selectedMailbox);
     if (part) parts.push(part);
+  }
+
+  // RFC 4551 §3.3.2: include MODSEQ when the client asked for it explicitly, or
+  // implicitly on every FETCH response once CONDSTORE is enabled. The value is
+  // parenthesized (`MODSEQ (n)`) per the msg-att-dynamic grammar.
+  const modseqRequested = dataItems.some((item) => item.type === "MODSEQ");
+  if ((condstoreEnabled || modseqRequested) && mail.modseq !== undefined) {
+    parts.push({ type: "simple", content: `MODSEQ (${mail.modseq})` });
   }
 
   return parts;

@@ -97,6 +97,12 @@ export interface MailType {
   answered: boolean;
   insight?: Insight;
   uid: MailUidType;
+  /**
+   * IMAP CONDSTORE mod-sequence (RFC 4551) — the per-message change counter,
+   * sibling to `uid`. Server-populated for IMAP FETCH MODSEQ / HIGHESTMODSEQ;
+   * the HTTP client never reads it, hence optional.
+   */
+  modseq?: number;
 }
 
 export class Mail extends Model<Mail> implements MailType {
@@ -121,6 +127,7 @@ export class Mail extends Model<Mail> implements MailType {
   declare answered: boolean;
   declare insight?: Insight;
   declare uid: MailUidType;
+  declare modseq?: number;
 
   constructor(data?: Partial<Mail>) {
     super(data);
