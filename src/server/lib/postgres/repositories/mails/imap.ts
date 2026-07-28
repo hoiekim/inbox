@@ -407,15 +407,28 @@ export const buildCriterionClause = (
   const type = criterion.type.toUpperCase();
   switch (type) {
     // Logical operators — recurse into operands carried on `value`.
+    // Recursion pushes bound params onto the shared `values` as a side effect,
+    // so whenever a reduction DISCARDS a recursed fragment (rather than emitting
+    // it), it must roll `values` back to the pre-recursion length — otherwise the
+    // discarded side's params are orphaned (present in `values`, referenced by no
+    // `$N`), desyncing the count and making Postgres reject the whole Bind.
     case "NOT": {
+      const savedLen = values.length;
       const inner = buildCriterionClause(
         criterion.value as { type: string; value?: unknown },
         uidField,
         values
       );
       // NOT match-all → match-none; NOT match-none → match-all; else negate.
-      if (inner === null) return MATCH_NONE;
-      if (inner === MATCH_NONE) return null;
+      // Both non-negating outcomes discard `inner`, so drop any params it pushed.
+      if (inner === null) {
+        values.length = savedLen;
+        return MATCH_NONE;
+      }
+      if (inner === MATCH_NONE) {
+        values.length = savedLen;
+        return null;
+      }
       return `NOT (${inner})`;
     }
     case "OR": {
@@ -423,13 +436,22 @@ export const buildCriterionClause = (
         left: { type: string; value?: unknown };
         right: { type: string; value?: unknown };
       };
+      const savedLen = values.length;
       const l = buildCriterionClause(left, uidField, values);
       const r = buildCriterionClause(right, uidField, values);
-      // An OR with a match-all (null) side matches everything → match-all.
-      if (l === null || r === null) return null;
-      // Both sides match nothing → match-none. Otherwise OR-with-match-none
-      // reduces to the other side (`X OR none` = `X`).
-      if (l === MATCH_NONE && r === MATCH_NONE) return MATCH_NONE;
+      // An OR with a match-all (null) side matches everything → match-all. Both
+      // fragments are discarded, so roll `values` back to before this OR.
+      if (l === null || r === null) {
+        values.length = savedLen;
+        return null;
+      }
+      // Both sides match nothing → match-none (neither pushed a param). Otherwise
+      // OR-with-match-none reduces to the other side (`X OR none` = `X`); the
+      // match-none side pushed nothing, so the kept side's params stay aligned.
+      if (l === MATCH_NONE && r === MATCH_NONE) {
+        values.length = savedLen;
+        return MATCH_NONE;
+      }
       if (l === MATCH_NONE) return r;
       if (r === MATCH_NONE) return l;
       return `(${l} OR ${r})`;

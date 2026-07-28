@@ -761,3 +761,95 @@ describe("buildCriterionClause — unexpressible criteria fail closed (#672)", (
     expect(await build({ type: "NOT", value: { type: "ALL" } })).toBe("FALSE");
   });
 });
+
+describe("buildCriterionClause — combinators don't orphan bound params (#672)", () => {
+  // Recursion pushes params onto the shared `values` as a side effect. When a
+  // reduction discards a side that already pushed a param (e.g. an OR that
+  // reduces to match-all because the OTHER side is ALL/UNKEYWORD), the discarded
+  // param must be rolled back — otherwise values.length exceeds the max `$N`
+  // referenced and Postgres rejects the Bind ("supplies N parameters, but
+  // prepared statement requires M"), so searchMailsByUid throws and returns [].
+  const build = async (
+    criterion: { type: string; value?: unknown },
+    values: unknown[],
+  ) => {
+    const { buildCriterionClause } = await import(".");
+    return buildCriterionClause(criterion, "uid_account", values as never);
+  };
+
+  it("`OR SUBJECT x ALL` → match-all, and rolls back SUBJECT's param", async () => {
+    const values: unknown[] = ["user-1", false]; // base user_id/sent seed
+    const frag = await build(
+      { type: "OR", value: { left: { type: "SUBJECT", value: "x" }, right: { type: "ALL" } } },
+      values,
+    );
+    expect(frag).toBeNull(); // X OR match-all = match-all
+    expect(values).toEqual(["user-1", false]); // %x% rolled back — no orphan
+  });
+
+  it("`OR SUBJECT x UNKEYWORD Foo` → match-all, param rolled back (was a hard throw)", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "UNKEYWORD" } },
+      },
+      values,
+    );
+    expect(frag).toBeNull();
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("`OR ALL SUBJECT x` (null on the left) also rolls back", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      { type: "OR", value: { left: { type: "ALL" }, right: { type: "SUBJECT", value: "x" } } },
+      values,
+    );
+    expect(frag).toBeNull();
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("`NOT (OR SUBJECT x ALL)` → match-none, nested param rolled back", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "NOT",
+        value: {
+          type: "OR",
+          value: { left: { type: "SUBJECT", value: "x" }, right: { type: "ALL" } },
+        },
+      },
+      values,
+    );
+    // inner OR = match-all (null) → NOT match-all = match-none.
+    expect(frag).toBe("FALSE");
+    expect(values).toEqual(["user-1", false]);
+  });
+
+  it("a real OR with two param-pushing sides keeps BOTH params, contiguously numbered", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "FROM", value: "y" } },
+      },
+      values,
+    );
+    expect(frag).toBe("(subject ILIKE $3 OR from_text ILIKE $4)");
+    expect(values).toEqual(["user-1", false, "%x%", "%y%"]);
+  });
+
+  it("`X OR none` keeps X's param aligned (match-none side pushed nothing)", async () => {
+    const values: unknown[] = ["user-1", false];
+    const frag = await build(
+      {
+        type: "OR",
+        value: { left: { type: "SUBJECT", value: "x" }, right: { type: "KEYWORD" } },
+      },
+      values,
+    );
+    expect(frag).toBe("subject ILIKE $3"); // KEYWORD = match-none → reduces to X
+    expect(values).toEqual(["user-1", false, "%x%"]);
+  });
+});
