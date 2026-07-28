@@ -29,6 +29,7 @@ import {
   writeFetchResponse,
   getRequestedFields,
   convertSequenceSet,
+  WriteChunked,
 } from "./fetch-helpers";
 import {
   resolveSeqRangeToUids,
@@ -51,6 +52,7 @@ export async function fetchMessagesTyped(
   selectedMailbox: string,
   seqState: SequenceState,
   write: (data: string) => boolean | undefined,
+  writeChunked: WriteChunked,
   condstoreEnabled: boolean = false
 ): Promise<void> {
   const isFlagsOnly = fetchRequest.dataItems.every(
@@ -96,6 +98,7 @@ export async function fetchMessagesTyped(
       selectedMailbox,
       seqState,
       write,
+      writeChunked,
       condstoreEnabled
     );
     write(`${tag} OK FETCH completed\r\n`);
@@ -176,6 +179,7 @@ async function _processFetchMessages(
   selectedMailbox: string,
   seqState: SequenceState,
   write: (data: string) => boolean | undefined,
+  writeChunked: WriteChunked,
   condstoreEnabled: boolean
 ): Promise<void> {
   const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
@@ -204,7 +208,7 @@ async function _processFetchMessages(
         selectedMailbox,
         condstoreEnabled
       );
-      writeFetchResponse(write, seqNum, response);
+      await writeFetchResponse(write, writeChunked, seqNum, response);
 
       if (shouldMarkAsRead(fetchRequest.dataItems)) {
         await markRead(store.getUser().id, id);

@@ -27,14 +27,20 @@ import {
   BodySection,
   FetchDataItem,
 } from "./types";
+import { bodyBufferKey, getSharedBodyBuffer } from "./body-buffer";
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
 // ---------------------------------------------------------------------------
 
+// `content` is a string for small parts (headers, simple attributes) and a
+// Buffer for large body payloads that flow through the shared body-buffer
+// cache — one Buffer reference is shared across every coalesced FETCH
+// handler for the same (mail, section), so heap footprint stays flat under
+// duplicate-FETCH storms. See `body-buffer.ts`.
 export type FetchResponsePart =
   | { type: "simple"; content: string }
-  | { type: "literal"; content: string; header: string; length: number };
+  | { type: "literal"; content: string | Buffer; header: string; length: number };
 
 // ---------------------------------------------------------------------------
 // Body content extraction
@@ -305,14 +311,45 @@ export async function buildBodyResponsePart(
   void selectedMailbox; // reserved for future per-mailbox logic
   const { section, partial } = bodyFetch;
 
+  // RFC822 / RFC822.HEADER / RFC822.TEXT reuse the BODY[...] builders but must
+  // label the response part with the item the client requested.
+  const sectionKey = keyOverride ?? getBodySectionKey(section);
+
+  // Fast path for large body sections (FULL / TEXT / bare MIME_PART): route
+  // the serialization through the shared body-buffer cache so N concurrent
+  // FETCH handlers for the same (docId, sectionKey) share one Buffer
+  // instead of each independently rebuilding a multi-MB string. Skips
+  // partial fetches (`<start.length>`) because their key would need the
+  // slice bounds and concurrent slices of the same body are uncommon
+  // enough that the coalescing benefit doesn't offset the added logic.
+  if (!partial && !isHeaderLikeSection(section)) {
+    const buffer = await getSharedBodyBuffer(
+      bodyBufferKey(docId, sectionKey),
+      // The trailing `\r\n` MUST be included in the cached value — it's part
+      // of the wire content and its byteLength is what the `{length}`
+      // literal advertises to the client. Appending it per-caller would
+      // negate the whole point of coalescing.
+      () => {
+        const raw = getBodyContent(mail, section, docId);
+        return raw === null ? "" : raw + "\r\n";
+      }
+    );
+    if (buffer.byteLength === 0) {
+      return { type: "simple", content: `${sectionKey} NIL` };
+    }
+    return {
+      type: "literal",
+      content: buffer,
+      header: sectionKey,
+      length: buffer.byteLength,
+    };
+  }
+
   const content = getBodyContent(mail, section, docId);
   if (content === null) {
     return null;
   }
 
-  // RFC822 / RFC822.HEADER / RFC822.TEXT reuse the BODY[...] builders but must
-  // label the response part with the item the client requested.
-  const sectionKey = keyOverride ?? getBodySectionKey(section);
   let header = sectionKey;
   let finalContent = content;
   let length = Buffer.byteLength(finalContent, "utf8");
@@ -338,15 +375,9 @@ export async function buildBodyResponsePart(
     // CRLF. (The non-partial branch below appends one and recounts `length`;
     // doing that here would emit 2 octets more than the `{length}` literal
     // advertises, desyncing clients that read exactly `length` octets.)
-  } else if (!isHeaderLikeSection(section)) {
-    // Body sections (FULL / TEXT / bare MIME_PART) get a trailing CRLF here.
-    // Header sections already carry their own delimiting blank line from
-    // `getBodyContent` (HEADER: `\r\n\r\n`; HEADER_FIELDS: last-field `\r\n` +
-    // blank line; MIME_PART `.HEADER`/`.MIME`: `\r\n\r\n`), so appending another
-    // `\r\n` would emit a spurious second blank line.
-    finalContent += "\r\n";
-    length = Buffer.byteLength(finalContent, "utf8");
   }
+  // (Non-partial, non-header-like branch is handled by the cached fast
+  // path above and returns before reaching here.)
 
   return { type: "literal", content: finalContent, header, length };
 }
@@ -481,11 +512,22 @@ export async function buildFetchResponse(
   return parts;
 }
 
-export function writeFetchResponse(
+/**
+ * Async writer for large payloads with socket-level backpressure. Called
+ * for `literal` parts whose `content` is a `Buffer` (i.e. flowed through
+ * the shared body-buffer cache). Chunks the write so V8 doesn't hold the
+ * whole payload in an outbound queue simultaneously, and awaits `drain`
+ * when `socket.write` reports back-pressure. `writeChunked` returning
+ * without an error means the payload is drained to the OS.
+ */
+export type WriteChunked = (payload: Buffer) => Promise<void>;
+
+export async function writeFetchResponse(
   write: (data: string) => boolean | undefined,
+  writeChunked: WriteChunked,
   seqNum: number,
   parts: FetchResponsePart[]
-) {
+): Promise<void> {
   write(`* ${seqNum} FETCH (`);
 
   for (let i = 0; i < parts.length; i++) {
@@ -493,7 +535,14 @@ export function writeFetchResponse(
 
     const part = parts[i];
     if (part.type === "literal") {
-      write(`${part.header} {${part.length}}\r\n${part.content}`);
+      write(`${part.header} {${part.length}}\r\n`);
+      // Buffer content flows through the chunked writer with drain
+      // awareness; string content stays on the fast synchronous path.
+      if (Buffer.isBuffer(part.content)) {
+        await writeChunked(part.content);
+      } else {
+        write(part.content);
+      }
     } else {
       write(part.content);
     }

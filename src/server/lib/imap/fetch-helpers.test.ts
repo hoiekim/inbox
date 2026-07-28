@@ -27,10 +27,19 @@ import {
   buildFetchResponsePart,
   buildBodyResponsePart,
   convertSequenceSet,
+  FetchResponsePart,
 } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
 import { BodyFetch, SequenceSet } from "./types";
 import type { MailType } from "common";
+
+// Wire content is `string | Buffer` — large non-partial body payloads flow
+// through the shared body-buffer cache and land as Buffer. Every test in
+// this file reasons about them as UTF-8 text, so coerce at the boundary.
+const contentAsString = (
+  part: Extract<FetchResponsePart, { type: "literal" }>
+): string =>
+  Buffer.isBuffer(part.content) ? part.content.toString("utf8") : part.content;
 
 describe("getRequestedFields", () => {
   describe("FLAGS", () => {
@@ -186,7 +195,7 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     expect(rfc).not.toBeNull();
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.length).toBe(body!.length);
       expect(rfc!.header).toBe("RFC822");
       expect(body!.header).toBe("BODY[]");
@@ -203,7 +212,11 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     );
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      // Compare octets, not identity — the two paths now flow through a
+      // shared body-buffer cache keyed on section-label (RFC822.HEADER vs
+      // BODY[HEADER]), so they produce distinct Buffer instances that
+      // encode identical bytes.
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.header).toBe("RFC822.HEADER");
     }
   });
@@ -218,7 +231,7 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     );
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(rfc!.content).toBe(body!.content);
+      expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.header).toBe("RFC822.TEXT");
     }
   });
@@ -375,7 +388,7 @@ describe("buildBodyResponsePart header terminators (inbox #645)", () => {
     if (part!.type !== "literal") throw new Error("expected literal part");
     // The advertised {N} literal must equal the emitted octets.
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
-    return part!.content;
+    return contentAsString(part!);
   };
 
   it("BODY[HEADER] ends in exactly one delimiting blank line", async () => {
@@ -623,7 +636,12 @@ describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
     if (part!.type !== "literal") throw new Error("expected literal part");
     // The advertised {N} literal must equal the emitted octets.
     expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
-    return part!;
+    // Give tests a stringy `content` alongside the raw part — they all treat
+    // it as UTF-8 text.
+    return {
+      ...part,
+      content: contentAsString(part),
+    };
   };
 
   it("BODY[1.MIME] returns part 1 MIME header block, keyed BODY[1.MIME]", async () => {
