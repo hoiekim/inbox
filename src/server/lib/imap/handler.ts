@@ -497,10 +497,26 @@ export class ImapRequestHandler {
       // journald's 10k-line tail cap in ~6 min and starves triage of the
       // interesting samples (the ones that actually moved RSS or ran
       // slow). Keep the interesting ones at INFO where the alarm embed
-      // and default triage tail find them; drop the noise to DEBUG which
-      // prod's INFO-level filter suppresses. No traceability loss for
-      // OOM / latency triage — the samples that mattered are still logged
-      // fully.
+      // and default triage tail find them; drop the noise to DEBUG.
+      //
+      // What "DEBUG" means in prod: `logger.ts:shouldLog` compares
+      // against `LOG_LEVEL` (default `"info"`), and `debug < info` short-
+      // circuits BEFORE console.log runs — no stdout write, so journald
+      // never sees the line. `journalctl -p debug` can't recover it;
+      // raising verbosity requires `LOG_LEVEL=debug` + a restart, which
+      // kills the storm's active sockets. That's fine for the OOM /
+      // latency triage this fix targets: samples that moved RSS or ran
+      // slow still land at INFO with the full payload. What DOES move
+      // off-log is per-IP command-rate attribution during a live storm
+      // (e.g. "how many UID FLAGS from :50613 in this minute?") — that
+      // signal now lives on the monitor sidecar's docker-stats poller,
+      // not in the app's log stream.
+      //
+      // Auth events (LOGIN / AUTHENTICATE) DO NOT rely on this gate;
+      // `auth.ts` emits its own `logger.info("IMAP LOGIN success", ...)`
+      // / `IMAP AUTHENTICATE success` line on the success path so the
+      // audit surface holds even when bcrypt completes in under
+      // `INTERESTING_DURATION_MS` on strong hardware.
       const isInteresting =
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||

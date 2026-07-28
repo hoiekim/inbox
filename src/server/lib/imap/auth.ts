@@ -87,6 +87,18 @@ export async function handleAuthenticate(
     }
 
     resetAuthFailures(ip);
+    // Auth-audit line — never behind the per-command threshold gate in
+    // handler.ts (a fast bcrypt round on strong hardware would drop the
+    // per-command "IMAP command completed" line to DEBUG). Auth events
+    // need a durable INFO surface at the same level as CREATE / RENAME /
+    // DELETE from mailbox-ops.ts.
+    logger.info("IMAP AUTHENTICATE success", {
+      component: "imap",
+      tag,
+      username: signedUser.username,
+      remote: `${ip}:${socket.remotePort ?? 0}`,
+      mechanism: "PLAIN",
+    });
     write(
       `${tag} OK [CAPABILITY ${getCapabilities()}] AUTHENTICATE completed\r\n`
     );
@@ -148,6 +160,15 @@ export async function handleLogin(
   }
 
   resetAuthFailures(ip);
+  // Auth-audit line — same rationale as the AUTHENTICATE success log
+  // above. Threshold gate in handler.ts is scoped to per-command
+  // memory/latency triage; auth events need their own INFO surface.
+  logger.info("IMAP LOGIN success", {
+    component: "imap",
+    tag,
+    username: signedUser.username,
+    remote: `${ip}:${socket.remotePort ?? 0}`,
+  });
   write(`${tag} OK [CAPABILITY ${getCapabilities()}] LOGIN completed\r\n`);
   return { store: new Store(signedUser), authenticated: true };
 }
