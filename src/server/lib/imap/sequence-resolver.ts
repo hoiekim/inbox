@@ -101,6 +101,27 @@ export function uidToSeqNumber(
 }
 
 /**
+ * Resolve the '*' UID sentinel (MAX_SAFE_INTEGER) in a UID-axis range to the
+ * mailbox's actual highest UID (RFC 3501 §9: '*' = highest UID in the
+ * mailbox). Concrete UIDs pass through unchanged. Unlike the sequence-number
+ * axis, an out-of-range concrete UID is not an error case — it simply
+ * matches no messages — so this always returns a resolved pair rather than
+ * undefined. On an empty mailbox the sentinel resolves to -1 (below any real
+ * UID, which are ≥ 1) instead of leaving MAX_SAFE_INTEGER to overflow a
+ * Postgres `integer` bind parameter (#678).
+ */
+export function resolveUidRangeSentinel(
+  seqToUid: number[],
+  start: number,
+  end: number
+): { uidStart: number; uidEnd: number } {
+  const maxUid = seqToUid.length > 0 ? seqToUid[seqToUid.length - 1] : -1;
+  const resolve = (value: number) =>
+    value === Number.MAX_SAFE_INTEGER ? maxUid : value;
+  return { uidStart: resolve(start), uidEnd: resolve(end) };
+}
+
+/**
  * Count messages covered by a sequence set (clamped to actual mailbox size).
  * Used for FETCH limit checks.
  */

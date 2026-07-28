@@ -22,6 +22,7 @@ import {
   CopyRequest,
   MoveRequest,
   AppendRequest,
+  UidCriterion,
 } from "./types";
 import {
   buildFetchResponse,
@@ -31,6 +32,7 @@ import {
 } from "./fetch-helpers";
 import {
   resolveSeqRangeToUids,
+  resolveUidRangeSentinel,
   uidToSeqNumber,
   countSequenceSetMessages,
   buildSequenceMapping,
@@ -131,6 +133,10 @@ async function _fetchMessages(
         }
         uidStart = resolved.uidStart;
         uidEnd = resolved.uidEnd;
+      } else {
+        const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
       }
 
       const messages = await store.getMessages(
@@ -198,10 +204,81 @@ async function _processFetchMessages(
 // SEARCH
 // ---------------------------------------------------------------------------
 
+// Resolve a UID-axis sequence set's ranges to concrete UIDs, mapping the
+// `*` sentinel (Number.MAX_SAFE_INTEGER) to the mailbox's actual highest
+// UID. Shared by the bare-set and explicit-`UID <set>`-keyword cases below.
+const resolveUidCriterionRanges = (
+  criterion: UidCriterion,
+  seqState: SequenceState
+): SearchCriterion => {
+  const uidRanges = convertSequenceSet(criterion.sequenceSet).map(
+    ({ start, end }) => {
+      const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
+      return { start: resolved.uidStart, end: resolved.uidEnd };
+    }
+  );
+  return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
+};
+
+// Resolve one criterion, recursing into NOT/OR operands — store.ts's
+// simplifyCriterion recurses the same way, so a UID/SEQ set nested under
+// NOT/OR (e.g. `UID SEARCH NOT UID *`, `UID SEARCH OR UID 1000:* SEEN`) must
+// be resolved here too, or its `*` sentinel reaches buildCriterionClause
+// unresolved and overflows the int4 uid column exactly like the top-level
+// case (#678).
+const resolveOneSearchKey = (
+  criterion: SearchCriterion,
+  isUidCommand: boolean,
+  seqState: SequenceState
+): SearchCriterion => {
+  if (criterion.type === "NOT") {
+    const notCriterion = criterion as { type: "NOT"; criterion: SearchCriterion };
+    return {
+      type: "NOT",
+      criterion: resolveOneSearchKey(notCriterion.criterion, isUidCommand, seqState),
+    };
+  }
+  if (criterion.type === "OR") {
+    const orCriterion = criterion as {
+      type: "OR";
+      left: SearchCriterion;
+      right: SearchCriterion;
+    };
+    return {
+      type: "OR",
+      left: resolveOneSearchKey(orCriterion.left, isUidCommand, seqState),
+      right: resolveOneSearchKey(orCriterion.right, isUidCommand, seqState),
+    };
+  }
+  // Explicit `UID <set>` keyword — already UID-axis, but `*` still needs
+  // resolving before it reaches the SQL layer and overflows a Postgres
+  // `integer` bind parameter (#678).
+  if (criterion.type === "UID") {
+    return resolveUidCriterionRanges(criterion as UidCriterion, seqState);
+  }
+  if (criterion.type !== "SEQ") return criterion;
+  if (isUidCommand) {
+    return resolveUidCriterionRanges(
+      { type: "UID", sequenceSet: criterion.sequenceSet } as UidCriterion,
+      seqState
+    );
+  }
+  const uidRanges = convertSequenceSet(criterion.sequenceSet)
+    .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
+    .filter((r): r is { uidStart: number; uidEnd: number } => r !== undefined)
+    .map(({ uidStart, uidEnd }) => ({ start: uidStart, end: uidEnd }));
+  // A set whose sequence numbers all lie past the end of the mailbox matches
+  // no messages. It must return the empty set — not vanish from the AND and
+  // match everything — so pin it to an impossible UID range (UIDs are ≥ 1).
+  if (uidRanges.length === 0) uidRanges.push({ start: -1, end: -1 });
+  return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
+};
+
 // A bare message sequence-set is a top-level SEARCH key (RFC 3501 §6.4.4),
 // parsed as a SEQ criterion. In a plain SEARCH it names message sequence
 // numbers, so resolve it against the mailbox's seq→uid map before querying; in
-// a UID SEARCH the same set already names UIDs, so relabel it as UID untouched.
+// a UID SEARCH the same set already names UIDs, so relabel it as UID and
+// resolve its `*` sentinel the same way an explicit `UID <set>` keyword does.
 // (`store.search` only understands UID/flag/text/date criteria — it has no
 // access to seqState — so the resolution has to happen here.)
 export function resolveSeqSearchKeys(
@@ -209,21 +286,9 @@ export function resolveSeqSearchKeys(
   isUidCommand: boolean,
   seqState: SequenceState
 ): SearchCriterion[] {
-  return criteria.map((criterion) => {
-    if (criterion.type !== "SEQ") return criterion;
-    if (isUidCommand) {
-      return { type: "UID", sequenceSet: criterion.sequenceSet };
-    }
-    const uidRanges = convertSequenceSet(criterion.sequenceSet)
-      .map(({ start, end }) => resolveSeqRangeToUids(seqState.seqToUid, start, end))
-      .filter((r): r is { uidStart: number; uidEnd: number } => r !== undefined)
-      .map(({ uidStart, uidEnd }) => ({ start: uidStart, end: uidEnd }));
-    // A set whose sequence numbers all lie past the end of the mailbox matches
-    // no messages. It must return the empty set — not vanish from the AND and
-    // match everything — so pin it to an impossible UID range (UIDs are ≥ 1).
-    if (uidRanges.length === 0) uidRanges.push({ start: -1, end: -1 });
-    return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
-  });
+  return criteria.map((criterion) =>
+    resolveOneSearchKey(criterion, isUidCommand, seqState)
+  );
 }
 
 export async function searchTyped(
@@ -316,6 +381,10 @@ export async function storeFlagsTyped(
           });
           continue;
         }
+        uidStart = resolved.uidStart;
+        uidEnd = resolved.uidEnd;
+      } else {
+        const resolved = resolveUidRangeSentinel(seqState.seqToUid, start, end);
         uidStart = resolved.uidStart;
         uidEnd = resolved.uidEnd;
       }
@@ -434,7 +503,7 @@ export async function copyMessageTyped(
     const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
     for (const { start, end } of ranges) {
       if (isUidCopy) {
-        uidRanges.push({ uidStart: start, uidEnd: end });
+        uidRanges.push(resolveUidRangeSentinel(seqState.seqToUid, start, end));
       } else {
         const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
         if (!resolved) continue;
@@ -739,7 +808,7 @@ export async function moveMessageTyped(
     const uidRanges: Array<{ uidStart: number; uidEnd: number }> = [];
     for (const { start, end } of ranges) {
       if (isUidMove) {
-        uidRanges.push({ uidStart: start, uidEnd: end });
+        uidRanges.push(resolveUidRangeSentinel(seqState.seqToUid, start, end));
       } else {
         const resolved = resolveSeqRangeToUids(seqState.seqToUid, start, end);
         if (!resolved) continue;
