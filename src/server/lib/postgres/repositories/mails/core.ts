@@ -3,7 +3,7 @@ import { logger } from "../../../logger";
 import { pool } from "../../client";
 import { ParamValue } from "../../database";
 import { MailModel, mailsTable, MAIL_ID, USER_ID, ENVELOPE_TO, DB_NOW } from "../../models";
-import { getNextModseq } from "./counters";
+import { getNextModseq, writeMailboxUid } from "./counters";
 
 export interface SaveMailInput {
   user_id: string;
@@ -38,6 +38,16 @@ export interface SaveMailInput {
   spam_score?: number;
   spam_reasons?: string[] | null;
   is_spam?: boolean;
+  /**
+   * Destination account-scoped mailbox path (e.g. `INBOX/accounts/claude`,
+   * `Sent Messages/accounts/claude`). When set alongside a non-zero
+   * `uid_account`, `saveMail` mirrors the (user, mailbox, mail_id, uid)
+   * tuple into `mail_mailbox_uid` — dual-write toward #702 PR-2b's read
+   * cutover. Domain-scoped destinations (INBOX, unified Sent Messages)
+   * are omitted deliberately: `uid_domain` is authoritative for those
+   * views and the mapping is only interested in per-account UID spaces.
+   */
+  mailbox?: string;
 }
 
 export const saveMail = async (
@@ -91,7 +101,24 @@ export const saveMail = async (
     };
 
     const row = await mailsTable.insert(data, [MAIL_ID]);
-    if (row) return { _id: row[MAIL_ID] as string };
+    if (row) {
+      const inserted_id = row[MAIL_ID] as string;
+      // Dual-write toward #702 PR-2b's read cutover: mirror the account
+      // UID into the per-mailbox mapping. Skipped when the destination
+      // is domain-scoped (no mailbox passed) or no account UID was
+      // reserved for this write. `writeMailboxUid` swallows its own
+      // errors — this row is still authoritative in `mails.uid_account`
+      // so a mapping-write miss doesn't lose the UID.
+      if (input.mailbox && (input.uid_account ?? 0) > 0) {
+        await writeMailboxUid(
+          input.user_id,
+          input.mailbox,
+          inserted_id,
+          input.uid_account as number
+        );
+      }
+      return { _id: inserted_id };
+    }
     return undefined;
   } catch (error: unknown) {
     // Unique constraint violation on (user_id, message_id):
@@ -119,6 +146,25 @@ export const saveMail = async (
         );
       }
 
+      // The 23505 branch fires for cross-delivery re-sends of the same
+      // Message-ID from distinct SMTP sessions — a mailgun retry landing
+      // on a different envelope, or a listserv fanning the same message
+      // to multiple recipients under separate connections. Each session
+      // has its own `input.mailbox`; the mapping row (existing_mail_id,
+      // new_mailbox, new_uid) surfaces the second delivery in the second
+      // account's UID space. Same-mailbox race between two concurrent
+      // saveIncomingMail calls hits `writeMailboxUid`'s
+      // `ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING`, so the
+      // loser's counter tick and mapping-insert round-trip are wasted
+      // (rare, sub-ms, off the SMTP reply path) — the winner's row wins.
+      if (input.mailbox && (input.uid_account ?? 0) > 0) {
+        await writeMailboxUid(
+          input.user_id,
+          input.mailbox,
+          existing.mail_id,
+          input.uid_account as number
+        );
+      }
       return { _id: existing.mail_id };
     }
 

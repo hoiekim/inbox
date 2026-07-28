@@ -27,7 +27,7 @@ import {
   getAttachmentId,
 } from "./util";
 import { push } from "../push";
-import { accountToBox } from "../imap/util";
+import { accountToBox, accountToSentBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
 import { sendAlarm } from "../alarm";
 import { logger } from "../logger";
@@ -119,6 +119,26 @@ export const saveMail = async (
 ): Promise<{ _id: string } | undefined> => {
   if (!userId) return;
 
+  // Derive the destination account mailbox for the per-mailbox UID map
+  // (#702 PR-2b). This wrapper handles BOTH receive and send call sites:
+  //  - Received mail (mail.sent === false): envelope-to[0] is the
+  //    recipient account address; the mail lands in that account's
+  //    `INBOX/accounts/<local>` folder. Same address that scoped the
+  //    earlier `getAccountUidNext` reservation in `convertMail`.
+  //  - Sent mail (mail.sent === true): envelope-from[0] is the sender
+  //    account address; the mail lands in the sender's
+  //    `Sent Messages/accounts/<local>` folder. Same address that
+  //    scoped `getAccountUidNext(user, fromEmail, sent=true)` in
+  //    `sendMail`.
+  const scopeAddress = mail.sent
+    ? mail.envelopeFrom?.[0]?.address
+    : mail.envelopeTo?.[0]?.address;
+  const mailbox = scopeAddress
+    ? mail.sent
+      ? accountToSentBox(scopeAddress)
+      : accountToBox(scopeAddress)
+    : undefined;
+
   const input: SaveMailInput = {
     user_id: userId,
     message_id: mail.messageId,
@@ -146,6 +166,7 @@ export const saveMail = async (
     draft: mail.draft,
     uid_domain: mail.uid?.domain,
     uid_account: mail.uid?.account,
+    mailbox,
     spam_score: spamResult?.score ?? 0,
     spam_reasons: spamResult?.reasons ?? null,
     is_spam: spamResult?.isSpam ?? false,

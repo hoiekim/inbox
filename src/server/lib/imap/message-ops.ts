@@ -741,7 +741,14 @@ export async function copyMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      const ok = await store.storeMail(newMail);
+      // Dual-write toward #702 PR-2b: mirror the account UID into the
+      // `mail_mailbox_uid` map when the destination is account-scoped.
+      // Domain-scoped destinations (INBOX, unified Sent Messages) skip —
+      // the mapping only tracks account UID spaces.
+      const ok = await store.storeMail(
+        newMail,
+        destIsDomainScoped ? undefined : destMailbox,
+      );
       if (!ok) {
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
         return;
@@ -1004,7 +1011,13 @@ export async function moveMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      const ok = await store.storeMail(newMail);
+      // Dual-write toward #702 PR-2b: mirror the account UID into the
+      // `mail_mailbox_uid` map when the destination is account-scoped.
+      // Domain-scoped destinations skip — see COPY for full rationale.
+      const ok = await store.storeMail(
+        newMail,
+        destIsDomainScoped ? undefined : destMailbox,
+      );
       if (!ok) {
         // Pre-deletion failure: copies already stored in the destination
         // linger; the source is untouched. Client can re-issue MOVE.
@@ -1130,7 +1143,12 @@ export async function appendMessage(
     mail.uid.domain = domainUid;
     mail.uid.account = accountUid;
 
-    const result = await store.storeMail(mail);
+    // Dual-write toward #702 PR-2b: mirror the account UID into the
+    // `mail_mailbox_uid` map when the APPEND target is account-scoped.
+    const result = await store.storeMail(
+      mail,
+      isDomainScoped(targetMailbox) ? undefined : targetMailbox,
+    );
 
     const uid = isDomainScoped(targetMailbox) ? mail.uid.domain : mail.uid.account;
 

@@ -338,6 +338,25 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     expect(saveSource).toMatch(/\[ENVELOPE_TO\]:/);
     expect(saveSource).toMatch(/updated:\s*DB_NOW/);
   });
+
+  // #702 PR-2a — dual-write shape assertions. `saveMail` mirrors the
+  // reserved account UID into `mail_mailbox_uid` at insert time AND on
+  // the 23505 (duplicate message_id) merge path. Guards against the fix
+  // regressing when future edits reshape the insert/merge branches.
+  it("saveMail dual-writes to mail_mailbox_uid on the INSERT branch", () => {
+    const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
+    if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
+    const saveSource = saveMatch[0];
+    // The call is gated: mailbox present AND uid_account > 0 (no
+    // account UID reserved → no mapping row).
+    expect(saveSource).toMatch(/writeMailboxUid\s*\(/);
+    expect(saveSource).toMatch(/input\.mailbox/);
+    expect(saveSource).toMatch(/uid_account/);
+    // Guards two call sites — INSERT success + 23505 conflict merge.
+    const writeMailboxUidCount =
+      (saveSource.match(/writeMailboxUid\s*\(/g) ?? []).length;
+    expect(writeMailboxUidCount).toBe(2);
+  });
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {
