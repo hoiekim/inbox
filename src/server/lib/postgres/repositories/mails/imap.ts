@@ -380,11 +380,24 @@ const toUpdatedMailFlags = (row: Record<string, unknown>): UpdatedMailFlags => (
 });
 
 /**
+ * SQL fragment for a criterion the backend cannot express as a real predicate,
+ * but which the RFC 3501 §6.4.4 semantics say matches NO message (e.g. KEYWORD
+ * when no custom keywords are stored). Emitting a literal `FALSE` fails the
+ * search CLOSED — the safe direction — instead of dropping the criterion, which
+ * would leave it out of the WHERE clause and match every message (fail-open).
+ */
+export const MATCH_NONE = "FALSE";
+
+/**
  * Builds the SQL boolean fragment for a single IMAP SEARCH criterion, pushing any
  * bound parameters onto `values` (1-indexed `$N` placeholders track `values.length`).
- * Returns `null` for criteria that impose no constraint (ALL, unsupported keys), so
- * the caller simply skips them. NOT/OR recurse so negation and disjunction compose
- * instead of falling through and matching every message.
+ * Three-valued: returns a constraint string, `null` for criteria that impose no
+ * constraint (match-all: ALL, UNKEYWORD, unsupported combinator operands), or the
+ * `MATCH_NONE` sentinel for criteria that can match nothing (KEYWORD, and any key
+ * the backend can't express — failing closed per #672). NOT/OR recurse so negation
+ * and disjunction compose the three values correctly instead of falling through and
+ * matching every message. The caller drops `null` fragments and keeps `MATCH_NONE`
+ * (a valid SQL boolean) so the enclosing AND collapses to the empty set.
  */
 export const buildCriterionClause = (
   criterion: { type: string; value?: unknown },
@@ -400,7 +413,10 @@ export const buildCriterionClause = (
         uidField,
         values
       );
-      return inner ? `NOT (${inner})` : null;
+      // NOT match-all → match-none; NOT match-none → match-all; else negate.
+      if (inner === null) return MATCH_NONE;
+      if (inner === MATCH_NONE) return null;
+      return `NOT (${inner})`;
     }
     case "OR": {
       const { left, right } = criterion.value as {
@@ -409,10 +425,14 @@ export const buildCriterionClause = (
       };
       const l = buildCriterionClause(left, uidField, values);
       const r = buildCriterionClause(right, uidField, values);
-      if (l && r) return `(${l} OR ${r})`;
-      // One side imposes no constraint: an OR with an unconstrained side matches
-      // everything, so drop the whole disjunction rather than over-narrow it.
-      return null;
+      // An OR with a match-all (null) side matches everything → match-all.
+      if (l === null || r === null) return null;
+      // Both sides match nothing → match-none. Otherwise OR-with-match-none
+      // reduces to the other side (`X OR none` = `X`).
+      if (l === MATCH_NONE && r === MATCH_NONE) return MATCH_NONE;
+      if (l === MATCH_NONE) return r;
+      if (r === MATCH_NONE) return l;
+      return `(${l} OR ${r})`;
     }
 
     // ALL: match everything — no additional condition needed
@@ -487,10 +507,22 @@ export const buildCriterionClause = (
       else if (fieldLower === "to") column = "to_text";
       else if (fieldLower === "message-id") column = "message_id";
       // Unsupported header field — skip to avoid incorrect results
-      if (column === null) return null;
+      // Only subject/from/to/message-id are stored as searchable columns.
+      // An arbitrary header field can't be evaluated → fail closed (match-none)
+      // rather than dropping the criterion and matching every message (#672).
+      if (column === null) return MATCH_NONE;
       values.push(`%${text}%`);
       return `${column} ILIKE $${values.length}`;
     }
+
+    // Custom keyword flags. The server stores only the system flag set and no
+    // custom keywords, so KEYWORD <x> can never match (match-none) and
+    // UNKEYWORD <x> always matches (match-all). Both are exact evaluations, not
+    // fail-closed guesses (#672).
+    case "KEYWORD":
+      return MATCH_NONE;
+    case "UNKEYWORD":
+      return null;
 
     // Date criteria (using internal date — date column)
     case "BEFORE":
@@ -521,10 +553,14 @@ export const buildCriterionClause = (
       values.push(criterion.value as Date);
       return `date >= $${values.length}`;
 
-    // Size criteria: not tracked per-row; skip to avoid incorrect results
+    // Size criteria: RFC822.SIZE is not persisted per-row, so the octet count
+    // can't be evaluated. Fail closed (match-none) rather than dropping the
+    // criterion — a dropped LARGER/SMALLER matches every message (fail-open),
+    // the dangerous direction. Exact evaluation needs an rfc822_size column
+    // (follow-up #665); until then match-none is the safe interim (#672).
     case "LARGER":
     case "SMALLER":
-      return null;
+      return MATCH_NONE;
 
     // A UID sequence-set: its ranges are alternatives, so OR them among
     // themselves (a message matches if it falls in ANY range) while the whole
@@ -544,9 +580,10 @@ export const buildCriterionClause = (
       return parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`;
     }
 
-    // Unsupported criterion — impose no constraint (caller skips it).
+    // Unsupported criterion — can't be evaluated, so fail closed (match-none)
+    // rather than imposing no constraint and matching every message (#672).
     default:
-      return null;
+      return MATCH_NONE;
   }
 };
 

@@ -133,6 +133,15 @@ export const simplifyCriterion = (
       return null;
     }
 
+    // Custom keyword flags. The server stores only the system flag set
+    // (\Seen \Flagged \Deleted \Draft \Answered) and no custom keywords, so
+    // KEYWORD can never match and UNKEYWORD always matches — the flag value is
+    // irrelevant. Preserve the type (no value) and let buildCriterionClause map
+    // KEYWORD to match-none and UNKEYWORD to match-all.
+    case "KEYWORD":
+    case "UNKEYWORD":
+      return { type };
+
     // UID set: carry every range in one entry so the SQL builder ORs them —
     // set membership means a message matches if it falls in ANY range (#659).
     case "UID": {
@@ -140,9 +149,14 @@ export const simplifyCriterion = (
       return { type: "UID_SET", value: uidCriterion.sequenceSet.ranges };
     }
 
+    // Unsupported criterion: preserve the type (no value) rather than dropping
+    // it here. Dropping would leave it out of the WHERE clause entirely, which
+    // matches EVERY message (fail-open) — the dangerous direction for a filter.
+    // buildCriterionClause maps any type it can't express to a match-none
+    // fragment, so the criterion fails closed instead. (#672)
     default:
       logger.warn("Unsupported search criterion", { component: "imap.store", type });
-      return null;
+      return { type };
   }
 };
 

@@ -168,6 +168,32 @@ describe("simplifyCriterion — NOT/OR operand normalisation (regression for #55
   });
 });
 
+describe("simplifyCriterion — unexpressible criteria are preserved, not dropped (#672)", () => {
+  // Dropping a criterion here (returning null) removes it from the WHERE clause,
+  // which matches every message (fail-open). Instead these are preserved so
+  // buildCriterionClause can fail them CLOSED. KEYWORD/UNKEYWORD normalise to a
+  // bare { type } (the flag value is irrelevant — no custom keywords are stored).
+
+  it("preserves KEYWORD as a bare { type }", () => {
+    expect(simplifyCriterion({ type: "KEYWORD", flag: "Foo" } as never)).toEqual({
+      type: "KEYWORD",
+    });
+  });
+
+  it("preserves UNKEYWORD as a bare { type }", () => {
+    expect(simplifyCriterion({ type: "UNKEYWORD", flag: "Foo" } as never)).toEqual({
+      type: "UNKEYWORD",
+    });
+  });
+
+  it("preserves an unknown criterion type instead of dropping it to null", () => {
+    // Pre-fix this returned null and the criterion vanished from the query.
+    expect(simplifyCriterion({ type: "SOMETHING-UNSUPPORTED" } as never)).toEqual({
+      type: "SOMETHING-UNSUPPORTED",
+    });
+  });
+});
+
 describe("Store.getFirstUnseenUid", () => {
   beforeEach(() => {
     mockGetFirstUnseenUid.mockClear();
