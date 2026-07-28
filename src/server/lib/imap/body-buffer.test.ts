@@ -1,84 +1,132 @@
 /**
- * getSharedBodyBuffer coalescing invariants:
- *  1. Concurrent identical (cacheKey, build) calls share ONE Buffer
- *     instance — only the first `build()` runs.
+ * getSharedBodyResult coalescing + tri-state invariants:
+ *  1. Concurrent identical (cacheKey, build) calls share ONE result —
+ *     only the first `build()` runs.
  *  2. Different cacheKeys build independently — no cross-key contamination.
  *  3. After the promise settles, the cache entry drops (singleflight
  *     lifetime); a later caller with the same key re-builds. Intentional:
  *     the OOM comes from CONCURRENT duplicate serializations, not
  *     sequential ones.
- *  4. Returns a Buffer — the whole point vs a string cache is that
- *     `socket.write(buffer)` skips the UTF-8 conversion and V8 can GC the
- *     intermediate JS string.
+ *  4. Tri-state: `{ kind: "content", text }` → Buffer;
+ *     `{ kind: "nil" }` → `nil` result (caller emits `NIL` simple part);
+ *     `{ kind: "omit" }` → `omit` result (caller drops the part).
+ *     These three shapes preserve the pre-cache behavior of
+ *     `buildBodyResponsePart` on empty-body and nonexistent-part paths.
+ *  5. Content result is a Buffer — `socket.write(buffer)` skips the
+ *     UTF-8 conversion and V8 can GC the intermediate JS string.
  */
 import { describe, it, expect, beforeEach } from "bun:test";
-import { getSharedBodyBuffer, bodyBufferKey } from "./body-buffer";
+import { getSharedBodyResult, bodyBufferKey } from "./body-buffer";
 import { inflightReset, inflightSize } from "../postgres/repositories/mails/inflight";
 
 beforeEach(() => {
   inflightReset();
 });
 
-describe("getSharedBodyBuffer", () => {
+describe("getSharedBodyResult", () => {
   it("coalesces two concurrent callers on the same key to one build + one Buffer", async () => {
     let builds = 0;
     // Both calls fire in the same synchronous tick — the second sees the
     // pending entry that the first inserted before returning (singleflight
     // sync-set-before-return semantic).
-    const p1 = getSharedBodyBuffer("k", () => {
+    const p1 = getSharedBodyResult("k", () => {
       builds += 1;
-      return "shared-body";
+      return { kind: "content", text: "shared-body" };
     });
-    const p2 = getSharedBodyBuffer("k", () => {
+    const p2 = getSharedBodyResult("k", () => {
       builds += 1;
-      return "would-lose-if-ran";
+      return { kind: "content", text: "would-lose-if-ran" };
     });
     // Both callers hold the SAME Promise reference — proof of coalescing at
     // the singleflight layer.
     expect(p1).toBe(p2);
     expect(inflightSize()).toBe(1);
-    const [b1, b2] = await Promise.all([p1, p2]);
-    expect(b1).toBe(b2);
-    expect(b1.toString("utf8")).toBe("shared-body");
-    // Only the first build ran. The second `build` callback was passed in
-    // but singleflight dropped it — that's the whole point.
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.kind).toBe("buffer");
+    if (r1.kind !== "buffer" || r2.kind !== "buffer") throw new Error();
+    // Same Buffer reference.
+    expect(r1.buffer).toBe(r2.buffer);
+    expect(r1.buffer.toString("utf8")).toBe("shared-body");
+    // Only the first build ran.
     expect(builds).toBe(1);
   });
 
   it("does NOT coalesce across different keys", async () => {
-    const b1 = await getSharedBodyBuffer("k1", () => "one");
-    const b2 = await getSharedBodyBuffer("k2", () => "two");
-    expect(b1.toString("utf8")).toBe("one");
-    expect(b2.toString("utf8")).toBe("two");
-    expect(b1).not.toBe(b2);
+    const r1 = await getSharedBodyResult("k1", () => ({ kind: "content", text: "one" }));
+    const r2 = await getSharedBodyResult("k2", () => ({ kind: "content", text: "two" }));
+    if (r1.kind !== "buffer" || r2.kind !== "buffer") throw new Error();
+    expect(r1.buffer.toString("utf8")).toBe("one");
+    expect(r2.buffer.toString("utf8")).toBe("two");
+    expect(r1.buffer).not.toBe(r2.buffer);
   });
 
-  it("returns a Buffer whose bytes match a UTF-8 encoding of build()'s output", async () => {
+  it("returns a Buffer whose bytes match a UTF-8 encoding of build()'s text", async () => {
     // Multi-byte codepoints — proves the encoding is UTF-8 and byteLength
     // is the octet count, not the JS-string length.
     const src = "hello — wörld";
-    const buf = await getSharedBodyBuffer("utf8", () => src);
-    expect(buf.byteLength).toBe(Buffer.byteLength(src, "utf8"));
-    expect(buf.toString("utf8")).toBe(src);
-    // JS-string length would be 13 but UTF-8 byteLength is 16 (—: 3 bytes,
-    // ö: 2 bytes). Guard the assertion from silently passing under
-    // ASCII-only inputs.
-    expect(buf.byteLength).not.toBe(src.length);
+    const r = await getSharedBodyResult("utf8", () => ({ kind: "content", text: src }));
+    if (r.kind !== "buffer") throw new Error();
+    expect(r.buffer.byteLength).toBe(Buffer.byteLength(src, "utf8"));
+    expect(r.buffer.toString("utf8")).toBe(src);
+    // Guard the assertion from silently passing under ASCII-only inputs.
+    expect(r.buffer.byteLength).not.toBe(src.length);
   });
 
   it("cache entry drops on settle so a later caller re-builds", async () => {
     let builds = 0;
-    const run = () => getSharedBodyBuffer("k", () => {
+    const run = () => getSharedBodyResult("k", () => {
       builds += 1;
-      return `run-${builds}`;
+      return { kind: "content", text: `run-${builds}` };
     });
     const first = await run();
-    expect(first.toString("utf8")).toBe("run-1");
+    if (first.kind !== "buffer") throw new Error();
+    expect(first.buffer.toString("utf8")).toBe("run-1");
     // singleflight semantics: entry cleared post-settle. Not a cache.
     expect(inflightSize()).toBe(0);
     const second = await run();
-    expect(second.toString("utf8")).toBe("run-2");
+    if (second.kind !== "buffer") throw new Error();
+    expect(second.buffer.toString("utf8")).toBe("run-2");
     expect(builds).toBe(2);
+  });
+
+  it("preserves `nil` sentinel across coalesced callers (empty-body path)", async () => {
+    // `BODY[TEXT]` on a mail with no text/html/attachments must emit
+    // `BODY[TEXT] NIL`, not a 2-byte CRLF literal. Regression: an earlier
+    // shape collapsed empty content into a zero-length Buffer and callers
+    // downstream couldn't distinguish it from a genuine "nil" sentinel.
+    let builds = 0;
+    const p1 = getSharedBodyResult("empty", () => {
+      builds += 1;
+      return { kind: "nil" };
+    });
+    const p2 = getSharedBodyResult("empty", () => {
+      builds += 1;
+      return { kind: "nil" };
+    });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.kind).toBe("nil");
+    expect(r2.kind).toBe("nil");
+    expect(builds).toBe(1);
+  });
+
+  it("preserves `omit` sentinel across coalesced callers (nonexistent-part path)", async () => {
+    // `BODY[99]` on a 2-part message must be DROPPED from the FETCH
+    // response, not emitted as `BODY[99] NIL`. Regression: same collapse
+    // as above but conflated with the empty-body case, so the null path
+    // that used to omit the part started emitting a NIL simple.
+    let builds = 0;
+    const p1 = getSharedBodyResult("gone", () => {
+      builds += 1;
+      return { kind: "omit" };
+    });
+    const p2 = getSharedBodyResult("gone", () => {
+      builds += 1;
+      return { kind: "omit" };
+    });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.kind).toBe("omit");
+    expect(r2.kind).toBe("omit");
+    expect(builds).toBe(1);
   });
 });
 

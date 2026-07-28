@@ -739,3 +739,75 @@ describe("buildFetchResponsePart UID data item — domain-scoped UID space (#702
     expect(part).toEqual({ type: "simple", content: "UID 7" });
   });
 });
+
+// #713 regression: the cached FULL/TEXT/MIME_PART path must preserve the
+// three response shapes the string path returned for empty and
+// nonexistent-part inputs. An earlier draft collapsed both into a
+// zero-length Buffer, which the caller rendered as either a 2-byte CRLF
+// literal (empty body) or a spurious `NIL` simple part (nonexistent part).
+describe("buildBodyResponsePart cached-path shape preservation (#713)", () => {
+  it("BODY[TEXT] on a mail with no text/html/attachments emits `BODY[TEXT] NIL`", async () => {
+    // No text, no html, no attachments — the source content is `""`. Old
+    // string path returned `{ type: "simple", content: "BODY[TEXT] NIL" }`;
+    // a broken cached path emitted a 2-byte `\r\n` literal.
+    const mail: Partial<MailType> = {
+      messageId: "<empty@local>",
+      text: "",
+      html: "",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      { type: "BODY", peek: false, section: { type: "TEXT" } },
+      "doc-empty-text",
+      "INBOX"
+    );
+    expect(part).toEqual({ type: "simple", content: "BODY[TEXT] NIL" });
+  });
+
+  it("BODY[99] on a message that has no such part is DROPPED (returns null)", async () => {
+    // Nonexistent MIME part → `getBodyPart` returns `null` →
+    // `getBodyContent` returns `null` → the whole response part is omitted
+    // from the FETCH tuple. A broken cached path would emit a spurious
+    // `BODY[99] NIL` simple where nothing used to be there.
+    const mail: Partial<MailType> = {
+      messageId: "<nopart@local>",
+      text: "some text",
+      html: "<p>some html</p>",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "99" },
+      },
+      "doc-nopart",
+      "INBOX"
+    );
+    expect(part).toBeNull();
+  });
+
+  it("BODY[2] on a text-only mail (no part 2) is DROPPED, not emitted as NIL", async () => {
+    // Text-only mail → only part 1 exists. Asking for part 2 must drop the
+    // response part entirely.
+    const mail: Partial<MailType> = {
+      messageId: "<textonly@local>",
+      text: "only text here",
+      html: "",
+      attachments: [],
+    };
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "2" },
+      },
+      "doc-textonly-part2",
+      "INBOX"
+    );
+    expect(part).toBeNull();
+  });
+});

@@ -27,7 +27,7 @@ import {
   BodySection,
   FetchDataItem,
 } from "./types";
-import { bodyBufferKey, getSharedBodyBuffer } from "./body-buffer";
+import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
@@ -322,26 +322,37 @@ export async function buildBodyResponsePart(
   // partial fetches (`<start.length>`) because their key would need the
   // slice bounds and concurrent slices of the same body are uncommon
   // enough that the coalescing benefit doesn't offset the added logic.
+  //
+  // Preserving the three response shapes the string path returns is
+  // load-bearing (see `body-buffer.ts` docs):
+  //  - `getBodyContent` → null: the whole part is dropped from the FETCH
+  //    response (e.g. `BODY[99]` on a 2-part message).
+  //  - `getBodyContent` → "":   emit `<sectionKey> NIL` (e.g.
+  //    `BODY[TEXT]` on a mail with no text/html/attachments).
+  //  - non-empty: emit a `{N}\r\n<octets>` literal, with the trailing
+  //    `\r\n` INCLUDED in the cached value (so the {N} literal length
+  //    matches the emitted octets — building the CRLF per caller after
+  //    the cache would defeat the coalescing entirely for the wire
+  //    check).
   if (!partial && !isHeaderLikeSection(section)) {
-    const buffer = await getSharedBodyBuffer(
+    const cached = await getSharedBodyResult(
       bodyBufferKey(docId, sectionKey),
-      // The trailing `\r\n` MUST be included in the cached value — it's part
-      // of the wire content and its byteLength is what the `{length}`
-      // literal advertises to the client. Appending it per-caller would
-      // negate the whole point of coalescing.
       () => {
         const raw = getBodyContent(mail, section, docId);
-        return raw === null ? "" : raw + "\r\n";
+        if (raw === null) return { kind: "omit" };
+        if (raw === "") return { kind: "nil" };
+        return { kind: "content", text: raw + "\r\n" };
       }
     );
-    if (buffer.byteLength === 0) {
+    if (cached.kind === "omit") return null;
+    if (cached.kind === "nil") {
       return { type: "simple", content: `${sectionKey} NIL` };
     }
     return {
       type: "literal",
-      content: buffer,
+      content: cached.buffer,
       header: sectionKey,
-      length: buffer.byteLength,
+      length: cached.buffer.byteLength,
     };
   }
 

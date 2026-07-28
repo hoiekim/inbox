@@ -20,10 +20,28 @@ import { singleFlight } from "../postgres/repositories/mails/inflight";
  * copy — it enqueues a reference), so heap footprint stays at
  * O(distinct-in-flight-bodies) instead of O(callers).
  *
- * Why Buffer, not string:
- * - `Buffer.from(str, "utf8")` produces an allocation that lives outside
- *   V8's string heap, so the intermediate JS string built by
- *   `buildFullMessage` can be GC'd immediately after the encode.
+ * The tri-state result (buffer / nil / omit) preserves the three IMAP
+ * response shapes `buildBodyResponsePart` had to distinguish BEFORE this
+ * cache existed:
+ * - **buffer**: normal literal response `{N}\r\n<octets>`.
+ * - **nil**:   `<sectionKey> NIL` simple part (returned when the source
+ *              body exists but is empty — e.g. BODY[TEXT] on a mail with
+ *              no text/html/attachments).
+ * - **omit**:  the whole FETCH-response part is dropped (returned when
+ *              the section doesn't exist at all — e.g. BODY[99] on a
+ *              2-part message).
+ *
+ * Encoding those inside the closure (not outside) is REQUIRED: if the
+ * empty/omit check ran outside the singleflight, two concurrent callers
+ * would each independently call `getBodyContent` — which for the big
+ * cases means each redoes `buildFullMessage` (the multi-MB base64
+ * encode). That's the exact per-caller allocation this cache is here to
+ * eliminate.
+ *
+ * Why Buffer, not string, for the content case:
+ * - `Buffer.from(str, "utf8")` allocates outside V8's string heap, so
+ *   the intermediate JS string built by `buildFullMessage` can be GC'd
+ *   immediately after the encode.
  * - `socket.write(buffer)` skips the per-write UTF-8 conversion Node
  *   otherwise runs on string writes.
  *
@@ -31,11 +49,28 @@ import { singleFlight } from "../postgres/repositories/mails/inflight";
  * settle. That's the correct scope — the OOM comes from CONCURRENT
  * duplicate serializations; sequential callers can freely re-build.
  */
-export const getSharedBodyBuffer = (
+
+/** What the closure passed to `getSharedBodyResult` may return. */
+export type BodyBuildResult =
+  | { kind: "content"; text: string }
+  | { kind: "nil" }
+  | { kind: "omit" };
+
+/** What coalesced callers receive from `getSharedBodyResult`. */
+export type BodyCacheResult =
+  | { kind: "buffer"; buffer: Buffer }
+  | { kind: "nil" }
+  | { kind: "omit" };
+
+export const getSharedBodyResult = (
   cacheKey: string,
-  build: () => string
-): Promise<Buffer> =>
-  singleFlight(`body:${cacheKey}`, async () => Buffer.from(build(), "utf8"));
+  build: () => BodyBuildResult
+): Promise<BodyCacheResult> =>
+  singleFlight(`body:${cacheKey}`, async () => {
+    const r = build();
+    if (r.kind !== "content") return r;
+    return { kind: "buffer", buffer: Buffer.from(r.text, "utf8") };
+  });
 
 /**
  * Cache-key shape: `<mailId>::<sectionKey>`. `mailId` scopes to a single
