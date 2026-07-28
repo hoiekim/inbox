@@ -740,16 +740,15 @@ describe("buildFetchResponsePart UID data item — domain-scoped UID space (#702
   });
 });
 
-// #713 regression: the cached FULL/TEXT/MIME_PART path must preserve the
-// three response shapes the string path returned for empty and
-// nonexistent-part inputs. An earlier draft collapsed both into a
-// zero-length Buffer, which the caller rendered as either a 2-byte CRLF
-// literal (empty body) or a spurious `NIL` simple part (nonexistent part).
-describe("buildBodyResponsePart cached-path shape preservation (#713)", () => {
+// The cached FULL/TEXT/MIME_PART path must preserve three distinct
+// response shapes: an empty body renders `BODY[TEXT] NIL` (not a 2-byte
+// CRLF literal), and a nonexistent part drops the response part entirely
+// (not a spurious `NIL` simple). A zero-length Buffer cannot distinguish
+// them, so the cache carries a tri-state result instead.
+describe("buildBodyResponsePart cached-path shape preservation", () => {
   it("BODY[TEXT] on a mail with no text/html/attachments emits `BODY[TEXT] NIL`", async () => {
-    // No text, no html, no attachments — the source content is `""`. Old
-    // string path returned `{ type: "simple", content: "BODY[TEXT] NIL" }`;
-    // a broken cached path emitted a 2-byte `\r\n` literal.
+    // No text, no html, no attachments — the source content is `""`, which
+    // RFC 3501 renders as `BODY[TEXT] NIL`, not a 2-byte `\r\n` literal.
     const mail: Partial<MailType> = {
       messageId: "<empty@local>",
       text: "",
@@ -768,8 +767,7 @@ describe("buildBodyResponsePart cached-path shape preservation (#713)", () => {
   it("BODY[99] on a message that has no such part is DROPPED (returns null)", async () => {
     // Nonexistent MIME part → `getBodyPart` returns `null` →
     // `getBodyContent` returns `null` → the whole response part is omitted
-    // from the FETCH tuple. A broken cached path would emit a spurious
-    // `BODY[99] NIL` simple where nothing used to be there.
+    // from the FETCH tuple (not emitted as a spurious `BODY[99] NIL`).
     const mail: Partial<MailType> = {
       messageId: "<nopart@local>",
       text: "some text",

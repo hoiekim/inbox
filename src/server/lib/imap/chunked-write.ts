@@ -71,6 +71,11 @@ export const writeChunkedToSocket = async (
         socket.once("drain", onDrain);
         socket.once("close", onClose);
       });
+      // If the wake came from 'close', the socket is dead: a further
+      // write returns false (Node emits ERR_STREAM_DESTROYED async, no
+      // sync throw for the try/catch), so continuing the loop would
+      // re-await a drain/close that never fires and wedge the FETCH.
+      if (socket.destroyed || !socket.writable) return written;
     }
   }
   return written;

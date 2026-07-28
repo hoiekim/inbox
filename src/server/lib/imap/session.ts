@@ -135,7 +135,7 @@ export class ImapSession {
    * multi-MB body in one shot, and awaits `drain` between chunks whenever
    * `socket.write` reports its high-water mark reached. This is the write
    * path FETCH BODY responses take once the payload is a shared Buffer
-   * from `getSharedBodyBuffer` — resolves after every chunk is queued and
+   * from `getSharedBodyResult` — resolves after every chunk is queued and
    * the socket is under its high-water mark again.
    *
    * The `payload` parameter is a Buffer specifically so V8 can GC the

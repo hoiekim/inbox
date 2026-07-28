@@ -6,9 +6,11 @@
  *     'drain' fires. Without this, a retry-storm of multi-MB FETCH
  *     responses lets the Node writable-side buffer grow unbounded,
  *     defeating the RSS cap that motivated the fix.
- *  3. Socket 'close' mid-drain wakes the awaiter — otherwise a socket
- *     that dies between `write:false` and any potential `drain` hangs
- *     the whole FETCH pipeline on that promise.
+ *  3. Socket 'close' mid-drain wakes the awaiter AND stops the loop —
+ *     otherwise a socket that dies between `write:false` and any potential
+ *     `drain` hangs the whole FETCH pipeline: on a multi-chunk payload the
+ *     next `socket.write` to the dead socket returns false (no sync throw),
+ *     re-awaiting a drain/close that never fires.
  *  4. Destroyed / unwritable socket → returns 0 without writing.
  *  5. Return value is the bytes actually written — bumped even on a
  *     partial write (some chunks landed, later one threw). Callers use
@@ -95,6 +97,31 @@ describe("writeChunkedToSocket", () => {
     // died before drain — write() DID succeed (returned false), the OS
     // has the bytes.
     expect(written).toBe(CHUNK_BYTES);
+  });
+
+  it("stops the loop when a multi-chunk payload's socket 'close's mid-drain (does not hang)", async () => {
+    // Multi-chunk payload with permanent backpressure. 'close' fires
+    // during chunk 0's drain-await and marks the socket destroyed. The
+    // loop must NOT proceed to chunk 1 — writing to the dead socket would
+    // return false again and re-await a drain/close that never comes.
+    let writes = 0;
+    const socket = makeFakeSocket({
+      writeFn: () => {
+        writes += 1;
+        return false;
+      },
+    });
+    const payload = Buffer.alloc(2 * CHUNK_BYTES, 0x45);
+    const done = writeChunkedToSocket(socket, payload, () => {});
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toBe(1); // parked on chunk 0's drain
+    (socket as { destroyed: boolean }).destroyed = true;
+    socket.emit("close");
+    // If this test hangs, the loop kept writing to a dead socket.
+    const written = await done;
+    expect(writes).toBe(1); // chunk 1 never attempted
+    expect(written).toBe(CHUNK_BYTES); // only chunk 0 landed
   });
 
   it("returns 0 without writing when the socket is destroyed", async () => {
