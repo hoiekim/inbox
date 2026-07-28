@@ -146,11 +146,17 @@ export const saveMail = async (
         );
       }
 
-      // Same 23505 (duplicate message_id) → one mail delivered to two
-      // envelope-to addresses that both matched the user's accounts.
-      // Register the NEW envelope-to account's mailbox mapping against
-      // the existing mail_id so both account inboxes carry a UID for
-      // this message.
+      // The 23505 branch fires for cross-delivery re-sends of the same
+      // Message-ID from distinct SMTP sessions — a mailgun retry landing
+      // on a different envelope, or a listserv fanning the same message
+      // to multiple recipients under separate connections. Each session
+      // has its own `input.mailbox`; the mapping row (existing_mail_id,
+      // new_mailbox, new_uid) surfaces the second delivery in the second
+      // account's UID space. Same-mailbox race between two concurrent
+      // saveIncomingMail calls hits `writeMailboxUid`'s
+      // `ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING`, so the
+      // loser's counter tick and mapping-insert round-trip are wasted
+      // (rare, sub-ms, off the SMTP reply path) — the winner's row wins.
       if (input.mailbox && (input.uid_account ?? 0) > 0) {
         await writeMailboxUid(
           input.user_id,
