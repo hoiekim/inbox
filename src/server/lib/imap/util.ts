@@ -1,6 +1,48 @@
+import crypto from "crypto";
 import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
 import { logger } from "server";
+
+/**
+ * Deterministic Message-ID for a COPY/MOVE destination row, derived from the
+ * source Message-ID + destination mailbox path. Two properties matter:
+ *
+ * 1. **Retry idempotency.** If a multi-mail COPY/MOVE partially fails (iteration
+ *    K writes the `mails` row but `writeMailboxUid` throws), the client's retry
+ *    of the same command re-derives the same message-id for each iteration →
+ *    `saveMail`'s `UNIQUE(user_id, message_id)` 23505 branch fires → the retry
+ *    merges into the row from the first attempt instead of inserting a
+ *    duplicate. Without this, every retry-loop iteration draws a fresh random
+ *    id (`getRandomId()`), 23505 never fires, iterations 0..K-1 land as new
+ *    rows → destination shows duplicates. Filed as hoiekim/inbox#721.
+ *
+ * 2. **RFC compliance.** RFC 3501 §6.4.7 doesn't require preserving the source
+ *    Message-ID across COPY — the destination row is a server-storage
+ *    representation, not a re-delivered RFC 5322 message. A deterministic
+ *    derived id is as legal as a fresh random one.
+ *
+ * SHA-256 truncated to 16 hex chars (64 bits) gives collision-safety far above
+ * the working-set size (n=2^32 mails per user before ~1% collision probability).
+ * The `.copy@` suffix + input separator `\0` avoid accidental collision with
+ * external Message-IDs and prevent length-extension edge cases.
+ */
+export const deriveCopyMessageId = (
+  sourceMessageId: string | undefined,
+  destMailbox: string
+): string => {
+  // Undefined source Message-ID is a broken source row (mails.message_id
+  // is NOT NULL, so this shouldn't reach production paths — but guard
+  // anyway). Falling through to the empty-string hash below would make
+  // ALL such copies collide on a single derived id; substitute a random
+  // seed so each becomes distinct.
+  const seed = sourceMessageId ?? crypto.randomBytes(8).toString("hex");
+  const hash = crypto
+    .createHash("sha256")
+    .update(`${seed}\0${destMailbox}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${hash}.copy@server`;
+};
 
 export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");

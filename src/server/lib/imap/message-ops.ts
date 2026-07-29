@@ -12,7 +12,7 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount, isDomainScoped, isInbox, isSentBox } from "./util";
+import { boxToAccount, deriveCopyMessageId, isDomainScoped, isInbox, isSentBox } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -648,21 +648,16 @@ export async function copyMessageTyped(
     const destUids: number[] = [];
 
     const Mail = (await import("common")).Mail;
-    const getRandomId = (await import("common")).getRandomId;
 
-    // No transaction wrapper around storeMail — `pgSaveMail` is a single
-    // INSERT and the per-mail loop is sequential, so a mid-loop failure
-    // leaves the already-stored copies in the destination. Documented as
-    // a limitation; a follow-up can promote this to a multi-row INSERT
-    // or transaction.
+    // Per-mail loop is sequential; a mid-loop failure (e.g.
+    // writeMailboxUid throw) leaves the already-committed iterations in
+    // the destination. On client retry the destination Message-IDs are
+    // DETERMINISTIC via `deriveCopyMessageId(source, destMailbox)`, so
+    // the retry's INSERT hits `mails_user_id_message_id_key` 23505 for
+    // the iterations that already committed → saveMail's merge branch
+    // fires → each iteration converges to the first-attempt row. See
+    // #721.
     for (const sourceMail of uniqueSourceMails) {
-      // The mails table has UNIQUE(user_id, message_id); the copy must
-      // carry a fresh message_id so the INSERT actually creates a new
-      // row (otherwise saveMail merges into the source row and the
-      // COPYUID response would fabricate dest UIDs that don't exist).
-      // RFC 3501 §6.4.7 doesn't mandate preserving Message-ID across
-      // COPY — a duplicate row is a server-storage representation, not
-      // a re-delivered RFC 5322 message — so a fresh id is RFC-compliant.
       const newMail = new Mail({
         subject: sourceMail.subject,
         date: sourceMail.date,
@@ -674,7 +669,9 @@ export async function copyMessageTyped(
         replyTo: sourceMail.replyTo,
         envelopeFrom: sourceMail.envelopeFrom,
         attachments: sourceMail.attachments,
-        messageId: getRandomId(),
+        // Derived from source Message-ID + destination mailbox — see
+        // `deriveCopyMessageId` docstring for retry-safety rationale.
+        messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
         insight: sourceMail.insight,
         // Flags carry over per RFC 3501 §6.4.7.
         read: sourceMail.read,
@@ -934,7 +931,6 @@ export async function moveMessageTyped(
     const destUids: number[] = [];
 
     const Mail = (await import("common")).Mail;
-    const getRandomId = (await import("common")).getRandomId;
 
     // === COPY phase (mirrors copyMessageTyped's fixed shape) ===
     for (const sourceMail of uniqueSourceMails) {
@@ -949,8 +945,9 @@ export async function moveMessageTyped(
         replyTo: sourceMail.replyTo,
         envelopeFrom: sourceMail.envelopeFrom,
         attachments: sourceMail.attachments,
-        // Fresh messageId — see copyMessageTyped for the UNIQUE(...) rationale.
-        messageId: getRandomId(),
+        // Derived from source Message-ID + destination mailbox for retry
+        // idempotency — see `deriveCopyMessageId` in imap/util.ts and #721.
+        messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
         insight: sourceMail.insight,
         read: sourceMail.read,
         saved: sourceMail.saved,
