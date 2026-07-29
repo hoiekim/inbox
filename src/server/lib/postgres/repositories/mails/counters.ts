@@ -150,9 +150,23 @@ export const getAccountUidNext = async (
  * Record a UID assignment in the per-(user, mailbox, mail) mapping. `ON
  * CONFLICT DO NOTHING` — a re-emit for a (user, mailbox, mail) already
  * mapped is a no-op, not an error (COPY into a mailbox where this mail
- * already has a UID). Insert failure is logged rather than thrown while
- * `mails.uid_account` is the authoritative UID source; when the mapping
- * table becomes authoritative, this path needs to abort on failure.
+ * already has a UID).
+ *
+ * ABORTS ON FAILURE. `mail_mailbox_uid` is now the sole per-mailbox UID
+ * source (#702 PR 3 dropped `mails.uid_account`), so a transient DB
+ * fault at this write path means the mail is invisible in the
+ * destination mailbox — every account-scoped SELECT / STATUS / FETCH /
+ * SEARCH / STORE / EXPUNGE / MOVE joins this mapping and misses. The
+ * mail row itself already landed on `mails` at the point saveMail calls
+ * here, so `mails.uid_domain` still surfaces the message via INBOX /
+ * unified Sent Messages — but any per-account view is silent-drop.
+ *
+ * Throw → saveMail's outer catch returns undefined → SMTP replies 5xx
+ * (mailgun retries) / IMAP APPEND replies NO (client retries) / COPY /
+ * MOVE reply NO (client retries). A retry on the same message-id hits
+ * saveMail's 23505 merge branch, which also calls writeMailboxUid; if
+ * the transient cleared, the mapping row lands and the mail becomes
+ * visible in the destination mailbox.
  */
 export const writeMailboxUid = async (
   user_id: string,
@@ -168,11 +182,12 @@ export const writeMailboxUid = async (
       [user_id, mailbox, mail_id, uid]
     );
   } catch (error) {
-    logger.warn(
-      "Failed to record mail_mailbox_uid mapping",
+    logger.error(
+      "Failed to record mail_mailbox_uid mapping — aborting to force retry",
       { user_id, mailbox, mail_id, uid },
       error
     );
+    throw error;
   }
 };
 

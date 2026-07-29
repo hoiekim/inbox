@@ -316,7 +316,11 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
       continue;
     }
 
-    // Note: search_vector is auto-populated by trigger
+    // Note: search_vector is auto-populated by trigger.
+    // uid_account was dropped in #702 PR 3 — this one-off script no longer
+    // populates it (or the per-mailbox mapping table `mail_mailbox_uid`);
+    // callers that need per-account UIDs will get them via subsequent
+    // receive-path writes going through the standard write path.
     const sql = `
       INSERT INTO mails (
         mail_id, user_id, message_id, subject, date, html, text,
@@ -325,7 +329,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         reply_to_address, reply_to_text,
         envelope_from, envelope_to, attachments,
         read, saved, sent, deleted, draft, insight,
-        uid_domain, uid_account, updated
+        uid_domain, updated
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7,
         $8, $9, $10, $11,
@@ -333,7 +337,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         $16, $17,
         $18, $19, $20,
         $21, $22, $23, $24, $25, $26,
-        $27, $28, $29
+        $27, $28
       )
     `;
 
@@ -342,6 +346,7 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
     const ccAddr = mail.cc as Record<string, unknown> | undefined;
     const bccAddr = mail.bcc as Record<string, unknown> | undefined;
     const replyTo = mail.replyTo as Record<string, unknown> | undefined;
+    // uid.account was the old per-account UID field, dropped in #702 PR 3.
     const uid = (mail.uid || {}) as Record<string, unknown>;
 
     // Helper to normalize address values to always be arrays
@@ -383,7 +388,6 @@ async function migrateMails(userIdMap: UserIdMap): Promise<void> {
         mail.draft ?? false,
         mail.insight ? JSON.stringify(mail.insight) : null,
         uid.domain ?? 0,
-        uid.account ?? 0,
         hit._source.updated || new Date().toISOString(),
       ]);
 

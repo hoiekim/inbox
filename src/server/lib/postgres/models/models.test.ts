@@ -59,7 +59,6 @@ function makeMailData(overrides: Record<string, unknown> = {}): Record<string, u
     expunged: false,
     insight: null,
     uid_domain: 0,
-    uid_account: 0,
     modseq: 1,
     spam_score: 0,
     spam_reasons: null,

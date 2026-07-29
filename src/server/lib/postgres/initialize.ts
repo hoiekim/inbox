@@ -167,7 +167,10 @@ export const initializePostgres = async (): Promise<void> => {
           SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
           WHERE imap_uid_validity IS NOT NULL
         `);
-        await client.query(`ALTER TABLE mails DROP COLUMN uid_account`);
+        // IF EXISTS so a concurrent rolling-deploy loser (raced through the
+        // presence check above, then found the winner had already dropped
+        // the column) rolls back its UPDATE cleanly instead of crash-looping.
+        await client.query(`ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`);
         await client.query("COMMIT");
         logger.info("[Migration] #702 PR 3 — done");
       } catch (error) {
