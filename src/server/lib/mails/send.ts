@@ -44,35 +44,48 @@ export const sendMail = async (
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
-    // Everything below runs AFTER mailgun has committed the delivery.
-    // A throw from getSentMail (getDomainUidNext / getAccountUidNext
-    // transient, or attachment writeBuffer fs error) OR from saveMail
-    // (mails INSERT / mail_mailbox_uid mapping write failure) means the
-    // recipient already got the message but we couldn't build/store the
-    // local Sent record — telling the user "retry" would send a
-    // duplicate. Swallow the local-side failure into the alarm+error-dump
-    // that receive.ts saveMail already wires (see receive.ts:175-197) and
-    // return the mailgun response so the send is reported successful.
-    // Ops recovers the missing Sent-mailbox record from the ./error/&lt;ts&gt;
-    // dump.
+    // Everything below runs AFTER mailgun has committed the delivery. A
+    // throw here (getSentMail's UID reserve / attachment fs write, or
+    // saveMail's mails INSERT / mail_mailbox_uid mapping write) means
+    // the recipient already got the message but we couldn't build/store
+    // the local Sent record — telling the user "retry" would send a
+    // duplicate. Swallow into an alarm keyed by the mailgun message-id
+    // and return the mailgun response so the send is reported successful.
+    // Ops recovers from ./error/&lt;ts&gt; (written by receive.ts saveMail's
+    // catch on the saveMail-throw path).
+    //
+    // Split the try so each incident produces exactly one alarm:
+    //   - saveMail throw → receive.ts wrapper's catch already fired
+    //     `Mail Send Save Failed`; the inner catch here just logs.
+    //   - getSentMail throw → no receive.ts catch fired; the outer
+    //     catch here fires `Mail Send Save Failed` itself.
+    const messageId = response?.id || randomUUID();
+    let sentMail;
     try {
-      const messageId = response?.id || randomUUID();
-      const sentMail = await getSentMail(user, mailToSend, messageId, files);
-      await saveMail(sentMail, userId);
-    } catch (postSendError) {
+      sentMail = await getSentMail(user, mailToSend, messageId, files);
+    } catch (getSentMailError) {
       logger.error(
-        "Mailgun accepted the send but local Sent-record save failed — recipient got the mail, per-account mapping missing",
+        "Mailgun accepted the send but building the local Sent record failed",
         { mailgunMessageId: response?.id },
-        postSendError
+        getSentMailError
       );
-      // receive.ts saveMail's catch already fired sendAlarm + wrote
-      // ./error/&lt;ts&gt; before re-throwing when the failure was in saveMail
-      // itself. For a getSentMail throw the receive.ts catch didn't fire —
-      // send a fresh alarm here so ops has one signal per lost Sent record.
       sendAlarm(
-        "Mail Send: local save failed after mailgun success",
-        `**Error:** ${postSendError instanceof Error ? postSendError.message : String(postSendError)}\n**Mailgun message-id:** ${response?.id ?? "unknown"}`
+        "Mail Send Save Failed",
+        `**Error:** ${getSentMailError instanceof Error ? getSentMailError.message : String(getSentMailError)}\n**Mailgun message-id:** ${response?.id ?? "unknown"}`
       ).catch(() => undefined);
+      return response;
+    }
+    try {
+      await saveMail(sentMail, userId);
+    } catch (saveError) {
+      // receive.ts saveMail's catch already fired `Mail Send Save Failed`
+      // + wrote ./error/&lt;ts&gt; before re-throwing. Don't double-alarm; just
+      // log with the mailgun message-id for cross-correlation.
+      logger.error(
+        "Mailgun accepted the send but local Sent-record save failed — recipient got the mail, per-mailbox mapping missing",
+        { mailgunMessageId: response?.id },
+        saveError
+      );
     }
 
     return response;
