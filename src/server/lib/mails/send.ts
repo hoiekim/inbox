@@ -44,9 +44,27 @@ export const sendMail = async (
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
+    // Everything below runs AFTER mailgun has committed the delivery. A
+    // saveMail throw here (mails INSERT / mail_mailbox_uid mapping write
+    // failure) means the recipient already got the message but we couldn't
+    // store the local record — telling the user "retry" would send a
+    // duplicate. Swallow the local-save failure into the alarm+error-dump
+    // that receive.ts saveMail already wires (see receive.ts:175-197) and
+    // return the mailgun response so the send is reported as successful.
+    // Ops recovers the missing local record from the ./error/&lt;ts&gt; dump.
     const messageId = response?.id || randomUUID();
     const sentMail = await getSentMail(user, mailToSend, messageId, files);
-    await saveMail(sentMail, userId);
+    try {
+      await saveMail(sentMail, userId);
+    } catch (saveError) {
+      logger.error(
+        "Mailgun accepted the send but local save failed — recipient got the mail, local Sent record missing",
+        { messageId },
+        saveError
+      );
+      // receive.ts saveMail's catch already fired sendAlarm + wrote
+      // ./error/&lt;ts&gt; before re-throwing; don't double-alarm.
+    }
 
     return response;
   } catch (error: unknown) {

@@ -421,6 +421,27 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
       (saveSource.match(/writeMailboxUid\s*\(/g) ?? []).length;
     expect(writeMailboxUidCount).toBe(2);
   });
+
+  // #720 (PR 3) reviewoie HIGH-2: the outer catch's non-23505 branch must
+  // throw (not return undefined). Silent-return here was the mail-loss
+  // channel — mail_mailbox_uid is now the sole per-mailbox UID source, so a
+  // writeMailboxUid throw that got swallowed dropped the mail from every
+  // account-scoped view. Static-scan guard against a future edit
+  // regressing back to `return undefined`.
+  it("saveMail's outer catch rethrows on non-23505 errors so SMTP replies 5xx", () => {
+    const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
+    if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
+    const saveSource = saveMatch[0];
+    // 23505 branch returns { _id }; the ONLY remaining `return undefined`
+    // is the early-guard when getMailByMessageId misses (rare invariant
+    // break, not a transient). The non-23505 outer-catch tail must throw.
+    expect(saveSource).toMatch(/logger\.error\("Failed to save mail"/);
+    // The line after "Failed to save mail" logger.error must be `throw error;`.
+    const outerCatchTail = saveSource.match(
+      /logger\.error\("Failed to save mail"[^\n]*\n\s+throw error;/
+    );
+    expect(outerCatchTail).not.toBeNull();
+  });
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {

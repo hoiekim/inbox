@@ -161,12 +161,19 @@ export const getAccountUidNext = async (
  * here, so `mails.uid_domain` still surfaces the message via INBOX /
  * unified Sent Messages — but any per-account view is silent-drop.
  *
- * Throw → saveMail's outer catch returns undefined → SMTP replies 5xx
- * (mailgun retries) / IMAP APPEND replies NO (client retries) / COPY /
- * MOVE reply NO (client retries). A retry on the same message-id hits
- * saveMail's 23505 merge branch, which also calls writeMailboxUid; if
- * the transient cleared, the mapping row lands and the mail becomes
- * visible in the destination mailbox.
+ * Throw → propagates through pgSaveMail's outer catch (non-23505 branch
+ * now re-throws, per #720) → receive.ts saveMail's catch (alarm + error
+ * dump, then re-throws) → saveMailHandler's Promise.all rejects →
+ * smtp.ts's .catch(cb) → SMTP 5xx → mailgun retries. IMAP APPEND / COPY /
+ * MOVE take the parallel path via storeMail (converts undefined-or-throw
+ * → false → tagged NO → client retries). Send-path swallows the throw
+ * back to a mailgun-response-return (mail already sent; a "retry" would
+ * duplicate delivery — the ops-side error dump preserves recovery info).
+ *
+ * A retry on the same message-id hits saveMail's 23505 merge branch,
+ * which also calls writeMailboxUid; if the transient cleared, the
+ * mapping row lands and the mail becomes visible in the destination
+ * mailbox.
  */
 export const writeMailboxUid = async (
   user_id: string,
