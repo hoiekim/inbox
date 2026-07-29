@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 
-// The per-account header/delta/UID reads filter rows with a jsonb `@>`
+// getMailHeaders and getMailHeadersDelta filter rows with a jsonb `@>`
 // containment OR across the address columns (buildHeaderAddressCondition in
 // repositories/mails/http.ts). Each of those columns needs a GIN
 // (jsonb_path_ops) index or the planner seq-scans the whole mailbox on every

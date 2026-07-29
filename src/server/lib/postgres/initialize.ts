@@ -98,10 +98,10 @@ export const initializePostgres = async (): Promise<void> => {
     `);
 
     // GIN indexes for the per-account address containment (@>) filter shared by
-    // getMailHeaders / getMailHeadersDelta / getAllUids (buildHeaderAddressCondition
-    // in repositories/mails/http.ts + imap.ts). Without these the planner seq-scans
-    // the user's whole mailbox on every account open and every delta poll — O(mailbox)
-    // instead of O(matches). jsonb_path_ops is the smallest opclass that supports @>.
+    // getMailHeaders and getMailHeadersDelta (buildHeaderAddressCondition in
+    // repositories/mails/http.ts). Without these the planner seq-scans the user's
+    // whole mailbox on every account open and every delta poll — O(mailbox) instead
+    // of O(matches). jsonb_path_ops is the smallest opclass that supports @>.
     // Kept raw here (not in the model's `indexes` block) because buildCreateIndex only
     // emits single-column btree; this mirrors the idx_mails_search GIN index above.
     for (const column of [
