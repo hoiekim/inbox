@@ -55,7 +55,6 @@ export const ANSWERED = "answered";
 export const EXPUNGED = "expunged";
 export const INSIGHT = "insight";
 export const UID_DOMAIN = "uid_domain";
-export const UID_ACCOUNT = "uid_account";
 // Per-message mod-sequence for CONDSTORE (RFC 7162). Monotonically increasing
 // within a mailbox. Bumped by the IMAP write paths — new-message insert
 // (saveMail, incl. APPEND/COPY), STORE (setMailFlags), and EXPUNGE/MOVE.

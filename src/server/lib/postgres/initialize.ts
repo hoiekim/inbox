@@ -141,6 +141,43 @@ export const initializePostgres = async (): Promise<void> => {
       )
     `);
 
+    // #702 PR 3: retire `mails.uid_account` — `mail_mailbox_uid.uid` is now
+    // the sole per-mailbox UID source. Drop the column when it still exists,
+    // and bump every user's `imap_uid_validity` in the same transaction so
+    // any client that was caching UIDs against the retired column resyncs
+    // (RFC 3501 §2.3.1.1). Both steps are gated on the column's presence so
+    // subsequent restarts are no-ops.
+    const uidAccountCheck = await pool.query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'mails'
+        AND column_name = 'uid_account'
+      LIMIT 1
+    `);
+    if ((uidAccountCheck.rowCount ?? 0) > 0) {
+      logger.info("[Migration] #702 PR 3 — bumping imap_uid_validity and dropping mails.uid_account");
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // Bump UIDVALIDITY per user. FLOOR(EXTRACT(EPOCH FROM NOW())) matches
+        // the seed used by `getImapUidValidity` on first IMAP access — a
+        // monotonically-increasing unix-seconds value.
+        await client.query(`
+          UPDATE users
+          SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
+          WHERE imap_uid_validity IS NOT NULL
+        `);
+        await client.query(`ALTER TABLE mails DROP COLUMN uid_account`);
+        await client.query("COMMIT");
+        logger.info("[Migration] #702 PR 3 — done");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
     logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);

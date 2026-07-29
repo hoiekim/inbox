@@ -411,11 +411,11 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
     if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
     const saveSource = saveMatch[0];
-    // The call is gated: mailbox present AND uid_account > 0 (no
-    // account UID reserved → no mapping row).
+    // The call is gated: mailbox present AND uid_mailbox > 0 (no
+    // per-mailbox UID reserved → no mapping row).
     expect(saveSource).toMatch(/writeMailboxUid\s*\(/);
     expect(saveSource).toMatch(/input\.mailbox/);
-    expect(saveSource).toMatch(/uid_account/);
+    expect(saveSource).toMatch(/uid_mailbox/);
     // Guards two call sites — INSERT success + 23505 conflict merge.
     const writeMailboxUidCount =
       (saveSource.match(/writeMailboxUid\s*\(/g) ?? []).length;
@@ -431,7 +431,7 @@ describe("buildCriterionClause — flag criteria use schema columns", () => {
   const clauseFor = async (type: string) => {
     const { buildCriterionClause } = await import(".");
     const values: unknown[] = [];
-    return buildCriterionClause({ type }, "uid_account", values as never);
+    return buildCriterionClause({ type }, "uid_mailbox", values as never);
   };
 
   it("ANSWERED maps to answered = TRUE", async () => {
@@ -483,7 +483,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "NOT", value: { type: "SEEN" } },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     // Pre-fix this case had no `case "NOT"`/default, so the criterion fell
@@ -503,7 +503,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
           right: { type: "FROM", value: "bob" },
         },
       },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect(frag).toBe("(from_text ILIKE $1 OR from_text ILIKE $2)");
@@ -515,7 +515,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "NOT", value: { type: "FROM", value: "spam@x" } },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect(frag).toBe("NOT (from_text ILIKE $1)");
@@ -533,7 +533,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
           right: { type: "TO", value: "b" },
         },
       },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect(frag).toBe("(subject ILIKE $3 OR to_text ILIKE $4)");
@@ -551,7 +551,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
           right: { type: "ALL" }, // ALL → null fragment
         },
       },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     // FROM alice OR ALL = everything, so the whole disjunction is dropped.
@@ -564,7 +564,7 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
     const when = new Date("2026-01-01T00:00:00Z");
     const frag = buildCriterionClause(
       { type: "NOT", value: { type: "BEFORE", value: when } },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect(frag).toBe("NOT (date < $1)");
@@ -574,10 +574,10 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
   it("plain criteria are unaffected by the refactor", async () => {
     const { buildCriterionClause } = await import(".");
     const values: unknown[] = [];
-    expect(buildCriterionClause({ type: "SEEN" }, "uid_account", values as never)).toBe(
+    expect(buildCriterionClause({ type: "SEEN" }, "uid_mailbox", values as never)).toBe(
       "read = TRUE"
     );
-    expect(buildCriterionClause({ type: "ALL" }, "uid_account", values as never)).toBeNull();
+    expect(buildCriterionClause({ type: "ALL" }, "uid_mailbox", values as never)).toBeNull();
   });
 });
 
@@ -592,10 +592,10 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "UID_SET", value: [{ start: 5 }] },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
-    expect(frag).toBe("uid_account = $1");
+    expect(frag).toBe("uid_mailbox = $1");
     expect(values).toEqual([5]);
   });
 
@@ -604,10 +604,10 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "UID_SET", value: [{ start: 1 }, { start: 3 }] },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
-    expect(frag).toBe("(uid_account = $1 OR uid_account = $2)");
+    expect(frag).toBe("(uid_mailbox = $1 OR uid_mailbox = $2)");
     expect(values).toEqual([1, 3]);
   });
 
@@ -616,11 +616,11 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "UID_SET", value: [{ start: 2, end: 3 }, { start: 5, end: 7 }] },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect(frag).toBe(
-      "((uid_account >= $1 AND uid_account <= $2) OR (uid_account >= $3 AND uid_account <= $4))"
+      "((uid_mailbox >= $1 AND uid_mailbox <= $2) OR (uid_mailbox >= $3 AND uid_mailbox <= $4))"
     );
     expect(values).toEqual([2, 3, 5, 7]);
   });
@@ -630,10 +630,10 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "UID_SET", value: [{ start: 1, end: 3 }] },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
-    expect(frag).toBe("(uid_account >= $1 AND uid_account <= $2)");
+    expect(frag).toBe("(uid_mailbox >= $1 AND uid_mailbox <= $2)");
     expect(values).toEqual([1, 3]);
   });
 
@@ -642,14 +642,14 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     // Sibling keys are joined with AND by searchMailsByUid; the set stays a
     // single OR-group so the intersection is `read AND (uid∈{1,3})`.
     const values: unknown[] = [];
-    const flag = buildCriterionClause({ type: "SEEN" }, "uid_account", values as never);
+    const flag = buildCriterionClause({ type: "SEEN" }, "uid_mailbox", values as never);
     const set = buildCriterionClause(
       { type: "UID_SET", value: [{ start: 1 }, { start: 3 }] },
-      "uid_account",
+      "uid_mailbox",
       values as never
     );
     expect([flag, set].join(" AND ")).toBe(
-      "read = TRUE AND (uid_account = $1 OR uid_account = $2)"
+      "read = TRUE AND (uid_mailbox = $1 OR uid_mailbox = $2)"
     );
     expect(values).toEqual([1, 3]);
   });
@@ -658,7 +658,7 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
     const { buildCriterionClause } = await import(".");
     const values: unknown[] = [];
     expect(
-      buildCriterionClause({ type: "UID_SET", value: [] }, "uid_account", values as never)
+      buildCriterionClause({ type: "UID_SET", value: [] }, "uid_mailbox", values as never)
     ).toBeNull();
     expect(values).toHaveLength(0);
   });
@@ -709,7 +709,7 @@ describe("buildCriterionClause — BODY/TEXT search the message body (#552)", ()
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "BODY", value: "needle" },
-      "uid_account",
+      "uid_mailbox",
       values as never,
     );
     expect(frag).toBe("text ILIKE $1");
@@ -724,7 +724,7 @@ describe("buildCriterionClause — BODY/TEXT search the message body (#552)", ()
     const values: unknown[] = [];
     const frag = buildCriterionClause(
       { type: "TEXT", value: "needle" },
-      "uid_account",
+      "uid_mailbox",
       values as never,
     );
     expect(frag).toContain("subject ILIKE");
@@ -749,7 +749,7 @@ describe("buildCriterionClause — unexpressible criteria fail closed (#672)", (
     values: unknown[] = [],
   ) => {
     const { buildCriterionClause } = await import(".");
-    return buildCriterionClause(criterion, "uid_account", values as never);
+    return buildCriterionClause(criterion, "uid_mailbox", values as never);
   };
 
   it("MATCH_NONE is a truthy SQL fragment so searchMailsByUid keeps it in the AND", async () => {
@@ -857,7 +857,7 @@ describe("buildCriterionClause — combinators don't orphan bound params (#672)"
     values: unknown[],
   ) => {
     const { buildCriterionClause } = await import(".");
-    return buildCriterionClause(criterion, "uid_account", values as never);
+    return buildCriterionClause(criterion, "uid_mailbox", values as never);
   };
 
   it("`OR SUBJECT x ALL` → match-all, and rolls back SUBJECT's param", async () => {

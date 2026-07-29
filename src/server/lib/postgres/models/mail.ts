@@ -28,7 +28,6 @@ import {
   EXPUNGED,
   INSIGHT,
   UID_DOMAIN,
-  UID_ACCOUNT,
   MODSEQ,
   UPDATED,
   MAILS,
@@ -79,7 +78,6 @@ export interface MailJSON {
   expunged: boolean;
   insight: object | null;
   uid_domain: number;
-  uid_account: number;
   modseq: number;
   spam_score: number;
   spam_reasons: string[] | null;
@@ -116,7 +114,6 @@ const mailSchema = {
   [EXPUNGED]: "BOOLEAN NOT NULL DEFAULT FALSE",
   [INSIGHT]: "JSONB",
   [UID_DOMAIN]: "INTEGER NOT NULL DEFAULT 0",
-  [UID_ACCOUNT]: "INTEGER NOT NULL DEFAULT 0",
   // DEFAULT 1 doubles as the single-pass backfill: the auto-migration's ADD
   // COLUMN stamps every existing row with modseq=1, so each mailbox's initial
   // HIGHESTMODSEQ is 1 and the counter (getNextModseq) seeds from MAX(modseq)+1.
@@ -162,7 +159,6 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   declare expunged: boolean;
   declare insight: object | null;
   declare uid_domain: number;
-  declare uid_account: number;
   declare modseq: number;
   declare spam_score: number;
   declare spam_reasons: string[] | null;
@@ -199,7 +195,6 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     expunged: isBoolean,
     insight: isNullableObject,
     uid_domain: isNumber,
-    uid_account: isNumber,
     modseq: isNumber,
     spam_score: isNumber,
     spam_reasons: isNullableArray,
@@ -243,7 +238,6 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       expunged: this.expunged,
       insight: this.insight,
       uid_domain: this.uid_domain,
-      uid_account: this.uid_account,
       modseq: this.modseq,
       spam_score: this.spam_score,
       spam_reasons: this.spam_reasons,
@@ -264,10 +258,26 @@ export class MailModel extends Model<MailJSON, MailSchema> {
  *   const partial = new PartialMailModel(["mail_id", "subject", "read"], row);
  *   partial.subject // string | undefined
  */
+/**
+ * PartialMailModel-only synthetic fields — populated by a JOIN alias in the
+ * repository layer, not stored on the `mails` table. Kept out of MailModel's
+ * typeChecker so full-row constructor calls (via `mailsTable.query`) don't
+ * fail when the alias is absent.
+ *
+ * - `uid_mailbox` — the per-mailbox UID from `mail_mailbox_uid.uid`. Only set
+ *   when `getMailsByRange` is called with a specific mailbox (account-scoped
+ *   or user-created). Undefined for domain-scoped views (INBOX / unified
+ *   Sent Messages) — those use `uid_domain`.
+ */
+const partialSyntheticFieldCheckers: Record<string, (v: unknown) => boolean> = {
+  uid_mailbox: isNumber,
+};
+
 export class PartialMailModel {
-  static readonly validFields: ReadonlySet<string> = new Set(
-    Object.keys(MailModel.typeChecker)
-  );
+  static readonly validFields: ReadonlySet<string> = new Set([
+    ...Object.keys(MailModel.typeChecker),
+    ...Object.keys(partialSyntheticFieldCheckers),
+  ]);
 
   readonly selectedFields: ReadonlySet<string>;
 
@@ -301,7 +311,7 @@ export class PartialMailModel {
   readonly expunged?: boolean;
   readonly insight?: object | null;
   readonly uid_domain?: number;
-  readonly uid_account?: number;
+  readonly uid_mailbox?: number;
   readonly modseq?: number;
   readonly spam_score?: number;
   readonly spam_reasons?: string[] | null;
@@ -320,11 +330,15 @@ export class PartialMailModel {
       );
     }
 
-    // 2. Build a checker for only the requested fields and validate
+    // 2. Build a checker for only the requested fields and validate.
+    // Synthetic PartialMailModel fields (e.g. uid_mailbox, populated from a
+    // JOIN alias) live outside MailModel.typeChecker; look them up in the
+    // synthetic table when MailModel's checker doesn't have them.
     const partialChecker = Object.fromEntries(
       fields.map((f) => [
         f,
-        MailModel.typeChecker[f as keyof typeof MailModel.typeChecker],
+        MailModel.typeChecker[f as keyof typeof MailModel.typeChecker] ??
+          partialSyntheticFieldCheckers[f],
       ])
     ) as Record<string, (v: unknown) => boolean>;
 
@@ -355,7 +369,6 @@ export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
     { column: READ },
     { column: SAVED },
     { column: UID_DOMAIN },
-    { column: UID_ACCOUNT },
     { column: MODSEQ },
     { column: IS_SPAM },
     { column: EXPUNGED },

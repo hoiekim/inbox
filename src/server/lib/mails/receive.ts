@@ -165,7 +165,7 @@ export const saveMail = async (
     deleted: mail.deleted,
     draft: mail.draft,
     uid_domain: mail.uid?.domain,
-    uid_account: mail.uid?.account,
+    uid_mailbox: mail.uid?.account,
     mailbox,
     spam_score: spamResult?.score ?? 0,
     spam_reasons: spamResult?.reasons ?? null,
