@@ -175,8 +175,13 @@ export const saveMail = async (
       return { _id: existing.mail_id };
     }
 
+    // Non-23505 error (mails INSERT transient, mail_mailbox_uid mapping-write
+    // failure via writeMailboxUid, etc.). Throw rather than return undefined
+    // so the SMTP-receive / IMAP-write caller replies 5xx / NO and the sender
+    // or client retries — silent-drop is worse than loud failure now that
+    // `mail_mailbox_uid` is the sole per-mailbox UID source (#702 PR 3).
     logger.error("Failed to save mail", {}, error instanceof Error ? error : new Error(String(error)));
-    return undefined;
+    throw error;
   }
 };
 

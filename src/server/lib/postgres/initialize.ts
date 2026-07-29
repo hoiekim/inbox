@@ -169,7 +169,12 @@ export const initializePostgres = async (): Promise<void> => {
         `);
         // IF EXISTS so a concurrent rolling-deploy loser (raced through the
         // presence check above, then found the winner had already dropped
-        // the column) rolls back its UPDATE cleanly instead of crash-looping.
+        // the column) completes cleanly instead of throwing. Postgres emits
+        // a NOTICE not an error for a missing column, so the loser's
+        // transaction still COMMITs — including its own UPDATE users, which
+        // bumps UIDVALIDITY a second time. Functionally fine (a
+        // few-seconds-later UIDVALIDITY bump is still monotonically
+        // increasing), just not idempotent to the same-second value.
         await client.query(`ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`);
         await client.query("COMMIT");
         logger.info("[Migration] #702 PR 3 — done");
