@@ -622,17 +622,18 @@ export class Store {
 
       const result = await pgSaveMail(input);
       if (!result) return false;
-      // Reconcile mail.uid.account to the PERSISTED per-mailbox UID.
-      // On a 23505 merge (partial-failure retry of a multi-mail COPY /
-      // MOVE, or an intentional dup-COPY of the same source→dest),
-      // `writeMailboxUid`'s ON CONFLICT DO UPDATE returns the
-      // pre-existing UID, not the retry's freshly-reserved one. Wire
-      // callers (COPY / MOVE) push `mail.uid.account` into the COPYUID
-      // response's dest-set — using the un-reconciled retry UID would
-      // advertise UIDs that don't exist in the mapping (client `UID
-      // FETCH`es on those UIDs come back empty). See #721 / #722.
-      if (result.uid_mailbox !== undefined && mail.uid) {
-        mail.uid.account = result.uid_mailbox;
+      // Reconcile mail.uid.{account,domain} to the PERSISTED UIDs. On
+      // a 23505 merge (partial-failure retry of a multi-mail COPY /
+      // MOVE / APPEND, or an intentional dup-op to the same dest),
+      // saveMail returns the FIRST-attempt row's UIDs — the retry's
+      // freshly-reserved values would advertise UIDs that don't exist
+      // (client `UID FETCH`es come back empty). Wire callers (COPY /
+      // MOVE / APPEND) push mail.uid.{domain|account} into COPYUID /
+      // APPENDUID; reconciling here means no caller-side change. See
+      // #721 / #722.
+      if (mail.uid) {
+        if (result.uid_mailbox !== undefined) mail.uid.account = result.uid_mailbox;
+        if (result.uid_domain !== undefined) mail.uid.domain = result.uid_domain;
       }
       return true;
     } catch (error) {

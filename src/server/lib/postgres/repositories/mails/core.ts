@@ -60,7 +60,7 @@ export interface SaveMailInput {
 
 export const saveMail = async (
   input: SaveMailInput
-): Promise<{ _id: string; uid_mailbox?: number } | undefined> => {
+): Promise<{ _id: string; uid_mailbox?: number; uid_domain?: number } | undefined> => {
   try {
     const mail_id = crypto.randomUUID();
     // Stamp the new message with a fresh mod-sequence so it advances the
@@ -127,7 +127,14 @@ export const saveMail = async (
           input.uid_mailbox as number
         );
       }
-      return { _id: inserted_id, uid_mailbox: persistedUid };
+      // On the INSERT branch the row we just wrote has our input.uid_domain
+      // (no conflict) — return it verbatim so storeMail can reconcile
+      // mail.uid.domain for domain-scoped COPY/APPEND wire responses.
+      return {
+        _id: inserted_id,
+        uid_mailbox: persistedUid,
+        uid_domain: input.uid_domain,
+      };
     }
     return undefined;
   } catch (error: unknown) {
@@ -176,7 +183,18 @@ export const saveMail = async (
           input.uid_mailbox as number
         );
       }
-      return { _id: existing.mail_id, uid_mailbox: persistedUid };
+      // On the 23505 merge branch the caller's input.uid_domain is a
+      // fresh reservation, but the row `existing` already has its own
+      // uid_domain from the first attempt. Return the existing value
+      // so storeMail reconciles mail.uid.domain — otherwise a
+      // domain-scoped COPY/APPEND that partial-failure-retries would
+      // report a fresh uid_domain in COPYUID/APPENDUID that has no
+      // matching mails row.
+      return {
+        _id: existing.mail_id,
+        uid_mailbox: persistedUid,
+        uid_domain: existing.uid_domain,
+      };
     }
 
     // Non-23505 error (mails INSERT transient, mail_mailbox_uid mapping-write
