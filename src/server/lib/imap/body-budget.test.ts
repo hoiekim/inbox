@@ -54,6 +54,37 @@ describe("body-budget semaphore (#726)", () => {
     expect(results).toEqual(gates.map((_, i) => `done-${i}`));
   });
 
+  it("wakes multiple queued callers in FIFO order (#727 reviewoie LOW)", async () => {
+    // Guards against a future refactor swapping shift/pop for LIFO or
+    // waking every waiter at once. Fill capacity with holders, queue
+    // three waiters A/B/C in that order, then release holders one at
+    // a time and assert the completion order is A → B → C.
+    const holding = Array.from({ length: CAP }, () => defer<void>());
+    const holdingRuns = holding.map((g) => withBodyBudget(() => g.promise));
+
+    const completed: string[] = [];
+    const waiters = ["A", "B", "C"] as const;
+    const waiterRuns: Promise<unknown>[] = [];
+    for (const name of waiters) {
+      waiterRuns.push(
+        withBodyBudget(async () => {
+          completed.push(name);
+        })
+      );
+      // Yield so each caller's acquire hits the queue in order.
+      await nextTick();
+    }
+
+    // Release holders one by one; each wakes exactly one waiter.
+    for (const g of holding) {
+      g.resolve();
+      await nextTick();
+    }
+    await Promise.all(holdingRuns);
+    await Promise.all(waiterRuns);
+    expect(completed).toEqual(["A", "B", "C"]);
+  });
+
   it("queues an extra caller until a slot frees", async () => {
     const holding = Array.from({ length: CAP }, () => defer<void>());
     const holdingRuns = holding.map((g) => withBodyBudget(() => g.promise));

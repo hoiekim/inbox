@@ -29,6 +29,12 @@ import {
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 import { withBodyBudget } from "./body-budget";
+// `getSharedBodyResult` already budget-gates INSIDE its singleflight
+// closure so coalesced callers share one slot (see body-buffer.ts +
+// hoiekim/inbox#726 / #727). The `withBodyBudget` import here is used
+// on the PARTIAL-fetch branch below, which bypasses the shared-body
+// cache but still materializes the full body via `buildFullMessage`
+// before slicing — same RSS scaling concern, so same gate.
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
@@ -336,16 +342,10 @@ export async function buildBodyResponsePart(
   //    the cache would defeat the coalescing entirely for the wire
   //    check).
   if (!partial && !isHeaderLikeSection(section)) {
-    // Global concurrency budget for large-body serialization work: N
-    // parallel FETCH BODY[] requests against DISTINCT (mail, section)
-    // pairs (a common iOS Mail / K-9 multi-account resync pattern)
-    // would otherwise each allocate an independent multi-MB Buffer
-    // and scale RSS linearly with connection count. The budget queues
-    // excess concurrent work so peak RSS stays bounded regardless of
-    // how many sockets pipeline distinct large-body FETCHes. See
-    // `body-budget.ts` + hoiekim/inbox#726.
-    const cached = await withBodyBudget(() =>
-      getSharedBodyResult(
+    // Route through the shared body-buffer cache; getSharedBodyResult
+    // gates its build closure with `withBodyBudget` INSIDE the
+    // singleflight so N coalesced callers share one budget slot.
+    const cached = await getSharedBodyResult(
       bodyBufferKey(docId, sectionKey),
       () => {
         const raw = getBodyContent(mail, section, docId);
@@ -353,7 +353,7 @@ export async function buildBodyResponsePart(
         if (raw === "") return { kind: "nil" };
         return { kind: "content", text: raw + "\r\n" };
       }
-    ));
+    );
     if (cached.kind === "omit") return null;
     if (cached.kind === "nil") {
       return { type: "simple", content: `${sectionKey} NIL` };
@@ -366,7 +366,17 @@ export async function buildBodyResponsePart(
     };
   }
 
-  const content = getBodyContent(mail, section, docId);
+  // Partial fetch (`BODY[]<start.length>`) and header-like sections
+  // (`BODY[HEADER.FIELDS ...]`) fall through here. Partial STILL
+  // materializes the full body via `buildFullMessage` before slicing
+  // in `applyPartialFetch`, so the RSS scaling concern is the same as
+  // the shared-body path — gate through the budget. Header-like
+  // sections are cheap (≤ a few KiB) and don't need gating; hop over
+  // them with an immediate acquire/release by only gating when the
+  // request is a partial.
+  const content = partial
+    ? await withBodyBudget(() => Promise.resolve(getBodyContent(mail, section, docId)))
+    : getBodyContent(mail, section, docId);
   if (content === null) {
     return null;
   }
