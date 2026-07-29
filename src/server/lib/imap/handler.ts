@@ -6,6 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
+import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
@@ -319,25 +320,32 @@ export class ImapRequestHandler {
     const rssBefore = process.memoryUsage.rss();
     const bytesBefore = session.bytesWritten;
 
+    // Bind a body-budget wait ledger to this command's async scope so
+    // every `withBodyBudget` acquire made deeper in the FETCH path
+    // (across await boundaries + nested calls) attributes its wait to
+    // THIS command's totals, not a racing sibling command on another
+    // socket. Reads via `getBodyBudgetWaitMs()` in the finally below.
+    // See `body-budget.ts`.
+    return runInBodyBudgetContext(async () => {
     try {
       switch (request.type) {
         case "CAPABILITY":
-          this.session.capability(tag);
+          session.capability(tag);
           break;
 
         case "NOOP":
-          this.session.noop(tag);
+          session.noop(tag);
           break;
 
         case "LOGIN":
-          await this.session.login(tag, [
+          await session.login(tag, [
             request.data.username,
             request.data.password
           ]);
           break;
 
         case "AUTHENTICATE":
-          await this.session.authenticate(
+          await session.authenticate(
             tag,
             request.data.mechanism,
             request.data.initialResponse
@@ -345,14 +353,14 @@ export class ImapRequestHandler {
           break;
 
         case "LIST":
-          await this.session.listMailboxes(
+          await session.listMailboxes(
             tag,
             request.data.reference,
             request.data.pattern
           );
           break;
         case "LSUB":
-          await this.session.listSubscribedMailboxes(
+          await session.listSubscribedMailboxes(
             tag,
             request.data.reference,
             request.data.pattern
@@ -360,23 +368,23 @@ export class ImapRequestHandler {
           break;
 
         case "SELECT":
-          await this.session.selectMailbox(tag, request.data.mailbox);
+          await session.selectMailbox(tag, request.data.mailbox);
           break;
 
         case "EXAMINE":
-          await this.session.examineMailbox(tag, request.data.mailbox);
+          await session.examineMailbox(tag, request.data.mailbox);
           break;
 
         case "CREATE":
-          await this.session.createMailbox(tag, request.data.mailbox);
+          await session.createMailbox(tag, request.data.mailbox);
           break;
 
         case "DELETE":
-          await this.session.deleteMailbox(tag, request.data.mailbox);
+          await session.deleteMailbox(tag, request.data.mailbox);
           break;
 
         case "RENAME":
-          await this.session.renameMailbox(
+          await session.renameMailbox(
             tag,
             request.data.oldName,
             request.data.newName
@@ -384,15 +392,15 @@ export class ImapRequestHandler {
           break;
 
         case "SUBSCRIBE":
-          await this.session.subscribeMailbox(tag, request.data.mailbox);
+          await session.subscribeMailbox(tag, request.data.mailbox);
           break;
 
         case "UNSUBSCRIBE":
-          await this.session.unsubscribeMailbox(tag, request.data.mailbox);
+          await session.unsubscribeMailbox(tag, request.data.mailbox);
           break;
 
         case "STATUS":
-          await this.session.statusMailbox(
+          await session.statusMailbox(
             tag,
             request.data.mailbox,
             request.data.items
@@ -400,35 +408,35 @@ export class ImapRequestHandler {
           break;
 
         case "APPEND":
-          await this.session.appendMessage(tag, request.data);
+          await session.appendMessage(tag, request.data);
           break;
 
         case "IDLE":
-          await this.session.startIdle(tag);
+          await session.startIdle(tag);
           break;
 
         case "CHECK":
-          await this.session.check(tag);
+          await session.check(tag);
           break;
 
         case "FETCH":
-          await this.session.fetchMessagesTyped(tag, request.data, false);
+          await session.fetchMessagesTyped(tag, request.data, false);
           break;
 
         case "SEARCH":
-          await this.session.searchTyped(tag, request.data, false);
+          await session.searchTyped(tag, request.data, false);
           break;
 
         case "STORE":
-          await this.session.storeFlagsTyped(tag, request.data, false);
+          await session.storeFlagsTyped(tag, request.data, false);
           break;
 
         case "COPY":
-          await this.session.copyMessageTyped(tag, request.data, false);
+          await session.copyMessageTyped(tag, request.data, false);
           break;
 
         case "MOVE":
-          await this.session.moveMessageTyped(tag, request.data, false);
+          await session.moveMessageTyped(tag, request.data, false);
           break;
 
         case "UID":
@@ -436,53 +444,53 @@ export class ImapRequestHandler {
           break;
 
         case "CLOSE":
-          this.session.closeMailbox(tag);
+          session.closeMailbox(tag);
           break;
 
         case "EXPUNGE":
-          await this.session.expunge(tag);
+          await session.expunge(tag);
           break;
 
         case "LOGOUT":
-          await this.session.logout(tag);
+          await session.logout(tag);
           break;
 
         case "ID":
-          this.session.write(`* ID NIL\r\n${tag} OK ID completed\r\n`);
+          session.write(`* ID NIL\r\n${tag} OK ID completed\r\n`);
           break;
 
         case "STARTTLS":
-          await this.session.startTls(tag);
+          await session.startTls(tag);
           break;
 
         case "NAMESPACE":
           // RFC 2342: single personal namespace, no other/shared namespaces
-          this.session.write(`* NAMESPACE (("" "/")) NIL NIL\r\n${tag} OK NAMESPACE completed\r\n`);
+          session.write(`* NAMESPACE (("" "/")) NIL NIL\r\n${tag} OK NAMESPACE completed\r\n`);
           break;
 
         case "ENABLE":
           // RFC 5161 / RFC 4551 §3.7: enable CONDSTORE (the one extension we
           // support enabling) and echo back what was activated.
-          this.session.enable(tag, request.data.capabilities);
+          session.enable(tag, request.data.capabilities);
           break;
 
         case "UNSELECT":
           // RFC 3691: like CLOSE but without expunging; deselect the current mailbox
-          this.session.closeMailbox(tag, true);
+          session.closeMailbox(tag, true);
           break;
 
         case "GETQUOTAROOT":
           // RFC 2087: quota not supported, return empty quota
-          this.session.write(`${tag} NO Quota not supported\r\n`);
+          session.write(`${tag} NO Quota not supported\r\n`);
           break;
 
         default:
-          this.session.write(`${tag} BAD Unknown command\r\n`);
+          session.write(`${tag} BAD Unknown command\r\n`);
           break;
       }
     } catch (error) {
       logger.error("Error handling IMAP request", { component: "imap", tag, type: request.type }, error);
-      this.session.write(`${tag} BAD Internal server error\r\n`);
+      session.write(`${tag} BAD Internal server error\r\n`);
     } finally {
       const rssAfter = process.memoryUsage.rss();
       const socket = session.socket;
@@ -521,6 +529,15 @@ export class ImapRequestHandler {
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||
         responseBytes >= INTERESTING_RESPONSE_BYTES;
+      // Body-budget wait attribution (#726): when many sockets pipeline
+      // distinct large-body FETCHes concurrently, most of the caller's
+      // duration is spent WAITING for a body-budget slot rather than
+      // doing DB / serialization work. Log the wait so an OOM / latency
+      // triage can attribute FETCH latency to backpressure vs the app.
+      // Read from the request-scoped AsyncLocalStorage ledger — a
+      // module-global cell would race with concurrent commands on
+      // other sockets.
+      const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
       const payload = {
         component: "imap",
         tag,
@@ -532,6 +549,7 @@ export class ImapRequestHandler {
         rssDeltaMB,
         responseBytes,
         durationMs,
+        waitedForBodyBudgetMs,
       };
       if (isInteresting) {
         logger.info("IMAP command completed", payload);
@@ -539,6 +557,7 @@ export class ImapRequestHandler {
         logger.debug("IMAP command completed", payload);
       }
     }
+    });
   }
 
   /**

@@ -1,3 +1,4 @@
+import { withBodyBudget } from "./body-budget";
 import { singleFlight } from "../postgres/repositories/mails/inflight";
 
 /**
@@ -66,11 +67,18 @@ export const getSharedBodyResult = (
   cacheKey: string,
   build: () => BodyBuildResult
 ): Promise<BodyCacheResult> =>
-  singleFlight(`body:${cacheKey}`, async () => {
-    const r = build();
-    if (r.kind !== "content") return r;
-    return { kind: "buffer", buffer: Buffer.from(r.text, "utf8") };
-  });
+  singleFlight(`body:${cacheKey}`, async () =>
+    // Budget-gate INSIDE the singleflight closure so N coalesced callers
+    // consume ONE budget slot for one build, not N slots for N waiters.
+    // A duplicate-UID storm (the shape #710/#713 addressed) would
+    // otherwise starve legitimate distinct-UID callers by pinning every
+    // slot on the same body build. See #726 / #727.
+    withBodyBudget(async () => {
+      const r = build();
+      if (r.kind !== "content") return r;
+      return { kind: "buffer", buffer: Buffer.from(r.text, "utf8") };
+    })
+  );
 
 /**
  * Cache-key shape: `<mailId>::<sectionKey>`. `mailId` scopes to a single
