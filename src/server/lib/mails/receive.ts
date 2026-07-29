@@ -165,7 +165,7 @@ export const saveMail = async (
     deleted: mail.deleted,
     draft: mail.draft,
     uid_domain: mail.uid?.domain,
-    uid_account: mail.uid?.account,
+    uid_mailbox: mail.uid?.account,
     mailbox,
     spam_score: spamResult?.score ?? 0,
     spam_reasons: spamResult?.reasons ?? null,
@@ -175,16 +175,32 @@ export const saveMail = async (
   try {
     return await pgSaveMail(input);
   } catch (error) {
+    // Persist a full copy of the mail + error for post-mortem before the
+    // failure propagates; the write is best-effort. Then re-throw so the
+    // caller (saveMailHandler → SMTP `cb(err)` → 5xx, or IMAP APPEND/COPY/
+    // MOVE → NO) fails loudly and mailgun / the client retries. Silent-
+    // return here was the #702 PR 3 mapping-write-failure loss channel.
+    //
+    // Distinguish the alarm title by mail.sent so ops-side triage in
+    // Discord routes to the right code path: a `Mail Receive Failed`
+    // signal must not fire for send-path failures (send.ts's post-
+    // mailgun-commit swallow chain calls into this saveMail with
+    // mail.sent = true).
     logger.error("Error saving mail", {}, error);
+    const alarmTitle = mail.sent ? "Mail Send Save Failed" : "Mail Receive Failed";
     sendAlarm(
-      "Mail Receive Failed",
+      alarmTitle,
       `**Error:** ${error instanceof Error ? error.message : String(error)}`
     ).catch(() => undefined);
-    const errorFilePath = `./error/${Date.now()}`;
-    const errorContent = JSON.stringify({ ...mail, error });
-    if (!fs.existsSync("./error")) fs.mkdirSync("./error");
-    fs.writeFileSync(errorFilePath, errorContent);
-    return undefined;
+    try {
+      const errorFilePath = `./error/${Date.now()}`;
+      const errorContent = JSON.stringify({ ...mail, error });
+      if (!fs.existsSync("./error")) fs.mkdirSync("./error");
+      fs.writeFileSync(errorFilePath, errorContent);
+    } catch (fsError) {
+      logger.warn("Failed to persist mail error dump", {}, fsError);
+    }
+    throw error;
   }
 };
 

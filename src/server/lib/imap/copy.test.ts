@@ -3,7 +3,7 @@
  *
  * COPY was a stub returning `NO [CANNOT]`. After this fix it performs an
  * actual copy: for each source UID it inserts a new mail row in the
- * destination mailbox with fresh `uid_domain` + `uid_account`, preserving
+ * destination mailbox with a fresh `uid_domain` and `mail_mailbox_uid.uid`, preserving
  * subject / body / attachments / flags / headers, and emits a
  * `[COPYUID <uidvalidity> <source-set> <dest-set>]` response per RFC 4315.
  *

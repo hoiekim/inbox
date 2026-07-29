@@ -164,11 +164,24 @@ const getMailsByRangeUncoalesced = async (
     if (!safeFields.includes("mail_id")) {
       safeFields.unshift("mail_id");
     }
+    // `uid_mailbox` is a synthetic PartialMailModel field, not a mails column
+    // (see mail.ts:partialSyntheticFieldCheckers). Handle its projection
+    // separately from the mails-column SELECT list: for a per-mailbox query
+    // it comes from the JOIN alias `x.uid AS uid_mailbox`; for domain-scoped
+    // views it aliases `uid_domain` (the domain UID is the "mailbox" UID for
+    // INBOX / unified Sent Messages). Strip it from `mailsColumns` so the
+    // literal name never appears in the mails-side SELECT list.
+    const wantsUidMailbox = safeFields.includes("uid_mailbox");
+    const mailsColumns = safeFields.filter((f) => f !== "uid_mailbox");
 
     if (mailbox === null) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
       // uid_domain, unchanged by the per-mailbox mapping migration.
-      const fieldList = safeFields.length > 0 ? safeFields.join(", ") : "*";
+      const projection = mailsColumns.length > 0 ? mailsColumns.join(", ") : "*";
+      const uidMailboxAlias = wantsUidMailbox
+        ? `, ${UID_DOMAIN} AS uid_mailbox`
+        : "";
+      const fieldList = `${projection}${uidMailboxAlias}`;
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails
@@ -190,11 +203,18 @@ const getMailsByRangeUncoalesced = async (
       // Per-mailbox query — JOIN `mail_mailbox_uid` to fetch the
       // mailbox-specific UID and enforce membership. Fields on `mails`
       // are prefixed with `m.` so the SELECT is unambiguous across the
-      // join.
-      const qualifiedFields = safeFields
+      // join. `uid_mailbox` is emitted as `x.uid AS uid_mailbox` when
+      // requested — the per-mailbox UID the client sees.
+      const qualifiedFields = mailsColumns
         .map((f) => `m.${f}`)
         .join(", ");
-      const fieldList = qualifiedFields.length > 0 ? qualifiedFields : "m.*";
+      const uidMailboxAlias = wantsUidMailbox
+        ? `${qualifiedFields ? ", " : ""}x.${UID} AS uid_mailbox`
+        : "";
+      const fieldList =
+        qualifiedFields.length + uidMailboxAlias.length > 0
+          ? `${qualifiedFields}${uidMailboxAlias}`
+          : "m.*";
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails m
@@ -355,9 +375,9 @@ export const setMailFlags = async (
       }
     } else {
       // Per-mailbox: JOIN `mail_mailbox_uid` for both membership and
-      // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees),
-      // NOT `m.uid_account` — the column is scheduled for removal in
-      // PR 3 and the JOIN is now the source of truth.
+      // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees)
+      // — the mapping table is the sole per-mailbox UID source after
+      // #702 PR 3 dropped `mails.uid_account`.
       const returningCols = `x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2

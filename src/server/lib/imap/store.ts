@@ -371,8 +371,8 @@ export class Store {
    */
   getHighestModseq = async (box: string): Promise<number> => {
     try {
-      const { accountName, isSent } = this.resolveBox(box);
-      return await pgGetHighestModseq(this.user.id, accountName, isSent);
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await pgGetHighestModseq(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error getting highest modseq", { component: "imap.store", box }, error);
       return 1;
@@ -414,13 +414,15 @@ export class Store {
           draft: model.draft,
           answered: model.answered,
         };
-        if (
-          model.uid_domain !== undefined &&
-          model.uid_account !== undefined
-        ) {
+        if (model.uid_domain !== undefined) {
           mail.uid = {
             domain: model.uid_domain,
-            account: model.uid_account,
+            // Per-mailbox UID lives in mail_mailbox_uid.uid, aliased as
+            // `uid_mailbox` by getMailsByRange's JOIN for account-scoped
+            // and user-created mailboxes. Domain-scoped views (INBOX,
+            // unified Sent Messages) don't populate it — 0 signals "use
+            // uid.domain instead", matching the domain-only wire path.
+            account: model.uid_mailbox ?? 0,
           };
         }
         if (model.modseq !== undefined) {
@@ -483,7 +485,7 @@ export class Store {
   private mapFieldName(field: string): string[] {
     const fieldMap: Record<string, string[]> = {
       messageId: ["message_id"],
-      uid: ["uid_domain", "uid_account"],
+      uid: ["uid_domain", "uid_mailbox"],
       from: ["from_address", "from_text"],
       to: ["to_address", "to_text"],
       cc: ["cc_address", "cc_text"],
@@ -614,7 +616,7 @@ export class Store {
         answered: mail.answered,
         insight: mail.insight,
         uid_domain: mail.uid?.domain,
-        uid_account: mail.uid?.account,
+        uid_mailbox: mail.uid?.account,
         mailbox,
       };
 

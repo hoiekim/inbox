@@ -34,18 +34,26 @@ export interface SaveMailInput {
   expunged?: boolean;
   insight?: object | null;
   uid_domain?: number;
-  uid_account?: number;
+  /**
+   * Per-mailbox UID reserved via `getMailboxUidNext` for the mailbox this
+   * write targets. Not persisted on the `mails` table (dropped in #702 PR 3);
+   * `saveMail` mirrors it into `mail_mailbox_uid.uid` (keyed by
+   * `input.mailbox`), which is now the sole per-mailbox UID source. Skip when
+   * the write is domain-only (INBOX / unified Sent Messages) — those views
+   * enumerate by `uid_domain`, not the mapping.
+   */
+  uid_mailbox?: number;
   spam_score?: number;
   spam_reasons?: string[] | null;
   is_spam?: boolean;
   /**
-   * Destination account-scoped mailbox path (e.g. `INBOX/accounts/claude`,
-   * `Sent Messages/accounts/claude`). When set alongside a non-zero
-   * `uid_account`, `saveMail` mirrors the (user, mailbox, mail_id, uid)
-   * tuple into `mail_mailbox_uid` — dual-write toward #702 PR-2b's read
-   * cutover. Domain-scoped destinations (INBOX, unified Sent Messages)
-   * are omitted deliberately: `uid_domain` is authoritative for those
-   * views and the mapping is only interested in per-account UID spaces.
+   * Destination mailbox path (per-account like `INBOX/accounts/claude` /
+   * `Sent Messages/accounts/claude`, or user-created like `Archive`). When
+   * set alongside a non-zero `uid_mailbox`, `saveMail` writes the (user,
+   * mailbox, mail_id, uid) tuple into `mail_mailbox_uid` — the sole
+   * per-mailbox UID source after #702 PR 3. Domain-scoped destinations
+   * (INBOX, unified Sent Messages) are omitted deliberately: `uid_domain`
+   * is authoritative for those views.
    */
   mailbox?: string;
 }
@@ -57,7 +65,7 @@ export const saveMail = async (
     const mail_id = crypto.randomUUID();
     // Stamp the new message with a fresh mod-sequence so it advances the
     // mailbox's HIGHESTMODSEQ (CONDSTORE, RFC 7162). Reserved before the INSERT,
-    // like uid_domain/uid_account are in convertMail.
+    // like uid_domain/uid_mailbox are in convertMail.
     const modseq = await getNextModseq(input.user_id);
     const data: Record<string, ParamValue | object | null> = {
       mail_id,
@@ -93,7 +101,6 @@ export const saveMail = async (
       expunged: input.expunged ?? false,
       insight: input.insight ? JSON.stringify(input.insight) : null,
       uid_domain: input.uid_domain ?? 0,
-      uid_account: input.uid_account ?? 0,
       modseq,
       spam_score: input.spam_score ?? 0,
       spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
@@ -103,18 +110,18 @@ export const saveMail = async (
     const row = await mailsTable.insert(data, [MAIL_ID]);
     if (row) {
       const inserted_id = row[MAIL_ID] as string;
-      // Dual-write toward #702 PR-2b's read cutover: mirror the account
-      // UID into the per-mailbox mapping. Skipped when the destination
-      // is domain-scoped (no mailbox passed) or no account UID was
-      // reserved for this write. `writeMailboxUid` swallows its own
-      // errors — this row is still authoritative in `mails.uid_account`
-      // so a mapping-write miss doesn't lose the UID.
-      if (input.mailbox && (input.uid_account ?? 0) > 0) {
+      // Write the per-mailbox mapping row. `mail_mailbox_uid` is now the
+      // sole per-mailbox UID source (PR 3 dropped `mails.uid_account`),
+      // so this write is authoritative — a miss here means the mail is
+      // invisible to the mailbox's account-scoped reads. `writeMailboxUid`
+      // swallows its own errors; the caller (receive/send/COPY/MOVE)
+      // handles retry via its own error path.
+      if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
         await writeMailboxUid(
           input.user_id,
           input.mailbox,
           inserted_id,
-          input.uid_account as number
+          input.uid_mailbox as number
         );
       }
       return { _id: inserted_id };
@@ -157,19 +164,24 @@ export const saveMail = async (
       // `ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING`, so the
       // loser's counter tick and mapping-insert round-trip are wasted
       // (rare, sub-ms, off the SMTP reply path) — the winner's row wins.
-      if (input.mailbox && (input.uid_account ?? 0) > 0) {
+      if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
         await writeMailboxUid(
           input.user_id,
           input.mailbox,
           existing.mail_id,
-          input.uid_account as number
+          input.uid_mailbox as number
         );
       }
       return { _id: existing.mail_id };
     }
 
+    // Non-23505 error (mails INSERT transient, mail_mailbox_uid mapping-write
+    // failure via writeMailboxUid, etc.). Throw rather than return undefined
+    // so the SMTP-receive / IMAP-write caller replies 5xx / NO and the sender
+    // or client retries — silent-drop is worse than loud failure now that
+    // `mail_mailbox_uid` is the sole per-mailbox UID source (#702 PR 3).
     logger.error("Failed to save mail", {}, error instanceof Error ? error : new Error(String(error)));
-    return undefined;
+    throw error;
   }
 };
 

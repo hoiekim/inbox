@@ -60,32 +60,42 @@ describe("buildDomainUidQuery", () => {
 });
 
 describe("buildAccountUidQuery", () => {
+  // #702 PR 3 dropped `mails.uid_account`; the seed now sources from
+  // `mail_mailbox_uid.uid`, keyed by the mailbox path(s) the write side
+  // derives from (address, sent). The counter row itself still keys on
+  // the address scope for backward compat with the pre-migration key.
   it("reserves atomically, keyed by kind=account + the address scope", () => {
     const { sql, values } = buildAccountUidQuery(userId, "user@hoie.kim", false);
     expect(sql).toContain("INSERT INTO mail_uid_counters");
     expect(sql).toContain(
       `DO UPDATE SET ${LAST_UID} = mail_uid_counters.${LAST_UID} + 1`
     );
-    expect(sql).toContain("COALESCE(MAX(uid_account), 0) + 1");
+    expect(sql).toContain("COALESCE(MAX(uid), 0) + 1 FROM mail_mailbox_uid");
     expect(values[1]).toBe("account");
     expect(values[2]).toBe("user@hoie.kim");
     expect(values[3]).toBe(false);
-    // jsonb match payload preserved for the seed's address-containment.
-    expect(values[4]).toBe(JSON.stringify([{ address: "user@hoie.kim" }]));
   });
 
-  it("seeds the received sequence from to/cc/bcc/envelope containment", () => {
-    const { sql } = buildAccountUidQuery(userId, "user@hoie.kim", false);
-    expect(sql).toContain("to_address @> $5::jsonb");
-    expect(sql).toContain("cc_address @> $5::jsonb");
-    expect(sql).toContain("bcc_address @> $5::jsonb");
-    expect(sql).toContain("envelope_to @> $5::jsonb");
+  it("seeds the received sequence from the account-scoped INBOX path + the raw local part", () => {
+    // Per-account received: `INBOX/accounts/<local>`. Fallback path
+    // (`<local>` alone) covers user-created mailboxes where the write
+    // side stores the raw box name (e.g. `Archive`) — the OR-union
+    // catches both under one indexed lookup.
+    const { sql, values } = buildAccountUidQuery(userId, "user@hoie.kim", false);
+    expect(sql).toContain("mailbox IN ($5, $6)");
+    expect(values[4]).toBe("INBOX/accounts/user");
+    expect(values[5]).toBe("user");
   });
 
-  it("seeds the sent sequence from from_address containment", () => {
+  it("seeds the sent sequence from the Sent-account path + the raw local part", () => {
     const { sql, values } = buildAccountUidQuery(userId, "user@hoie.kim", true);
-    expect(sql).toContain("from_address @> $5::jsonb");
-    expect(sql).not.toContain("to_address @> $5::jsonb");
+    expect(sql).toContain("mailbox IN ($5, $6)");
+    expect(values[4]).toBe("Sent Messages/accounts/user");
+    expect(values[5]).toBe("user");
     expect(values[3]).toBe(true);
+    // Address-JSON containment on `mails` is gone — the seed no longer
+    // touches `mails.to_address`/`from_address` (PR 3).
+    expect(sql).not.toContain("to_address @>");
+    expect(sql).not.toContain("from_address @>");
   });
 });
