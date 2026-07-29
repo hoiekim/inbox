@@ -621,7 +621,20 @@ export class Store {
       };
 
       const result = await pgSaveMail(input);
-      return !!result;
+      if (!result) return false;
+      // Reconcile mail.uid.account to the PERSISTED per-mailbox UID.
+      // On a 23505 merge (partial-failure retry of a multi-mail COPY /
+      // MOVE, or an intentional dup-COPY of the same source→dest),
+      // `writeMailboxUid`'s ON CONFLICT DO UPDATE returns the
+      // pre-existing UID, not the retry's freshly-reserved one. Wire
+      // callers (COPY / MOVE) push `mail.uid.account` into the COPYUID
+      // response's dest-set — using the un-reconciled retry UID would
+      // advertise UIDs that don't exist in the mapping (client `UID
+      // FETCH`es on those UIDs come back empty). See #721 / #722.
+      if (result.uid_mailbox !== undefined && mail.uid) {
+        mail.uid.account = result.uid_mailbox;
+      }
+      return true;
     } catch (error) {
       logger.error("Error storing mail", { component: "imap.store" }, error);
       return false;

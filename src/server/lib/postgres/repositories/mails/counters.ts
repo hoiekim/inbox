@@ -147,10 +147,20 @@ export const getAccountUidNext = async (
 };
 
 /**
- * Record a UID assignment in the per-(user, mailbox, mail) mapping. `ON
- * CONFLICT DO NOTHING` — a re-emit for a (user, mailbox, mail) already
- * mapped is a no-op, not an error (COPY into a mailbox where this mail
- * already has a UID).
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping.
+ * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or
+ * the pre-existing one when a row for `(user, mailbox, mail_id)` already
+ * exists (COPY-twice / partial-failure retry). Callers that need to
+ * report the destination UID over the wire (COPY's COPYUID, MOVE's
+ * COPYUID response) MUST use this returned value, not the caller's
+ * freshly-reserved `uid` param — otherwise the response advertises UIDs
+ * that don't exist in the mapping (client `UID FETCH`es on those UIDs
+ * come back empty).
+ *
+ * SQL uses `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` as
+ * a no-op update: Postgres's `INSERT ... ON CONFLICT DO NOTHING RETURNING`
+ * returns nothing for the conflict path, but `DO UPDATE ... RETURNING`
+ * always returns the row's current value. See #721 / #722.
  *
  * ABORTS ON FAILURE. `mail_mailbox_uid` is now the sole per-mailbox UID
  * source (#702 PR 3 dropped `mails.uid_account`), so a transient DB
@@ -169,25 +179,23 @@ export const getAccountUidNext = async (
  * → false → tagged NO → client retries). Send-path swallows the throw
  * back to a mailgun-response-return (mail already sent; a "retry" would
  * duplicate delivery — the ops-side error dump preserves recovery info).
- *
- * A retry on the same message-id hits saveMail's 23505 merge branch,
- * which also calls writeMailboxUid; if the transient cleared, the
- * mapping row lands and the mail becomes visible in the destination
- * mailbox.
  */
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,
   mail_id: string,
   uid: number
-): Promise<void> => {
+): Promise<number> => {
   try {
-    await pool.query(
+    const result = await pool.query<{ uid: number }>(
       `INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID}) DO NOTHING`,
+       ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID})
+         DO UPDATE SET ${UID} = ${MAIL_MAILBOX_UID}.${UID}
+       RETURNING ${UID}`,
       [user_id, mailbox, mail_id, uid]
     );
+    return Number(result.rows[0]?.uid ?? uid);
   } catch (error) {
     logger.error(
       "Failed to record mail_mailbox_uid mapping — aborting to force retry",

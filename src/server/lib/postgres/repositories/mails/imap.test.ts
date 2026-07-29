@@ -442,6 +442,59 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     );
     expect(outerCatchTail).not.toBeNull();
   });
+
+  // #722 reviewoie HIGH: on a 23505-merge (partial-failure retry of a
+  // multi-mail COPY/MOVE, or intentional dup-COPY to the same dest),
+  // the caller (message-ops.ts COPY/MOVE loop → storeMail) needs the
+  // ACTUAL persisted mapping UID to include in the COPYUID response.
+  // `writeMailboxUid` returns the persisted UID via `ON CONFLICT ...
+  // DO UPDATE SET uid = mail_mailbox_uid.uid RETURNING uid` (the
+  // no-op update forces RETURNING to fire on the conflict path).
+  // Guard against a future edit reverting to `ON CONFLICT DO NOTHING`
+  // (which returns nothing on conflict → caller advertises non-
+  // existent UIDs) or dropping the RETURNING clause.
+  it("writeMailboxUid uses DO UPDATE + RETURNING so persisted UID is always returned", async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const counters = await fs.readFile(
+      path.join(import.meta.dir, "counters.ts"),
+      "utf8"
+    );
+    const fnMatch = counters.match(/export const writeMailboxUid[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("writeMailboxUid not found in counters.ts");
+    const fnSource = fnMatch[0];
+    expect(fnSource).toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO UPDATE/);
+    expect(fnSource).toMatch(/RETURNING\s+\$\{UID\}/);
+    // Return type must be `Promise<number>` — callers rely on it.
+    expect(fnSource).toMatch(/Promise<number>/);
+    // Guard against a future revert to DO NOTHING.
+    expect(fnSource).not.toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO NOTHING/);
+  });
+
+  it("saveMail returns uid_mailbox on both the INSERT and the 23505 merge branches", async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const core = await fs.readFile(
+      path.join(import.meta.dir, "core.ts"),
+      "utf8"
+    );
+    const saveMatch = core.match(/export const saveMail[\s\S]*?\n};/);
+    if (!saveMatch) throw new Error("saveMail not found in core.ts");
+    const saveSource = saveMatch[0];
+    // The type annotation on saveMail's return promise must include
+    // uid_mailbox as an optional field — callers depend on it for
+    // COPYUID / MOVE dest-UID reporting (see storeMail's mail.uid.account
+    // reconciliation).
+    expect(saveSource).toMatch(/Promise<\{\s*_id:\s*string;\s*uid_mailbox\?/);
+    // Both writeMailboxUid call sites (INSERT success + 23505 merge)
+    // capture the returned UID into `persistedUid` and thread it into
+    // the returned object.
+    const persistedUidAssignments = (saveSource.match(/persistedUid\s*=\s*await\s+writeMailboxUid/g) ?? []).length;
+    expect(persistedUidAssignments).toBe(2);
+    // Both return statements include uid_mailbox: persistedUid.
+    const returnSites = (saveSource.match(/return\s*\{\s*_id:[^}]*uid_mailbox:\s*persistedUid/g) ?? []).length;
+    expect(returnSites).toBe(2);
+  });
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {

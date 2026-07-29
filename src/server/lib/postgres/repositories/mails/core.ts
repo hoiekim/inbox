@@ -60,7 +60,7 @@ export interface SaveMailInput {
 
 export const saveMail = async (
   input: SaveMailInput
-): Promise<{ _id: string } | undefined> => {
+): Promise<{ _id: string; uid_mailbox?: number } | undefined> => {
   try {
     const mail_id = crypto.randomUUID();
     // Stamp the new message with a fresh mod-sequence so it advances the
@@ -113,18 +113,21 @@ export const saveMail = async (
       // Write the per-mailbox mapping row. `mail_mailbox_uid` is now the
       // sole per-mailbox UID source (PR 3 dropped `mails.uid_account`),
       // so this write is authoritative — a miss here means the mail is
-      // invisible to the mailbox's account-scoped reads. `writeMailboxUid`
-      // swallows its own errors; the caller (receive/send/COPY/MOVE)
-      // handles retry via its own error path.
+      // invisible to the mailbox's account-scoped reads. Callers need
+      // the returned persisted UID (may differ from input.uid_mailbox
+      // when a row already exists — a partial-failure retry hits the
+      // ON CONFLICT DO UPDATE and returns the first-attempt UID; see
+      // #721 / #722).
+      let persistedUid: number | undefined;
       if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
-        await writeMailboxUid(
+        persistedUid = await writeMailboxUid(
           input.user_id,
           input.mailbox,
           inserted_id,
           input.uid_mailbox as number
         );
       }
-      return { _id: inserted_id };
+      return { _id: inserted_id, uid_mailbox: persistedUid };
     }
     return undefined;
   } catch (error: unknown) {
@@ -164,15 +167,16 @@ export const saveMail = async (
       // `ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING`, so the
       // loser's counter tick and mapping-insert round-trip are wasted
       // (rare, sub-ms, off the SMTP reply path) — the winner's row wins.
+      let persistedUid: number | undefined;
       if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
-        await writeMailboxUid(
+        persistedUid = await writeMailboxUid(
           input.user_id,
           input.mailbox,
           existing.mail_id,
           input.uid_mailbox as number
         );
       }
-      return { _id: existing.mail_id };
+      return { _id: existing.mail_id, uid_mailbox: persistedUid };
     }
 
     // Non-23505 error (mails INSERT transient, mail_mailbox_uid mapping-write
