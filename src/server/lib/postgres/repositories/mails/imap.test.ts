@@ -358,6 +358,45 @@ describe("getMailsByRange — text_octets / html_octets synthetic projection", (
   });
 });
 
+describe("getMailsByRange — CHANGEDSINCE modseq filter (CONDSTORE phase 3, #609)", () => {
+  // Source-text scan (robust against module-mock interactions in the full
+  // suite): the CHANGEDSINCE modifier must add a `modseq > $N` predicate to the
+  // range query in both the domain-wide and per-mailbox branches, so the filter
+  // runs in SQL (O(rows-changed)) rather than as a JS post-filter over the
+  // whole window.
+  let mailsSource: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    mailsSource = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
+  });
+
+  it("takes an optional changedSince parameter", () => {
+    const sigMatch = mailsSource.match(
+      /export const getMailsByRange\s*=\s*async\s*\(([\s\S]*?)\)/
+    );
+    expect(sigMatch).not.toBeNull();
+    expect(sigMatch![1]).toMatch(/changedSince\s*\??\s*:\s*number/);
+  });
+
+  it("adds a `modseq > $N` predicate for the domain-wide branch", () => {
+    // `${MODSEQ} > $5` — the param after the domain branch's fixed 4 args.
+    expect(mailsSource).toMatch(/\$\{MODSEQ\}\s*>\s*\$5/);
+  });
+
+  it("adds a qualified `m.modseq > $N` predicate for the per-mailbox branch", () => {
+    // `m.${MODSEQ} > $6` — the param after the per-mailbox branch's fixed 5 args.
+    expect(mailsSource).toMatch(/m\.\$\{MODSEQ\}\s*>\s*\$6/);
+  });
+
+  it("only appends the predicate when changedSince is provided", () => {
+    // The clause is gated on `changedSince !== undefined` so existing callers
+    // (no modifier) issue the identical pre-#609 query.
+    expect(mailsSource).toMatch(/changedSince !== undefined/);
+  });
+});
+
 describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
   // Static source check: the expunge write paths must go through
   // mailsTable.updateWhere with `updated: DB_NOW` in the data bag so the

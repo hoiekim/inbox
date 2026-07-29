@@ -397,6 +397,12 @@ export class ImapSession {
     if (!this.selectedMailbox) {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
+    // RFC 4551 §3.3.1: the CHANGEDSINCE modifier implicitly enables CONDSTORE
+    // for the session — subsequent FETCH/STORE responses carry MODSEQ, and
+    // this response emits it too.
+    if (fetchRequest.changedSince !== undefined) {
+      this.condstoreEnabled = true;
+    }
     return fetchMessagesOp(
       tag,
       fetchRequest,

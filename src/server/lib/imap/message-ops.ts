@@ -83,6 +83,14 @@ export async function fetchMessagesTyped(
     return;
   }
 
+  // RFC 4551 §3.3.1: a CHANGEDSINCE fetch implies the MODSEQ data item, so the
+  // response carries `MODSEQ (n)` even if the client never ENABLEd CONDSTORE.
+  // The session separately flips its persistent condstore flag so subsequent
+  // plain fetches also carry MODSEQ; this local flag keeps THIS response
+  // correct in isolation.
+  const emitCondstore =
+    condstoreEnabled || fetchRequest.changedSince !== undefined;
+
   try {
     const messages = await _fetchMessages(
       fetchRequest,
@@ -90,7 +98,7 @@ export async function fetchMessagesTyped(
       store,
       selectedMailbox,
       seqState,
-      condstoreEnabled
+      emitCondstore
     );
     await _processFetchMessages(
       messages,
@@ -102,7 +110,7 @@ export async function fetchMessagesTyped(
       write,
       writeChunked,
       writeStream,
-      condstoreEnabled
+      emitCondstore
     );
     write(`${tag} OK FETCH completed\r\n`);
   } catch (error) {
@@ -163,7 +171,8 @@ async function _fetchMessages(
         uidStart,
         uidEnd,
         Array.from(requestedFields),
-        true
+        true,
+        fetchRequest.changedSince
       );
       messages.forEach((mail, id) => {
         result.set(id, mail);

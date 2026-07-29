@@ -110,6 +110,10 @@ export interface SequenceRange {
 export interface FetchRequest {
   sequenceSet: SequenceSet;
   dataItems: FetchDataItem[];
+  // RFC 4551 §3.3.1 CHANGEDSINCE modifier: `FETCH … (CHANGEDSINCE <modseq>)`.
+  // When set, the server returns only messages whose mod-sequence is greater
+  // than this value, and implicitly enables CONDSTORE + emits MODSEQ.
+  changedSince?: number;
 }
 
 export type FetchDataItem =
