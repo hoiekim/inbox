@@ -8,7 +8,8 @@ import {
   accountToBox,
   boxToAccount,
   formatInternalDate,
-  isDomainScoped
+  isDomainScoped,
+  deriveCopyMessageId,
 } from "./util";
 import type { MailType, MailAddressValueType } from "common";
 
@@ -504,6 +505,63 @@ describe("IMAP util", () => {
         expect(nonExt).toContain(`"application" "pdf"`);
         expect(nonExt).toContain(`BASE64 ${attachmentSize})`);
       });
+    });
+  });
+
+  // #721: multi-mail COPY/MOVE partial-failure retry safety. The old code
+  // drew a fresh random Message-ID per iteration, so a client retry after
+  // an iteration-K throw produced duplicate destination rows for the
+  // iterations that had committed (the retry's fresh ids didn't collide
+  // with the first attempt's ids). `deriveCopyMessageId` makes the id a
+  // deterministic function of (source Message-ID, dest mailbox) so the
+  // retry's INSERTs hit `mails_user_id_message_id_key` 23505 and merge
+  // into the first attempt's rows instead of inserting duplicates.
+  describe("deriveCopyMessageId — retry idempotency (#721)", () => {
+    it("returns the same id for the same (source, dest) — the load-bearing invariant", () => {
+      const a = deriveCopyMessageId("src-msg-id", "INBOX/accounts/foo");
+      const b = deriveCopyMessageId("src-msg-id", "INBOX/accounts/foo");
+      expect(a).toBe(b);
+    });
+
+    it("returns different ids for different source Message-IDs", () => {
+      const a = deriveCopyMessageId("src-msg-id-A", "INBOX/accounts/foo");
+      const b = deriveCopyMessageId("src-msg-id-B", "INBOX/accounts/foo");
+      expect(a).not.toBe(b);
+    });
+
+    it("returns different ids for different destination mailboxes", () => {
+      // Same source, different dest → different id. Otherwise COPYing the
+      // same source to two different mailboxes would produce a single
+      // shared destination row (via 23505 merge) instead of two.
+      const a = deriveCopyMessageId("src-msg-id", "INBOX/accounts/foo");
+      const b = deriveCopyMessageId("src-msg-id", "Archive");
+      expect(a).not.toBe(b);
+    });
+
+    it("uses a separator that prevents source/dest boundary confusion", () => {
+      // Without the `\0` separator, ("srcId", "dest") and ("srcIddest", "")
+      // would hash to the same string. The separator prevents this.
+      const a = deriveCopyMessageId("src", "dest");
+      const b = deriveCopyMessageId("srcdest", "");
+      expect(a).not.toBe(b);
+    });
+
+    it("falls back to random for missing source Message-ID so undefined sources don't collide", () => {
+      // mails.message_id is NOT NULL in prod, but defensively: two rows
+      // with undefined source ids must NOT hash to the same derived id
+      // (they'd merge into a single dest row via 23505 → wrong count).
+      const a = deriveCopyMessageId(undefined, "INBOX/accounts/foo");
+      const b = deriveCopyMessageId(undefined, "INBOX/accounts/foo");
+      expect(a).not.toBe(b);
+    });
+
+    it("emits a valid RFC-shaped Message-ID (angle-bracket-free, has `@`)", () => {
+      // saveMail's DB layer wraps in `<>` when needed; the raw form here
+      // is `<hash>.copy@server` — a compact deterministic derivation the
+      // server treats as its own storage id, not a re-delivered RFC 5322
+      // message-id (RFC 3501 §6.4.7 permits this).
+      const id = deriveCopyMessageId("src", "dest");
+      expect(id).toMatch(/^[a-f0-9]{16}\.copy@server$/);
     });
   });
 });
