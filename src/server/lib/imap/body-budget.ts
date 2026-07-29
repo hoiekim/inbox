@@ -24,6 +24,7 @@
  * the point: one misbehaving client shouldn't be able to squeeze the
  * rest of the process out of memory just by opening more sockets.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "server";
 
 const DEFAULT_CONCURRENCY = 3;
@@ -48,29 +49,40 @@ let inFlight = 0;
 const waitQueue: Array<() => void> = [];
 
 /**
- * The last budget wait latency, exposed so per-command diag logging
- * can attribute FETCH latency to budget queuing vs DB / serialization.
- * Reset by each new caller when they acquire — read it BEFORE releasing
- * or the next caller overwrites it.
+ * Per-request wait accumulator. Bound at the top of the IMAP command
+ * handler via `runInBodyBudgetContext(fn)`; every `withBodyBudget` call
+ * that runs INSIDE `fn` (even across `await` boundaries and nested
+ * async work) adds its measured wait to the SAME `{ ms }` object.
+ * The handler reads the total from `getBodyBudgetWaitMs()` at the end.
+ *
+ * Load-bearing: without AsyncLocalStorage the wait latency would sit on
+ * a module-scoped variable that concurrent handlers overwrite (handler
+ * A yields inside `await withBodyBudget`, handler B on a different
+ * socket acquires and writes its OWN wait time to the shared cell,
+ * then A resumes and reads B's value). AsyncLocalStorage keeps each
+ * request's ledger separate.
  */
-let lastAcquireWaitMs = 0;
+const waitStore = new AsyncLocalStorage<{ ms: number }>();
 
-export const getLastBodyBudgetWaitMs = (): number => lastAcquireWaitMs;
+export const runInBodyBudgetContext = <T>(fn: () => T): T =>
+  waitStore.run({ ms: 0 }, fn);
 
-const acquire = (): Promise<void> => {
-  const start = performance.now();
+export const getBodyBudgetWaitMs = (): number => waitStore.getStore()?.ms ?? 0;
+
+const acquire = async (): Promise<void> => {
   if (inFlight < CAPACITY) {
     inFlight++;
-    lastAcquireWaitMs = 0;
-    return Promise.resolve();
+    return;
   }
-  return new Promise<void>((resolve) => {
+  const start = performance.now();
+  await new Promise<void>((resolve) => {
     waitQueue.push(() => {
       inFlight++;
-      lastAcquireWaitMs = performance.now() - start;
       resolve();
     });
   });
+  const ledger = waitStore.getStore();
+  if (ledger) ledger.ms += performance.now() - start;
 };
 
 const release = (): void => {
@@ -82,7 +94,9 @@ const release = (): void => {
 /**
  * Run `fn` inside the body budget. Waits for a slot if `CAPACITY`
  * large-body serializations are already in flight. Always releases,
- * even if `fn` throws.
+ * even if `fn` throws. When the caller is inside a
+ * `runInBodyBudgetContext` scope, the wait time (0 if the acquire was
+ * immediate) is added to that scope's ledger.
  */
 export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
   await acquire();
@@ -97,7 +111,6 @@ export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
 export const _resetBodyBudget = (): void => {
   inFlight = 0;
   waitQueue.length = 0;
-  lastAcquireWaitMs = 0;
 };
 
 export const bodyBudgetCapacity = (): number => CAPACITY;

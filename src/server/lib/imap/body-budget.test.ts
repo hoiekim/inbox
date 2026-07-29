@@ -6,7 +6,8 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import {
   withBodyBudget,
   bodyBudgetCapacity,
-  getLastBodyBudgetWaitMs,
+  runInBodyBudgetContext,
+  getBodyBudgetWaitMs,
   _resetBodyBudget,
 } from "./body-budget";
 
@@ -78,29 +79,53 @@ describe("body-budget semaphore (#726)", () => {
     await extra;
   });
 
-  it("records the acquire wait latency for the most recent acquire", async () => {
+  it("attributes wait time to the request-scoped ledger, not a global cell", async () => {
+    // The load-bearing invariant. Two concurrent request scopes run
+    // side by side; each scope's wait-ledger MUST reflect ONLY its own
+    // queue latency, not the other scope's. The pre-AsyncLocalStorage
+    // shape wrote to a module-scoped variable that both scopes would
+    // race on and overwrite.
     const holding = Array.from({ length: CAP }, () => defer<void>());
-    const holdingRuns = holding.map((g) => withBodyBudget(() => g.promise));
+    const holdingRuns = holding.map((g) =>
+      runInBodyBudgetContext(() => withBodyBudget(() => g.promise))
+    );
 
-    // A queued caller can measure its own wait time — the value is
-    // overwritten on the next acquire, so capture it inside the
-    // waited callback.
-    const waitedCaptured = defer<number>();
-    const queued = withBodyBudget(async () => {
-      waitedCaptured.resolve(getLastBodyBudgetWaitMs());
-      return "queued-done";
+    // Queue scope A first — it'll acquire the first slot freed by a
+    // filler. Its fn holds the slot briefly so scope B (queued next)
+    // must wait through that hold.
+    const aWait = defer<number>();
+    const bWait = defer<number>();
+    const scopeA = runInBodyBudgetContext(async () => {
+      await withBodyBudget(async () => {
+        aWait.resolve(getBodyBudgetWaitMs());
+        await new Promise((r) => setTimeout(r, 40));
+      });
     });
+    // Yield so A's acquire hits the queue before B's.
+    await nextTick();
+    const scopeB = runInBodyBudgetContext(async () => {
+      await withBodyBudget(async () => {
+        bWait.resolve(getBodyBudgetWaitMs());
+      });
+    });
+    await nextTick();
 
-    // Small delay so the queued caller has non-zero wait time.
-    await new Promise((r) => setTimeout(r, 25));
+    // Release only ONE filler → wakes A (queued first). All other
+    // fillers stay held throughout, so when A's fn completes and A
+    // releases, B is the ONLY caller that can acquire (no other slots
+    // free) → B's wait spans A's ~40 ms fn hold. A's own wait was
+    // short (one microtask after filler[0] released). Distinct scopes
+    // → distinct ledgers.
     holding[0].resolve();
-    const waited = await waitedCaptured.promise;
-    expect(waited).toBeGreaterThan(0);
 
-    // Drain.
+    const [a, b] = await Promise.all([aWait.promise, bWait.promise]);
+    expect(b).toBeGreaterThan(a + 20);
+
+    // Drain remaining fillers so their runs don't hang the suite.
     holding.slice(1).forEach((g) => g.resolve());
+    await scopeA;
+    await scopeB;
     await Promise.all(holdingRuns);
-    await queued;
   });
 
   it("releases on throw so subsequent callers still run", async () => {
@@ -122,9 +147,15 @@ describe("body-budget semaphore (#726)", () => {
     expect(ranAfter).toBe(true);
   });
 
-  it("acquire wait is 0 when the caller acquires without queuing", async () => {
+  it("wait ledger stays at 0 when the caller acquires without queuing", async () => {
     _resetBodyBudget();
-    await withBodyBudget(async () => {});
-    expect(getLastBodyBudgetWaitMs()).toBe(0);
+    await runInBodyBudgetContext(async () => {
+      await withBodyBudget(async () => {});
+      expect(getBodyBudgetWaitMs()).toBe(0);
+    });
+  });
+
+  it("getBodyBudgetWaitMs outside a context returns 0 (no throw)", () => {
+    expect(getBodyBudgetWaitMs()).toBe(0);
   });
 });
