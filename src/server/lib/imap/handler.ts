@@ -6,6 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
+import { getLastBodyBudgetWaitMs } from "./body-budget";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
@@ -521,6 +522,12 @@ export class ImapRequestHandler {
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||
         responseBytes >= INTERESTING_RESPONSE_BYTES;
+      // Body-budget wait attribution (#726): when many sockets pipeline
+      // distinct large-body FETCHes concurrently, most of the caller's
+      // duration is spent WAITING for a body-budget slot rather than
+      // doing DB / serialization work. Log the wait so an OOM / latency
+      // triage can attribute FETCH latency to backpressure vs the app.
+      const waitedForBodyBudgetMs = Math.round(getLastBodyBudgetWaitMs());
       const payload = {
         component: "imap",
         tag,
@@ -532,6 +539,7 @@ export class ImapRequestHandler {
         rssDeltaMB,
         responseBytes,
         durationMs,
+        waitedForBodyBudgetMs,
       };
       if (isInteresting) {
         logger.info("IMAP command completed", payload);

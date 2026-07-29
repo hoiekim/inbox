@@ -28,6 +28,7 @@ import {
   FetchDataItem,
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
+import { withBodyBudget } from "./body-budget";
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
@@ -335,7 +336,16 @@ export async function buildBodyResponsePart(
   //    the cache would defeat the coalescing entirely for the wire
   //    check).
   if (!partial && !isHeaderLikeSection(section)) {
-    const cached = await getSharedBodyResult(
+    // Global concurrency budget for large-body serialization work: N
+    // parallel FETCH BODY[] requests against DISTINCT (mail, section)
+    // pairs (a common iOS Mail / K-9 multi-account resync pattern)
+    // would otherwise each allocate an independent multi-MB Buffer
+    // and scale RSS linearly with connection count. The budget queues
+    // excess concurrent work so peak RSS stays bounded regardless of
+    // how many sockets pipeline distinct large-body FETCHes. See
+    // `body-budget.ts` + hoiekim/inbox#726.
+    const cached = await withBodyBudget(() =>
+      getSharedBodyResult(
       bodyBufferKey(docId, sectionKey),
       () => {
         const raw = getBodyContent(mail, section, docId);
@@ -343,7 +353,7 @@ export async function buildBodyResponsePart(
         if (raw === "") return { kind: "nil" };
         return { kind: "content", text: raw + "\r\n" };
       }
-    );
+    ));
     if (cached.kind === "omit") return null;
     if (cached.kind === "nil") {
       return { type: "simple", content: `${sectionKey} NIL` };
