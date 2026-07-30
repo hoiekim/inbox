@@ -93,6 +93,34 @@ const parseTtl = (): number => {
 
 const TTL_MS = parseTtl();
 
+/**
+ * Maximum number of cached body results held simultaneously. Under a
+ * pathological load — many distinct large-body FETCHes within a single
+ * TTL window — an unbounded cache could hold N × (up to ~26MB) of
+ * buffers and blow the container's memory cap even though each
+ * INDIVIDUAL build is protected by the concurrency budget (#727).
+ *
+ * The cap uses LRU-by-insertion-order eviction: on `setCached`, if the
+ * new entry would push the map past the cap, drop the oldest. JS Map
+ * preserves insertion order, so `cache.keys().next().value` is always
+ * the oldest entry.
+ *
+ * Retune via `IMAP_BODY_BUFFER_MAX_ENTRIES`. The default (32) is
+ * generous for realistic single-user + a handful of concurrent clients;
+ * larger deployments may want to lower it if body sizes trend high.
+ */
+const DEFAULT_MAX_ENTRIES = 32;
+
+const parseMaxEntries = (): number => {
+  const raw = process.env.IMAP_BODY_BUFFER_MAX_ENTRIES;
+  if (!raw) return DEFAULT_MAX_ENTRIES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_ENTRIES;
+  return parsed;
+};
+
+const MAX_ENTRIES = parseMaxEntries();
+
 interface CacheEntry {
   result: BodyCacheResult;
   timer: NodeJS.Timeout;
@@ -102,8 +130,29 @@ const cache = new Map<string, CacheEntry>();
 
 const setCached = (key: string, result: BodyCacheResult): void => {
   if (TTL_MS <= 0) return;
+
+  // Refresh recency: an existing key's re-population should move it to
+  // the newest slot (Map iteration is insertion order), so an LRU
+  // eviction pass doesn't drop the entry we just wrote.
   const existing = cache.get(key);
-  if (existing) clearTimeout(existing.timer);
+  if (existing) {
+    clearTimeout(existing.timer);
+    cache.delete(key);
+  }
+
+  // LRU eviction: drop the oldest entry when we'd overflow. `existing`
+  // means we're refreshing a key already accounted for → no eviction
+  // needed. Otherwise, evict FIRST so the following `.set` lands under
+  // the cap.
+  if (!existing && cache.size >= MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldest = cache.get(oldestKey);
+      if (oldest) clearTimeout(oldest.timer);
+      cache.delete(oldestKey);
+    }
+  }
+
   const timer = setTimeout(() => cache.delete(key), TTL_MS);
   // `unref` so a pending expiry timer doesn't block Node from exiting
   // (tests + graceful shutdown).
@@ -161,3 +210,4 @@ export const _resetBodyBufferCache = (): void => {
   cache.clear();
 };
 export const _bodyBufferTtlMs = (): number => TTL_MS;
+export const _bodyBufferMaxEntries = (): number => MAX_ENTRIES;

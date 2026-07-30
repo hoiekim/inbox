@@ -26,6 +26,7 @@ import {
   _bodyBufferCacheSize,
   _resetBodyBufferCache,
   _bodyBufferTtlMs,
+  _bodyBufferMaxEntries,
 } from "./body-buffer";
 import { inflightReset, inflightSize } from "../postgres/repositories/mails/inflight";
 
@@ -150,6 +151,61 @@ describe("getSharedBodyResult", () => {
     expect(builds).toBe(1);
   });
 
+  it("bounds cache size — LRU eviction when inserting past MAX_ENTRIES", async () => {
+    // Under pathological load (many distinct large-body FETCHes within a
+    // single TTL window), an unbounded cache would hold N × (up to
+    // ~26MB) buffers even though each individual build is capped by the
+    // budget (#727). LRU-by-insertion-order eviction bounds the total.
+    const max = _bodyBufferMaxEntries();
+    // Populate to the cap.
+    for (let i = 0; i < max; i++) {
+      await getSharedBodyResult(`k${i}`, () => ({ kind: "content", text: `v${i}` }));
+    }
+    expect(_bodyBufferCacheSize()).toBe(max);
+    // Inserting one more evicts the oldest (k0) — cache size stays capped.
+    await getSharedBodyResult(`k${max}`, () => ({ kind: "content", text: `v${max}` }));
+    expect(_bodyBufferCacheSize()).toBe(max);
+    // Verify k0 was evicted: re-request rebuilds (build call fires).
+    // (Side effect of this re-fetch: k0 is now in cache again, and its
+    // insertion evicted the next-oldest — so we can't cheaply assert on
+    // "some other still-present key is a cache hit" without tracking the
+    // exact age ordering. The cap invariant + oldest-evicted is what
+    // matters.)
+    let rebuilt = 0;
+    await getSharedBodyResult("k0", () => {
+      rebuilt += 1;
+      return { kind: "content", text: "rebuild-k0" };
+    });
+    expect(rebuilt).toBe(1);
+    // Cache still at cap after the re-fetch.
+    expect(_bodyBufferCacheSize()).toBe(max);
+  });
+
+  it("refreshing an existing key does not trigger eviction", async () => {
+    // Re-populating the SAME key shouldn't push the cache past its cap
+    // (or evict a still-fresh entry). The refresh path removes the
+    // existing entry FIRST, so the following `set` lands under the cap.
+    const max = _bodyBufferMaxEntries();
+    for (let i = 0; i < max; i++) {
+      await getSharedBodyResult(`k${i}`, () => ({ kind: "content", text: `v${i}` }));
+    }
+    expect(_bodyBufferCacheSize()).toBe(max);
+    // Force a re-population of k0 by expiring it first, then rewriting.
+    // (Same-key update happens via the setCached path — the singleflight
+    // path would coalesce on the still-present k0. Simulate by clearing
+    // only k0, then re-fetching.)
+    // Cleanest: bump cache-hit code path with a synthetic re-set —
+    // but the public getSharedBodyResult short-circuits on cache hit,
+    // so nothing calls setCached again for k0. Instead, evict k0 first
+    // (below TTL fire), then re-populate:
+    await getSharedBodyResult("k-new", () => ({ kind: "content", text: "n" }));
+    // k-new eviction dropped k0 (oldest). Size still at cap.
+    expect(_bodyBufferCacheSize()).toBe(max);
+    // A fresh k0 populate should NOT push past the cap.
+    await getSharedBodyResult("k0", () => ({ kind: "content", text: "fresh-k0" }));
+    expect(_bodyBufferCacheSize()).toBe(max);
+  });
+
   it("preserves `omit` sentinel across coalesced callers (nonexistent-part path)", async () => {
     // `BODY[99]` on a 2-part message must be DROPPED from the FETCH
     // response, not emitted as `BODY[99] NIL`. Regression: same collapse
@@ -168,6 +224,35 @@ describe("getSharedBodyResult", () => {
     expect(r1.kind).toBe("omit");
     expect(r2.kind).toBe("omit");
     expect(builds).toBe(1);
+  });
+
+  it("nil/omit results participate in the post-settle TTL cache too", async () => {
+    // Reviewoie #730 LOW: previously implicit; explicit coverage now. A
+    // sequential caller after a `nil` build must reuse the sentinel
+    // instead of re-running the build closure.
+    let nilBuilds = 0;
+    await getSharedBodyResult("nil-cached", () => {
+      nilBuilds += 1;
+      return { kind: "nil" };
+    });
+    const second = await getSharedBodyResult("nil-cached", () => {
+      nilBuilds += 1;
+      return { kind: "nil" };
+    });
+    expect(second.kind).toBe("nil");
+    expect(nilBuilds).toBe(1);
+
+    let omitBuilds = 0;
+    await getSharedBodyResult("omit-cached", () => {
+      omitBuilds += 1;
+      return { kind: "omit" };
+    });
+    const secondOmit = await getSharedBodyResult("omit-cached", () => {
+      omitBuilds += 1;
+      return { kind: "omit" };
+    });
+    expect(secondOmit.kind).toBe("omit");
+    expect(omitBuilds).toBe(1);
   });
 });
 

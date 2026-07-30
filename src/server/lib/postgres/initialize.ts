@@ -115,11 +115,30 @@ export const initializePostgres = async (): Promise<void> => {
       $$ LANGUAGE plpgsql;
     `);
 
-    // Create trigger (drop first to handle updates)
+    // Create triggers (drop first — idempotent, and the earlier
+    // combined-event trigger definition needs to go so the column-scoped
+    // pair below can take over).
+    //
+    // Split into TWO triggers so the UPDATE side can restrict itself via
+    // `UPDATE OF <cols>` — the trigger only fires when the SET list
+    // mentions one of the columns the tokenization actually reads
+    // (subject / text / from_text / to_text). Metadata-only UPDATEs (e.g.
+    // `updateRfc822Size` per PR #731) then skip the retokenization
+    // entirely — same reason PG has the OF syntax in the first place.
+    //
+    // INSERT always fires (no OF equivalent for INSERT — every new row
+    // must have its search_vector populated regardless of what columns
+    // the INSERT enumerates).
     await pool.query(`DROP TRIGGER IF EXISTS mails_search_update ON mails`);
+    await pool.query(`DROP TRIGGER IF EXISTS mails_search_insert ON mails`);
     await pool.query(`
-      CREATE TRIGGER mails_search_update 
-        BEFORE INSERT OR UPDATE ON mails 
+      CREATE TRIGGER mails_search_insert
+        BEFORE INSERT ON mails
+        FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
+    `);
+    await pool.query(`
+      CREATE TRIGGER mails_search_update
+        BEFORE UPDATE OF subject, text, from_text, to_text ON mails
         FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
     `);
 
