@@ -23,7 +23,7 @@
  *     results. Eviction is least-recently-USED: a cache hit refreshes
  *     recency, so a hammered key outlives a burst of distinct inserts.
  */
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterAll } from "bun:test";
 import {
   getSharedBodyResult,
   bodyBufferKey,
@@ -41,6 +41,12 @@ beforeEach(() => {
   inflightReset();
   _resetBodyBufferCache();
 });
+
+// The cache and its limits are module singletons, and `_setBodyBufferLimits`
+// shrinks them. `fetch-helpers.test.ts` drives the same cache through
+// `buildBodyResponsePart`, so leaving a 512-byte ceiling behind after the
+// last test here would silently disable caching for whichever file runs next.
+afterAll(_resetBodyBufferCache);
 
 describe("getSharedBodyResult", () => {
   it("coalesces two concurrent callers on the same key to one build + one Buffer", async () => {
