@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { logger } from "../../../logger";
 import { pool } from "../../client";
 import { ParamValue } from "../../database";
-import { MailModel, mailsTable, MAIL_ID, USER_ID, ENVELOPE_TO, DB_NOW } from "../../models";
+import { MailModel, mailsTable, MAIL_ID, USER_ID, ENVELOPE_TO, DB_NOW, RFC822_SIZE } from "../../models";
 import { getNextModseq, writeMailboxUid } from "./counters";
 
 export interface SaveMailInput {
@@ -229,6 +229,34 @@ export const getMailById = async (
     logger.error("Failed to get mail by ID", {}, error);
     return null;
   }
+};
+
+/**
+ * Persist the derived `rfc822_size` for a mail on the first FETCH that
+ * computes it. Deliberately does NOT bump `updated` — this is metadata
+ * derivation, not a semantic edit; touching `updated` would trip the
+ * CONDSTORE/HIGHESTMODSEQ change-tracking that clients use to detect
+ * real mail mutations, generating spurious wake-ups on every first-observation.
+ *
+ * Idempotent: mail body content (text/html/attachments/headers) is
+ * immutable after insert, so the derived size is stable; concurrent
+ * callers writing the same value is a no-op collision. Deliberately
+ * unconditional — a `WHERE rfc822_size IS NULL` guard would race with
+ * a parallel writer for the same mail, and the same-value write is
+ * cheap.
+ *
+ * Fire-and-forget from the caller: a failure here logs but does not
+ * fail the FETCH response.
+ */
+export const updateRfc822Size = async (
+  user_id: string,
+  mail_id: string,
+  rfc822_size: number
+): Promise<void> => {
+  await mailsTable.updateWhere(
+    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
+    { [RFC822_SIZE]: rfc822_size }
+  );
 };
 
 export const markMailRead = async (

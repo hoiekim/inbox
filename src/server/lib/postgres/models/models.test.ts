@@ -63,6 +63,7 @@ function makeMailData(overrides: Record<string, unknown> = {}): Record<string, u
     spam_score: 0,
     spam_reasons: null,
     is_spam: false,
+    rfc822_size: null,
     updated: "2024-01-01T00:00:00+00:00",
     search_vector: null,
     ...overrides,
