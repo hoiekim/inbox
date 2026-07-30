@@ -11,6 +11,7 @@ import {
 } from "server";
 import { pool } from "server";
 import { sendAlarm } from "./lib/alarm";
+import { handleStartupFailure } from "./lib/startup-failure";
 
 // Process-level error handlers (centralised here alongside SIGTERM/SIGINT)
 // Note: These fire before IMAP/SMTP servers are shut down. The alarm call is
@@ -87,4 +88,4 @@ const start = async () => {
   process.on("SIGINT", () => shutdown("SIGINT"));
 };
 
-start();
+start().catch(handleStartupFailure);
