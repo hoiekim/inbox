@@ -87,4 +87,13 @@ const start = async () => {
   process.on("SIGINT", () => shutdown("SIGINT"));
 };
 
-start();
+start().catch((error) => {
+  console.error("Fatal error during startup:", error);
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? (error.stack ?? "") : "";
+  sendAlarm(
+    "Startup Failed",
+    `**Message:** ${message}\n\`\`\`\n${stack.slice(0, 1000)}\n\`\`\``,
+  ).catch(() => undefined);
+  process.exit(1);
+});
