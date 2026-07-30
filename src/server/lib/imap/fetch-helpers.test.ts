@@ -41,6 +41,19 @@ const contentAsString = (
 ): string =>
   Buffer.isBuffer(part.content) ? part.content.toString("utf8") : part.content;
 
+// Stream parts don't materialize a `.content` field — iterate the async
+// generator to collect chunks, concat, and stringify. Tests treat both
+// shapes uniformly; the wire bytes are what matters.
+const contentAsStringAny = async (
+  part: FetchResponsePart
+): Promise<string> => {
+  if (part.type === "simple") return part.content;
+  if (part.type === "literal") return contentAsString(part);
+  const chunks: Buffer[] = [];
+  for await (const chunk of part.stream) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+};
+
 describe("getRequestedFields", () => {
   describe("FLAGS", () => {
     it("requests every flag-backing column, including answered", () => {
@@ -204,9 +217,15 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
       mailbox
     );
     expect(rfc).not.toBeNull();
-    expect(rfc!.type).toBe("literal");
-    if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(contentAsString(rfc)).toBe(contentAsString(body));
+    // Both RFC822 and BODY[] FULL route through the stream part after
+    // #733; length + wire bytes match, header label differs.
+    expect(rfc!.type === "stream" || rfc!.type === "literal").toBe(true);
+    expect(body!.type === "stream" || body!.type === "literal").toBe(true);
+    if (
+      (rfc!.type === "literal" || rfc!.type === "stream") &&
+      (body!.type === "literal" || body!.type === "stream")
+    ) {
+      expect(await contentAsStringAny(rfc!)).toBe(await contentAsStringAny(body!));
       expect(rfc!.length).toBe(body!.length);
       expect(rfc!.header).toBe("RFC822");
       expect(body!.header).toBe("BODY[]");
@@ -366,13 +385,84 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
         mailbox
       );
       expect(size!.type).toBe("simple");
-      expect(body!.type).toBe("literal");
-      if (size!.type === "simple" && body!.type === "literal") {
+      // BODY[] FULL now routes through the stream part (peak allocation
+      // stays sub-MB regardless of body size — see #733). The RFC822.SIZE
+      // invariant is unchanged: `computeFullMessageSize` (backing SIZE)
+      // and `buildFullMessageStream` (backing BODY[]) share the same
+      // per-part byte-length math by construction.
+      expect(body!.type === "stream" || body!.type === "literal").toBe(true);
+      if (
+        size!.type === "simple" &&
+        (body!.type === "literal" || body!.type === "stream")
+      ) {
         const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
         expect(reported).toBe(body!.length);
       }
     });
   }
+});
+
+describe("buildFetchResponsePart BODY[] streams without materializing (#733)", () => {
+  // #733 replaces the shared-Buffer path for FULL sections with an async
+  // generator that yields Buffer chunks straight to the writer. Peak
+  // transient allocation stays sub-MB regardless of body size.
+
+  const docId = "doc-stream";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<stream@local>",
+    date: new Date("2026-07-30T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "stream",
+    text: "plain body",
+    html: "<p>rich body</p>",
+    attachments: [] as unknown as MailType["attachments"],
+  };
+
+  it("BODY[] returns a stream part with pre-computed length", async () => {
+    const body = await buildFetchResponsePart(
+      base,
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(body).not.toBeNull();
+    expect(body!.type).toBe("stream");
+    if (body!.type === "stream") {
+      expect(body!.length).toBeGreaterThan(0);
+      expect(body!.header).toBe("BODY[]");
+      // Sum of chunk byte-lengths equals the declared `length`. Load-
+      // bearing: without this invariant, the IMAP `{N}` literal would
+      // desync from the octet count that arrives, corrupting the wire
+      // response.
+      let seen = 0;
+      for await (const chunk of body!.stream) {
+        expect(Buffer.isBuffer(chunk)).toBe(true);
+        seen += chunk.byteLength;
+      }
+      expect(seen).toBe(body!.length);
+    }
+  });
+
+  it("stream chunks are individually small (peak-alloc invariant)", async () => {
+    // Not a hard-enforced max but a signal that the producer isn't
+    // materializing the full body into a single Buffer. Any chunk
+    // above ~256 KiB indicates a regression toward monolithic build.
+    const body = await buildFetchResponsePart(
+      base,
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    if (body?.type === "stream") {
+      const maxChunk = 256 * 1024;
+      for await (const chunk of body.stream) {
+        expect(chunk.byteLength).toBeLessThanOrEqual(maxChunk);
+      }
+    }
+  });
 });
 
 describe("buildFetchResponsePart RFC822.SIZE cached-column short-circuit (#729)", () => {
@@ -438,8 +528,11 @@ describe("buildFetchResponsePart RFC822.SIZE cached-column short-circuit (#729)"
       mailbox
     );
     expect(size!.type).toBe("simple");
-    expect(body!.type).toBe("literal");
-    if (size!.type === "simple" && body!.type === "literal") {
+    expect(body!.type === "stream" || body!.type === "literal").toBe(true);
+    if (
+      size!.type === "simple" &&
+      (body!.type === "literal" || body!.type === "stream")
+    ) {
       const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
       expect(reported).toBe(body!.length);
     }

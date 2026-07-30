@@ -22,7 +22,7 @@ import {
 } from "./idle-manager";
 import { getCapabilities } from "./capabilities";
 import { ImapRequestHandler } from "./handler";
-import { writeChunkedToSocket } from "./chunked-write";
+import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -152,6 +152,36 @@ export class ImapSession {
     const written = await writeChunkedToSocket(this.socket, payload, (error) =>
       logger.error(
         "Error in writeChunked socket.write",
+        { component: "imap" },
+        error
+      )
+    );
+    this.bytesWritten += written;
+  };
+
+  /**
+   * Stream an async iterable of `Buffer` chunks straight to the socket
+   * with backpressure. Used by BODY[] / RFC822 fetches wired through
+   * `buildFullMessageStream` — the full body is never materialized in
+   * memory; each chunk (~64 KiB base64 slice of one attachment) is
+   * emitted, written, and released before the next runs. Peak transient
+   * allocation stays sub-MB regardless of body size.
+   *
+   * Distinct from `writeChunked` because the source is a stream (the
+   * chunks are produced lazily by the generator) rather than a
+   * pre-materialized Buffer. Both share the same backpressure
+   * discipline via `chunked-write.ts`.
+   */
+  writeStream = async (chunks: AsyncIterable<Buffer>): Promise<void> => {
+    if (this.socket.destroyed || !this.socket.writable) {
+      logger.warn("Attempted to writeStream to destroyed/unwritable socket", {
+        component: "imap",
+      });
+      return;
+    }
+    const written = await writeStreamToSocket(this.socket, chunks, (error) =>
+      logger.error(
+        "Error in writeStream socket.write",
         { component: "imap" },
         error
       )
@@ -376,6 +406,7 @@ export class ImapSession {
       this.seqState,
       this.write,
       this.writeChunked,
+      this.writeStream,
       this.condstoreEnabled
     );
   };

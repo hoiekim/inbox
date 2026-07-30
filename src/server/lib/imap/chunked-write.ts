@@ -31,6 +31,58 @@ export interface ChunkedWriteSocket extends EventEmitter {
 
 export const CHUNK_BYTES = 64 * 1024; // matches typical TCP high-water mark
 
+/**
+ * Consume an async iterable of `Buffer` chunks and write each to the
+ * socket with the same backpressure discipline as `writeChunkedToSocket`
+ * (await `drain` when `socket.write` reports its high-water mark).
+ *
+ * Distinct from `writeChunkedToSocket` because the source is a stream
+ * (produced by `buildFullMessageStream` for BODY[] fetches) rather than
+ * a pre-materialized Buffer: chunk boundaries are determined by the
+ * producer, not by fixed CHUNK_BYTES slicing. Producer is expected to
+ * yield chunks in the CHUNK_BYTES ballpark so socket writes align
+ * naturally with the high-water mark.
+ *
+ * Same close-during-drain guard as writeChunkedToSocket: if the socket
+ * dies mid-write, return early with the partial count instead of
+ * hanging on a drain that will never fire.
+ */
+export const writeStreamToSocket = async (
+  socket: ChunkedWriteSocket,
+  chunks: AsyncIterable<Buffer>,
+  onError: (err: unknown) => void
+): Promise<number> => {
+  if (socket.destroyed || !socket.writable) return 0;
+  let written = 0;
+  for await (const chunk of chunks) {
+    if (socket.destroyed || !socket.writable) return written;
+    let ok: boolean;
+    try {
+      ok = socket.write(chunk as unknown as Uint8Array);
+    } catch (error) {
+      onError(error);
+      return written;
+    }
+    written += chunk.byteLength;
+    if (!ok) {
+      await new Promise<void>((resolve) => {
+        const onDrain = () => {
+          socket.off("close", onClose);
+          resolve();
+        };
+        const onClose = () => {
+          socket.off("drain", onDrain);
+          resolve();
+        };
+        socket.once("drain", onDrain);
+        socket.once("close", onClose);
+      });
+      if (socket.destroyed || !socket.writable) return written;
+    }
+  }
+  return written;
+};
+
 export const writeChunkedToSocket = async (
   socket: ChunkedWriteSocket,
   payload: Buffer,

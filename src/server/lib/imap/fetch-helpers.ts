@@ -18,6 +18,8 @@ import {
 import {
   applyPartialFetch,
   buildFullMessage,
+  buildFullMessageStream,
+  computeFullMessageSize,
   getBodyPart,
   getBodyPartHeaders,
   getBodySectionKey,
@@ -46,9 +48,23 @@ import { updateRfc822Size } from "../postgres/repositories/mails/core";
 // cache — one Buffer reference is shared across every coalesced FETCH
 // handler for the same (mail, section), so heap footprint stays flat under
 // duplicate-FETCH storms. See `body-buffer.ts`.
+//
+// **stream** variant: BODY[] / RFC822 for a fetch that streams its bytes
+// directly to the socket via `buildFullMessageStream`, never materializing
+// the full body in memory. `length` is pre-computed by
+// `computeFullMessageSize` (pure math on stored attachment sizes — no
+// disk I/O) so the writer can advertise `{N}` before the first chunk
+// yields. Sum of yielded chunk byte-lengths equals `length` by
+// construction (parallel case blocks in the two functions).
 export type FetchResponsePart =
   | { type: "simple"; content: string }
-  | { type: "literal"; content: string | Buffer; header: string; length: number };
+  | { type: "literal"; content: string | Buffer; header: string; length: number }
+  | {
+      type: "stream";
+      stream: AsyncIterable<Buffer>;
+      header: string;
+      length: number;
+    };
 
 // ---------------------------------------------------------------------------
 // Body content extraction
@@ -347,10 +363,47 @@ export async function buildBodyResponsePart(
   //    matches the emitted octets — building the CRLF per caller after
   //    the cache would defeat the coalescing entirely for the wire
   //    check).
+  // FULL section (BODY[] / RFC822): stream the body directly to the
+  // socket. `computeFullMessageSize` pre-computes the `{N}` literal
+  // from stored attachment sizes (no disk I/O) so the writer can
+  // advertise the length before the first chunk yields. The stream
+  // itself materializes only ONE 48 KiB base64 slice at a time — peak
+  // transient allocation stays sub-MB regardless of body size.
+  //
+  // Skips the shared body-buffer cache path (getSharedBodyResult):
+  // streaming makes each build cheap enough that caching gives no RSS
+  // win. iOS Mail's abort-and-retry pattern (#729 K843) that motivated
+  // the TTL cache in #730 becomes a re-stream from disk instead of a
+  // re-materialization of a multi-MB string — orders of magnitude
+  // cheaper either way. Cache is retained for TEXT / HEADER / partial
+  // paths that still go through `getSharedBodyResult`.
+  if (!partial && !isHeaderLikeSection(section) && section.type === "FULL") {
+    // `computeFullMessageSize` includes the trailing CRLF the wire
+    // response appends (matches the pre-#733 shape where
+    // `getSharedBodyResult`'s closure emitted `text + "\r\n"` before
+    // caching). The stream must emit the same trailer or the {N}
+    // literal won't match the byte count that arrives — hence the
+    // extra `\r\n` chunk after the generator finishes.
+    const length = computeFullMessageSize(mail, docId);
+    async function* streamWithTrailer(): AsyncGenerator<Buffer, void, unknown> {
+      for await (const chunk of buildFullMessageStream(mail, docId)) {
+        yield chunk;
+      }
+      yield Buffer.from("\r\n", "utf8");
+    }
+    return {
+      type: "stream",
+      stream: streamWithTrailer(),
+      header: sectionKey,
+      length,
+    };
+  }
+
   if (!partial && !isHeaderLikeSection(section)) {
-    // Route through the shared body-buffer cache; getSharedBodyResult
-    // gates its build closure with `withBodyBudget` INSIDE the
-    // singleflight so N coalesced callers share one budget slot.
+    // Non-FULL, non-partial, non-header-like sections (currently
+    // TEXT / MIME_PART body): route through the shared body-buffer
+    // cache. TEXT is bounded by html+text size (rarely large); the
+    // cache still earns its keep here on repeated FETCH BODY[TEXT].
     const cached = await getSharedBodyResult(
       bodyBufferKey(docId, sectionKey),
       () => {
@@ -449,38 +502,28 @@ export async function buildFetchResponsePart(
       // 2822 format — i.e. it must equal the number of octets BODY[] / RFC822
       // returns for the same message.
       //
-      // Two-path resolution:
+      // Three-path resolution:
       //  1. **Cached column hit** — `mails.rfc822_size` is a nullable BIGINT
-      //     stamped on first observation. When present, return it verbatim:
-      //     no buildFullMessage, no attachment materialization, no ~100MB
-      //     transient allocation per request. This is the K836-spike fix in
-      //     #729 — a metadata-scan fetch (`UID FETCH X (UID RFC822.SIZE
-      //     BODYSTRUCTURE)`) becomes an in-memory number lookup for
-      //     already-observed mails.
-      //  2. **Fallback compute + persist** — for mails that haven't been
-      //     observed yet (cold rows from before this PR, or brand-new
-      //     inserts), derive via buildBodyResponsePart (same FULL-body
-      //     serializer BODY[] uses, so the two agree by construction) and
-      //     write the result back to the row. The write is fire-and-forget
-      //     (`.catch(logger.warn)` — the FETCH response doesn't wait for
-      //     the persist round-trip).
+      //     stamped on first observation (#731). When present, return it
+      //     verbatim: zero work.
+      //  2. **Compute + persist** — for mails that haven't been observed
+      //     yet, derive via `computeFullMessageSize` (pure math on stored
+      //     attachment sizes — no disk read, no body materialization). The
+      //     value equals `Buffer.byteLength(buildFullMessageStream output)`
+      //     by construction so it agrees with what BODY[] would emit.
+      //     Fire-and-forget UPDATE persists the value for next time.
+      //     Skips the earlier `buildBodyResponsePart(BODY[])` call that
+      //     materialized the whole body just to read its length — that
+      //     was the K836 +66 MB spike in #729.
       if (typeof mail.rfc822_size === "number") {
         return { type: "simple", content: `RFC822.SIZE ${mail.rfc822_size}` };
       }
-      const fullBody = await buildBodyResponsePart(
-        mail,
-        { type: "BODY", peek: true, section: { type: "FULL" } },
-        docId,
-        selectedMailbox
-      );
-      const size = fullBody?.type === "literal" ? fullBody.length : 0;
-      // Persist for future requests. `userId` is threaded from the
-      // top-level FETCH handler (buildFetchResponse → buildFetchResponsePart)
-      // — the mail row itself doesn't expose user_id on the client-facing
-      // MailType. Fire-and-forget: a persist failure surfaces as a log line
-      // and the same fetch re-computes next time; nothing is broken.
-      // Callers without a userId (unit-test callers, internal fetchers)
-      // skip the persist step silently.
+      const size = computeFullMessageSize(mail, docId);
+      // Persist for future requests. `userId` is threaded from the top-level
+      // FETCH handler; callers without a userId (unit-test / internal)
+      // skip the persist step silently. Fire-and-forget — a persist
+      // failure surfaces as a log line and the same fetch re-computes
+      // next time; nothing is broken.
       if (userId) {
         void updateRfc822Size(userId, docId, size).catch((err) => {
           logger.warn("Failed to persist rfc822_size", {
@@ -591,9 +634,18 @@ export async function buildFetchResponse(
  */
 export type WriteChunked = (payload: Buffer) => Promise<void>;
 
+/**
+ * Consume an async iterable of chunks and write each to the socket with
+ * backpressure. Called for `stream` parts (BODY[] / RFC822 fetches wired
+ * through `buildFullMessageStream`). Peak in-flight allocation stays at
+ * one chunk (~64 KiB) — no full-body Buffer is ever materialized.
+ */
+export type WriteStream = (chunks: AsyncIterable<Buffer>) => Promise<void>;
+
 export async function writeFetchResponse(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
+  writeStream: WriteStream,
   seqNum: number,
   parts: FetchResponsePart[]
 ): Promise<void> {
@@ -612,6 +664,13 @@ export async function writeFetchResponse(
       } else {
         write(part.content);
       }
+    } else if (part.type === "stream") {
+      // {N} literal advertises the sum of upcoming chunk byte-lengths
+      // (guaranteed by `computeFullMessageSize` matching the stream's
+      // emit-set), then the generator's chunks flow through the
+      // stream writer with backpressure.
+      write(`${part.header} {${part.length}}\r\n`);
+      await writeStream(part.stream);
     } else {
       write(part.content);
     }

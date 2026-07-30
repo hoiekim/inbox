@@ -480,6 +480,9 @@ const runFetch = async (
     async (payload: Buffer) => {
       lines.push(payload.toString("utf8"));
     },
+    async (chunks: AsyncIterable<Buffer>) => {
+      for await (const chunk of chunks) lines.push(chunk.toString("utf8"));
+    },
     condstoreEnabled
   );
   return { captured, out: lines.join("") };
