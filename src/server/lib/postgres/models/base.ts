@@ -203,6 +203,19 @@ export abstract class Table<
     return result.rows.length > 0 ? new this.ModelClass(result.rows[0]) : null;
   }
 
+  /**
+   * Whether this table's DDL declares an `updated` column. The INSERT builders
+   * stamp `updated = CURRENT_TIMESTAMP` by default, which Postgres rejects for
+   * a table that has no such column — `mailboxes` was the one builder-written
+   * table in that state, so every `CREATE <mailbox>` failed with
+   * `column "updated" of relation "mailboxes" does not exist` (#687).
+   * Deriving the flag from the schema keeps the two in sync for future tables
+   * instead of re-encoding the assumption at each call site.
+   */
+  private get stampUpdated(): boolean {
+    return "updated" in this.schema;
+  }
+
   async insert(
     data: QueryData,
     returning?: string[]
@@ -210,7 +223,8 @@ export abstract class Table<
     const { sql, values } = buildInsert(
       this.name,
       data as Record<string, ParamValue>,
-      returning ?? [this.primaryKey]
+      returning ?? [this.primaryKey],
+      { stampUpdated: this.stampUpdated }
     );
     const result = await pool.query(sql, values);
     return result.rows.length > 0 ? result.rows[0] : null;
@@ -237,6 +251,7 @@ export abstract class Table<
       updateColumns:
         updateColumns ?? Object.keys(data).filter((k) => k !== this.primaryKey),
       returning: ["*"],
+      stampUpdated: this.stampUpdated,
     });
     const result = await pool.query(sql, values);
     return result.rows.length > 0 ? result.rows[0] : null;

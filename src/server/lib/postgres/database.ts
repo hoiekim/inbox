@@ -30,6 +30,8 @@ export interface UpdateOptions {
 export interface UpsertOptions {
   updateColumns?: string[];
   returning?: string[];
+  /** See `StampUpdatedOption`. Defaults to `true`. */
+  stampUpdated?: boolean;
 }
 
 // Type guards
@@ -103,13 +105,29 @@ export function prepareQuery(
   return { sql, values };
 }
 
+/**
+ * Whether the generated INSERT should stamp `updated = CURRENT_TIMESTAMP`.
+ * Only tables whose DDL declares an `updated` column may — Postgres rejects
+ * the INSERT outright otherwise. `Table.insert` / `Table.upsert` derive this
+ * from their own schema; the default stays `true` so a caller that predates
+ * the option keeps its existing SQL.
+ */
+export interface StampUpdatedOption {
+  stampUpdated?: boolean;
+}
+
+const autoColumns = (stampUpdated: boolean) =>
+  stampUpdated
+    ? { columns: ["updated"], placeholders: ["CURRENT_TIMESTAMP"] }
+    : { columns: [] as string[], placeholders: [] as string[] };
+
 export function buildInsert(
   tableName: string,
   data: Record<string, ParamValue>,
-  returning?: string[]
+  returning?: string[],
+  options: StampUpdatedOption = {}
 ): PreparedQuery {
-  const columns: string[] = ["updated"];
-  const placeholders: string[] = ["CURRENT_TIMESTAMP"];
+  const { columns, placeholders } = autoColumns(options.stampUpdated !== false);
   const values: ParamValue[] = [];
   let paramIndex = 1;
 
@@ -178,10 +196,9 @@ export function buildUpsert(
   data: QueryData,
   options: UpsertOptions = {}
 ): PreparedQuery {
-  const { updateColumns = [], returning = [primaryKey] } = options;
+  const { updateColumns = [], returning = [primaryKey], stampUpdated = true } = options;
 
-  const columns: string[] = ["updated"];
-  const placeholders: string[] = ["CURRENT_TIMESTAMP"];
+  const { columns, placeholders } = autoColumns(stampUpdated);
   const values: ParamValue[] = [];
   let paramIndex = 1;
 
@@ -199,8 +216,16 @@ export function buildUpsert(
     const updateClauses = updateColumns
       .filter((col) => col !== primaryKey)
       .map((col) => `${col} = EXCLUDED.${col}`);
-    updateClauses.push("updated = CURRENT_TIMESTAMP");
-    sql += ` ON CONFLICT (${primaryKey}) DO UPDATE SET ${updateClauses.join(", ")}`;
+    if (stampUpdated) updateClauses.push("updated = CURRENT_TIMESTAMP");
+    // An empty SET list is a syntax error. Reachable only when the table has
+    // no `updated` column AND every requested update column is the conflict
+    // key — nothing is left to write, so DO NOTHING is the right degenerate
+    // form. (With `stampUpdated` the timestamp always kept the list non-empty,
+    // which is why this branch could not arise before.)
+    sql +=
+      updateClauses.length > 0
+        ? ` ON CONFLICT (${primaryKey}) DO UPDATE SET ${updateClauses.join(", ")}`
+        : ` ON CONFLICT (${primaryKey}) DO NOTHING`;
   } else {
     sql += ` ON CONFLICT (${primaryKey}) DO NOTHING`;
   }
