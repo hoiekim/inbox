@@ -93,22 +93,97 @@ const parseTtl = (): number => {
 
 const TTL_MS = parseTtl();
 
+/**
+ * Retention ceiling for the post-settle cache, in BYTES — memory is what
+ * the container caps, and one `BODY[]` can exceed 34MB on its own
+ * (`http/index.ts` permits 25MB per attachment and `buildFullMessage`
+ * base64-inflates it ~4/3), so a handful of distinct large bodies inside
+ * one TTL window is already hundreds of MB. `setCached` evicts
+ * least-recently-used entries until the incoming buffer fits, and refuses
+ * outright any single body larger than the whole budget.
+ *
+ * The 64MiB default leaves room for one worst-case body plus headroom, so
+ * the sequential-retry dedup still applies to the largest mails while
+ * total retention stays a small fraction of a modest container limit —
+ * an assumption to retune via `IMAP_BODY_BUFFER_MAX_BYTES`, since the
+ * deployed memory limit is maintained outside this repo.
+ *
+ * `IMAP_BODY_BUFFER_MAX_ENTRIES` (default 32) stays on as a secondary
+ * guard: `nil`/`omit` results carry no payload bytes, so only a count
+ * bounds how many of those accumulate.
+ */
+const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_ENTRIES = 32;
+
+const parseLimit = (raw: string | undefined, fallback: number): number => {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return parsed;
+};
+
+const envMaxBytes = (): number =>
+  parseLimit(process.env.IMAP_BODY_BUFFER_MAX_BYTES, DEFAULT_MAX_BYTES);
+const envMaxEntries = (): number =>
+  parseLimit(process.env.IMAP_BODY_BUFFER_MAX_ENTRIES, DEFAULT_MAX_ENTRIES);
+
+let maxBytes = envMaxBytes();
+let maxEntries = envMaxEntries();
+
 interface CacheEntry {
   result: BodyCacheResult;
+  /** Payload octets this entry keeps reachable; 0 for `nil`/`omit`. */
+  bytes: number;
   timer: NodeJS.Timeout;
 }
 
 const cache = new Map<string, CacheEntry>();
+let totalBytes = 0;
+
+/** Remove an entry and give its bytes back to the budget. */
+const drop = (key: string): void => {
+  const entry = cache.get(key);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  totalBytes -= entry.bytes;
+  cache.delete(key);
+};
+
+/**
+ * Move an existing entry to the newest LRU slot, keeping its timer and its
+ * byte accounting. Map iteration is insertion order, so re-inserting makes
+ * `cache.keys().next()` yield it last.
+ */
+const touch = (key: string, entry: CacheEntry): void => {
+  cache.delete(key);
+  cache.set(key, entry);
+};
 
 const setCached = (key: string, result: BodyCacheResult): void => {
   if (TTL_MS <= 0) return;
-  const existing = cache.get(key);
-  if (existing) clearTimeout(existing.timer);
-  const timer = setTimeout(() => cache.delete(key), TTL_MS);
+
+  const bytes = result.kind === "buffer" ? result.buffer.byteLength : 0;
+  // A body bigger than the entire budget can never be held: even an empty
+  // cache would be over the ceiling the moment it landed.
+  if (bytes > maxBytes) return;
+
+  // `drop` first so a repopulate could never double-count bytes (a no-op on
+  // the normal miss path, which is the only path that reaches here).
+  drop(key);
+
+  // Evict least-recently-used until the incoming entry fits BOTH budgets.
+  while (cache.size > 0 && (totalBytes + bytes > maxBytes || cache.size >= maxEntries)) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    drop(oldestKey);
+  }
+
+  const timer = setTimeout(() => drop(key), TTL_MS);
   // `unref` so a pending expiry timer doesn't block Node from exiting
   // (tests + graceful shutdown).
   timer.unref?.();
-  cache.set(key, { result, timer });
+  cache.set(key, { result, bytes, timer });
+  totalBytes += bytes;
 };
 
 // NOT `async` — two concurrent cache-miss callers with the same key must
@@ -125,7 +200,15 @@ export const getSharedBodyResult = (
   // Post-settle cache: sequential retries within TTL reuse the resolved
   // Buffer directly — no rebuild, no singleflight, no budget slot.
   const cached = cache.get(key);
-  if (cached) return Promise.resolve(cached.result);
+  if (cached) {
+    // Use refreshes recency, so the entry a retry is hammering survives a
+    // burst of distinct-key inserts. The expiry timer is deliberately NOT
+    // restarted: the key is `mailId::sectionKey` only, so TTL is also the
+    // bound on how stale a served buffer can be, and a polling client must
+    // not be able to extend that window indefinitely.
+    touch(key, cached);
+    return Promise.resolve(cached.result);
+  }
 
   return singleFlight(key, async () =>
     // Budget-gate INSIDE the singleflight closure so N coalesced callers
@@ -154,10 +237,28 @@ export const getSharedBodyResult = (
 export const bodyBufferKey = (mailId: string, sectionKey: string): string =>
   `${mailId}::${sectionKey}`;
 
-/** Exposed for tests: current TTL cache size + reset. */
+/** Exposed for tests: cache state, limits, and reset. */
 export const _bodyBufferCacheSize = (): number => cache.size;
+export const _bodyBufferBytes = (): number => totalBytes;
+/** Clears the cache and restores the env-derived limits. */
 export const _resetBodyBufferCache = (): void => {
   for (const entry of cache.values()) clearTimeout(entry.timer);
   cache.clear();
+  totalBytes = 0;
+  maxBytes = envMaxBytes();
+  maxEntries = envMaxEntries();
 };
 export const _bodyBufferTtlMs = (): number => TTL_MS;
+export const _bodyBufferMaxBytes = (): number => maxBytes;
+export const _bodyBufferMaxEntries = (): number => maxEntries;
+/**
+ * Test-only: shrink the limits so eviction is exercisable without
+ * allocating the real 64MiB budget. `_resetBodyBufferCache` undoes it.
+ */
+export const _setBodyBufferLimits = (next: {
+  maxBytes?: number;
+  maxEntries?: number;
+}): void => {
+  if (next.maxBytes !== undefined) maxBytes = next.maxBytes;
+  if (next.maxEntries !== undefined) maxEntries = next.maxEntries;
+};
