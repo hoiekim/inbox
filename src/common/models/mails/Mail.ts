@@ -103,6 +103,14 @@ export interface MailType {
    * the HTTP client never reads it, hence optional.
    */
   modseq?: number;
+  /**
+   * Cached byte count of the serialized RFC 822 form (i.e. what BODY[] /
+   * RFC822 returns). Server-populated lazily on the first FETCH that
+   * derives it (see fetch-helpers RFC822.SIZE / RFC822 cases). Optional
+   * because the DB column starts NULL for existing rows and gets
+   * populated on their first observation; the HTTP client never reads it.
+   */
+  rfc822_size?: number | null;
 }
 
 export class Mail extends Model<Mail> implements MailType {
@@ -128,6 +136,7 @@ export class Mail extends Model<Mail> implements MailType {
   declare insight?: Insight;
   declare uid: MailUidType;
   declare modseq?: number;
+  declare rfc822_size?: number | null;
 
   constructor(data?: Partial<Mail>) {
     super(data);

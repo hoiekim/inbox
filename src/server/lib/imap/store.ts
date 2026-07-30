@@ -428,6 +428,15 @@ export class Store {
         if (model.modseq !== undefined) {
           mail.modseq = model.modseq;
         }
+        // rfc822_size: cached BODY[] byte count. `null` on the DB row means
+        // "not computed yet"; `undefined` on the model means "not
+        // requested" (getRequestedFields didn't add it, e.g. FLAGS-only
+        // fetch). Preserve both — the RFC822.SIZE fetch handler
+        // distinguishes stored-value hit (typeof === 'number') from
+        // fall-through (compute + persist).
+        if (model.rfc822_size !== undefined) {
+          mail.rfc822_size = model.rfc822_size;
+        }
 
         if (model.from_address) {
           mail.from = {

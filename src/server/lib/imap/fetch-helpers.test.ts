@@ -142,15 +142,26 @@ describe("getRequestedFields", () => {
   });
 
   describe("RFC822.SIZE (inbox #654)", () => {
-    it("requests the full-message columns its size computation serializes", () => {
+    it("requests the full-message columns its size computation serializes, plus the cached column", () => {
       // RFC822.SIZE is derived from the FULL-body serializer, so a bare
       // `FETCH n RFC822.SIZE` must load the header columns too — otherwise
       // formatHeaders omits those lines and the size under-reports vs BODY[].
+      // Post-#729: also request `rfc822_size` (the cached-column short-circuit)
+      // so the fetch handler can skip buildFullMessage when the value is
+      // already persisted. The set is a STRICT SUPERSET of BODY[]'s.
       const size = getRequestedFields([{ type: "RFC822.SIZE" }]);
       const body = getRequestedFields([
         { type: "BODY", peek: true, section: { type: "FULL" } }
       ]);
-      expect([...size].sort()).toEqual([...body].sort());
+      // Every BODY[] field must be present for the fallback compute path
+      // (first observation of a mail — cached column is NULL).
+      for (const f of body) {
+        expect(size.has(f)).toBe(true);
+      }
+      // Plus the cached-column short-circuit.
+      expect(size.has("rfc822_size" as never)).toBe(true);
+      // And no other fields — the difference is exactly one column.
+      expect(size.size).toBe(body.size + 1);
       for (const f of [
         "text",
         "html",
@@ -362,6 +373,99 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
       }
     });
   }
+});
+
+describe("buildFetchResponsePart RFC822.SIZE cached-column short-circuit (#729)", () => {
+  const docId = "doc-cached";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<cached@local>",
+    date: new Date("2026-07-30T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "cached",
+    text: "irrelevant — buildFullMessage MUST NOT run when rfc822_size is set",
+    html: "",
+    attachments: [],
+  };
+
+  it("returns the cached column value verbatim without calling buildFullMessage", async () => {
+    // The load-bearing invariant. When `mail.rfc822_size` is set (populated
+    // by getMailsByRange's SELECT for a previously-observed mail), the
+    // fetch handler skips the FULL-body serializer entirely — no
+    // buildFullMessage call, no attachment materialization, no ~100MB
+    // allocation. We prove this by setting the cached value to a number
+    // that DOES NOT match what buildFullMessage would produce; if the
+    // handler fell through to compute, the returned value would differ.
+    const mailWithCache: Partial<MailType> = {
+      ...base,
+      rfc822_size: 999_999_999,
+    };
+    const part = await buildFetchResponsePart(
+      mailWithCache,
+      { type: "RFC822.SIZE" },
+      docId,
+      mailbox
+    );
+    expect(part!.type).toBe("simple");
+    if (part!.type === "simple") {
+      expect(part!.content).toBe("RFC822.SIZE 999999999");
+    }
+  });
+
+  it("falls through to compute when rfc822_size is null (not yet populated)", async () => {
+    // The DB stores NULL for rows that haven't been observed yet. Handler
+    // must fall through to the FULL-body compute — reported size matches
+    // what BODY[] would emit.
+    const mailNoCache: Partial<MailType> = {
+      ...base,
+      rfc822_size: null,
+    };
+    const size = await buildFetchResponsePart(
+      mailNoCache,
+      { type: "RFC822.SIZE" },
+      docId,
+      mailbox
+      // userId omitted intentionally — persist step is fire-and-forget
+      // and skipped without a userId; the fetch response is independent
+      // of the persist outcome.
+    );
+    const body = await buildFetchResponsePart(
+      mailNoCache,
+      { type: "BODY", peek: true, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(size!.type).toBe("simple");
+    expect(body!.type).toBe("literal");
+    if (size!.type === "simple" && body!.type === "literal") {
+      const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+      expect(reported).toBe(body!.length);
+    }
+  });
+
+  it("falls through to compute when rfc822_size is absent (field not projected)", async () => {
+    // Symmetric with the null case but for callers whose SELECT didn't
+    // include `rfc822_size` (e.g. a FETCH that only asked for FLAGS but
+    // downstream code still routes through buildFetchResponsePart with a
+    // partial mail). typeof undefined !== 'number' guards this branch.
+    const mailNoField: Partial<MailType> = { ...base };
+    delete (mailNoField as { rfc822_size?: number | null }).rfc822_size;
+    const size = await buildFetchResponsePart(
+      mailNoField,
+      { type: "RFC822.SIZE" },
+      docId,
+      mailbox
+    );
+    expect(size!.type).toBe("simple");
+    if (size!.type === "simple") {
+      expect(size!.content.startsWith("RFC822.SIZE ")).toBe(true);
+      const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+      // Non-zero — the compute path actually ran.
+      expect(reported).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("buildBodyResponsePart header terminators (inbox #645)", () => {

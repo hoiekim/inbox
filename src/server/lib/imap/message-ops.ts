@@ -206,7 +206,8 @@ async function _processFetchMessages(
         uid,
         isUidFetch,
         selectedMailbox,
-        condstoreEnabled
+        condstoreEnabled,
+        store.getUser().id
       );
       await writeFetchResponse(write, writeChunked, seqNum, response);
 

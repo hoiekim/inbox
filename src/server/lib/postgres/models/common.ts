@@ -70,6 +70,15 @@ export const LAST_UID = "last_uid";
 export const SPAM_SCORE = "spam_score";
 export const SPAM_REASONS = "spam_reasons";
 export const IS_SPAM = "is_spam";
+// Cached byte count of the mail's serialized RFC 822 form. Populated
+// lazily on the first FETCH that requests RFC822.SIZE (or an equivalent
+// full-body derivation) and never invalidated — mail body content
+// (text/html/attachments/headers) is immutable after insert, so the
+// size is a stable derived value. `NULL` means "not yet computed";
+// readers fall back to the on-the-fly `buildFullMessage` compute and
+// persist the result. Motivates: avoid materializing multi-MB
+// attachments per RFC822.SIZE request. See #729.
+export const RFC822_SIZE = "rfc822_size";
 
 // Sessions columns
 export const SESSION_ID = "session_id";

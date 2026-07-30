@@ -29,6 +29,7 @@ import {
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 import { withBodyBudget } from "./body-budget";
+import { updateRfc822Size } from "../postgres/repositories/mails/core";
 // `getSharedBodyResult` already budget-gates INSIDE its singleflight
 // closure so coalesced callers share one slot (see body-buffer.ts +
 // hoiekim/inbox#726 / #727). The `withBodyBudget` import here is used
@@ -176,9 +177,14 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
       // RFC822.SIZE is derived from the full-message serializer (it must equal
       // len(BODY[]) per §2.3.4), so it needs every column that serializer
       // reads — headers included, not just the body parts. Request the same
-      // columns a FULL body fetch does.
+      // columns a FULL body fetch does. Also request `rfc822_size` (nullable
+      // cached column) so the fetch handler can short-circuit — a hit skips
+      // buildFullMessage entirely, saving the ~100MB attachment materialization
+      // per request (see #729 K836 spike). The body columns stay in the
+      // projection for the fallback path (first observation of a mail).
       case "RFC822.SIZE":
         addBodyFields({ type: "BODY", peek: true, section: { type: "FULL" } }, fields);
+        fields.add("rfc822_size" as keyof MailType);
         break;
 
       // RFC822* alias the matching BODY[...] sections (§6.4.5); request the
@@ -417,7 +423,8 @@ export async function buildFetchResponsePart(
   mail: Partial<MailType>,
   item: FetchDataItem,
   docId: string,
-  selectedMailbox: string
+  selectedMailbox: string,
+  userId?: string
 ): Promise<FetchResponsePart | null> {
   switch (item.type) {
     case "UID": {
@@ -440,12 +447,26 @@ export async function buildFetchResponsePart(
     case "RFC822.SIZE": {
       // RFC 3501 §2.3.4: RFC822.SIZE is the octet count of the message in RFC
       // 2822 format — i.e. it must equal the number of octets BODY[] / RFC822
-      // returns for the same message. Deriving it from the same FULL-body
-      // serializer BODY[] uses (buildBodyResponsePart) makes the two agree by
-      // construction, including the RFC-2822 header block, all MIME framing,
-      // and the exact base64 encoding of every part. The previous ad-hoc
-      // formula summed only the base64 body parts (no headers, no boundaries),
-      // so it under-reported and drifted from BODY[] in both directions.
+      // returns for the same message.
+      //
+      // Two-path resolution:
+      //  1. **Cached column hit** — `mails.rfc822_size` is a nullable BIGINT
+      //     stamped on first observation. When present, return it verbatim:
+      //     no buildFullMessage, no attachment materialization, no ~100MB
+      //     transient allocation per request. This is the K836-spike fix in
+      //     #729 — a metadata-scan fetch (`UID FETCH X (UID RFC822.SIZE
+      //     BODYSTRUCTURE)`) becomes an in-memory number lookup for
+      //     already-observed mails.
+      //  2. **Fallback compute + persist** — for mails that haven't been
+      //     observed yet (cold rows from before this PR, or brand-new
+      //     inserts), derive via buildBodyResponsePart (same FULL-body
+      //     serializer BODY[] uses, so the two agree by construction) and
+      //     write the result back to the row. The write is fire-and-forget
+      //     (`.catch(logger.warn)` — the FETCH response doesn't wait for
+      //     the persist round-trip).
+      if (typeof mail.rfc822_size === "number") {
+        return { type: "simple", content: `RFC822.SIZE ${mail.rfc822_size}` };
+      }
       const fullBody = await buildBodyResponsePart(
         mail,
         { type: "BODY", peek: true, section: { type: "FULL" } },
@@ -453,6 +474,22 @@ export async function buildFetchResponsePart(
         selectedMailbox
       );
       const size = fullBody?.type === "literal" ? fullBody.length : 0;
+      // Persist for future requests. `userId` is threaded from the
+      // top-level FETCH handler (buildFetchResponse → buildFetchResponsePart)
+      // — the mail row itself doesn't expose user_id on the client-facing
+      // MailType. Fire-and-forget: a persist failure surfaces as a log line
+      // and the same fetch re-computes next time; nothing is broken.
+      // Callers without a userId (unit-test callers, internal fetchers)
+      // skip the persist step silently.
+      if (userId) {
+        void updateRfc822Size(userId, docId, size).catch((err) => {
+          logger.warn("Failed to persist rfc822_size", {
+            component: "imap.fetch",
+            mail_id: docId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
       return { type: "simple", content: `RFC822.SIZE ${size}` };
     }
 
@@ -514,7 +551,8 @@ export async function buildFetchResponse(
   uid: number,
   isUidFetch: boolean,
   selectedMailbox: string,
-  condstoreEnabled: boolean = false
+  condstoreEnabled: boolean = false,
+  userId?: string
 ): Promise<FetchResponsePart[]> {
   const parts: FetchResponsePart[] = [];
 
@@ -528,7 +566,7 @@ export async function buildFetchResponse(
     // this dedups an explicit `(MODSEQ)` request against the implicit
     // post-ENABLE emission and keeps a single `MODSEQ (n)` in the response.
     if (item.type === "MODSEQ") continue;
-    const part = await buildFetchResponsePart(mail, item, docId, selectedMailbox);
+    const part = await buildFetchResponsePart(mail, item, docId, selectedMailbox, userId);
     if (part) parts.push(part);
   }
 
