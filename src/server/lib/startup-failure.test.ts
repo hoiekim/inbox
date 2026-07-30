@@ -5,7 +5,6 @@ import {
   beforeEach,
   afterEach,
   spyOn,
-  mock,
 } from "bun:test";
 import * as alarm from "./alarm";
 import {
