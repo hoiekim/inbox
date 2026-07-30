@@ -37,7 +37,7 @@ export const CHUNK_BYTES = 64 * 1024; // matches typical TCP high-water mark
  * (await `drain` when `socket.write` reports its high-water mark).
  *
  * Distinct from `writeChunkedToSocket` because the source is a stream
- * (produced by `buildFullMessageStream` for BODY[] fetches) rather than
+ * (produced by `streamFromSegments` for BODY[] fetches) rather than
  * a pre-materialized Buffer: chunk boundaries are determined by the
  * producer, not by fixed CHUNK_BYTES slicing. Producer is expected to
  * yield chunks in the CHUNK_BYTES ballpark so socket writes align

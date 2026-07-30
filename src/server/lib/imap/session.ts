@@ -162,7 +162,7 @@ export class ImapSession {
   /**
    * Stream an async iterable of `Buffer` chunks straight to the socket
    * with backpressure. Used by BODY[] / RFC822 fetches wired through
-   * `buildFullMessageStream` — the full body is never materialized in
+   * `streamFromSegments` — the full body is never materialized in
    * memory; each chunk (~64 KiB base64 slice of one attachment) is
    * emitted, written, and released before the next runs. Peak transient
    * allocation stays sub-MB regardless of body size.
