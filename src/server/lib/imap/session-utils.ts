@@ -77,10 +77,10 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
  * One piece of the RFC 822 serialization.
  *
  * `buildMessageSegments` is the SINGLE definition of the MIME layout.
- * `computeFullMessageSize` measures the segments and
- * `buildFullMessageStream` emits them, so the `{N}` literal the writer
- * advertises and the octets that follow it are derived from one source
- * and cannot disagree. Keeping the layout in one place is the invariant,
+ * `sumSegmentBytes` measures the segments and `streamFromSegments`
+ * emits them, so the `{N}` literal the writer advertises and the
+ * octets that follow it are derived from one source and cannot
+ * disagree. Keeping the layout in one place is the invariant,
  * not an aesthetic choice: three hand-parallel copies (measure, emit,
  * materialize) is how the count and the payload drift apart, and a
  * literal whose count is wrong desyncs every subsequent response on the
@@ -442,27 +442,13 @@ export async function* streamFromSegments(
 }
 
 /**
- * Legacy convenience wrapper — builds segments then streams them.
- * DEPRECATED for BODY[] callers because it builds the segment list
- * independently from `computeFullMessageSize`, letting `stat` races
- * corrupt the wire literal. Prefer `buildMessageSegments` + share the
- * result between `sumSegmentBytes` (for `{N}`) and `streamFromSegments`
- * (for the octets). Kept for tests that only need the stream shape.
- */
-export async function* buildFullMessageStream(
-  mail: Partial<MailType>,
-  docId?: string
-): AsyncGenerator<Buffer, void, unknown> {
-  yield* streamFromSegments(buildMessageSegments(mail, docId));
-}
-
-/**
  * Build the complete RFC 822 message as a single string.
  *
  * Materializing consumer for `getBodyContent`'s TEXT section, which needs
  * `indexOf("\r\n\r\n") + substring` over the whole message. Prefer
- * `buildFullMessageStream` + `computeFullMessageSize` for BODY[] / RFC822 —
- * this function's peak allocation is O(message), which is what #729 was about.
+ * `streamFromSegments` (paired with `sumSegmentBytes` on the same
+ * `buildMessageSegments` result) for BODY[] / RFC822 — this function's
+ * peak allocation is O(message), which is what #729 was about.
  */
 export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
   const parts: string[] = [];

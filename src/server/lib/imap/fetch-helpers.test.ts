@@ -547,12 +547,13 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
   });
 
   it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync (#733 reviewoie HIGH)", async () => {
-    // Reproduces the reviewoie HIGH: previously buildFullMessageStream
-    // rebuilt segments independently from computeFullMessageSize, so each
-    // pass ran its own `fs.statSync` on the attachment. If the file
-    // grew between the two stats, `{N}` (from the first) < emitted bytes
-    // (from the second), corrupting the wire literal — reviewoie
-    // reproduced "declared 1833, emitted 67165".
+    // Reproduces the reviewoie HIGH: the stream side previously called
+    // `buildMessageSegments` independently from `computeFullMessageSize`,
+    // so each pass ran its own `fs.statSync` on the attachment. If the
+    // file grew between the two stats, `{N}` (from the first) < emitted
+    // bytes (from the second), corrupting the wire literal — reviewoie
+    // reproduced "declared 1833, emitted 67165". Fix hoisted segments to
+    // the caller so both size + stream derive from ONE list.
     //
     // The fix hoists `buildMessageSegments` to `buildBodyResponsePart`
     // so ONE list drives both measurement and emit. This test proves it

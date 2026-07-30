@@ -18,7 +18,6 @@ import {
 import {
   applyPartialFetch,
   buildFullMessage,
-  buildFullMessageStream,
   buildMessageSegments,
   computeFullMessageSize,
   streamFromSegments,
@@ -53,12 +52,12 @@ import { updateRfc822Size } from "../postgres/repositories/mails/core";
 // duplicate-FETCH storms. See `body-buffer.ts`.
 //
 // **stream** variant: BODY[] / RFC822 for a fetch that streams its bytes
-// directly to the socket via `buildFullMessageStream`, never materializing
-// the full body in memory. `length` is pre-computed by
-// `computeFullMessageSize` (pure math on stored attachment sizes — no
+// directly to the socket via `streamFromSegments`, never materializing
+// the full body in memory. `length` is pre-computed by `sumSegmentBytes`
+// on the SAME segment list (pure math on stored attachment sizes — no
 // disk I/O) so the writer can advertise `{N}` before the first chunk
 // yields. Sum of yielded chunk byte-lengths equals `length` by
-// construction (parallel case blocks in the two functions).
+// construction (both derive from the same segment list).
 export type FetchResponsePart =
   | { type: "simple"; content: string }
   | { type: "literal"; content: string | Buffer; header: string; length: number }
@@ -517,7 +516,7 @@ export async function buildFetchResponsePart(
       //  2. **Compute + persist** — for mails that haven't been observed
       //     yet, derive via `computeFullMessageSize` (pure math on stored
       //     attachment sizes — no disk read, no body materialization). The
-      //     value equals `Buffer.byteLength(buildFullMessageStream output)`
+      //     value equals `Buffer.byteLength(streamFromSegments output)`
       //     by construction so it agrees with what BODY[] would emit.
       //     Fire-and-forget UPDATE persists the value for next time.
       //     Derived without materializing the body, which is the point: a
@@ -644,7 +643,7 @@ export type WriteChunked = (payload: Buffer) => Promise<void>;
 /**
  * Consume an async iterable of chunks and write each to the socket with
  * backpressure. Called for `stream` parts (BODY[] / RFC822 fetches wired
- * through `buildFullMessageStream`). Peak in-flight allocation stays at
+ * through `streamFromSegments`). Peak in-flight allocation stays at
  * one chunk (~64 KiB) — no full-body Buffer is ever materialized.
  */
 export type WriteStream = (chunks: AsyncIterable<Buffer>) => Promise<void>;
