@@ -389,6 +389,16 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
         ] as unknown as MailType["attachments"],
       },
     ],
+    // The has-text / has-html predicates use `.trim()` while the emit uses the
+    // untrimmed source, so a whitespace-only part is the shape where a
+    // measure/emit split would show up.
+    ["whitespace-only text", { ...base, text: "   \r\n  ", html: "", attachments: [] }],
+    [
+      "whitespace-only text with real html",
+      { ...base, text: "   ", html: "<p>rich</p>", attachments: [] }
+    ],
+    ["whitespace-only text and html", { ...base, text: "  ", html: "   ", attachments: [] }],
+    ["no body at all", { ...base, text: "", html: "", attachments: [] }],
     // Multibyte UTF-8: octet count != character count, so any path that
     // measured string `.length` instead of `Buffer.byteLength` would diverge.
     [
