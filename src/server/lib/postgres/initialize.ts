@@ -2,6 +2,7 @@ import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
 import { runMigrations } from "./migration";
+import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
   Table,
@@ -96,69 +97,11 @@ export const initializePostgres = async (): Promise<void> => {
       ON mails USING GIN(search_vector)
     `);
 
-    // Create trigger function for auto-updating search_vector.
-    // subject, from_text, and to_text are plain-text fields — escape angle brackets
-    // before calling to_tsvector so that words like "alert" in a subject such as
-    // "<alert>" are not silently stripped.  The text (HTML body) field is left as-is
-    // because stripping HTML tags there is the desired behaviour.
-    await pool.query(`
-      CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
-      BEGIN
-        NEW.search_vector := to_tsvector('english',
-          coalesce(replace(replace(NEW.subject,   '<', ' '), '>', ' '), '') || ' ' ||
-          coalesce(NEW.text, '') || ' ' ||
-          coalesce(replace(replace(NEW.from_text, '<', ' '), '>', ' '), '') || ' ' ||
-          coalesce(replace(replace(NEW.to_text,   '<', ' '), '>', ' '), '')
-        );
-        RETURN NEW;
-      END
-      $$ LANGUAGE plpgsql;
-    `);
-
-    // Create triggers (drop first — idempotent, and the earlier
-    // combined-event trigger definition needs to go so the column-scoped
-    // pair below can take over).
-    //
-    // Split into TWO triggers so the UPDATE side can restrict itself via
-    // `UPDATE OF <cols>` — the trigger only fires when the SET list
-    // mentions one of the columns the tokenization actually reads
-    // (subject / text / from_text / to_text). Metadata-only UPDATEs (e.g.
-    // `updateRfc822Size` per PR #731) then skip the retokenization
-    // entirely — same reason PG has the OF syntax in the first place.
-    //
-    // INSERT always fires (no OF equivalent for INSERT — every new row
-    // must have its search_vector populated regardless of what columns
-    // the INSERT enumerates).
-    await pool.query(`DROP TRIGGER IF EXISTS mails_search_update ON mails`);
-    await pool.query(`DROP TRIGGER IF EXISTS mails_search_insert ON mails`);
-    await pool.query(`
-      CREATE TRIGGER mails_search_insert
-        BEFORE INSERT ON mails
-        FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
-    `);
-    await pool.query(`
-      CREATE TRIGGER mails_search_update
-        BEFORE UPDATE OF subject, text, from_text, to_text ON mails
-        FOR EACH ROW EXECUTE FUNCTION mails_search_vector_trigger()
-    `);
-
-    // Reindex existing rows so that the corrected trigger is applied retroactively.
-    // This is idempotent — a no-op when search_vector is already up to date.
-    await pool.query(`
-      UPDATE mails
-      SET search_vector = to_tsvector('english',
-        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
-        coalesce(text, '') || ' ' ||
-        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
-        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
-      )
-      WHERE search_vector IS DISTINCT FROM to_tsvector('english',
-        coalesce(replace(replace(subject,   '<', ' '), '>', ' '), '') || ' ' ||
-        coalesce(text, '') || ' ' ||
-        coalesce(replace(replace(from_text, '<', ' '), '>', ' '), '') || ' ' ||
-        coalesce(replace(replace(to_text,   '<', ' '), '>', ' '), '')
-      )
-    `);
+    // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
+    // the reindex — all three derived from `searchVectorExpression` so the
+    // trigger and the direct write can't drift apart. See search-vector.ts.
+    for (const sql of searchVectorDdl()) await pool.query(sql);
+    await pool.query(searchVectorReindexSql());
 
     // #702 PR 3: retire `mails.uid_account` — `mail_mailbox_uid.uid` is now
     // the sole per-mailbox UID source. Drop the column when it still exists,

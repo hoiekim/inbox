@@ -18,15 +18,22 @@
  *     All three variants participate in the TTL cache.
  *  5. Content result is a Buffer — `socket.write(buffer)` skips the
  *     UTF-8 conversion and V8 can GC the intermediate JS string.
+ *  6. Retention is bounded in BYTES (`IMAP_BODY_BUFFER_MAX_BYTES`), with
+ *     an entry count as a secondary guard for zero-byte `nil`/`omit`
+ *     results. Eviction is least-recently-USED: a cache hit refreshes
+ *     recency, so a hammered key outlives a burst of distinct inserts.
  */
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
   getSharedBodyResult,
   bodyBufferKey,
   _bodyBufferCacheSize,
+  _bodyBufferBytes,
   _resetBodyBufferCache,
   _bodyBufferTtlMs,
+  _bodyBufferMaxBytes,
   _bodyBufferMaxEntries,
+  _setBodyBufferLimits,
 } from "./body-buffer";
 import { inflightReset, inflightSize } from "../postgres/repositories/mails/inflight";
 
@@ -151,59 +158,124 @@ describe("getSharedBodyResult", () => {
     expect(builds).toBe(1);
   });
 
-  it("bounds cache size — LRU eviction when inserting past MAX_ENTRIES", async () => {
-    // Under pathological load (many distinct large-body FETCHes within a
-    // single TTL window), an unbounded cache would hold N × (up to
-    // ~26MB) buffers even though each individual build is capped by the
-    // budget (#727). LRU-by-insertion-order eviction bounds the total.
-    const max = _bodyBufferMaxEntries();
-    // Populate to the cap.
-    for (let i = 0; i < max; i++) {
-      await getSharedBodyResult(`k${i}`, () => ({ kind: "content", text: `v${i}` }));
+  it("bounds retention by BYTES — evicts until the incoming buffer fits", async () => {
+    // The cap has to be denominated in bytes because bytes are what the
+    // container limits: a handful of distinct multi-MB bodies inside one
+    // TTL window is hundreds of MB while sitting far below any plausible
+    // entry count. 1KB budget + 400B bodies → at most 2 resident.
+    _setBodyBufferLimits({ maxBytes: 1024 });
+    const body = (label: string) => "x".repeat(400) + label;
+    for (const label of ["a", "b", "c", "d"]) {
+      await getSharedBodyResult(label, () => ({ kind: "content", text: body(label) }));
+      expect(_bodyBufferBytes()).toBeLessThanOrEqual(1024);
     }
-    expect(_bodyBufferCacheSize()).toBe(max);
-    // Inserting one more evicts the oldest (k0) — cache size stays capped.
-    await getSharedBodyResult(`k${max}`, () => ({ kind: "content", text: `v${max}` }));
-    expect(_bodyBufferCacheSize()).toBe(max);
-    // Verify k0 was evicted: re-request rebuilds (build call fires).
-    // (Side effect of this re-fetch: k0 is now in cache again, and its
-    // insertion evicted the next-oldest — so we can't cheaply assert on
-    // "some other still-present key is a cache hit" without tracking the
-    // exact age ordering. The cap invariant + oldest-evicted is what
-    // matters.)
-    let rebuilt = 0;
-    await getSharedBodyResult("k0", () => {
-      rebuilt += 1;
-      return { kind: "content", text: "rebuild-k0" };
+    // 4 × 401B against a 1024B ceiling → only the newest 2 survive.
+    expect(_bodyBufferCacheSize()).toBe(2);
+    expect(_bodyBufferBytes()).toBe(802);
+    // Oldest gone, newest kept.
+    let rebuiltA = false;
+    await getSharedBodyResult("a", () => {
+      rebuiltA = true;
+      return { kind: "content", text: "re-a" };
     });
-    expect(rebuilt).toBe(1);
-    // Cache still at cap after the re-fetch.
-    expect(_bodyBufferCacheSize()).toBe(max);
+    expect(rebuiltA).toBe(true);
+    let rebuiltD = false;
+    await getSharedBodyResult("d", () => {
+      rebuiltD = true;
+      return { kind: "content", text: "re-d" };
+    });
+    expect(rebuiltD).toBe(false);
   });
 
-  it("refreshing an existing key does not trigger eviction", async () => {
-    // Re-populating the SAME key shouldn't push the cache past its cap
-    // (or evict a still-fresh entry). The refresh path removes the
-    // existing entry FIRST, so the following `set` lands under the cap.
-    const max = _bodyBufferMaxEntries();
-    for (let i = 0; i < max; i++) {
+  it("refuses to cache a single body larger than the whole byte budget", async () => {
+    // Evicting everything still wouldn't make room, so the entry is served
+    // and dropped rather than parked over the ceiling.
+    _setBodyBufferLimits({ maxBytes: 512 });
+    const r = await getSharedBodyResult("huge", () => ({
+      kind: "content",
+      text: "y".repeat(4096),
+    }));
+    if (r.kind !== "buffer") throw new Error();
+    expect(r.buffer.byteLength).toBe(4096);
+    expect(_bodyBufferCacheSize()).toBe(0);
+    expect(_bodyBufferBytes()).toBe(0);
+    // ...and the next caller rebuilds rather than getting a stale/absent hit.
+    let rebuilt = false;
+    await getSharedBodyResult("huge", () => {
+      rebuilt = true;
+      return { kind: "content", text: "again" };
+    });
+    expect(rebuilt).toBe(true);
+  });
+
+  it("keeps the entry count as a secondary guard for zero-byte results", async () => {
+    // `nil`/`omit` carry no payload bytes, so the byte budget alone would
+    // never bound them.
+    _setBodyBufferLimits({ maxEntries: 4 });
+    for (let i = 0; i < 20; i++) {
+      await getSharedBodyResult(`nil-${i}`, () => ({ kind: "nil" }));
+    }
+    expect(_bodyBufferCacheSize()).toBe(4);
+    expect(_bodyBufferBytes()).toBe(0);
+  });
+
+  it("is real LRU — a hammered key survives a burst of distinct inserts", async () => {
+    // The entry a retry needs is by definition the recently-USED one.
+    // Insertion-order eviction would drop the hottest key here.
+    _setBodyBufferLimits({ maxEntries: 8 });
+    for (let i = 0; i < 8; i++) {
       await getSharedBodyResult(`k${i}`, () => ({ kind: "content", text: `v${i}` }));
     }
-    expect(_bodyBufferCacheSize()).toBe(max);
-    // Force a re-population of k0 by expiring it first, then rewriting.
-    // (Same-key update happens via the setCached path — the singleflight
-    // path would coalesce on the still-present k0. Simulate by clearing
-    // only k0, then re-fetching.)
-    // Cleanest: bump cache-hit code path with a synthetic re-set —
-    // but the public getSharedBodyResult short-circuits on cache hit,
-    // so nothing calls setCached again for k0. Instead, evict k0 first
-    // (below TTL fire), then re-populate:
-    await getSharedBodyResult("k-new", () => ({ kind: "content", text: "n" }));
-    // k-new eviction dropped k0 (oldest). Size still at cap.
-    expect(_bodyBufferCacheSize()).toBe(max);
-    // A fresh k0 populate should NOT push past the cap.
-    await getSharedBodyResult("k0", () => ({ kind: "content", text: "fresh-k0" }));
-    expect(_bodyBufferCacheSize()).toBe(max);
+    // Hammer the OLDEST-inserted key.
+    for (let i = 0; i < 20; i++) {
+      const hit = await getSharedBodyResult("k0", () => ({
+        kind: "content",
+        text: "must-not-rebuild",
+      }));
+      if (hit.kind !== "buffer") throw new Error();
+      expect(hit.buffer.toString("utf8")).toBe("v0");
+    }
+    // A burst of new keys — one eviction each. k0 is now newest, so it
+    // survives until 8 more distinct keys have displaced it.
+    for (let i = 0; i < 7; i++) {
+      await getSharedBodyResult(`new${i}`, () => ({ kind: "content", text: `n${i}` }));
+    }
+    expect(_bodyBufferCacheSize()).toBe(8);
+    let k0Rebuilt = false;
+    const k0 = await getSharedBodyResult("k0", () => {
+      k0Rebuilt = true;
+      return { kind: "content", text: "rebuilt" };
+    });
+    if (k0.kind !== "buffer") throw new Error();
+    expect(k0Rebuilt).toBe(false);
+    expect(k0.buffer.toString("utf8")).toBe("v0");
+    // k1 — never re-used after insertion — is the one that got evicted.
+    let k1Rebuilt = false;
+    await getSharedBodyResult("k1", () => {
+      k1Rebuilt = true;
+      return { kind: "content", text: "rebuilt" };
+    });
+    expect(k1Rebuilt).toBe(true);
+  });
+
+  it("returns bytes to the budget on eviction and on reset", async () => {
+    // Byte accounting must be symmetric — a leak here silently shrinks the
+    // effective cache to nothing over a long uptime.
+    _setBodyBufferLimits({ maxEntries: 2 });
+    await getSharedBodyResult("b1", () => ({ kind: "content", text: "z".repeat(100) }));
+    expect(_bodyBufferBytes()).toBe(100);
+    await getSharedBodyResult("b2", () => ({ kind: "content", text: "z".repeat(200) }));
+    expect(_bodyBufferBytes()).toBe(300);
+    // b3 evicts b1 (100B) — accounting drops with it.
+    await getSharedBodyResult("b3", () => ({ kind: "content", text: "z".repeat(50) }));
+    expect(_bodyBufferCacheSize()).toBe(2);
+    expect(_bodyBufferBytes()).toBe(250);
+    _resetBodyBufferCache();
+    expect(_bodyBufferBytes()).toBe(0);
+    expect(_bodyBufferCacheSize()).toBe(0);
+    // Reset also restores the env-derived limits.
+    expect(_bodyBufferMaxEntries()).toBe(32);
+    expect(_bodyBufferMaxBytes()).toBe(64 * 1024 * 1024);
   });
 
   it("preserves `omit` sentinel across coalesced callers (nonexistent-part path)", async () => {
