@@ -9,18 +9,42 @@
  *    seq/UID range like `3:1` must resolve the same as `1:3` (RFC 3501 §9).
  */
 
-import { describe, it, expect, mock } from "bun:test";
+import { describe, it, expect, mock, afterAll } from "bun:test";
+import fs from "node:fs";
+import {
+  ATTACHMENT_FOLDER,
+  getAttachmentFilePath,
+  getAttachment
+} from "../mails/util";
 
-// fetch-helpers only pulls `logger` from the server barrel; stub it so the
-// import does not drag in the full server (DB, etc.).
+// Stub the server barrel so the import does not drag in the full server (DB,
+// etc.). `mock.module` is process-global in Bun and reaches the leaf module the
+// barrel re-exports, so the attachment helpers are forwarded VERBATIM rather
+// than redirected — swapping ATTACHMENT_FOLDER for a temp dir here broke
+// mails/util.test.ts's constant assertions in the same run.
 mock.module("server", () => ({
   logger: {
     warn: mock(() => {}),
     error: mock(() => {}),
     info: mock(() => {}),
     debug: mock(() => {})
-  }
+  },
+  ATTACHMENT_FOLDER,
+  getAttachmentFilePath,
+  getAttachment
 }));
+
+// Attachment bodies are measured (stat) and read from the same path, so these
+// tests write real files under the real folder and remove exactly those.
+const TEST_ID_PREFIX = "fetch-helpers-test-";
+const attachmentPath = (id: string) => getAttachmentFilePath(TEST_ID_PREFIX + id);
+const writtenIds = new Set<string>();
+const writeAttachment = (id: string, data: Buffer): Buffer => {
+  fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
+  fs.writeFileSync(attachmentPath(id), data);
+  writtenIds.add(id);
+  return data;
+};
 
 import {
   getRequestedFields,
@@ -31,7 +55,16 @@ import {
 } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
 import { BodyFetch, SequenceSet } from "./types";
+import {
+  withBodyBudget,
+  bodyBudgetCapacity,
+  _resetBodyBudget
+} from "./body-budget";
 import type { MailType } from "common";
+
+afterAll(() => {
+  for (const id of writtenIds) fs.rmSync(attachmentPath(id), { force: true });
+});
 
 // Wire content is `string | Buffer` — large non-partial body payloads flow
 // through the shared body-buffer cache and land as Buffer. Every test in
@@ -40,6 +73,19 @@ const contentAsString = (
   part: Extract<FetchResponsePart, { type: "literal" }>
 ): string =>
   Buffer.isBuffer(part.content) ? part.content.toString("utf8") : part.content;
+
+// Stream parts don't materialize a `.content` field — iterate the async
+// generator to collect chunks, concat, and stringify. Tests treat both
+// shapes uniformly; the wire bytes are what matters.
+const contentAsStringAny = async (
+  part: FetchResponsePart
+): Promise<string> => {
+  if (part.type === "simple") return part.content;
+  if (part.type === "literal") return contentAsString(part);
+  const chunks: Buffer[] = [];
+  for await (const chunk of part.stream) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+};
 
 describe("getRequestedFields", () => {
   describe("FLAGS", () => {
@@ -204,9 +250,15 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
       mailbox
     );
     expect(rfc).not.toBeNull();
-    expect(rfc!.type).toBe("literal");
-    if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(contentAsString(rfc)).toBe(contentAsString(body));
+    // Both RFC822 and BODY[] FULL route through the stream part after
+    // Length + wire bytes match; only the header label differs.
+    expect(rfc!.type === "stream" || rfc!.type === "literal").toBe(true);
+    expect(body!.type === "stream" || body!.type === "literal").toBe(true);
+    if (
+      (rfc!.type === "literal" || rfc!.type === "stream") &&
+      (body!.type === "literal" || body!.type === "stream")
+    ) {
+      expect(await contentAsStringAny(rfc!)).toBe(await contentAsStringAny(body!));
       expect(rfc!.length).toBe(body!.length);
       expect(rfc!.header).toBe("RFC822");
       expect(body!.header).toBe("BODY[]");
@@ -337,6 +389,16 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
         ] as unknown as MailType["attachments"],
       },
     ],
+    // The has-text / has-html predicates use `.trim()` while the emit uses the
+    // untrimmed source, so a whitespace-only part is the shape where a
+    // measure/emit split would show up.
+    ["whitespace-only text", { ...base, text: "   \r\n  ", html: "", attachments: [] }],
+    [
+      "whitespace-only text with real html",
+      { ...base, text: "   ", html: "<p>rich</p>", attachments: [] }
+    ],
+    ["whitespace-only text and html", { ...base, text: "  ", html: "   ", attachments: [] }],
+    ["no body at all", { ...base, text: "", html: "", attachments: [] }],
     // Multibyte UTF-8: octet count != character count, so any path that
     // measured string `.length` instead of `Buffer.byteLength` would diverge.
     [
@@ -352,7 +414,7 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
   ];
 
   for (const [label, mail] of shapes) {
-    it(`RFC822.SIZE equals BODY[] length for ${label}`, async () => {
+    it(`RFC822.SIZE equals the octets BODY[] actually emits for ${label}`, async () => {
       const size = await buildFetchResponsePart(
         mail,
         { type: "RFC822.SIZE" },
@@ -366,13 +428,436 @@ describe("buildFetchResponsePart RFC822.SIZE == BODY[] octet count (inbox #654)"
         mailbox
       );
       expect(size!.type).toBe("simple");
-      expect(body!.type).toBe("literal");
-      if (size!.type === "simple" && body!.type === "literal") {
-        const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
-        expect(reported).toBe(body!.length);
-      }
+      // A FULL section is deterministically a stream part; accepting "literal"
+      // here would also pass if the branch silently fell back, which is the
+      // regression most worth catching.
+      expect(body!.type).toBe("stream");
+      if (size!.type !== "simple" || body!.type !== "stream") return;
+
+      const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+      expect(reported).toBe(body!.length);
+
+      // The load-bearing assertion. Comparing `reported` to `body.length` alone
+      // is a tautology — both read `computeFullMessageSize`. Only draining the
+      // generator proves the `{N}` literal matches the octets that arrive; a
+      // mismatch desyncs every later response on the connection.
+      let emitted = 0;
+      for await (const chunk of body!.stream) emitted += chunk.byteLength;
+      expect(emitted).toBe(reported);
     });
   }
+});
+
+describe("BODY[] {N} holds when the attachment file disagrees with the mail row", () => {
+  // The shapes above all have stored sizes that happen to match. These are the
+  // ones that diverge: the literal count is advertised before a single byte is
+  // read, so anything derived from the stored `size` while the payload comes
+  // from disk can desync the stream.
+  const docId = "doc-divergent";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<divergent@local>",
+    date: new Date("2026-07-30T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "divergent",
+    text: "see attached",
+    html: ""
+  };
+
+  /** attachments field for an already-prefixed attachment id. */
+  const attList = (prefixedId: string) => ({
+    attachments: [
+      {
+        filename: "a.bin",
+        contentType: "application/octet-stream",
+        size: 60_000,
+        content: { data: prefixedId }
+      }
+    ] as unknown as MailType["attachments"]
+  });
+
+  const withAttachment = (id: string, storedSize: number): Partial<MailType> => ({
+    ...base,
+    attachments: [
+      {
+        filename: "a.bin",
+        contentType: "application/octet-stream",
+        size: storedSize,
+        content: { data: TEST_ID_PREFIX + id }
+      }
+    ] as unknown as MailType["attachments"]
+  });
+
+  /** The base64 payload the wire carried for `filename`, decoded. */
+  const decodePart = (wire: string, filename: string): Buffer => {
+    const marker = `filename="${filename}"\r\n\r\n`;
+    const start = wire.indexOf(marker);
+    if (start === -1) throw new Error(`part ${filename} not on the wire`);
+    const from = start + marker.length;
+    const end = wire.indexOf("\r\n--", from);
+    return Buffer.from(wire.slice(from, end === -1 ? undefined : end), "base64");
+  };
+
+  const drain = async (mail: Partial<MailType>) => {
+    const size = await buildFetchResponsePart(mail, { type: "RFC822.SIZE" }, docId, mailbox);
+    const body = await buildFetchResponsePart(
+      mail,
+      { type: "BODY", peek: true, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(size!.type).toBe("simple");
+    expect(body!.type).toBe("stream");
+    if (size!.type !== "simple" || body!.type !== "stream") throw new Error("shape");
+    const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
+    const parts: Buffer[] = [];
+    let emitted = 0;
+    for await (const chunk of body!.stream) {
+      emitted += chunk.byteLength;
+      parts.push(Buffer.from(chunk));
+    }
+    const wire = Buffer.concat(parts).toString("utf8");
+    return { reported, declared: body!.length, emitted, wire };
+  };
+
+  it("stored size LARGER than the file on disk", async () => {
+    const id = "att-too-big";
+    const original = Buffer.alloc(1024, 7);
+    writeAttachment(id, original);
+    const { reported, declared, emitted, wire } = await drain(withAttachment(id, 999_999));
+    expect(emitted).toBe(reported);
+    expect(emitted).toBe(declared);
+    // The count holding is not enough: measuring the stored size while emitting
+    // the file pads the payload out to a size the attachment never had, so the
+    // client decodes a corrupt attachment. The size must follow the file.
+    expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
+  });
+
+  it("stored size SMALLER than the file on disk", async () => {
+    const id = "att-too-small";
+    const original = Buffer.alloc(200_000, 9);
+    writeAttachment(id, original);
+    const { reported, declared, emitted, wire } = await drain(withAttachment(id, 11));
+    expect(emitted).toBe(reported);
+    expect(emitted).toBe(declared);
+    // Understating the size truncates the attachment mid-stream.
+    expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
+  });
+
+  it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync (#733 reviewoie HIGH)", async () => {
+    // Reproduces the reviewoie HIGH: previously buildFullMessageStream
+    // rebuilt segments independently from computeFullMessageSize, so each
+    // pass ran its own `fs.statSync` on the attachment. If the file
+    // grew between the two stats, `{N}` (from the first) < emitted bytes
+    // (from the second), corrupting the wire literal — reviewoie
+    // reproduced "declared 1833, emitted 67165".
+    //
+    // The fix hoists `buildMessageSegments` to `buildBodyResponsePart`
+    // so ONE list drives both measurement and emit. This test proves it
+    // by growing the file AFTER the fetch part is constructed (which
+    // freezes the segment list) but BEFORE the stream drains — before
+    // the fix, the stream would `stat` the grown file and emit more
+    // bytes than declared. After the fix, the emit is clamped by the
+    // segment's stored `rawSize`.
+    const id = "att-grows-mid-fetch";
+    const initial = Buffer.alloc(1024, 7);
+    writeAttachment(id, initial);
+    const mail = withAttachment(id, 1024);
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "BODY", peek: true, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(part!.type).toBe("stream");
+    if (part!.type !== "stream") throw new Error("shape");
+    const declared = part.length;
+
+    // Grow the file well past the initial size. If segments were
+    // re-built inside the stream, this would leak into the emit.
+    const grown = Buffer.alloc(64 * 1024, 9);
+    fs.writeFileSync(attachmentPath(id), grown);
+
+    let emitted = 0;
+    for await (const chunk of part.stream) emitted += chunk.byteLength;
+    expect(emitted).toBe(declared);
+  });
+
+  it("stored size zero (Attachment ctor default for a falsy incoming size)", async () => {
+    const id = "att-zero";
+    const original = Buffer.alloc(50_000, 3);
+    writeAttachment(id, original);
+    const { reported, emitted, wire } = await drain(withAttachment(id, 0));
+    expect(emitted).toBe(reported);
+    expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
+  });
+
+  it("attachment file missing entirely", async () => {
+    const { reported, declared, emitted } = await drain(
+      withAttachment("att-does-not-exist", 1_398_738)
+    );
+    expect(emitted).toBe(reported);
+    expect(emitted).toBe(declared);
+    expect(Number.isFinite(reported)).toBe(true);
+  });
+
+  it("stored size undefined does not advertise NaN", async () => {
+    const id = "att-undef-size";
+    writeAttachment(id, Buffer.alloc(4096, 1));
+    const mail: Partial<MailType> = {
+      ...base,
+      attachments: [
+        {
+          filename: "a.bin",
+          contentType: "application/octet-stream",
+          content: { data: TEST_ID_PREFIX + id }
+        }
+      ] as unknown as MailType["attachments"]
+    };
+    const { reported, emitted, wire } = await drain(mail);
+    expect(Number.isNaN(reported)).toBe(false);
+    expect(emitted).toBe(reported);
+    expect(decodePart(wire, "a.bin").equals(Buffer.alloc(4096, 1))).toBe(true);
+  });
+
+  it("multiple attachments, mixed present and missing", async () => {
+    const present = "att-multi-present";
+    writeAttachment(present, Buffer.alloc(120_000, 5));
+    const mail: Partial<MailType> = {
+      ...base,
+      attachments: [
+        {
+          filename: "present.bin",
+          contentType: "application/octet-stream",
+          size: 120_000,
+          content: { data: TEST_ID_PREFIX + present }
+        },
+        {
+          filename: "gone.bin",
+          contentType: "application/octet-stream",
+          size: 777_777,
+          content: { data: TEST_ID_PREFIX + "att-multi-missing" }
+        }
+      ] as unknown as MailType["attachments"]
+    };
+    const { reported, emitted, wire } = await drain(mail);
+    expect(emitted).toBe(reported);
+    expect(decodePart(wire, "present.bin").equals(Buffer.alloc(120_000, 5))).toBe(true);
+  });
+
+  // MED 4 in review: the MIME layout used to be hand-parallel across the
+  // measure/emit/materialize functions, so a shape covered by only one of them
+  // could drift. These walk every branch of the layout with a real file on disk.
+  const layoutShapes: Array<[string, (id: string) => Partial<MailType>]> = [
+    [
+      "text + html + attachment (alternative nested in mixed)",
+      (id) => ({ ...base, text: "plain", html: "<p>rich</p>", ...attList(id) })
+    ],
+    ["html + attachment", (id) => ({ ...base, text: "", html: "<p>rich</p>", ...attList(id) })],
+    ["attachment only", (id) => ({ ...base, text: "", html: "", ...attList(id) })],
+    [
+      "multibyte text + attachment",
+      (id) => ({ ...base, text: "café ☕ 日本語 😀", html: "", ...attList(id) })
+    ]
+  ];
+
+  for (const [label, make] of layoutShapes) {
+    it(`{N} matches emitted octets for ${label}`, async () => {
+      const id = `att-layout-${label.replace(/[^a-z]/gi, "")}`;
+      const original = Buffer.alloc(60_000, 11);
+      writeAttachment(id, original);
+      const { reported, declared, emitted, wire } = await drain(
+        make(TEST_ID_PREFIX + id) as Partial<MailType>
+      );
+      expect(emitted).toBe(reported);
+      expect(emitted).toBe(declared);
+      expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
+    });
+  }
+
+  it("a multi-slice attachment round-trips byte-for-byte", async () => {
+    // A 200 KB attachment crosses several 48 KiB slice boundaries. If the slice
+    // size were not divisible by 3, base64 would inject '=' padding mid-stream
+    // and the decode would not match — corrupting the payload for the client on
+    // top of breaking the ceil(n/3)*4 total the literal advertises.
+    const id = "att-slice-boundary";
+    const original = Buffer.alloc(200_000);
+    for (let i = 0; i < original.length; i += 1) original[i] = i % 251;
+    writeAttachment(id, original);
+
+    const body = await buildFetchResponsePart(
+      withAttachment(id, original.length),
+      { type: "BODY", peek: true, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    if (body?.type !== "stream") throw new Error("expected stream");
+    const parts: Buffer[] = [];
+    for await (const chunk of body.stream) parts.push(Buffer.from(chunk));
+    const wire = Buffer.concat(parts).toString("utf8");
+
+    const marker = `filename="a.bin"\r\n\r\n`;
+    const start = wire.indexOf(marker) + marker.length;
+    const end = wire.indexOf("\r\n--", start);
+    expect(start).toBeGreaterThan(marker.length - 1);
+    expect(end).toBeGreaterThan(start);
+    const encoded = wire.slice(start, end);
+    expect(encoded.length).toBe(Math.ceil(original.length / 3) * 4);
+    expect(Buffer.from(encoded, "base64").equals(original)).toBe(true);
+  });
+});
+
+describe("buildFetchResponsePart BODY[] streams without materializing", () => {
+  // FULL sections yield Buffer chunks straight to the writer, so peak transient
+  // allocation stays bounded by the chunk size rather than the body size.
+
+  const docId = "doc-stream";
+  const mailbox = "INBOX";
+  const base = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<stream@local>",
+    date: new Date("2026-07-30T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "stream",
+    text: "plain body",
+    html: "<p>rich body</p>",
+    attachments: [] as unknown as MailType["attachments"],
+  };
+
+  it("BODY[] returns a stream part with pre-computed length", async () => {
+    const body = await buildFetchResponsePart(
+      base,
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(body).not.toBeNull();
+    expect(body!.type).toBe("stream");
+    if (body!.type === "stream") {
+      expect(body!.length).toBeGreaterThan(0);
+      expect(body!.header).toBe("BODY[]");
+      // Sum of chunk byte-lengths equals the declared `length`. Load-
+      // bearing: without this invariant, the IMAP `{N}` literal would
+      // desync from the octet count that arrives, corrupting the wire
+      // response.
+      let seen = 0;
+      for await (const chunk of body!.stream) {
+        expect(Buffer.isBuffer(chunk)).toBe(true);
+        seen += chunk.byteLength;
+      }
+      expect(seen).toBe(body!.length);
+    }
+  });
+
+  it("stream chunks stay small for a LARGE body, not just a small one", async () => {
+    // The previous version of this test used a 10-byte body, so its 256 KiB
+    // ceiling could never fire. Sizing text and html into the megabytes is what
+    // makes the assertion mean anything: an unchunked part yields one Buffer of
+    // ~4/3 the source size and fails here.
+    const large = {
+      ...base,
+      text: "t".repeat(4 * 1024 * 1024),
+      html: `<p>${"h".repeat(4 * 1024 * 1024)}</p>`
+    };
+    const body = await buildFetchResponsePart(
+      large,
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(body!.type).toBe("stream");
+    if (body!.type !== "stream") return;
+
+    const maxChunk = 256 * 1024;
+    let chunks = 0;
+    let biggest = 0;
+    let emitted = 0;
+    for await (const chunk of body!.stream) {
+      chunks += 1;
+      biggest = Math.max(biggest, chunk.byteLength);
+      emitted += chunk.byteLength;
+    }
+    expect(biggest).toBeLessThanOrEqual(maxChunk);
+    expect(chunks).toBeGreaterThan(100);
+    expect(emitted).toBe(body!.length);
+  });
+
+  // The budget tests below deliberately saturate capacity BEFORE starting the
+  // stream. Asserting only "capacity is free after draining" would pass whether
+  // or not the stream ever acquired a slot — the same vacuous shape this file's
+  // size assertions used to have.
+  const saturateAllButOne = () => {
+    const releases: Array<() => void> = [];
+    const held = Array.from({ length: bodyBudgetCapacity() - 1 }, () =>
+      withBodyBudget(() => new Promise<void>((resolve) => releases.push(resolve)))
+    );
+    return { releases, held };
+  };
+
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  const startStream = async () => {
+    const body = await buildFetchResponsePart(
+      base,
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    if (body?.type !== "stream") throw new Error("expected stream");
+    const iterator = body.stream[Symbol.asyncIterator]();
+    // The first `next()` is what awaits the budget acquire.
+    await iterator.next();
+    return iterator;
+  };
+
+  it("holds a budget slot while the stream is in flight", async () => {
+    _resetBodyBudget();
+    const { releases, held } = saturateAllButOne();
+    const iterator = await startStream();
+
+    // The stream now owns the last slot, so a further acquire must wait.
+    let extraRan = false;
+    const pending = withBodyBudget(async () => {
+      extraRan = true;
+    });
+    await flush();
+    expect(extraRan).toBe(false);
+
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+    }
+    await pending;
+    expect(extraRan).toBe(true);
+
+    releases.forEach((release) => release());
+    await Promise.all(held);
+  });
+
+  it("releases the slot when the consumer abandons the stream early", async () => {
+    _resetBodyBudget();
+    const { releases, held } = saturateAllButOne();
+    const iterator = await startStream();
+
+    let extraRan = false;
+    const pending = withBodyBudget(async () => {
+      extraRan = true;
+    });
+    await flush();
+    expect(extraRan).toBe(false);
+
+    // Mirrors writeStreamToSocket breaking out on a dead socket: the generator's
+    // finally must run and hand the slot back, or an aborted FETCH leaks it.
+    await iterator.return?.(undefined);
+    await pending;
+    expect(extraRan).toBe(true);
+
+    releases.forEach((release) => release());
+    await Promise.all(held);
+  });
 });
 
 describe("buildFetchResponsePart RFC822.SIZE cached-column short-circuit (#729)", () => {
@@ -438,8 +923,11 @@ describe("buildFetchResponsePart RFC822.SIZE cached-column short-circuit (#729)"
       mailbox
     );
     expect(size!.type).toBe("simple");
-    expect(body!.type).toBe("literal");
-    if (size!.type === "simple" && body!.type === "literal") {
+    expect(body!.type === "stream" || body!.type === "literal").toBe(true);
+    if (
+      size!.type === "simple" &&
+      (body!.type === "literal" || body!.type === "stream")
+    ) {
       const reported = Number(size!.content.replace("RFC822.SIZE ", ""));
       expect(reported).toBe(body!.length);
     }

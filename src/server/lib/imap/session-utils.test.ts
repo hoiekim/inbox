@@ -3,11 +3,23 @@
  * Covers inbox #341
  */
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import fs from "node:fs";
+import {
+  ATTACHMENT_FOLDER,
+  getAttachmentFilePath,
+  getAttachment
+} from "../mails/util";
 
-// Mock the "server" module before importing session-utils
+// Mock the "server" module before importing session-utils. `mock.module` is
+// process-global in Bun and reaches the leaf module the barrel re-exports, so
+// the attachment helpers are forwarded VERBATIM rather than redirected at a temp
+// dir — redirecting them broke mails/util.test.ts's constant assertions in the
+// same run.
 mock.module("server", () => ({
-  getAttachment: mock(() => undefined),
+  ATTACHMENT_FOLDER,
+  getAttachmentFilePath,
+  getAttachment,
   logger: {
     warn: mock(() => {}),
     error: mock(() => {}),
@@ -15,6 +27,24 @@ mock.module("server", () => ({
     debug: mock(() => {})
   }
 }));
+
+// Attachment bodies are measured (stat) and read from the same path, so these
+// tests write real files rather than stubbing a reader — a stub would let the
+// measured size and the emitted bytes disagree, which is exactly the bug class
+// this module has to make impossible.
+const TEST_ID_PREFIX = "session-utils-test-";
+const attachmentPath = (id: string) => getAttachmentFilePath(TEST_ID_PREFIX + id);
+const writtenIds = new Set<string>();
+const writeAttachment = (id: string, data: Buffer): Buffer => {
+  fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
+  fs.writeFileSync(attachmentPath(id), data);
+  writtenIds.add(id);
+  return data;
+};
+
+afterAll(() => {
+  for (const id of writtenIds) fs.rmSync(attachmentPath(id), { force: true });
+});
 
 import {
   applyPartialFetch,
@@ -30,12 +60,6 @@ import type {
   PartialRange
 } from "./types";
 import type { MailType } from "common";
-
-// Helper: get the mocked getAttachment from the mocked module
-async function getMockedGetAttachment() {
-  const serverMod = await import("server");
-  return serverMod.getAttachment as ReturnType<typeof mock>;
-}
 
 // ---------------------------------------------------------------------------
 // applyPartialFetch
@@ -350,20 +374,21 @@ describe("buildFullMessage", () => {
     expect(result).toContain("--boundary_test-doc-123--");
   });
 
-  it("returns multipart/mixed for text+html+attachment mail", async () => {
-    const mockGetAttachment = await getMockedGetAttachment();
-    const fakeAttachmentData = Buffer.from("PDF_BINARY_DATA");
-    mockGetAttachment.mockImplementation(() => fakeAttachmentData);
+  it("returns multipart/mixed for text+html+attachment mail", () => {
+    const fakeAttachmentData = writeAttachment(
+      "att-file-id-1",
+      Buffer.from("PDF_BINARY_DATA")
+    );
 
     const mail: Partial<MailType> = {
       text: "See attached",
       html: "<p>See attached</p>",
       attachments: [
         {
-          content: { data: "att-file-id-1" },
+          content: { data: TEST_ID_PREFIX + "att-file-id-1" },
           contentType: "application/pdf",
           filename: "document.pdf",
-          size: 1024
+          size: fakeAttachmentData.byteLength
         }
       ]
     };
@@ -376,19 +401,17 @@ describe("buildFullMessage", () => {
     expect(result).toContain("--boundary_doc-mixed-1--");
   });
 
-  it("returns multipart/mixed for text-only+attachment mail", async () => {
-    const mockGetAttachment = await getMockedGetAttachment();
-    const fakeData = Buffer.from("SOME_DATA");
-    mockGetAttachment.mockImplementation(() => fakeData);
+  it("returns multipart/mixed for text-only+attachment mail", () => {
+    const fakeData = writeAttachment("att-file-id-2", Buffer.from("SOME_DATA"));
 
     const mail: Partial<MailType> = {
       text: "See attached",
       attachments: [
         {
-          content: { data: "att-file-id-2" },
+          content: { data: TEST_ID_PREFIX + "att-file-id-2" },
           contentType: "text/plain",
           filename: "notes.txt",
-          size: 50
+          size: fakeData.byteLength
         }
       ]
     };
@@ -507,16 +530,14 @@ describe("getBodyPart", () => {
     expect(result).toBe(Buffer.from("<p>Body HTML</p>", "utf8").toString("base64"));
   });
 
-  it("returns attachment data for part 2 in mail with attachment", async () => {
-    const mockGetAttachment = await getMockedGetAttachment();
-    const attData = Buffer.from("ATTACHMENT_BYTES");
-    mockGetAttachment.mockImplementation(() => attData);
+  it("returns attachment data for part 2 in mail with attachment", () => {
+    const attData = writeAttachment("att-file-xyz", Buffer.from("ATTACHMENT_BYTES"));
 
     const mail: Partial<MailType> = {
       text: "Body",
       attachments: [
         {
-          content: { data: "att-file-xyz" },
+          content: { data: TEST_ID_PREFIX + "att-file-xyz" },
           contentType: "image/png",
           filename: "photo.png",
           size: 200
@@ -527,15 +548,13 @@ describe("getBodyPart", () => {
     expect(result).toBe(attData.toString("base64"));
   });
 
-  it("returns null for attachment when getAttachment returns undefined", async () => {
-    const mockGetAttachment = await getMockedGetAttachment();
-    mockGetAttachment.mockImplementation(() => undefined);
+  it("returns null for an attachment whose file is missing", () => {
 
     const mail: Partial<MailType> = {
       text: "Body",
       attachments: [
         {
-          content: { data: "missing-file" },
+          content: { data: TEST_ID_PREFIX + "missing-file" },
           contentType: "image/png",
           filename: "photo.png",
           size: 200
