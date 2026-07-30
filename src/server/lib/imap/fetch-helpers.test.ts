@@ -546,6 +546,45 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
     expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
   });
 
+  it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync (#733 reviewoie HIGH)", async () => {
+    // Reproduces the reviewoie HIGH: previously buildFullMessageStream
+    // rebuilt segments independently from computeFullMessageSize, so each
+    // pass ran its own `fs.statSync` on the attachment. If the file
+    // grew between the two stats, `{N}` (from the first) < emitted bytes
+    // (from the second), corrupting the wire literal — reviewoie
+    // reproduced "declared 1833, emitted 67165".
+    //
+    // The fix hoists `buildMessageSegments` to `buildBodyResponsePart`
+    // so ONE list drives both measurement and emit. This test proves it
+    // by growing the file AFTER the fetch part is constructed (which
+    // freezes the segment list) but BEFORE the stream drains — before
+    // the fix, the stream would `stat` the grown file and emit more
+    // bytes than declared. After the fix, the emit is clamped by the
+    // segment's stored `rawSize`.
+    const id = "att-grows-mid-fetch";
+    const initial = Buffer.alloc(1024, 7);
+    writeAttachment(id, initial);
+    const mail = withAttachment(id, 1024);
+    const part = await buildFetchResponsePart(
+      mail,
+      { type: "BODY", peek: true, section: { type: "FULL" } },
+      docId,
+      mailbox
+    );
+    expect(part!.type).toBe("stream");
+    if (part!.type !== "stream") throw new Error("shape");
+    const declared = part.length;
+
+    // Grow the file well past the initial size. If segments were
+    // re-built inside the stream, this would leak into the emit.
+    const grown = Buffer.alloc(64 * 1024, 9);
+    fs.writeFileSync(attachmentPath(id), grown);
+
+    let emitted = 0;
+    for await (const chunk of part.stream) emitted += chunk.byteLength;
+    expect(emitted).toBe(declared);
+  });
+
   it("stored size zero (Attachment ctor default for a falsy incoming size)", async () => {
     const id = "att-zero";
     const original = Buffer.alloc(50_000, 3);

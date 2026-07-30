@@ -86,7 +86,7 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
  * literal whose count is wrong desyncs every subsequent response on the
  * connection.
  */
-type MessageSegment =
+export type MessageSegment =
   /** Emitted verbatim; measured with `Buffer.byteLength`. */
   | { kind: "literal"; value: string }
   /** `source` base64-encoded; sliced so the encoded form is never one allocation. */
@@ -151,7 +151,7 @@ const rewriteContentType = (headers: string, replacement: string): string =>
  * Attachment bodies are referenced by id + resolved size, never read, so
  * building the list costs one `stat` per attachment regardless of mail size.
  */
-const buildMessageSegments = (
+export const buildMessageSegments = (
   mail: Partial<MailType>,
   docId?: string
 ): MessageSegment[] => {
@@ -271,19 +271,30 @@ const segmentByteLength = (segment: MessageSegment): number => {
 const WIRE_TRAILER = 2;
 
 /**
+ * Sum the exact WIRE byte count for an already-built segment list. Used by
+ * callers that need BOTH the size and the stream to derive from the SAME
+ * segment list — building once, then measuring + streaming the same
+ * segments — so no `stat` race can make the `{N}` literal disagree with the
+ * emitted octets. See `buildBodyResponsePart` FULL branch.
+ */
+export const sumSegmentBytes = (segments: MessageSegment[]): number =>
+  segments.reduce(
+    (bytes, segment) => bytes + segmentByteLength(segment),
+    WIRE_TRAILER
+  );
+
+/**
  * Exact WIRE byte count the IMAP `{N}` literal advertises for `BODY[]`, and
- * the value `RFC822.SIZE` reports. Measures the same segment list
- * `buildFullMessageStream` emits, so the two agree by construction rather
- * than by two implementations happening to match.
+ * the value `RFC822.SIZE` reports. Convenience wrapper that builds + sums in
+ * one call — safe for RFC822.SIZE (single build, no stream to disagree
+ * with). For BODY[] the caller MUST share ONE segment list between
+ * `sumSegmentBytes` (for `{N}`) and `streamFromSegments` (for the octets)
+ * — see `buildBodyResponsePart` for the correct pattern.
  */
 export const computeFullMessageSize = (
   mail: Partial<MailType>,
   docId?: string
-): number =>
-  buildMessageSegments(mail, docId).reduce(
-    (bytes, segment) => bytes + segmentByteLength(segment),
-    WIRE_TRAILER
-  );
+): number => sumSegmentBytes(buildMessageSegments(mail, docId));
 
 /**
  * Raw bytes per base64 slice. MUST be divisible by 3: base64 pads any input
@@ -401,18 +412,21 @@ async function* emitAttachment(
 }
 
 /**
- * Stream the RFC 822 serialization of a mail as `Buffer` chunks.
+ * Stream a pre-built segment list as `Buffer` chunks. Sum of yielded
+ * byte-lengths equals `sumSegmentBytes(segments) - WIRE_TRAILER` — the
+ * caller appends the wire trailer.
  *
- * The sum of yielded byte-lengths is exactly `computeFullMessageSize(mail,
- * docId) - WIRE_TRAILER`; the caller appends the trailer. Both walk the same
- * segment list, and every segment's emit is length-clamped to its measured
- * size, so the `{N}` literal holds even when the filesystem changes underneath.
+ * **Load-bearing invariant:** the caller must share ONE segment list with
+ * `sumSegmentBytes` for its `{N}` — reproducing the segment list here
+ * (via `buildMessageSegments`) would `stat` files a second time and can
+ * race the measurement pass, corrupting the wire response by up to
+ * whatever the file's size changed by. That was hoiekim/inbox#733
+ * reviewoie HIGH.
  */
-export async function* buildFullMessageStream(
-  mail: Partial<MailType>,
-  docId?: string
+export async function* streamFromSegments(
+  segments: MessageSegment[]
 ): AsyncGenerator<Buffer, void, unknown> {
-  for (const segment of buildMessageSegments(mail, docId)) {
+  for (const segment of segments) {
     switch (segment.kind) {
       case "literal":
         yield* emitLiteral(segment.value);
@@ -425,6 +439,21 @@ export async function* buildFullMessageStream(
         break;
     }
   }
+}
+
+/**
+ * Legacy convenience wrapper — builds segments then streams them.
+ * DEPRECATED for BODY[] callers because it builds the segment list
+ * independently from `computeFullMessageSize`, letting `stat` races
+ * corrupt the wire literal. Prefer `buildMessageSegments` + share the
+ * result between `sumSegmentBytes` (for `{N}`) and `streamFromSegments`
+ * (for the octets). Kept for tests that only need the stream shape.
+ */
+export async function* buildFullMessageStream(
+  mail: Partial<MailType>,
+  docId?: string
+): AsyncGenerator<Buffer, void, unknown> {
+  yield* streamFromSegments(buildMessageSegments(mail, docId));
 }
 
 /**

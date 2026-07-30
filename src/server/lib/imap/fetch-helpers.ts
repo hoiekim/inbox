@@ -19,7 +19,10 @@ import {
   applyPartialFetch,
   buildFullMessage,
   buildFullMessageStream,
+  buildMessageSegments,
   computeFullMessageSize,
+  streamFromSegments,
+  sumSegmentBytes,
   getBodyPart,
   getBodyPartHeaders,
   getBodySectionKey,
@@ -379,11 +382,21 @@ export async function buildBodyResponsePart(
   // body while the budget covered only the cheaper paths. The slot is held for
   // the stream's whole lifetime and released even if the consumer abandons it.
   if (!partial && !isHeaderLikeSection(section) && section.type === "FULL") {
-    // The wire response ends with a CRLF after the body serialization, which
-    // `computeFullMessageSize` counts, so the stream must emit it too.
-    const length = computeFullMessageSize(mail, docId);
+    // Build the segment list ONCE — reproducing it inside the stream
+    // would `stat` attachment files a second time, and a file whose size
+    // changed between calls (upload-in-progress, mid-write race, etc.)
+    // would make `{N}` disagree with the emitted octets — the exact
+    // #733 reviewoie HIGH ("declared 1833, emitted 67165"). Sharing one
+    // segment list between the size measurement and the stream is what
+    // makes `{N}` byte-exact by construction.
+    //
+    // The wire response ends with a CRLF after the body serialization,
+    // which `sumSegmentBytes` counts (via WIRE_TRAILER), so the stream
+    // must emit it too.
+    const segments = buildMessageSegments(mail, docId);
+    const length = sumSegmentBytes(segments);
     const stream = withBodyBudgetStream(async function* () {
-      yield* buildFullMessageStream(mail, docId);
+      yield* streamFromSegments(segments);
       yield Buffer.from("\r\n", "utf8");
     });
     return {
