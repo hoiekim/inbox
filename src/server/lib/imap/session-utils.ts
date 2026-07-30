@@ -3,11 +3,13 @@
  * These are pure functions that don't require session state
  */
 
+import fs from "node:fs";
 import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from "./types";
-import { formatHeaders, encodeText } from "./util";
-import { getAttachment } from "server";
+import { formatHeaders } from "./util";
+import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
+import { CHUNK_BYTES } from "./chunked-write";
 
 /**
  * Apply partial fetch range to content
@@ -72,18 +74,61 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
 };
 
 /**
- * Byte length of `4 * ceil(n/3)`-format base64 encoding of `n` input octets.
- * No I/O; used by `computeFullMessageSize` to pre-compute the RFC822.SIZE
- * / `{N}` literal length for a mail without materializing its body.
+ * One piece of the RFC 822 serialization.
+ *
+ * `buildMessageSegments` is the SINGLE definition of the MIME layout.
+ * `computeFullMessageSize` measures the segments and
+ * `buildFullMessageStream` emits them, so the `{N}` literal the writer
+ * advertises and the octets that follow it are derived from one source
+ * and cannot disagree. Keeping the layout in one place is the invariant,
+ * not an aesthetic choice: three hand-parallel copies (measure, emit,
+ * materialize) is how the count and the payload drift apart, and a
+ * literal whose count is wrong desyncs every subsequent response on the
+ * connection.
  */
-const base64ByteLen = (rawBytes: number): number =>
-  Math.ceil(rawBytes / 3) * 4;
+type MessageSegment =
+  /** Emitted verbatim; measured with `Buffer.byteLength`. */
+  | { kind: "literal"; value: string }
+  /** `source` base64-encoded; sliced so the encoded form is never one allocation. */
+  | { kind: "base64"; source: string }
+  /** An attachment file, base64-encoded, read and emitted in slices. */
+  | { kind: "attachment"; dataId: string; rawSize: number; filename: string };
 
 /**
- * The stable boundary strings a build for this mail would generate. Shared
- * between `computeFullMessageSize` (which needs their lengths) and
- * `buildFullMessageStream` (which emits them) so the byte counts agree by
- * construction.
+ * Byte length of `4 * ceil(n/3)`-format base64 encoding of `n` input octets.
+ * Exact, and with no line folding — `encodeText` produces unfolded base64,
+ * so this is the true encoded length rather than an estimate.
+ */
+const base64ByteLen = (rawBytes: number): number => Math.ceil(rawBytes / 3) * 4;
+
+/**
+ * Raw byte count emitted for an attachment whose file cannot be read.
+ * Measured and emitted through the same constant so the two agree.
+ */
+const MISSING_ATTACHMENT_NOTICE = "Attachment data not found";
+
+/**
+ * Raw size of an attachment as it will actually be emitted.
+ *
+ * `stat` rather than the `size` stored on the mail row: the stored value is
+ * what the sender declared at receipt, and when it disagrees with the file on
+ * disk (or the file is gone) it is the file that gets streamed. Measuring the
+ * stored value while emitting the file's bytes is exactly the divergence that
+ * corrupts the literal. `stat` is a metadata call — no read, no allocation —
+ * so this keeps `RFC822.SIZE` free of body materialization.
+ */
+const resolveAttachmentRawSize = (dataId: string): number => {
+  try {
+    const stats = fs.statSync(getAttachmentFilePath(dataId));
+    if (stats.isFile()) return stats.size;
+  } catch {
+    // Missing / unreadable — fall through to the notice length below.
+  }
+  return Buffer.byteLength(MISSING_ATTACHMENT_NOTICE, "utf8");
+};
+
+/**
+ * The stable boundary strings a build for this mail would generate.
  */
 const boundariesFor = (
   mail: Partial<MailType>,
@@ -93,390 +138,334 @@ const boundariesFor = (
   const boundaryMatch = headers.match(/boundary="([^"]+)"/);
   const stableId = docId || mail.messageId || "default";
   const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
-  const altBoundary =
-    "alt_" + stableId.replace(/[^a-zA-Z0-9_]/g, "_");
+  const altBoundary = "alt_" + stableId.replace(/[^a-zA-Z0-9_]/g, "_");
   return { boundary, altBoundary };
 };
 
-/**
- * Header block after the multipart Content-Type substitution — same string
- * `buildFullMessage`/`buildFullMessageStream` would emit as their first
- * chunk. Extracted so `computeFullMessageSize` measures the exact bytes
- * that will be sent, not an approximation.
- */
 const rewriteContentType = (headers: string, replacement: string): string =>
   headers.replace(/Content-Type: [^\r\n]+/, replacement);
 
 /**
- * Compute the exact WIRE byte count IMAP `{N}` literal advertises for
- * `BODY[]` — i.e. the byte length of the RFC 822 serialization the mail
- * would produce, PLUS the trailing `\r\n` the wire response appends
- * after the multipart terminator (matches the pre-#733 shape where
- * `getSharedBodyResult`'s closure appended `text + "\r\n"` before
- * emitting the literal). This IS the value RFC822.SIZE reports and
- * `{N}` literal advertises — the two agree by construction.
+ * The RFC 822 serialization of `mail`, as an ordered segment list.
  *
- * Attachments are measured via the base64 length formula
- * (`ceil(size/3)*4`) applied to their stored `size` — no disk read, no
- * allocation. That's the whole point of this function: SIZE / `{N}`
- * without materializing bodies.
+ * Attachment bodies are referenced by id + resolved size, never read, so
+ * building the list costs one `stat` per attachment regardless of mail size.
  */
-export const computeFullMessageSize = (
+const buildMessageSegments = (
   mail: Partial<MailType>,
   docId?: string
-): number => {
+): MessageSegment[] => {
   const headers = formatHeaders(mail, docId);
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
-  const hasAttachments = mail.attachments && mail.attachments.length > 0;
+  const hasText = !!mail.text && mail.text.trim().length > 0;
+  const hasHtml = !!mail.html && mail.html.trim().length > 0;
+  const hasAttachments = !!mail.attachments && mail.attachments.length > 0;
 
-  const utf8 = (s: string): number => Buffer.byteLength(s, "utf8");
-  // Trailing wire CRLF appended after the pure-body serialization —
-  // matches `getSharedBodyResult`'s closure that emitted `text + "\r\n"`
-  // before building the response Buffer (see body-buffer.ts). Every
-  // BODY[]/RFC822 wire response ends with this extra CRLF; RFC822.SIZE
-  // includes it so `SIZE == {N}` holds.
-  const WIRE_TRAILER = 2;
+  const segments: MessageSegment[] = [];
+  const literal = (value: string): void => {
+    segments.push({ kind: "literal", value });
+  };
+  const base64 = (source: string): void => {
+    segments.push({ kind: "base64", source });
+  };
 
   if (!hasText && !hasHtml && !hasAttachments) {
-    return utf8(`${headers}\r\n\r\n`) + WIRE_TRAILER;
+    literal(`${headers}\r\n\r\n`);
+    return segments;
   }
   if (hasText && !hasHtml && !hasAttachments) {
-    return utf8(`${headers}\r\n\r\n${encodeText(mail.text!)}\r\n`) + WIRE_TRAILER;
+    literal(`${headers}\r\n\r\n`);
+    base64(mail.text!);
+    literal(`\r\n`);
+    return segments;
   }
   if (!hasText && hasHtml && !hasAttachments) {
-    return utf8(`${headers}\r\n\r\n${encodeText(mail.html!)}\r\n`) + WIRE_TRAILER;
-  }
-
-  const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
-  let bytes = 0;
-
-  if (hasText && hasHtml && !hasAttachments) {
-    const updatedHeaders = rewriteContentType(
-      headers,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`
-    );
-    bytes += utf8(`${updatedHeaders}\r\n\r\n`);
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: text/plain; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.text!)}\r\n`);
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: text/html; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.html!)}\r\n`);
-    bytes += utf8(`--${boundary}--`);
-    return bytes + WIRE_TRAILER;
-  }
-
-  // hasAttachments — multipart/mixed
-  const updatedHeaders = rewriteContentType(
-    headers,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`
-  );
-  bytes += utf8(`${updatedHeaders}\r\n\r\n`);
-
-  if (hasText && hasHtml) {
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-    bytes += utf8(`--${altBoundary}\r\n`);
-    bytes += utf8(`Content-Type: text/plain; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.text!)}\r\n`);
-    bytes += utf8(`--${altBoundary}\r\n`);
-    bytes += utf8(`Content-Type: text/html; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.html!)}\r\n`);
-    bytes += utf8(`--${altBoundary}--\r\n`);
-  } else if (hasText) {
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: text/plain; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.text!)}\r\n`);
-  } else if (hasHtml) {
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: text/html; charset=utf-8\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    bytes += utf8(`${encodeText(mail.html!)}\r\n`);
-  }
-
-  // Attachments — sum header + base64_len(raw size) + trailing CRLF
-  // per attachment. `att.size` is the RAW attachment byte count stored
-  // on the mail row; base64 length formula converts to the encoded
-  // length WITHOUT ever reading the file. This is the whole point of
-  // this function — RFC822.SIZE / {N} without materializing bodies.
-  for (const att of mail.attachments!) {
-    bytes += utf8(`--${boundary}\r\n`);
-    bytes += utf8(`Content-Type: ${att.contentType}\r\n`);
-    bytes += utf8(`Content-Transfer-Encoding: base64\r\n`);
-    bytes += utf8(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
-    bytes += base64ByteLen(att.size);
-    bytes += utf8(`\r\n`);
-  }
-  bytes += utf8(`--${boundary}--`);
-  return bytes + WIRE_TRAILER;
-};
-
-/**
- * Stream the RFC 822 serialization of a mail as `Buffer` chunks. Each
- * yielded chunk is small (header block, one part header, one base64-
- * encoded slice of an attachment) so peak transient allocation stays
- * O(chunk-size) regardless of total body size — the whole point of the
- * streaming path.
- *
- * Attachments are base64-encoded in 48 KiB raw slices (~64 KiB encoded)
- * so a multi-MB attachment never materializes as a single base64 string.
- * `Buffer.toString("base64")` on a 48 KiB slice returns a ~64 KiB string
- * which is immediately wrapped in a Buffer and yielded — the temporary
- * string is GC-eligible before the next slice runs.
- *
- * The consumer (writer) must have advertised `{N}` where N ==
- * `computeFullMessageSize(mail, docId)` BEFORE iterating this stream —
- * both functions read from `mail.text` / `mail.html` / `mail.attachments`
- * with identical formulas, so the sum of yielded chunk byte-lengths
- * equals N by construction.
- */
-const ATTACHMENT_SLICE_BYTES = 48 * 1024;
-
-export async function* buildFullMessageStream(
-  mail: Partial<MailType>,
-  docId?: string
-): AsyncGenerator<Buffer, void, unknown> {
-  const headers = formatHeaders(mail, docId);
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
-  const hasAttachments = mail.attachments && mail.attachments.length > 0;
-
-  const emit = (s: string): Buffer => Buffer.from(s, "utf8");
-
-  if (!hasText && !hasHtml && !hasAttachments) {
-    yield emit(`${headers}\r\n\r\n`);
-    return;
-  }
-  if (hasText && !hasHtml && !hasAttachments) {
-    yield emit(`${headers}\r\n\r\n${encodeText(mail.text!)}\r\n`);
-    return;
-  }
-  if (!hasText && hasHtml && !hasAttachments) {
-    yield emit(`${headers}\r\n\r\n${encodeText(mail.html!)}\r\n`);
-    return;
+    literal(`${headers}\r\n\r\n`);
+    base64(mail.html!);
+    literal(`\r\n`);
+    return segments;
   }
 
   if (!docId) {
-    logger.warn(
-      "docId is missing in buildFullMessageStream, falling back to messageId",
-      { component: "imap", messageId: mail.messageId }
-    );
-  }
-  const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
-
-  if (hasText && hasHtml && !hasAttachments) {
-    const updatedHeaders = rewriteContentType(
-      headers,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`
-    );
-    yield emit(`${updatedHeaders}\r\n\r\n`);
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: text/plain; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.text!)}\r\n`);
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: text/html; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.html!)}\r\n`);
-    yield emit(`--${boundary}--`);
-    return;
-  }
-
-  // hasAttachments — multipart/mixed
-  const updatedHeaders = rewriteContentType(
-    headers,
-    `Content-Type: multipart/mixed; boundary="${boundary}"`
-  );
-  yield emit(`${updatedHeaders}\r\n\r\n`);
-
-  if (hasText && hasHtml) {
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-    yield emit(`--${altBoundary}\r\n`);
-    yield emit(`Content-Type: text/plain; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.text!)}\r\n`);
-    yield emit(`--${altBoundary}\r\n`);
-    yield emit(`Content-Type: text/html; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.html!)}\r\n`);
-    yield emit(`--${altBoundary}--\r\n`);
-  } else if (hasText) {
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: text/plain; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.text!)}\r\n`);
-  } else if (hasHtml) {
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: text/html; charset=utf-8\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    yield emit(`${encodeText(mail.html!)}\r\n`);
-  }
-
-  for (const att of mail.attachments!) {
-    yield emit(`--${boundary}\r\n`);
-    yield emit(`Content-Type: ${att.contentType}\r\n`);
-    yield emit(`Content-Transfer-Encoding: base64\r\n`);
-    yield emit(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
-
-    const raw =
-      getAttachment(att.content.data) ||
-      Buffer.from("Attachment data not found");
-
-    // Slice size chosen so base64 encoding of the slice is `~64 KiB`
-    // (matches CHUNK_BYTES in chunked-write.ts) — one write per slice
-    // aligns naturally with the socket's high-water mark. `att.size`
-    // in `computeFullMessageSize` uses the STORED size which for a
-    // real attachment matches `raw.byteLength`; on a missing-file
-    // fallback (`Buffer.from("Attachment data not found")`) the two
-    // will disagree. Callers should treat rfc822_size derivation
-    // separately from stream-emit in that pathological case.
-    for (
-      let offset = 0;
-      offset < raw.byteLength;
-      offset += ATTACHMENT_SLICE_BYTES
-    ) {
-      const sliceEnd = Math.min(offset + ATTACHMENT_SLICE_BYTES, raw.byteLength);
-      const slice = raw.subarray(offset, sliceEnd);
-      // `slice.toString("base64")` returns a fresh ~64 KiB string that
-      // becomes GC-eligible right after `Buffer.from(...)` copies its
-      // bytes into a new Buffer. Peak transient per slice: raw slice
-      // (48 KiB, borrowed view) + intermediate string (~64 KiB) +
-      // emitted Buffer (~64 KiB) = ~128 KiB. No growing accumulator.
-      yield Buffer.from(slice.toString("base64"), "utf8");
-    }
-    yield emit(`\r\n`);
-  }
-  yield emit(`--${boundary}--`);
-}
-
-/**
- * Build complete RFC822 message from mail data as a single string.
- *
- * Legacy consumer-facing API — the stream-native path
- * (`buildFullMessageStream` + `computeFullMessageSize`) is preferred
- * for BODY[] / RFC822 fetches because it keeps peak allocation at
- * O(chunk-size). This function collects every stream chunk into an
- * array and joins at the end — the pragmatic middle ground for the
- * remaining callers that need a materialized string:
- *
- * - `getBodyContent` for the TEXT section: takes the full message
- *   string, `indexOf("\r\n\r\n") + substring` to extract the body.
- *   Small-mail-friendly; large-attachment mails still pay the
- *   materialization here.
- * - `scripts/backfill-rfc822-size.ts` for the one-off backfill —
- *   though that script really wants `Buffer.byteLength(full, "utf8")`,
- *   which is exactly `computeFullMessageSize` without materializing.
- *   A follow-up can migrate the backfill to `computeFullMessageSize`
- *   and drop this function's dependency on the string materialization
- *   for that path.
- *
- * Uses `chunks.push(str) + chunks.join("")` internally instead of the
- * earlier `let body = ""; body += X;` chain — `Array#join` is a single
- * O(total_length) allocation vs the quadratic rope-realloc buildup
- * that made this the OOM offender on #729's K836 case.
- */
-export const buildFullMessage = (
-  mail: Partial<MailType>,
-  docId?: string
-): string => {
-  const headers = formatHeaders(mail, docId);
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
-  const hasAttachments = mail.attachments && mail.attachments.length > 0;
-
-  if (!hasText && !hasHtml && !hasAttachments) {
-    return `${headers}\r\n\r\n`;
-  }
-
-  if (hasText && !hasHtml && !hasAttachments) {
-    return `${headers}\r\n\r\n${encodeText(mail.text!)}\r\n`;
-  }
-
-  if (!hasText && hasHtml && !hasAttachments) {
-    return `${headers}\r\n\r\n${encodeText(mail.html!)}\r\n`;
-  }
-
-  if (!docId) {
-    logger.warn("docId is missing in buildFullMessage, falling back to messageId", {
+    logger.warn("docId is missing in buildMessageSegments, falling back to messageId", {
       component: "imap",
       messageId: mail.messageId
     });
   }
   const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
-  const chunks: string[] = [];
+
+  /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
+  const bodyPart = (delimiter: string, contentType: string, source: string): void => {
+    literal(`--${delimiter}\r\n`);
+    literal(`Content-Type: ${contentType}; charset=utf-8\r\n`);
+    literal(`Content-Transfer-Encoding: base64\r\n\r\n`);
+    base64(source);
+    literal(`\r\n`);
+  };
 
   if (hasText && hasHtml && !hasAttachments) {
-    // multipart/alternative
-    const updatedHeaders = rewriteContentType(
-      headers,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`
+    literal(
+      `${rewriteContentType(
+        headers,
+        `Content-Type: multipart/alternative; boundary="${boundary}"`
+      )}\r\n\r\n`
     );
-
-    chunks.push(`${updatedHeaders}\r\n\r\n`);
-    chunks.push(`--${boundary}\r\n`);
-    chunks.push(`Content-Type: text/plain; charset=utf-8\r\n`);
-    chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    chunks.push(`${encodeText(mail.text!)}\r\n`);
-    chunks.push(`--${boundary}\r\n`);
-    chunks.push(`Content-Type: text/html; charset=utf-8\r\n`);
-    chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    chunks.push(`${encodeText(mail.html!)}\r\n`);
-    chunks.push(`--${boundary}--`);
-  } else if (hasAttachments) {
-    // multipart/mixed
-    const updatedHeaders = rewriteContentType(
-      headers,
-      `Content-Type: multipart/mixed; boundary="${boundary}"`
-    );
-
-    chunks.push(`${updatedHeaders}\r\n\r\n`);
-
-    if (hasText && hasHtml) {
-      chunks.push(`--${boundary}\r\n`);
-      chunks.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-      chunks.push(`--${altBoundary}\r\n`);
-      chunks.push(`Content-Type: text/plain; charset=utf-8\r\n`);
-      chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-      chunks.push(`${encodeText(mail.text!)}\r\n`);
-      chunks.push(`--${altBoundary}\r\n`);
-      chunks.push(`Content-Type: text/html; charset=utf-8\r\n`);
-      chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-      chunks.push(`${encodeText(mail.html!)}\r\n`);
-      chunks.push(`--${altBoundary}--\r\n`);
-    } else if (hasText) {
-      chunks.push(`--${boundary}\r\n`);
-      chunks.push(`Content-Type: text/plain; charset=utf-8\r\n`);
-      chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-      chunks.push(`${encodeText(mail.text!)}\r\n`);
-    } else if (hasHtml) {
-      chunks.push(`--${boundary}\r\n`);
-      chunks.push(`Content-Type: text/html; charset=utf-8\r\n`);
-      chunks.push(`Content-Transfer-Encoding: base64\r\n\r\n`);
-      chunks.push(`${encodeText(mail.html!)}\r\n`);
-    }
-
-    for (const att of mail.attachments!) {
-      chunks.push(`--${boundary}\r\n`);
-      chunks.push(`Content-Type: ${att.contentType}\r\n`);
-      chunks.push(`Content-Transfer-Encoding: base64\r\n`);
-      chunks.push(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
-      const attachmentData =
-        getAttachment(att.content.data) ||
-        Buffer.from("Attachment data not found");
-      chunks.push(`${attachmentData.toString("base64")}\r\n`);
-    }
-
-    chunks.push(`--${boundary}--`);
+    bodyPart(boundary, "text/plain", mail.text!);
+    bodyPart(boundary, "text/html", mail.html!);
+    literal(`--${boundary}--`);
+    return segments;
   }
 
-  return chunks.join("");
+  // hasAttachments — multipart/mixed
+  literal(
+    `${rewriteContentType(
+      headers,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`
+    )}\r\n\r\n`
+  );
+
+  if (hasText && hasHtml) {
+    literal(`--${boundary}\r\n`);
+    literal(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
+    bodyPart(altBoundary, "text/plain", mail.text!);
+    bodyPart(altBoundary, "text/html", mail.html!);
+    literal(`--${altBoundary}--\r\n`);
+  } else if (hasText) {
+    bodyPart(boundary, "text/plain", mail.text!);
+  } else if (hasHtml) {
+    bodyPart(boundary, "text/html", mail.html!);
+  }
+
+  for (const att of mail.attachments!) {
+    literal(`--${boundary}\r\n`);
+    literal(`Content-Type: ${att.contentType}\r\n`);
+    literal(`Content-Transfer-Encoding: base64\r\n`);
+    literal(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
+    segments.push({
+      kind: "attachment",
+      dataId: att.content.data,
+      rawSize: resolveAttachmentRawSize(att.content.data),
+      filename: att.filename
+    });
+    literal(`\r\n`);
+  }
+  literal(`--${boundary}--`);
+  return segments;
+};
+
+/** Exact wire byte count of one segment. No I/O, no allocation. */
+const segmentByteLength = (segment: MessageSegment): number => {
+  switch (segment.kind) {
+    case "literal":
+      return Buffer.byteLength(segment.value, "utf8");
+    case "base64":
+      return base64ByteLen(Buffer.byteLength(segment.source, "utf8"));
+    case "attachment":
+      return base64ByteLen(segment.rawSize);
+  }
+};
+
+/**
+ * Trailing `\r\n` the wire response appends after the body serialization.
+ * `RFC822.SIZE` includes it so `SIZE == {N}` holds for `BODY[]`.
+ */
+const WIRE_TRAILER = 2;
+
+/**
+ * Exact WIRE byte count the IMAP `{N}` literal advertises for `BODY[]`, and
+ * the value `RFC822.SIZE` reports. Measures the same segment list
+ * `buildFullMessageStream` emits, so the two agree by construction rather
+ * than by two implementations happening to match.
+ */
+export const computeFullMessageSize = (
+  mail: Partial<MailType>,
+  docId?: string
+): number =>
+  buildMessageSegments(mail, docId).reduce(
+    (bytes, segment) => bytes + segmentByteLength(segment),
+    WIRE_TRAILER
+  );
+
+/**
+ * Raw bytes per base64 slice. MUST be divisible by 3: base64 pads any input
+ * whose length is not a multiple of 3, so a non-multiple slice size would
+ * inject `=` padding at every slice boundary — corrupting the payload for the
+ * client AND breaking the `ceil(n/3)*4` total the `{N}` literal advertises.
+ * 48 KiB raw encodes to ~64 KiB, matching CHUNK_BYTES in chunked-write.ts so
+ * one emitted chunk is roughly one socket write.
+ */
+const SLICE_RAW_BYTES = 48 * 1024;
+
+if (SLICE_RAW_BYTES % 3 !== 0) {
+  throw new Error(
+    `SLICE_RAW_BYTES must be divisible by 3 to avoid mid-stream base64 padding, got ${SLICE_RAW_BYTES}`
+  );
+}
+
+/** Emit `value` as byte-bounded chunks so one huge literal is not one write. */
+async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown> {
+  const buffer = Buffer.from(value, "utf8");
+  if (buffer.byteLength <= CHUNK_BYTES) {
+    yield buffer;
+    return;
+  }
+  for (let offset = 0; offset < buffer.byteLength; offset += CHUNK_BYTES) {
+    yield buffer.subarray(offset, Math.min(offset + CHUNK_BYTES, buffer.byteLength));
+  }
+}
+
+/**
+ * Emit `source` base64-encoded, one SLICE_RAW_BYTES slice at a time, so the
+ * encoded form never exists as a single allocation. Peak transient per slice
+ * is the raw slice view + the ~64 KiB encoded string + its Buffer.
+ */
+async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
+  const raw = Buffer.from(source, "utf8");
+  if (raw.byteLength === 0) return;
+  for (let offset = 0; offset < raw.byteLength; offset += SLICE_RAW_BYTES) {
+    const slice = raw.subarray(offset, Math.min(offset + SLICE_RAW_BYTES, raw.byteLength));
+    yield Buffer.from(slice.toString("base64"), "utf8");
+  }
+}
+
+/**
+ * Emit an attachment base64-encoded, reading the file in slices through a
+ * single descriptor so a multi-MB attachment never materializes whole.
+ *
+ * Emits EXACTLY `base64ByteLen(rawSize)` octets — the count already advertised
+ * in `{N}`. If the file disagrees with the size resolved at measure time (it
+ * changed, vanished, or became unreadable in between), the shortfall is padded
+ * with newlines, which are legal inside a base64 body and ignored by decoders.
+ * The client then sees one damaged attachment; emitting the true length instead
+ * would desync the literal and corrupt every later response on the connection.
+ * This function must never throw for the same reason: `{N}` is already on the
+ * wire by the time it runs.
+ */
+async function* emitAttachment(
+  segment: Extract<MessageSegment, { kind: "attachment" }>
+): AsyncGenerator<Buffer, void, unknown> {
+  const advertised = base64ByteLen(segment.rawSize);
+  let emitted = 0;
+
+  const emit = function* (encoded: string): Generator<Buffer, void, unknown> {
+    const remaining = advertised - emitted;
+    if (remaining <= 0) return;
+    const buffer = Buffer.from(encoded, "utf8");
+    const usable =
+      buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+    emitted += usable.byteLength;
+    yield usable;
+  };
+
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(getAttachmentFilePath(segment.dataId), "r");
+    const scratch = Buffer.allocUnsafe(SLICE_RAW_BYTES);
+    // Cast because Node's `readSync` types constrain the backing ArrayBuffer
+    // more tightly than `Buffer.allocUnsafe`'s return; same idiom as
+    // chunked-write.ts's `socket.write` call.
+    const target = scratch as unknown as Uint8Array;
+    let position = 0;
+    for (;;) {
+      const read = fs.readSync(fd, target, 0, SLICE_RAW_BYTES, position);
+      if (read <= 0) break;
+      position += read;
+      yield* emit(scratch.subarray(0, read).toString("base64"));
+      if (emitted >= advertised) break;
+    }
+  } catch (error) {
+    logger.warn("Attachment unreadable while streaming BODY[]", {
+      component: "imap",
+      filename: segment.filename,
+      err: error instanceof Error ? error.message : String(error)
+    });
+    yield* emit(Buffer.from(MISSING_ATTACHMENT_NOTICE, "utf8").toString("base64"));
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Nothing actionable; the descriptor is already gone.
+      }
+    }
+  }
+
+  if (emitted < advertised) {
+    logger.error("Attachment shorter than measured size; padding to hold the literal", {
+      component: "imap",
+      filename: segment.filename,
+      advertised,
+      emitted
+    });
+    yield Buffer.alloc(advertised - emitted, "\n");
+  }
+}
+
+/**
+ * Stream the RFC 822 serialization of a mail as `Buffer` chunks.
+ *
+ * The sum of yielded byte-lengths is exactly `computeFullMessageSize(mail,
+ * docId) - WIRE_TRAILER`; the caller appends the trailer. Both walk the same
+ * segment list, and every segment's emit is length-clamped to its measured
+ * size, so the `{N}` literal holds even when the filesystem changes underneath.
+ */
+export async function* buildFullMessageStream(
+  mail: Partial<MailType>,
+  docId?: string
+): AsyncGenerator<Buffer, void, unknown> {
+  for (const segment of buildMessageSegments(mail, docId)) {
+    switch (segment.kind) {
+      case "literal":
+        yield* emitLiteral(segment.value);
+        break;
+      case "base64":
+        yield* emitBase64(segment.source);
+        break;
+      case "attachment":
+        yield* emitAttachment(segment);
+        break;
+    }
+  }
+}
+
+/**
+ * Build the complete RFC 822 message as a single string.
+ *
+ * Materializing consumer for `getBodyContent`'s TEXT section, which needs
+ * `indexOf("\r\n\r\n") + substring` over the whole message. Prefer
+ * `buildFullMessageStream` + `computeFullMessageSize` for BODY[] / RFC822 —
+ * this function's peak allocation is O(message), which is what #729 was about.
+ */
+export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
+  const parts: string[] = [];
+  for (const segment of buildMessageSegments(mail, docId)) {
+    switch (segment.kind) {
+      case "literal":
+        parts.push(segment.value);
+        break;
+      case "base64":
+        parts.push(Buffer.from(segment.source, "utf8").toString("base64"));
+        break;
+      case "attachment": {
+        // Same length clamp as the streaming path, so a string built here and a
+        // stream emitted there are byte-identical and both match `{N}`.
+        const advertised = base64ByteLen(segment.rawSize);
+        let encoded: string;
+        try {
+          encoded = fs
+            .readFileSync(getAttachmentFilePath(segment.dataId))
+            .toString("base64");
+        } catch {
+          encoded = Buffer.from(MISSING_ATTACHMENT_NOTICE, "utf8").toString("base64");
+        }
+        if (encoded.length > advertised) encoded = encoded.slice(0, advertised);
+        else if (encoded.length < advertised)
+          encoded += "\n".repeat(advertised - encoded.length);
+        parts.push(encoded);
+        break;
+      }
+    }
+  }
+  return parts.join("");
 };
 
 /**

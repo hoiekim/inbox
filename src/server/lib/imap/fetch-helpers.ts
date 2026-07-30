@@ -30,7 +30,7 @@ import {
   FetchDataItem,
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
-import { withBodyBudget } from "./body-budget";
+import { withBodyBudget, withBodyBudgetStream } from "./body-budget";
 import { updateRfc822Size } from "../postgres/repositories/mails/core";
 // `getSharedBodyResult` already budget-gates INSIDE its singleflight
 // closure so coalesced callers share one slot (see body-buffer.ts +
@@ -363,37 +363,32 @@ export async function buildBodyResponsePart(
   //    matches the emitted octets — building the CRLF per caller after
   //    the cache would defeat the coalescing entirely for the wire
   //    check).
-  // FULL section (BODY[] / RFC822): stream the body directly to the
-  // socket. `computeFullMessageSize` pre-computes the `{N}` literal
-  // from stored attachment sizes (no disk I/O) so the writer can
-  // advertise the length before the first chunk yields. The stream
-  // itself materializes only ONE 48 KiB base64 slice at a time — peak
-  // transient allocation stays sub-MB regardless of body size.
+  // FULL section (BODY[] / RFC822): stream the body directly to the socket.
+  // `computeFullMessageSize` measures the same segment list the stream emits
+  // (one `stat` per attachment, no reads), so the writer can advertise `{N}`
+  // before the first chunk yields and the count cannot disagree with the
+  // payload. The stream holds only one 48 KiB slice at a time.
   //
-  // Skips the shared body-buffer cache path (getSharedBodyResult):
-  // streaming makes each build cheap enough that caching gives no RSS
-  // win. iOS Mail's abort-and-retry pattern (#729 K843) that motivated
-  // the TTL cache in #730 becomes a re-stream from disk instead of a
-  // re-materialization of a multi-MB string — orders of magnitude
-  // cheaper either way. Cache is retained for TEXT / HEADER / partial
-  // paths that still go through `getSharedBodyResult`.
+  // Skips the shared body-buffer cache (getSharedBodyResult): streaming makes
+  // each build cheap enough that caching gives no RSS win, and iOS Mail's
+  // abort-and-retry pattern becomes a re-stream from disk instead of a
+  // re-materialization. The cache is retained for TEXT / HEADER / partial.
+  //
+  // Still inside the body budget: this is the largest fetch shape, so leaving
+  // it uncapped would let K concurrent sockets each stream a distinct large
+  // body while the budget covered only the cheaper paths. The slot is held for
+  // the stream's whole lifetime and released even if the consumer abandons it.
   if (!partial && !isHeaderLikeSection(section) && section.type === "FULL") {
-    // `computeFullMessageSize` includes the trailing CRLF the wire
-    // response appends (matches the pre-#733 shape where
-    // `getSharedBodyResult`'s closure emitted `text + "\r\n"` before
-    // caching). The stream must emit the same trailer or the {N}
-    // literal won't match the byte count that arrives — hence the
-    // extra `\r\n` chunk after the generator finishes.
+    // The wire response ends with a CRLF after the body serialization, which
+    // `computeFullMessageSize` counts, so the stream must emit it too.
     const length = computeFullMessageSize(mail, docId);
-    async function* streamWithTrailer(): AsyncGenerator<Buffer, void, unknown> {
-      for await (const chunk of buildFullMessageStream(mail, docId)) {
-        yield chunk;
-      }
+    const stream = withBodyBudgetStream(async function* () {
+      yield* buildFullMessageStream(mail, docId);
       yield Buffer.from("\r\n", "utf8");
-    }
+    });
     return {
       type: "stream",
-      stream: streamWithTrailer(),
+      stream,
       header: sectionKey,
       length,
     };
@@ -512,9 +507,8 @@ export async function buildFetchResponsePart(
       //     value equals `Buffer.byteLength(buildFullMessageStream output)`
       //     by construction so it agrees with what BODY[] would emit.
       //     Fire-and-forget UPDATE persists the value for next time.
-      //     Skips the earlier `buildBodyResponsePart(BODY[])` call that
-      //     materialized the whole body just to read its length — that
-      //     was the K836 +66 MB spike in #729.
+      //     Derived without materializing the body, which is the point: a
+      //     BODY[] build just to read its length is a multi-MB allocation.
       if (typeof mail.rfc822_size === "number") {
         return { type: "simple", content: `RFC822.SIZE ${mail.rfc822_size}` };
       }

@@ -107,6 +107,31 @@ export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
   }
 };
 
+/**
+ * Hold a budget slot for the whole lifetime of a stream.
+ *
+ * The streaming BODY[] path is the LARGEST fetch shape, so it must be inside
+ * the same bound as the materializing paths — otherwise K concurrent sockets
+ * each stream a distinct large body with no cap and the budget covers only the
+ * cheaper shapes. `withBodyBudget` cannot express this: it releases when its
+ * promise settles, which for a generator is before the consumer has read a
+ * single chunk.
+ *
+ * The slot is released in `finally`, which a generator runs on completion, on
+ * throw, AND when the consumer abandons it early (`for await` breaking on a
+ * dead socket calls `.return()`), so an aborted FETCH cannot leak a slot.
+ */
+export const withBodyBudgetStream = async function* <T>(
+  makeStream: () => AsyncIterable<T>
+): AsyncGenerator<T, void, unknown> {
+  await acquire();
+  try {
+    yield* makeStream();
+  } finally {
+    release();
+  }
+};
+
 /** Exposed for tests. */
 export const _resetBodyBudget = (): void => {
   inFlight = 0;
