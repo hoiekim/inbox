@@ -22,16 +22,27 @@ export interface WhereOptions {
   excludeDeleted?: boolean;
 }
 
-export interface UpdateOptions {
+/**
+ * Set `stampUpdated: false` for a table whose DDL declares no `updated` column —
+ * Postgres rejects the whole statement otherwise. `Table` derives it from its own
+ * schema; the default `true` keeps the SQL of callers that predate the option.
+ */
+export interface StampUpdatedOption {
+  stampUpdated?: boolean;
+}
+
+export interface UpdateOptions extends StampUpdatedOption {
   additionalWhere?: { column: string; value: ParamValue };
   returning?: string[];
 }
 
-export interface UpsertOptions {
+export interface UpsertOptions extends StampUpdatedOption {
   updateColumns?: string[];
   returning?: string[];
-  /** See `StampUpdatedOption`. Defaults to `true`. */
-  stampUpdated?: boolean;
+}
+
+export interface SoftDeleteOptions extends StampUpdatedOption {
+  additionalWhere?: { column: string; value: ParamValue };
 }
 
 // Type guards
@@ -105,17 +116,6 @@ export function prepareQuery(
   return { sql, values };
 }
 
-/**
- * Whether the generated INSERT should stamp `updated = CURRENT_TIMESTAMP`.
- * Only tables whose DDL declares an `updated` column may — Postgres rejects
- * the INSERT outright otherwise. `Table.insert` / `Table.upsert` derive this
- * from their own schema; the default stays `true` so a caller that predates
- * the option keeps its existing SQL.
- */
-export interface StampUpdatedOption {
-  stampUpdated?: boolean;
-}
-
 const autoColumns = (stampUpdated: boolean) =>
   stampUpdated
     ? { columns: ["updated"], placeholders: ["CURRENT_TIMESTAMP"] }
@@ -155,9 +155,11 @@ export function buildUpdate(
   data: QueryData,
   options: UpdateOptions = {}
 ): PreparedQuery | null {
-  const setClauses: string[] = ["updated = CURRENT_TIMESTAMP"];
+  const stampUpdated = options.stampUpdated !== false;
+  const setClauses: string[] = stampUpdated ? ["updated = CURRENT_TIMESTAMP"] : [];
   const values: ParamValue[] = [];
   let paramIndex = 1;
+  let dataColumns = 0;
 
   for (const [key, value] of Object.entries(data)) {
     if (key === "raw") continue;
@@ -165,9 +167,12 @@ export function buildUpdate(
     setClauses.push(`${key} = $${paramIndex}`);
     values.push(prepareParamValue(value as ParamValue));
     paramIndex++;
+    dataColumns++;
   }
 
-  if (setClauses.length === 1) {
+  // Nothing the caller asked to write: a no-op update. Without the count an
+  // unstamped table would emit an empty SET list, which is a syntax error.
+  if (dataColumns === 0) {
     return null;
   }
 
@@ -217,15 +222,14 @@ export function buildUpsert(
       .filter((col) => col !== primaryKey)
       .map((col) => `${col} = EXCLUDED.${col}`);
     if (stampUpdated) updateClauses.push("updated = CURRENT_TIMESTAMP");
-    // An empty SET list is a syntax error. Reachable only when the table has
-    // no `updated` column AND every requested update column is the conflict
-    // key — nothing is left to write, so DO NOTHING is the right degenerate
-    // form. (With `stampUpdated` the timestamp always kept the list non-empty,
-    // which is why this branch could not arise before.)
-    sql +=
-      updateClauses.length > 0
-        ? ` ON CONFLICT (${primaryKey}) DO UPDATE SET ${updateClauses.join(", ")}`
-        : ` ON CONFLICT (${primaryKey}) DO NOTHING`;
+    // Every requested column was the conflict key and there is no `updated` to
+    // stamp, so nothing is left to write. An empty SET list is a syntax error;
+    // re-assigning the conflict key is the no-op that keeps `DO UPDATE` — and
+    // therefore `RETURNING` — so the caller still gets the conflicting row.
+    if (updateClauses.length === 0) {
+      updateClauses.push(`${primaryKey} = EXCLUDED.${primaryKey}`);
+    }
+    sql += ` ON CONFLICT (${primaryKey}) DO UPDATE SET ${updateClauses.join(", ")}`;
   } else {
     sql += ` ON CONFLICT (${primaryKey}) DO NOTHING`;
   }
@@ -241,10 +245,14 @@ export function buildSoftDelete(
   tableName: string,
   primaryKey: string,
   primaryKeyValue: ParamValue,
-  additionalWhere?: { column: string; value: ParamValue }
+  options: SoftDeleteOptions = {}
 ): PreparedQuery {
+  const { additionalWhere, stampUpdated = true } = options;
+  const setClauses = ["is_deleted = TRUE"];
+  if (stampUpdated) setClauses.push("updated = CURRENT_TIMESTAMP");
+
   const values: ParamValue[] = [primaryKeyValue];
-  let sql = `UPDATE ${tableName} SET is_deleted = TRUE, updated = CURRENT_TIMESTAMP WHERE ${primaryKey} = $1`;
+  let sql = `UPDATE ${tableName} SET ${setClauses.join(", ")} WHERE ${primaryKey} = $1`;
 
   if (additionalWhere) {
     values.push(additionalWhere.value);

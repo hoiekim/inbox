@@ -203,15 +203,7 @@ export abstract class Table<
     return result.rows.length > 0 ? new this.ModelClass(result.rows[0]) : null;
   }
 
-  /**
-   * Whether this table's DDL declares an `updated` column. The INSERT builders
-   * stamp `updated = CURRENT_TIMESTAMP` by default, which Postgres rejects for
-   * a table that has no such column — `mailboxes` was the one builder-written
-   * table in that state, so every `CREATE <mailbox>` failed with
-   * `column "updated" of relation "mailboxes" does not exist` (#687).
-   * Deriving the flag from the schema keeps the two in sync for future tables
-   * instead of re-encoding the assumption at each call site.
-   */
+  /** The builders stamp `updated` only where the DDL declares the column. */
   private get stampUpdated(): boolean {
     return "updated" in this.schema;
   }
@@ -237,6 +229,7 @@ export abstract class Table<
   ): Promise<Record<string, unknown> | null> {
     const query = buildUpdate(this.name, this.primaryKey, primaryKeyValue, data, {
       returning: returning ?? [this.primaryKey],
+      stampUpdated: this.stampUpdated,
     });
     if (!query) return null;
     const result = await pool.query(query.sql, query.values);
@@ -258,10 +251,16 @@ export abstract class Table<
   }
 
   async softDelete(primaryKeyValue: ParamValue): Promise<boolean> {
+    if (!("is_deleted" in this.schema)) {
+      throw new Error(
+        `${this.name} declares no is_deleted column — use hardDelete or deleteWhere`
+      );
+    }
     const { sql, values } = buildSoftDelete(
       this.name,
       this.primaryKey,
-      primaryKeyValue
+      primaryKeyValue,
+      { stampUpdated: this.stampUpdated }
     );
     const result = await pool.query(sql, values);
     return result.rowCount !== null && result.rowCount > 0;
