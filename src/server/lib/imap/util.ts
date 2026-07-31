@@ -222,11 +222,11 @@ export const formatBodyStructure = (
       typeof octets === "number"
         ? Math.ceil(octets / 3) * 4
         : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
-    // RFC 3501 §7.4.2: body-fld-lines, like body-fld-octets, measures the body
-    // *in its transfer encoding* — the bytes `BODY[n]` serves, not the decoded
-    // text. `encodeText` emits unfolded base64, so a text part is exactly one
-    // line on both paths. Folding base64 at 76 columns (RFC 2045 §6.8) would
-    // make this a real count; that change is tracked in #751.
+    // RFC 3501 §7.4.2: body-fld-octets and body-fld-lines both describe the
+    // body *in its transfer encoding* — the bytes `BODY[n]` serves, not the
+    // decoded text. `encodeText` emits unfolded base64 (hoiekim/inbox#751), so
+    // a text part is one line on the cached path as much as the materialized
+    // one, and the count stays 1 until folding lands.
     const lines = 1;
 
     const parts = [

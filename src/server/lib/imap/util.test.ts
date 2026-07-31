@@ -559,13 +559,19 @@ describe("IMAP util", () => {
         expect(Number(size)).toBe(Buffer.byteLength(encoded, "utf-8"));
         expect(Number(lines)).toBe(encoded.split(/\r?\n/).length);
       });
+
+      it("reports zero octets on the empty default part", () => {
+        expect(formatBodyStructure({}, false)).toBe(
+          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 0 1)`
+        );
+      });
     });
 
-    // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
-    // extension data: md5/disposition/language/location on single parts and
-    // param-list/disposition/language/location on the multipart wrappers (#666).
-    describe("non-extensible form (extensible=false)", () => {
-      it("drops the body-ext-1part tail from a leaf text part", () => {
+    // RFC 3501 §7.4.2 — `body-type-1part = body-type-text [SP body-ext-1part]`,
+    // where body-ext-1part is md5/disposition/language/location. Present in
+    // BODYSTRUCTURE, absent from the bare `BODY` data item (§6.4.5).
+    describe("body-ext-1part tail on text parts", () => {
+      it("is emitted on a leaf text part and dropped from the bare BODY form", () => {
         const mail: Partial<MailType> = { text: "Hello, World!" };
         const encoded = encodeText("Hello, World!");
         const head = `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 ${encoded.length} 1`;
@@ -573,13 +579,19 @@ describe("IMAP util", () => {
         expect(formatBodyStructure(mail, false)).toBe(`${head})`);
       });
 
-      it("drops the body-ext-1part tail from text parts nested in a multipart", () => {
+      it("is emitted on text parts nested in a multipart", () => {
         const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
         const ext = formatBodyStructure(mail, true);
         const nonExt = formatBodyStructure(mail, false);
         expect(ext.match(/NIL NIL NIL NIL\)/g)).toHaveLength(3); // 2 text parts + the multipart tail
         expect(nonExt).not.toContain("NIL NIL NIL NIL");
       });
+    });
+
+    // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
+    // extension data: md5/disposition/language/location on single parts and
+    // param-list/disposition/language/location on the multipart wrappers (#666).
+    describe("non-extensible form (extensible=false)", () => {
 
       it("drops the multipart/alternative extension tail", () => {
         const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
