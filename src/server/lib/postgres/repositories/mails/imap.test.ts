@@ -1171,31 +1171,64 @@ describe("INBOX quarantines spam (#605)", () => {
       ["expungeMailsByUid", "expungeMailsByUid"],
     ];
 
-    // Minimum applications per function — one per SQL-bearing branch, so a
-    // whole-function presence check can't pass while one branch loses the
-    // rule. Dropping it from just the `mailbox === null` branch of getAllUids
-    // (INBOX's own seq->UID map) is the mutation this guards: quarantined UIDs
-    // reappear in the map past the filtered EXISTS, and `FETCH <last seq>`
-    // addresses a message the client was told does not exist.
+    // Applications per function — one per SQL-bearing branch. Counting helper
+    // CALLS is not enough: several of these call the helper once into a local
+    // and interpolate `${membership}` into two or more statements, so deleting
+    // one interpolation leaves the call (and a call-count guard) untouched.
+    // Count application SITES instead — a helper call that is not assigned to
+    // a local, plus every interpolation of a local that is. Dropping the rule
+    // from the `mailbox === null` branch of getAllUids (INBOX's own seq->UID
+    // map) is one guarded mutation: quarantined UIDs reappear past the
+    // filtered EXISTS and `FETCH <last seq>` addresses a message the client
+    // was told does not exist. Dropping it from setMailFlags' domain UID
+    // branch is the other: `UID STORE 1:* +FLAGS (\Deleted)` on INBOX followed
+    // by EXPUNGE destroys quarantined spam the client was never shown.
     const applications: Record<string, number> = {
-      countMessages: 2,
-      getMailsByRangeUncoalesced: 2,
-      setMailFlags: 4,
+      countMessages: 7,
+      getMailsByRangeUncoalesced: 5,
+      setMailFlags: 6,
       searchMailsByUid: 1,
       getAllUids: 2,
       getFirstUnseenUid: 2,
-      expungeDeletedMails: 2,
+      expungeDeletedMails: 3,
       expungeMailsByUid: 2,
+    };
+
+    const HELPERS =
+      "(?:membershipCondition|membershipExpression|quarantinesSpam)";
+
+    const applicationSites = (body: string) => {
+      const locals = new Set(
+        [...body.matchAll(new RegExp(`const\\s+(\\w+)\\s*=\\s*${HELPERS}\\(`, "g"))].map(
+          (m) => m[1]
+        )
+      );
+      // Assignments are the definition, not a use — drop them so only the
+      // sites that put the rule into SQL are counted.
+      const withoutAssignments = body.replace(
+        new RegExp(`const\\s+\\w+\\s*=\\s*${HELPERS}\\([\\s\\S]*?;`, "g"),
+        ""
+      );
+      const direct =
+        withoutAssignments.match(new RegExp(`${HELPERS}\\(`, "g"))?.length ?? 0;
+      // Count every use of a helper-derived local, not just `${…}` ones: the
+      // expunge paths consume `quarantined` as a boolean that gates an
+      // `is_spam` key in the data bag, which is an application of the rule
+      // that never appears in a template.
+      let uses = 0;
+      for (const local of locals) {
+        uses +=
+          withoutAssignments.match(new RegExp(`\\b${local}\\b`, "g"))?.length ?? 0;
+      }
+      return direct + uses;
     };
 
     it.each(fns)("%s applies the membership rule in every branch", (_name, symbol) => {
       const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
       expect(body, `body not found for ${symbol}`).not.toBeNull();
-      const hits =
-        body![0].match(
-          /membershipCondition\(|membershipExpression\(|quarantinesSpam\(/g
-        ) ?? [];
-      expect(hits.length).toBeGreaterThanOrEqual(applications[symbol]);
+      expect(applicationSites(body![0])).toBeGreaterThanOrEqual(
+        applications[symbol]
+      );
     });
 
     it("never filters MAX(uid) — UIDNEXT must not regress on a spam-mark", () => {
