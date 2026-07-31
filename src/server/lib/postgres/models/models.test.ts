@@ -64,6 +64,8 @@ function makeMailData(overrides: Record<string, unknown> = {}): Record<string, u
     spam_reasons: null,
     is_spam: false,
     rfc822_size: null,
+    text_line_count: null,
+    html_line_count: null,
     updated: "2024-01-01T00:00:00+00:00",
     search_vector: null,
     ...overrides,
@@ -267,6 +269,29 @@ describe("MailModel construction", () => {
     const data = makeMailData({ spam_reasons: ["SPAM_WORD", "BLACKLIST"] });
     const m = new MailModel(data);
     expect(m.spam_reasons).toEqual(["SPAM_WORD", "BLACKLIST"]);
+  });
+
+  // The BODYSTRUCTURE `lines` cache columns round-trip as numbers OR null
+  // (NULL for pre-migration rows that haven't been observed yet).
+  it("accepts numeric text_line_count / html_line_count", () => {
+    const m = new MailModel(makeMailData({ text_line_count: 12, html_line_count: 34 }));
+    expect(m.text_line_count).toBe(12);
+    expect(m.html_line_count).toBe(34);
+    const json = m.toJSON();
+    expect(json.text_line_count).toBe(12);
+    expect(json.html_line_count).toBe(34);
+  });
+
+  it("accepts null text_line_count / html_line_count for unbackfilled rows", () => {
+    const m = new MailModel(makeMailData({ text_line_count: null, html_line_count: null }));
+    expect(m.text_line_count).toBeNull();
+    expect(m.html_line_count).toBeNull();
+  });
+
+  it("throws when text_line_count is a non-number, non-null value", () => {
+    expect(() => new MailModel(makeMailData({ text_line_count: "12" }))).toThrow(
+      ModelValidationError
+    );
   });
 });
 

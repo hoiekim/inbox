@@ -79,6 +79,18 @@ export const IS_SPAM = "is_spam";
 // persist the result. Motivates: avoid materializing multi-MB
 // attachments per RFC822.SIZE request. See #729.
 export const RFC822_SIZE = "rfc822_size";
+// Cached line counts of the mail's `text` / `html` columns, matching the
+// RFC 3501 §7.4.2 BODYSTRUCTURE `lines` field (`content.split(/\r?\n/).length`
+// on the raw column). Populated at INSERT time from the incoming body strings
+// (cheap: one split each) and lazily backfilled on read for pre-existing
+// rows. `NULL` means "not yet computed"; readers fall back to loading the
+// text/html columns to compute + persist. Motivates: BODYSTRUCTURE's `lines`
+// field was the last text/html materialization gap after #731 / #739 — a
+// bare `UID FETCH X BODYSTRUCTURE` batch was still loading multi-MB
+// text/html per UID to derive `lines`, spiking RSS. See the 2026-07-31 07:54
+// + 09:17 UTC OOMs.
+export const TEXT_LINE_COUNT = "text_line_count";
+export const HTML_LINE_COUNT = "html_line_count";
 
 // Sessions columns
 export const SESSION_ID = "session_id";

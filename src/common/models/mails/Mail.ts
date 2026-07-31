@@ -111,6 +111,16 @@ export interface MailType {
    * populated on their first observation; the HTTP client never reads it.
    */
   rfc822_size?: number | null;
+  /**
+   * Cached line counts for the mail's `text` / `html` columns, matching
+   * the RFC 3501 §7.4.2 BODYSTRUCTURE `lines` field. Populated at INSERT
+   * time from the incoming strings and lazily backfilled for pre-existing
+   * rows on the first BODYSTRUCTURE fetch. Optional because the DB
+   * columns start NULL for pre-migration rows; the HTTP client never
+   * reads either.
+   */
+  text_line_count?: number | null;
+  html_line_count?: number | null;
 }
 
 export class Mail extends Model<Mail> implements MailType {
@@ -137,6 +147,8 @@ export class Mail extends Model<Mail> implements MailType {
   declare uid: MailUidType;
   declare modseq?: number;
   declare rfc822_size?: number | null;
+  declare text_line_count?: number | null;
+  declare html_line_count?: number | null;
 
   constructor(data?: Partial<Mail>) {
     super(data);
