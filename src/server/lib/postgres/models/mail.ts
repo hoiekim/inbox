@@ -130,9 +130,10 @@ const mailSchema = {
   [SPAM_REASONS]: "JSONB",
   [IS_SPAM]: "BOOLEAN NOT NULL DEFAULT FALSE",
   // Nullable — auto-migration ADD COLUMN IF NOT EXISTS stamps existing rows
-  // with NULL, and the read path (fetch-helpers RFC822.SIZE case) computes
-  // + persists on first observation. New rows also start NULL and populate
-  // on their first RFC822.SIZE / RFC822 / BODY[] fetch.
+  // with NULL. New rows populate at INSERT via saveMail
+  // (`computeFullMessageSize` on the lazy-body synthetics, same predicate
+  // FETCH uses). The lazy-populate fallback in `fetch-helpers.ts` stays as
+  // a safety net for pre-migration rows.
   [RFC822_SIZE]: "BIGINT",
   // Nullable — auto-migration stamps existing rows with NULL; new rows
   // populate at INSERT time from the split of `text` / `html` (see
