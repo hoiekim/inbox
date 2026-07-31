@@ -102,10 +102,11 @@ const INBOX_ACCOUNTS_PREFIX = "INBOX/accounts/";
  *
  * INBOX (`mailbox === null`, `sent = false`) has no address condition at all,
  * and its per-account sub-views match purely on delivery address, so a
- * spam-classified mail lands in both simply by having been received. The HTTP
- * client already quarantines those rows into a dedicated Spam view; excluding
- * them here gives IMAP the same inbox membership instead of showing spam
- * intermixed with ham and counting it toward EXISTS/UNSEEN.
+ * spam-classified mail lands in both simply by having been received, showing up
+ * intermixed with ham and counting toward EXISTS/UNSEEN. The web client routes
+ * those rows to a dedicated Spam view; this is the IMAP side of the same
+ * quarantine. Until a `Junk` mailbox exists, quarantined mail is reachable over
+ * the web client only.
  *
  * Deliberately narrow on two axes:
  * - **Sent is never classified.** `is_spam` is only ever written on received
@@ -561,11 +562,15 @@ export const setMailFlags = async (
         // Sequence-number path: match a single row at the OFFSETth
         // position in the mailbox's UID-ordered list.
         // A sequence number counts only the messages the mailbox shows, so this
-        // OFFSET has to walk the same filtered list `getAllUids` builds. The
-        // join onto `mails` is emitted only for a box that actually filters —
-        // every other box keeps the mapping-only scan it had.
+        // OFFSET has to walk the same list `getAllUids` builds — which means
+        // `sent` and `expunged` too, not just the membership rule: mapping rows
+        // outlive the expunge that hid their mail, so a mapping-only scan
+        // counts messages the seq map does not and shifts every position after
+        // them. The join is emitted only for a box that filters; every other
+        // box keeps the mapping-only scan it had.
         const membershipJoin = quarantinesSpam(mailbox, sent)
           ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
+             AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
              AND ${membershipExpression(mailbox, sent, "z.")}`
           : "";
         const targetSubquery = `(
@@ -868,10 +873,12 @@ export const searchMailsByUid = async (
 
     // Always exclude expunged messages from search, and anything the mailbox
     // doesn't show — SEARCH must not return UIDs the client can't FETCH.
-    const conditions: string[] = ["m.user_id = $1", "m.sent = $2", "m.expunged = FALSE"];
-    if (quarantinesSpam(mailbox, sent)) {
-      conditions.push(membershipExpression(mailbox, sent, "m."));
-    }
+    const conditions: string[] = [
+      "m.user_id = $1",
+      "m.sent = $2",
+      "m.expunged = FALSE",
+      membershipExpression(mailbox, sent, "m."),
+    ];
     const values: ParamValue[] = [user_id, sent];
 
     // Base table + optional mailbox join

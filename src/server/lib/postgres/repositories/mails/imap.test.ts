@@ -1193,11 +1193,28 @@ describe("INBOX quarantines spam (#605)", () => {
       for (const line of maxUidLines) expect(line).not.toContain("FILTER");
     });
 
-    it("does not exclude \\Deleted mail from INBOX", () => {
+    it("does not exclude \\Deleted mail from INBOX", async () => {
       // `mails.deleted` is the IMAP \Deleted flag; RFC 3501 §6.4.3 keeps those
-      // messages in the mailbox until EXPUNGE. Only `expunged` removes them.
-      expect(source).not.toMatch(/AND\s+\$\{?DELETED\}?\s*=\s*FALSE/);
-      expect(source).not.toMatch(/AND\s+deleted\s*=\s*FALSE/);
+      // messages in the mailbox until EXPUNGE. Assert on what the rule actually
+      // emits — `is_spam` and nothing else — rather than on the absence of a
+      // string, which would pass just as well on a file that never had one.
+      const { membershipExpression, membershipCondition } = await import(".");
+      for (const box of [null, "INBOX/accounts/alice"]) {
+        expect(membershipExpression(box, false)).toBe("is_spam = FALSE");
+        expect(membershipCondition(box, false)).toBe(" AND is_spam = FALSE");
+      }
+    });
+
+    it("keeps the seq-number OFFSET list in step with getAllUids", () => {
+      // Mapping rows outlive the expunge that hid their mail, so the OFFSET
+      // subquery has to filter `sent` and `expunged` exactly as getAllUids
+      // does — membership alone leaves every position after an expunged row
+      // off by one.
+      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      const join = body.match(/const membershipJoin[\s\S]*?: "";/)![0];
+      expect(join).toContain("z.${SENT} = $2");
+      expect(join).toContain("z.${EXPUNGED} = FALSE");
+      expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
     });
   });
 });

@@ -442,6 +442,14 @@ export const deleteMail = async (
  *
  * Distinguishing "no change" from "not found" lets the caller skip classifier
  * training on idempotent re-marks while still surfacing real auth failures.
+ *
+ * The flip moves the mail in or out of IMAP's INBOX (see `quarantinesSpam`), so
+ * it advances the mod-sequence the way every other membership change does —
+ * otherwise a CONDSTORE client resyncing off an unchanged HIGHESTMODSEQ (RFC
+ * 7162 §3.1.2) concludes nothing happened and keeps serving the stale row. As
+ * on the expunge paths, the mod-sequence is reserved before the row count is
+ * known; an idempotent re-mark matches no row, so the reserved value simply
+ * goes unused and HIGHESTMODSEQ (a MAX over stamped rows) stays put.
  */
 export const markMailSpam = async (
   user_id: string,
@@ -450,10 +458,10 @@ export const markMailSpam = async (
 ): Promise<{ found: boolean; changed: boolean }> => {
   try {
     const result = await pool.query(
-      `UPDATE mails SET is_spam = $1, updated = NOW()
+      `UPDATE mails SET is_spam = $1, updated = NOW(), modseq = $4
          WHERE mail_id = $2 AND user_id = $3 AND is_spam IS DISTINCT FROM $1
          RETURNING mail_id`,
-      [is_spam, mail_id, user_id]
+      [is_spam, mail_id, user_id, await getNextModseq(user_id)]
     );
     if ((result.rowCount ?? 0) > 0) return { found: true, changed: true };
     const exists = await pool.query(
