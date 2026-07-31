@@ -325,18 +325,67 @@ async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown
 }
 
 /**
- * Emit `source` base64-encoded, one SLICE_RAW_BYTES slice at a time, so the
- * encoded form never exists as a single allocation. Peak transient per slice
- * is the raw slice view + the ~64 KiB encoded string + its Buffer.
+ * Emit `source` base64-encoded in sub-SLICE_RAW_BYTES slices. Peak transient
+ * is O(SLICE_RAW_BYTES) regardless of source length — both input and output
+ * are chunked, matching `emitAttachment`'s streaming shape.
+ *
+ * Two invariants the chunking has to preserve:
+ * 1. **Surrogate pairs stay whole.** `source` is UTF-16; slicing at code-
+ *    unit boundaries can land between the high and low half of an emoji.
+ *    Each isolated half round-trips to U+FFFD (3 bytes), so a split pair
+ *    emits 6 bytes where the whole encodes to 4 — a 2-byte wire overrun vs.
+ *    the pre-measured `{N}` literal, corrupting every subsequent response
+ *    on the connection. `end` is nudged back one code unit when it would
+ *    land after a high surrogate.
+ * 2. **Intermediate slices are 3-byte-aligned raw.** Base64 encodes 3 raw
+ *    bytes to 4 chars; a non-multiple-of-3 slice emits `=` padding, and
+ *    padded slices concatenated ≠ base64 of the concatenated raw. Residual
+ *    (0–2 bytes) carries to the next iteration; the final slice is emitted
+ *    whole (padding at the end is legal).
  */
 async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
-  const raw = Buffer.from(source, "utf8");
-  if (raw.byteLength === 0) return;
-  for (let offset = 0; offset < raw.byteLength; offset += SLICE_RAW_BYTES) {
-    const slice = raw.subarray(offset, Math.min(offset + SLICE_RAW_BYTES, raw.byteLength));
-    yield Buffer.from(slice.toString("base64"), "utf8");
+  if (source.length === 0) return;
+  // Worst-case UTF-8 expansion is 3 bytes per BMP code unit (surrogate pairs
+  // are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing by
+  // SLICE_RAW_BYTES/3 code units guarantees the encoded chunk stays under
+  // SLICE_RAW_BYTES.
+  const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3);
+  let carry: Buffer | null = null;
+  let offset = 0;
+  while (offset < source.length) {
+    let end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
+    // If `end` lands after a high surrogate and there's a next slice, the
+    // low surrogate would go to the next slice and both halves would
+    // encode to U+FFFD. Back off one code unit so the whole pair goes in
+    // the next slice.
+    if (end < source.length && isHighSurrogate(source.charCodeAt(end - 1))) {
+      end -= 1;
+    }
+    let bytes = Buffer.from(source.slice(offset, end), "utf8");
+    offset = end;
+    if (carry) {
+      bytes = Buffer.concat([carry, bytes] as unknown as Uint8Array[]);
+      carry = null;
+    }
+    if (offset < source.length) {
+      // Align to multiple-of-3 and carry the residual to keep base64
+      // concatenation lossless.
+      const residualLen = bytes.byteLength % 3;
+      if (residualLen > 0) {
+        // Copy the trailing 1–2 bytes out so `bytes` can be GC'd — a
+        // `subarray` view would pin the whole underlying ArrayBuffer.
+        const tail = bytes.subarray(bytes.byteLength - residualLen);
+        carry = Buffer.from(tail as unknown as Uint8Array);
+        bytes = bytes.subarray(0, bytes.byteLength - residualLen);
+      }
+    }
+    if (bytes.byteLength === 0) continue;
+    yield Buffer.from(bytes.toString("base64"), "utf8");
   }
 }
+
+const isHighSurrogate = (charCode: number): boolean =>
+  charCode >= 0xd800 && charCode <= 0xdbff;
 
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
