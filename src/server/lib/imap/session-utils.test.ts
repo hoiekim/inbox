@@ -51,6 +51,8 @@ import {
   getBodySectionKey,
   shouldMarkAsRead,
   buildFullMessage,
+  buildMessageSegments,
+  streamFromSegments,
   getBodyPart,
   getBodyPartHeaders
 } from "./session-utils";
@@ -662,3 +664,127 @@ describe("getBodyPartHeaders", () => {
     expect(getBodyPartHeaders(mail, "3")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// streamFromSegments + emitBase64 — regression coverage for the 2026-07-30
+// OOM. `emitBase64` used to allocate the whole raw source Buffer up front,
+// so a 500 KiB HTML body pinned 500 KiB per in-flight fetch. Now the input
+// is sliced too — peak transient must stay O(SLICE_RAW_BYTES).
+// ---------------------------------------------------------------------------
+
+describe("streamFromSegments — emitBase64 input chunking", () => {
+  const SLICE_RAW_BYTES = 48 * 1024; // must match the constant in session-utils.ts
+
+  const drainToBuffer = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<{ concatenated: Buffer; maxChunkBytes: number; chunkCount: number }> => {
+    const chunks: Buffer[] = [];
+    let maxChunkBytes = 0;
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+      if (chunk.byteLength > maxChunkBytes) maxChunkBytes = chunk.byteLength;
+    }
+    return {
+      concatenated: Buffer.concat(chunks),
+      maxChunkBytes,
+      chunkCount: chunks.length,
+    };
+  };
+
+  it("produces byte-identical output to base64(source) for a small text mail", async () => {
+    const mail: Partial<MailType> = { text: "Hello, streaming world!" };
+    const segments = buildMessageSegments(mail, "small-text");
+    const { concatenated } = await drainToBuffer(streamFromSegments(segments));
+    const expectedBody = Buffer.from(mail.text!, "utf8").toString("base64");
+    expect(concatenated.toString("utf8")).toContain(expectedBody);
+  });
+
+  it("yields multiple chunks and never emits > ~64 KiB per chunk for a 200 KiB HTML body (input isn't materialized whole)", async () => {
+    // 200 KiB of ASCII HTML — larger than SLICE_RAW_BYTES (48 KiB), so if the
+    // pre-fix `Buffer.from(source, "utf8")` regressed back in, we'd see either
+    // one giant chunk or peak transient tracking the source size. The
+    // post-fix contract is: each yielded chunk stays in the ~64 KiB ballpark
+    // (SLICE_RAW_BYTES raw → base64 expansion ≈ 4/3 → ~64 KiB out).
+    const html = "<p>" + "x".repeat(200 * 1024 - 8) + "</p>";
+    const mail: Partial<MailType> = { html };
+    const segments = buildMessageSegments(mail, "big-html");
+    const { concatenated, maxChunkBytes, chunkCount } = await drainToBuffer(
+      streamFromSegments(segments)
+    );
+
+    // Chunk count must scale with body size — one giant chunk (the pre-fix
+    // shape) would be `chunkCount === headers-count + 1 attachment-part`.
+    expect(chunkCount).toBeGreaterThanOrEqual(4);
+    // No single chunk should be anywhere near the source size.
+    expect(maxChunkBytes).toBeLessThan(80 * 1024);
+    // Reassembled body must round-trip back to the original HTML.
+    const wire = concatenated.toString("utf8");
+    const bodyMatch = wire.match(/base64\r\n\r\n([\s\S]*?)\r\n$/);
+    expect(bodyMatch).not.toBeNull();
+    const decoded = Buffer.from(bodyMatch![1], "base64").toString("utf8");
+    expect(decoded).toBe(html);
+  });
+
+  it("handles a body whose UTF-8 length is NOT a multiple of 3 across many slices without corrupting the round-trip", async () => {
+    // Pick a length that will straddle SLICE_RAW_BYTES boundaries and land on
+    // various byte-count residuals — the carry logic between slices is what
+    // could corrupt the base64 if buggy.
+    // 100003 = 100 KiB + 3 bytes, distributed across multiple SLICE_RAW_BYTES
+    // slices, ending with `len % 3 == 1` (100003 / 3 = 33334 remainder 1).
+    const text = "a".repeat(100003);
+    const mail: Partial<MailType> = { text };
+    const segments = buildMessageSegments(mail, "misaligned");
+    const { concatenated } = await drainToBuffer(streamFromSegments(segments));
+    const wire = concatenated.toString("utf8");
+    const bodyMatch = wire.match(/base64\r\n\r\n([\s\S]*?)\r\n$/);
+    expect(bodyMatch).not.toBeNull();
+    // Round-trip must recover the exact original bytes.
+    const decoded = Buffer.from(bodyMatch![1], "base64").toString("utf8");
+    expect(decoded).toBe(text);
+  });
+
+  it("handles multi-byte UTF-8 across slice boundaries", async () => {
+    // A body of emojis (each 4 UTF-8 bytes as a surrogate pair, 2 UTF-16 units)
+    // sized to straddle SLICE_RAW_BYTES. If the code-unit slicing miscounted
+    // the UTF-8 expansion, chunks could either be too big or split a codepoint.
+    // Rocket emoji: 🚀 = 4 UTF-8 bytes (2 UTF-16 units).
+    const emoji = "🚀".repeat(20000); // 80 000 UTF-8 bytes = 40 000 UTF-16 units
+    const mail: Partial<MailType> = { text: emoji };
+    const segments = buildMessageSegments(mail, "emoji");
+    const { concatenated, maxChunkBytes } = await drainToBuffer(
+      streamFromSegments(segments)
+    );
+    expect(maxChunkBytes).toBeLessThan(80 * 1024);
+    const wire = concatenated.toString("utf8");
+    const bodyMatch = wire.match(/base64\r\n\r\n([\s\S]*?)\r\n$/);
+    expect(bodyMatch).not.toBeNull();
+    const decoded = Buffer.from(bodyMatch![1], "base64").toString("utf8");
+    expect(decoded).toBe(emoji);
+  });
+
+  it("empty body yields no base64 output (short-circuit path)", async () => {
+    const mail: Partial<MailType> = { text: "" };
+    const segments = buildMessageSegments(mail, "empty-text");
+    const { concatenated } = await drainToBuffer(streamFromSegments(segments));
+    const wire = concatenated.toString("utf8");
+    // Headers-only, no body segment output between headers and terminating CRLF.
+    expect(wire).toContain("MIME-Version: 1.0");
+    expect(wire).not.toMatch(/base64\r\n\r\n[A-Za-z0-9+/=]+/);
+  });
+
+  it("preserves byte-for-byte parity with buildFullMessage for the same mail", async () => {
+    // The materializing path (`buildFullMessage`) and the streaming path
+    // (`streamFromSegments`) must produce identical output — otherwise
+    // `RFC822.SIZE` (cached from computeFullMessageSize) can disagree with
+    // what BODY[] emits, breaking the {N} literal invariant.
+    const mail: Partial<MailType> = {
+      text: "plain body text",
+      html: "<p>rich body</p>".repeat(3000), // ~48 KiB — crosses one slice boundary
+    };
+    const segments = buildMessageSegments(mail, "parity-test");
+    const { concatenated } = await drainToBuffer(streamFromSegments(segments));
+    const materialized = buildFullMessage(mail, "parity-test");
+    expect(concatenated.toString("utf8")).toBe(materialized);
+  });
+});
+

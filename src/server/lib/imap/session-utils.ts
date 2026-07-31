@@ -325,16 +325,60 @@ async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown
 }
 
 /**
- * Emit `source` base64-encoded, one SLICE_RAW_BYTES slice at a time, so the
- * encoded form never exists as a single allocation. Peak transient per slice
- * is the raw slice view + the ~64 KiB encoded string + its Buffer.
+ * Emit `source` base64-encoded, one SLICE_RAW_BYTES slice at a time — with
+ * the INPUT chunked too, so the raw source is never fully materialized as
+ * one Buffer. Peak transient stays O(SLICE_RAW_BYTES) regardless of source
+ * length, matching `emitAttachment`'s streaming shape.
+ *
+ * A previous version did `const raw = Buffer.from(source, "utf8")` up front,
+ * which allocated the whole source (500+ KiB for large HTML mails) and held
+ * it for the fetch's entire lifetime. Under concurrent iOS BODY[] fetches
+ * that was the primary contributor to the 137→285 MB RSS climb on the
+ * 2026-07-30 23:52 UTC OOM.
+ *
+ * Base64 constraint: each intermediate slice must be a multiple of 3 raw
+ * bytes to avoid `=` padding chars mid-stream (padded slices concatenated
+ * ≠ base64 of the concatenated raw). We encode into a fixed scratch Buffer,
+ * emit the largest 3-byte-aligned prefix, and carry the 0–2 residual bytes
+ * to the next iteration. The final slice is emitted whole (padding at the
+ * end is legal).
  */
 async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
-  const raw = Buffer.from(source, "utf8");
-  if (raw.byteLength === 0) return;
-  for (let offset = 0; offset < raw.byteLength; offset += SLICE_RAW_BYTES) {
-    const slice = raw.subarray(offset, Math.min(offset + SLICE_RAW_BYTES, raw.byteLength));
-    yield Buffer.from(slice.toString("base64"), "utf8");
+  if (source.length === 0) return;
+  // Worst-case UTF-8 expansion of a JS string is 3 bytes per BMP code unit
+  // (surrogate pairs are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing
+  // by SLICE_RAW_BYTES/3 code units guarantees the encoded chunk fits under
+  // SLICE_RAW_BYTES without over-shooting. Under-shooting a bit (vs. filling
+  // scratch to the brim) is fine — the emit granularity is still ~48 KiB.
+  const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3);
+  let carry: Buffer | null = null;
+  let offset = 0;
+  while (offset < source.length) {
+    const end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
+    let bytes = Buffer.from(source.slice(offset, end), "utf8");
+    offset = end;
+    if (carry) {
+      // Prepend the 0–2 unencoded residual bytes from the previous slice.
+      // Small concat (≤ SLICE_RAW_BYTES+2 bytes), unavoidable to keep the
+      // base64 alignment invariant. Cast to Uint8Array[] because Node's
+      // Buffer.concat signature is Uint8Array<ArrayBufferLike>[]-typed and
+      // Buffer's ArrayBuffer parameter doesn't line up under the current @types/node.
+      bytes = Buffer.concat([carry, bytes] as unknown as Uint8Array[]);
+      carry = null;
+    }
+    if (offset < source.length) {
+      // Not the final slice — align to a multiple of 3 and carry the residual.
+      const residualLen = bytes.byteLength % 3;
+      if (residualLen > 0) {
+        // Copy the trailing 1-2 bytes out so `bytes` can be GC'd; otherwise a
+        // `subarray` view would pin the whole underlying ArrayBuffer.
+        const tail = bytes.subarray(bytes.byteLength - residualLen);
+        carry = Buffer.from(tail as unknown as Uint8Array);
+        bytes = bytes.subarray(0, bytes.byteLength - residualLen);
+      }
+    }
+    if (bytes.byteLength === 0) continue;
+    yield Buffer.from(bytes.toString("base64"), "utf8");
   }
 }
 
