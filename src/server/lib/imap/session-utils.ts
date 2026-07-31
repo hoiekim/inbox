@@ -9,6 +9,7 @@ import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from ".
 import { formatHeaders } from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
+import { pgTextChunks } from "server";
 import { CHUNK_BYTES } from "./chunked-write";
 
 /**
@@ -92,7 +93,22 @@ export type MessageSegment =
   /** `source` base64-encoded; sliced so the encoded form is never one allocation. */
   | { kind: "base64"; source: string }
   /** An attachment file, base64-encoded, read and emitted in slices. */
-  | { kind: "attachment"; dataId: string; rawSize: number; filename: string };
+  | { kind: "attachment"; dataId: string; rawSize: number; filename: string }
+  /**
+   * A `mails.text` or `mails.html` column, streamed via chunked
+   * `SUBSTRING` reads and base64-encoded. `byteLength` is the raw
+   * `octet_length(<col>)` measured at range-read time (see
+   * `PartialMailModel.text_octets` / `html_octets`), so the encoded byte
+   * count is pinned before the first chunk yields — the `{N}` literal
+   * cannot race the stream.
+   */
+  | {
+      kind: "lazy-text";
+      source: "text" | "html";
+      mail_id: string;
+      user_id: string;
+      byteLength: number;
+    };
 
 /**
  * Byte length of `4 * ceil(n/3)`-format base64 encoding of `n` input octets.
@@ -261,6 +277,11 @@ const segmentByteLength = (segment: MessageSegment): number => {
       return base64ByteLen(Buffer.byteLength(segment.source, "utf8"));
     case "attachment":
       return base64ByteLen(segment.rawSize);
+    case "lazy-text":
+      // The raw byte count comes from `octet_length()` at range-read time —
+      // measured server-side against the same value the stream will pull, so
+      // the `{N}` literal cannot disagree with the pgTextChunks output.
+      return base64ByteLen(segment.byteLength);
   }
 };
 
@@ -566,6 +587,16 @@ export async function* streamFromSegments(
         break;
       case "attachment":
         yield* emitAttachment(segment);
+        break;
+      case "lazy-text":
+        // Stream the mails.<source> column via chunked SUBSTRING reads.
+        // Both the char-carry (surrogate at chunk boundary) and byte-carry
+        // (3-byte alignment) inside emitBase64 survive across upstream
+        // pgTextChunks pulls, so the encoded output equals what a whole-
+        // string encode of the same column would produce.
+        yield* emitBase64(
+          pgTextChunks(segment.mail_id, segment.user_id, segment.source)
+        );
         break;
     }
   }

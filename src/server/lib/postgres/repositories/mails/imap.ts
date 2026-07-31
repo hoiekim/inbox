@@ -20,6 +20,54 @@ import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
 
 /**
+ * Character-length chunk size for the SUBSTRING body-streaming reader. Chosen
+ * so the encoded UTF-8 chunk stays under SLICE_RAW_BYTES (48 KiB) in the
+ * emitBase64 pipeline: worst-case UTF-8 expansion is 4 bytes per character,
+ * so 12 000 chars → up to 48 000 bytes → fits safely under 49 152. Pg's
+ * SUBSTRING is CHARACTER-indexed, not byte-indexed, so the constant is in
+ * characters (code points), not bytes.
+ */
+export const PG_TEXT_CHUNK_CHARS = 12_000;
+
+/**
+ * Stream one mail row's `text` or `html` column in fixed-size character
+ * chunks. Each round-trip pulls at most PG_TEXT_CHUNK_CHARS characters via a
+ * `SUBSTRING(<col> FROM $off FOR $chunk)` query — the whole column never
+ * loads into Node's heap. Complements `getMailsByRange`'s `text_octets` /
+ * `html_octets` synthetic projections: the caller pre-measures the `{N}`
+ * literal from the octet count, then streams the body via this generator.
+ *
+ * Stops when a SUBSTRING call returns an empty string (Postgres serves an
+ * empty string for offsets past the column length, which is the natural
+ * terminator).
+ *
+ * The `sourceColumn` is a hard-coded literal, not user input — narrowed to
+ * "text" | "html" at the type level so it can be interpolated into the SQL
+ * safely.
+ */
+export async function* pgTextChunks(
+  mail_id: string,
+  user_id: string,
+  sourceColumn: "text" | "html",
+  chunkChars: number = PG_TEXT_CHUNK_CHARS
+): AsyncGenerator<string, void, unknown> {
+  // Postgres SUBSTRING(text FROM start FOR len): `start` is 1-indexed. We
+  // step by `chunkChars` chars each round-trip; a chunk shorter than
+  // `chunkChars` OR empty means we've drained the column.
+  let offset = 1;
+  for (;;) {
+    const sql = `SELECT SUBSTRING(${sourceColumn} FROM $3 FOR $4) AS chunk
+                 FROM mails WHERE mail_id = $1 AND user_id = $2`;
+    const result = await pool.query(sql, [mail_id, user_id, offset, chunkChars]);
+    const chunk = (result.rows[0]?.chunk ?? "") as string;
+    if (chunk.length === 0) return;
+    yield chunk;
+    if (chunk.length < chunkChars) return;
+    offset += chunk.length;
+  }
+}
+
+/**
  * Callers pass `mailbox` as the raw IMAP box path (e.g. `INBOX/accounts/amazon`,
  * `Sent Messages/accounts/claoie`, or a user-created box like `Archive`) — the
  * exact string the write side stores in `mail_mailbox_uid.mailbox`. `null` is
