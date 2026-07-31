@@ -845,7 +845,7 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
   const saturateAllButOne = () => {
     const releases: Array<() => void> = [];
     const held = Array.from({ length: bodyBudgetCapacity() - 1 }, () =>
-      withBodyBudget(() => new Promise<void>((resolve) => releases.push(resolve)))
+      withBodyBudget(0, () => new Promise<void>((resolve) => releases.push(resolve)))
     );
     return { releases, held };
   };
@@ -873,7 +873,7 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
 
     // The stream now owns the last slot, so a further acquire must wait.
     let extraRan = false;
-    const pending = withBodyBudget(async () => {
+    const pending = withBodyBudget(0, async () => {
       extraRan = true;
     });
     await flush();
@@ -896,7 +896,7 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
     const iterator = await startStream();
 
     let extraRan = false;
-    const pending = withBodyBudget(async () => {
+    const pending = withBodyBudget(0, async () => {
       extraRan = true;
     });
     await flush();

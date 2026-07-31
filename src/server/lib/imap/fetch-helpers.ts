@@ -501,7 +501,10 @@ export async function buildBodyResponsePart(
     const partialAddressableBytes = totalBodyLength - WIRE_TRAILER;
     // Acquire the per-key mutex OUTSIDE the byte-budget so a queued
     // same-key waiter doesn't pin a byte-slot while it waits. When it
-    // owns the key, it then acquires the byte budget for its stream.
+    // owns the key, it then acquires the byte budget for its stream, with
+    // the pre-measured `{N}` — the wire bytes this stream is about to
+    // reserve — as the amount, so aggregate in-flight body bytes stay
+    // under the memory cap.
     const streamKey = `${docId}::${sectionKey}`;
     if (partial) {
       // RFC 3501 §6.4.5: `BODY[]<start.length>` returns bytes
@@ -518,7 +521,7 @@ export async function buildBodyResponsePart(
         partialAddressableBytes - start
       );
       const partialStream = withStreamMutex(streamKey, () =>
-        withBodyBudgetStream(async function* () {
+        withBodyBudgetStream(emittedLength, async function* () {
           yield* streamPartialFromSegments(segments, start, emittedLength);
         })
       );
@@ -533,7 +536,7 @@ export async function buildBodyResponsePart(
       };
     }
     const stream = withStreamMutex(streamKey, () =>
-      withBodyBudgetStream(async function* () {
+      withBodyBudgetStream(totalBodyLength, async function* () {
         yield* streamFromSegments(segments);
         yield Buffer.from("\r\n", "utf8");
       })
@@ -565,7 +568,7 @@ export async function buildBodyResponsePart(
     }
     const streamKey = `${docId}::${sectionKey}`;
     const stream = withStreamMutex(streamKey, () =>
-      withBodyBudgetStream(async function* () {
+      withBodyBudgetStream(bodyBytes + WIRE_TRAILER, async function* () {
         yield* streamBodyFromSegments(segments);
         yield Buffer.from("\r\n", "utf8");
       })
@@ -605,7 +608,7 @@ export async function buildBodyResponsePart(
       }
       const streamKey = `${docId}::${sectionKey}`;
       const stream = withStreamMutex(streamKey, () =>
-        withBodyBudgetStream(async function* () {
+        withBodyBudgetStream(partBytes + WIRE_TRAILER, async function* () {
           yield* streamPartBodyFromSegments(segments, partPath);
           yield Buffer.from("\r\n", "utf8");
         })
@@ -626,9 +629,12 @@ export async function buildBodyResponsePart(
   // the shared-body path — gate through the budget. Header-like
   // sections are cheap (≤ a few KiB) and don't need gating; hop over
   // them with an immediate acquire/release by only gating when the
-  // request is a partial.
+  // request is a partial. The reservation uses the pre-measured full-message
+  // size, since that whole body is what gets materialized before slicing.
   const content = partial
-    ? await withBodyBudget(() => Promise.resolve(getBodyContent(mail, section, docId)))
+    ? await withBodyBudget(computeFullMessageSize(mail, docId), () =>
+        Promise.resolve(getBodyContent(mail, section, docId))
+      )
     : getBodyContent(mail, section, docId);
   if (content === null) {
     return null;

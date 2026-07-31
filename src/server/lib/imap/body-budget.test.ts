@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import {
   withBodyBudget,
   bodyBudgetCapacity,
+  bodyBudgetMemoryCap,
+  bodyBudgetBytesInFlight,
   runInBodyBudgetContext,
   getBodyBudgetWaitMs,
   _resetBodyBudget,
@@ -38,7 +40,7 @@ describe("body-budget semaphore (#726)", () => {
     const gates = Array.from({ length: CAP }, () => defer<string>());
     const running: string[] = [];
     const wrapped = gates.map((g, i) =>
-      withBodyBudget(async () => {
+      withBodyBudget(0, async () => {
         running.push(`start-${i}`);
         return await g.promise;
       })
@@ -60,14 +62,14 @@ describe("body-budget semaphore (#726)", () => {
     // three waiters A/B/C in that order, then release holders one at
     // a time and assert the completion order is A → B → C.
     const holding = Array.from({ length: CAP }, () => defer<void>());
-    const holdingRuns = holding.map((g) => withBodyBudget(() => g.promise));
+    const holdingRuns = holding.map((g) => withBodyBudget(0, () => g.promise));
 
     const completed: string[] = [];
     const waiters = ["A", "B", "C"] as const;
     const waiterRuns: Promise<unknown>[] = [];
     for (const name of waiters) {
       waiterRuns.push(
-        withBodyBudget(async () => {
+        withBodyBudget(0, async () => {
           completed.push(name);
         })
       );
@@ -87,10 +89,10 @@ describe("body-budget semaphore (#726)", () => {
 
   it("queues an extra caller until a slot frees", async () => {
     const holding = Array.from({ length: CAP }, () => defer<void>());
-    const holdingRuns = holding.map((g) => withBodyBudget(() => g.promise));
+    const holdingRuns = holding.map((g) => withBodyBudget(0, () => g.promise));
 
     let extraStarted = false;
-    const extra = withBodyBudget(async () => {
+    const extra = withBodyBudget(0, async () => {
       extraStarted = true;
       return "extra-done";
     });
@@ -118,7 +120,7 @@ describe("body-budget semaphore (#726)", () => {
     // race on and overwrite.
     const holding = Array.from({ length: CAP }, () => defer<void>());
     const holdingRuns = holding.map((g) =>
-      runInBodyBudgetContext(() => withBodyBudget(() => g.promise))
+      runInBodyBudgetContext(() => withBodyBudget(0, () => g.promise))
     );
 
     // Queue scope A first — it'll acquire the first slot freed by a
@@ -127,7 +129,7 @@ describe("body-budget semaphore (#726)", () => {
     const aWait = defer<number>();
     const bWait = defer<number>();
     const scopeA = runInBodyBudgetContext(async () => {
-      await withBodyBudget(async () => {
+      await withBodyBudget(0, async () => {
         aWait.resolve(getBodyBudgetWaitMs());
         await new Promise((r) => setTimeout(r, 40));
       });
@@ -135,7 +137,7 @@ describe("body-budget semaphore (#726)", () => {
     // Yield so A's acquire hits the queue before B's.
     await nextTick();
     const scopeB = runInBodyBudgetContext(async () => {
-      await withBodyBudget(async () => {
+      await withBodyBudget(0, async () => {
         bWait.resolve(getBodyBudgetWaitMs());
       });
     });
@@ -163,7 +165,7 @@ describe("body-budget semaphore (#726)", () => {
     // Fill capacity with throwers.
     const results = await Promise.allSettled(
       Array.from({ length: CAP }, (_, i) =>
-        withBodyBudget<never>(async () => {
+        withBodyBudget<never>(0, async () => {
           throw new Error(`boom-${i}`);
         })
       )
@@ -172,7 +174,7 @@ describe("body-budget semaphore (#726)", () => {
 
     // A subsequent caller should acquire immediately (no leaked slots).
     let ranAfter = false;
-    await withBodyBudget(async () => {
+    await withBodyBudget(0, async () => {
       ranAfter = true;
     });
     expect(ranAfter).toBe(true);
@@ -181,12 +183,101 @@ describe("body-budget semaphore (#726)", () => {
   it("wait ledger stays at 0 when the caller acquires without queuing", async () => {
     _resetBodyBudget();
     await runInBodyBudgetContext(async () => {
-      await withBodyBudget(async () => {});
+      await withBodyBudget(0, async () => {});
       expect(getBodyBudgetWaitMs()).toBe(0);
     });
   });
 
   it("getBodyBudgetWaitMs outside a context returns 0 (no throw)", () => {
     expect(getBodyBudgetWaitMs()).toBe(0);
+  });
+});
+
+describe("body-budget memory cap", () => {
+  beforeEach(() => {
+    _resetBodyBudget();
+  });
+
+  it("queues a caller whose bytes would exceed the memory cap even though the count slot is free", async () => {
+    // First caller takes ~90% of the cap — well under CAP count, well under
+    // memory cap. Second caller wants another ~20% — count would fit (2/CAP),
+    // memory would not (110% > 100%). Must queue.
+    const CAP_BYTES = bodyBudgetMemoryCap();
+    const first = defer<void>();
+    const firstBytes = Math.floor(CAP_BYTES * 0.9);
+    const secondBytes = Math.floor(CAP_BYTES * 0.2);
+
+    const inflight1 = withBodyBudget(firstBytes, () => first.promise);
+    await nextTick();
+    expect(bodyBudgetBytesInFlight()).toBe(firstBytes);
+
+    let secondStarted = false;
+    const inflight2 = withBodyBudget(secondBytes, async () => {
+      secondStarted = true;
+    });
+    await nextTick();
+    expect(secondStarted).toBe(false); // queued behind first
+
+    first.resolve();
+    await inflight1;
+    await inflight2;
+    expect(secondStarted).toBe(true);
+    expect(bodyBudgetBytesInFlight()).toBe(0);
+  });
+
+  it("does NOT skip past a queued big caller to serve a smaller one that would fit — starvation guard", async () => {
+    const CAP_BYTES = bodyBudgetMemoryCap();
+    const first = defer<void>();
+    const firstBytes = Math.floor(CAP_BYTES * 0.7);
+
+    const holdA = withBodyBudget(firstBytes, () => first.promise);
+    await nextTick();
+
+    // Big waiter — wants 40% but only 30% is free → queued.
+    const bigOrder: string[] = [];
+    const bigWaiter = withBodyBudget(Math.floor(CAP_BYTES * 0.4), async () => {
+      bigOrder.push("big");
+    });
+    await nextTick();
+
+    // Small waiter arrives AFTER — wants 10% (would fit if it jumped the
+    // queue). Must NOT run before the big waiter.
+    const smallWaiter = withBodyBudget(Math.floor(CAP_BYTES * 0.1), async () => {
+      bigOrder.push("small");
+    });
+    await nextTick();
+    expect(bigOrder).toEqual([]); // neither ran — head-of-queue block
+
+    first.resolve();
+    await holdA;
+    await bigWaiter;
+    await smallWaiter;
+    expect(bigOrder).toEqual(["big", "small"]); // FIFO
+  });
+
+  it("oversized single caller (bytes > cap) bypasses the memory check + logs — never deadlocks", async () => {
+    const CAP_BYTES = bodyBudgetMemoryCap();
+    // 2× cap: must NOT wait — release would never free enough on its own.
+    const oversize = CAP_BYTES * 2;
+    const started = defer<void>();
+
+    const promise = withBodyBudget(oversize, async () => {
+      started.resolve();
+      return "done";
+    });
+    await started.promise; // proves the acquire returned without queuing
+    const result = await promise;
+    expect(result).toBe("done");
+    expect(bodyBudgetBytesInFlight()).toBe(0);
+  });
+
+  it("releases bytes on throw so the counter doesn't leak", async () => {
+    const bytes = Math.floor(bodyBudgetMemoryCap() * 0.5);
+    await expect(
+      withBodyBudget(bytes, async () => {
+        throw new Error("boom");
+      })
+    ).rejects.toThrow("boom");
+    expect(bodyBudgetBytesInFlight()).toBe(0);
   });
 });
