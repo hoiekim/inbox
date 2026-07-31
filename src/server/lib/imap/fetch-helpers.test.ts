@@ -1427,7 +1427,7 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
 });
 
 describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+html", () => {
-  // Regression for reviewoie R1 HIGH on #739: iOS Mail's chunked large-body
+  // iOS Mail's chunked large-body
   // pull uses `BODY[]<0.65536>`, then `BODY[]<65536.65536>`, etc. The lazy
   // shape (`text_octets` + `html_octets` instead of the strings) cannot
   // drive the sync materializer in buildFullMessage — partial FULL falls
