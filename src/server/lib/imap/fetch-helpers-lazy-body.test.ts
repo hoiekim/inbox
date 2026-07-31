@@ -27,7 +27,7 @@ const substringCalls: Array<{ column: "text" | "html"; take: number; returnedCha
 const columnStore = new Map<string, string>();
 
 const mockQuery = mock(async (sql: string, values: unknown[]) => {
-  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3\s+FOR\s+\$4\)/);
+  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/);
   if (substringMatch) {
     const column = substringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
