@@ -303,3 +303,153 @@ describe("lazy-text MessageSegment — pre-measured `{N}` + chunked stream", () 
 // Silence unused-import warnings — `computeFullMessageSize` is available in
 // case a future assertion wants to compare against the wrapper's output.
 void computeFullMessageSize;
+
+// ---------------------------------------------------------------------------
+// buildMessageSegments — lazy mode parity with materialized mode
+// ---------------------------------------------------------------------------
+
+describe("buildMessageSegments — lazy mode wire parity", () => {
+  const drainToBuffer = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c);
+    return Buffer.concat(chunks);
+  };
+
+  const baseHeaders = {
+    subject: "hello",
+    messageId: "<lazy@test>",
+    date: "2026-07-30T00:00:00Z",
+    from: { text: "a@example.com", value: [{ address: "a@example.com", name: "" }] },
+    to: { text: "b@example.com", value: [{ address: "b@example.com", name: "" }] },
+    envelopeTo: [{ address: "b@example.com", name: "" }],
+  } as const;
+
+  it("lazy segments AND materialized segments produce byte-identical BODY[] output", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const text = "plain body ".repeat(4000);
+    const html = "<p>rich body</p>".repeat(4000);
+    columnStore.set("mail-parity:text", text);
+    columnStore.set("mail-parity:html", html);
+
+    // Materialized path — strings on the mail.
+    const materialized = buildMessageSegments(
+      { ...baseHeaders, text, html } as never,
+      "docId-parity"
+    );
+    // Lazy path — no strings, four synthetic fields.
+    const lazy = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-parity",
+        user_id: "user-1",
+      } as never,
+      "docId-parity"
+    );
+
+    const matBytes = await drainToBuffer(streamFromSegments(materialized));
+    const lazyBytes = await drainToBuffer(streamFromSegments(lazy));
+    expect(lazyBytes.equals(matBytes)).toBe(true);
+
+    // And the pre-measured {N} literal matches on both sides.
+    expect(sessionUtils.sumSegmentBytes(lazy)).toBe(
+      sessionUtils.sumSegmentBytes(materialized)
+    );
+  });
+
+  it("sumSegmentBytes on a lazy mail with a big body is I/O-free", () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    // The store IS populated so a real read WOULD succeed — the point is
+    // that sumSegmentBytes never issues one.
+    columnStore.set("mail-io-free:text", "x".repeat(500_000));
+    columnStore.set("mail-io-free:html", "y".repeat(500_000));
+
+    const lazy = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 500_000,
+        html_octets: 500_000,
+        mail_id: "mail-io-free",
+        user_id: "user-1",
+      } as never,
+      "docId-io-free"
+    );
+    const size = sessionUtils.sumSegmentBytes(lazy);
+    expect(size).toBeGreaterThan(0);
+    // No SUBSTRING calls fired during measurement — computeFullMessageSize
+    // on a 1 MB body stays cheap enough to run per FETCH.
+    expect(substringCalls.length).toBe(0);
+  });
+
+  it("lazy mail with text_octets=0 emits headers-only, matching a materialized empty mail", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    columnStore.set("mail-empty:text", "");
+    columnStore.set("mail-empty:html", "");
+
+    const lazy = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: 0,
+        mail_id: "mail-empty",
+        user_id: "user-1",
+      } as never,
+      "docId-empty"
+    );
+    const materialized = buildMessageSegments(
+      { ...baseHeaders, text: "", html: "" } as never,
+      "docId-empty"
+    );
+    const lazyBytes = await drainToBuffer(streamFromSegments(lazy));
+    const matBytes = await drainToBuffer(streamFromSegments(materialized));
+    expect(lazyBytes.equals(matBytes)).toBe(true);
+    // The whole thing was headers-only — no SUBSTRING pulls fired.
+    expect(substringCalls.length).toBe(0);
+  });
+
+  it("peak transient stays chunked for a 500 KB lazy body", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const html = "<p>" + "x".repeat(500 * 1024 - 8) + "</p>";
+    columnStore.set("mail-big:text", "");
+    columnStore.set("mail-big:html", html);
+
+    const lazy = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-big",
+        user_id: "user-1",
+      } as never,
+      "docId-big"
+    );
+    let maxBytes = 0;
+    let emitted = 0;
+    for await (const chunk of streamFromSegments(lazy)) {
+      emitted += chunk.byteLength;
+      if (chunk.byteLength > maxBytes) maxBytes = chunk.byteLength;
+    }
+    // {N} agrees with what actually got emitted.
+    const advertised = sessionUtils.sumSegmentBytes(lazy) - 2;
+    expect(emitted).toBe(advertised);
+    // Peak transient chunk is ~64 KiB (base64 of SLICE_RAW_BYTES).
+    expect(maxBytes).toBeLessThan(80 * 1024);
+    // No SUBSTRING request > PG_TEXT_CHUNK_CHARS chars.
+    for (const call of substringCalls) {
+      expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
+    }
+    // Round-trip count scales with body size, not a fixed constant — the
+    // 500 KB body forces multiple pulls, proving nothing materialized the
+    // whole column at once.
+    expect(substringCalls.length).toBeGreaterThanOrEqual(
+      Math.floor(html.length / PG_TEXT_CHUNK_CHARS)
+    );
+  });
+});

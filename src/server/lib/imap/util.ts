@@ -69,8 +69,23 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
   return formatted || "NIL";
 };
 
+/**
+ * `text` / `html` presence probe that also honors the pg-SUBSTRING
+ * streaming shape. In the streaming path the caller passes
+ * `text_octets` / `html_octets` (from `octet_length()` at range-read time)
+ * instead of the multi-MB column values — a non-zero octet count means the
+ * body is non-empty even though the string isn't loaded. Materialized
+ * callers still get the `.trim()`-aware check on the actual string.
+ */
+const hasMaterializedOrLazyBody = (
+  raw: string | undefined,
+  octets: number | undefined
+): boolean =>
+  (typeof raw === "string" && raw.trim().length > 0) ||
+  (typeof octets === "number" && octets > 0);
+
 export const formatHeaders = (
-  mail: Partial<MailType>,
+  mail: Partial<MailType> & { text_octets?: number; html_octets?: number },
   docId?: string
 ): string => {
   const headers: string[] = [];
@@ -112,8 +127,8 @@ export const formatHeaders = (
   // Add MIME headers
   headers.push("MIME-Version: 1.0");
 
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
+  const hasText = hasMaterializedOrLazyBody(mail.text, mail.text_octets);
+  const hasHtml = hasMaterializedOrLazyBody(mail.html, mail.html_octets);
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
 
   // Use stable boundary based on docId - docId should always exist

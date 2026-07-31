@@ -161,10 +161,24 @@ describe("getRequestedFields", () => {
         { type: "BODY", peek: false, section: { type: "FULL" } }
       ]);
       expect([...rfc].sort()).toEqual([...body].sort());
-      // sanity: full message needs text/html/headers/attachments columns.
-      for (const f of ["text", "html", "subject", "from", "attachments"] as const) {
+      // sanity: full-message stream needs headers + attachments AND the
+      // four synthetic streaming fields (text_octets / html_octets +
+      // mail_id / user_id) that drive the pg SUBSTRING body stream. The
+      // raw `text`/`html` strings are deliberately NOT requested — loading
+      // multi-MB columns per FETCH is the OOM path this stream fixed.
+      for (const f of [
+        "text_octets",
+        "html_octets",
+        "mail_id",
+        "user_id",
+        "subject",
+        "from",
+        "attachments",
+      ] as const) {
         expect(rfc.has(f)).toBe(true);
       }
+      expect(rfc.has("text")).toBe(false);
+      expect(rfc.has("html")).toBe(false);
     });
 
     it("RFC822.HEADER requests the same columns as BODY[HEADER]", () => {
@@ -209,8 +223,10 @@ describe("getRequestedFields", () => {
       // And no other fields — the difference is exactly one column.
       expect(size.size).toBe(body.size + 1);
       for (const f of [
-        "text",
-        "html",
+        "text_octets",
+        "html_octets",
+        "mail_id",
+        "user_id",
         "subject",
         "from",
         "to",
@@ -222,6 +238,11 @@ describe("getRequestedFields", () => {
       ] as const) {
         expect(size.has(f)).toBe(true);
       }
+      // The raw text/html columns are NOT requested — the size compute
+      // path also uses the streaming fields via computeFullMessageSize on
+      // a lazy segment list (measurement is pure math on `byteLength`).
+      expect(size.has("text")).toBe(false);
+      expect(size.has("html")).toBe(false);
     });
   });
 });

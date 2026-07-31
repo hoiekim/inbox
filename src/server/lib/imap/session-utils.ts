@@ -162,26 +162,84 @@ const rewriteContentType = (headers: string, replacement: string): string =>
   headers.replace(/Content-Type: [^\r\n]+/, replacement);
 
 /**
+ * A mail argument that may carry either the materialized body strings
+ * (`text` / `html` on the `MailType` shape) or the streaming metadata (the
+ * four `text_octets` / `html_octets` / `mail_id` / `user_id` fields
+ * projected by `getMailsByRange`). When all four streaming fields are set
+ * and the strings are absent, `buildMessageSegments` emits `lazy-text`
+ * segments — the body is streamed from Postgres via chunked SUBSTRING
+ * reads instead of being held in Node's heap.
+ */
+export type FetchMailInput = Partial<MailType> & {
+  text_octets?: number;
+  html_octets?: number;
+  mail_id?: string;
+  user_id?: string;
+};
+
+/** True iff the four synthetic fields are all set AND neither string is loaded. */
+const wantsLazyBodies = (mail: FetchMailInput): boolean =>
+  typeof mail.text_octets === "number" &&
+  typeof mail.html_octets === "number" &&
+  typeof mail.mail_id === "string" &&
+  typeof mail.user_id === "string" &&
+  mail.text === undefined &&
+  mail.html === undefined;
+
+/**
  * The RFC 822 serialization of `mail`, as an ordered segment list.
  *
  * Attachment bodies are referenced by id + resolved size, never read, so
  * building the list costs one `stat` per attachment regardless of mail size.
+ *
+ * When the caller opts into streaming (`wantsLazyBodies` — the four
+ * synthetic fields set, no `text` / `html` strings), the text/html body
+ * parts are emitted as `lazy-text` segments that read the column in chunked
+ * SUBSTRING reads at stream time. Peak transient per BODY[] fetch drops
+ * from O(body-length) to O(chunk).
  */
 export const buildMessageSegments = (
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   docId?: string
 ): MessageSegment[] => {
   const headers = formatHeaders(mail, docId);
-  const hasText = !!mail.text && mail.text.trim().length > 0;
-  const hasHtml = !!mail.html && mail.html.trim().length > 0;
+  const isLazy = wantsLazyBodies(mail);
+  // In lazy mode, `hasText`/`hasHtml` derive from `octet_length()` — the
+  // materialized `.trim()` check isn't possible without loading the column.
+  // A non-zero octet count is treated as "has content" even if the content
+  // is whitespace-only. Whitespace-only bodies are pathological in real
+  // mail and callers that need the trim-check semantics stay on the
+  // materialized path (pass `mail.text` / `mail.html`).
+  const hasText = isLazy
+    ? mail.text_octets! > 0
+    : !!mail.text && mail.text.trim().length > 0;
+  const hasHtml = isLazy
+    ? mail.html_octets! > 0
+    : !!mail.html && mail.html.trim().length > 0;
   const hasAttachments = !!mail.attachments && mail.attachments.length > 0;
 
   const segments: MessageSegment[] = [];
   const literal = (value: string): void => {
     segments.push({ kind: "literal", value });
   };
-  const base64 = (source: string): void => {
-    segments.push({ kind: "base64", source });
+  // Picks a `lazy-text` segment in lazy mode, a `base64` segment otherwise.
+  // Both encode to identical wire bytes for the same input column (see the
+  // split-input parity tests on emitBase64 in commit 2).
+  const pushBody = (which: "text" | "html"): void => {
+    if (isLazy) {
+      segments.push({
+        kind: "lazy-text",
+        source: which,
+        mail_id: mail.mail_id!,
+        user_id: mail.user_id!,
+        byteLength: which === "text" ? mail.text_octets! : mail.html_octets!,
+      });
+    } else {
+      segments.push({
+        kind: "base64",
+        source: (which === "text" ? mail.text! : mail.html!),
+      });
+    }
   };
 
   if (!hasText && !hasHtml && !hasAttachments) {
@@ -190,13 +248,13 @@ export const buildMessageSegments = (
   }
   if (hasText && !hasHtml && !hasAttachments) {
     literal(`${headers}\r\n\r\n`);
-    base64(mail.text!);
+    pushBody("text");
     literal(`\r\n`);
     return segments;
   }
   if (!hasText && hasHtml && !hasAttachments) {
     literal(`${headers}\r\n\r\n`);
-    base64(mail.html!);
+    pushBody("html");
     literal(`\r\n`);
     return segments;
   }
@@ -210,11 +268,11 @@ export const buildMessageSegments = (
   const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
 
   /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
-  const bodyPart = (delimiter: string, contentType: string, source: string): void => {
+  const bodyPart = (delimiter: string, contentType: string, which: "text" | "html"): void => {
     literal(`--${delimiter}\r\n`);
     literal(`Content-Type: ${contentType}; charset=utf-8\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    base64(source);
+    pushBody(which);
     literal(`\r\n`);
   };
 
@@ -225,8 +283,8 @@ export const buildMessageSegments = (
         `Content-Type: multipart/alternative; boundary="${boundary}"`
       )}\r\n\r\n`
     );
-    bodyPart(boundary, "text/plain", mail.text!);
-    bodyPart(boundary, "text/html", mail.html!);
+    bodyPart(boundary, "text/plain", "text");
+    bodyPart(boundary, "text/html", "html");
     literal(`--${boundary}--`);
     return segments;
   }
@@ -242,13 +300,13 @@ export const buildMessageSegments = (
   if (hasText && hasHtml) {
     literal(`--${boundary}\r\n`);
     literal(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-    bodyPart(altBoundary, "text/plain", mail.text!);
-    bodyPart(altBoundary, "text/html", mail.html!);
+    bodyPart(altBoundary, "text/plain", "text");
+    bodyPart(altBoundary, "text/html", "html");
     literal(`--${altBoundary}--\r\n`);
   } else if (hasText) {
-    bodyPart(boundary, "text/plain", mail.text!);
+    bodyPart(boundary, "text/plain", "text");
   } else if (hasHtml) {
-    bodyPart(boundary, "text/html", mail.html!);
+    bodyPart(boundary, "text/html", "html");
   }
 
   for (const att of mail.attachments!) {
@@ -313,7 +371,7 @@ export const sumSegmentBytes = (segments: MessageSegment[]): number =>
  * — see `buildBodyResponsePart` for the correct pattern.
  */
 export const computeFullMessageSize = (
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   docId?: string
 ): number => sumSegmentBytes(buildMessageSegments(mail, docId));
 
@@ -611,7 +669,7 @@ export async function* streamFromSegments(
  * `buildMessageSegments` result) for BODY[] / RFC822 — this function's
  * peak allocation is O(message), which is what #729 was about.
  */
-export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
+export const buildFullMessage = (mail: FetchMailInput, docId?: string): string => {
   const parts: string[] = [];
   for (const segment of buildMessageSegments(mail, docId)) {
     switch (segment.kind) {
@@ -621,6 +679,17 @@ export const buildFullMessage = (mail: Partial<MailType>, docId?: string): strin
       case "base64":
         parts.push(Buffer.from(segment.source, "utf8").toString("base64"));
         break;
+      case "lazy-text":
+        // The synchronous materializing path can't drive the pg SUBSTRING
+        // reader. Callers that need a materialized full message must load
+        // `mail.text` / `mail.html` up front — `getRequestedFields` picks
+        // the right shape for each BODY[...] section (TEXT + related keep
+        // the strings; FULL uses lazy fields).
+        throw new Error(
+          "buildFullMessage: cannot materialize a lazy-text segment. " +
+            "Caller must project mail.text / mail.html instead of the " +
+            "text_octets / html_octets streaming fields."
+        );
       case "attachment": {
         // Same length clamp as the streaming path, so a string built here and a
         // stream emitted there are byte-identical and both match `{N}`.

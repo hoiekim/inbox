@@ -45,6 +45,22 @@ import { logger, getUserDomain } from "server";
 type SimplifiedCriterion = { type: string; value?: unknown };
 
 /**
+ * A `Partial<Mail>` extended with the four synthetic streaming fields the
+ * IMAP BODY[] / RFC822 path opts into (`text_octets` / `html_octets` +
+ * `mail_id` / `user_id`). When all four are set and `text` / `html` are
+ * absent, `buildMessageSegments` emits `lazy-text` segments — the body is
+ * streamed from Postgres via chunked SUBSTRING reads rather than loaded as
+ * a string. Existing consumers that never request the octet fields see the
+ * same shape as `Partial<Mail>`.
+ */
+export type StoreFetchedMail = Partial<Mail> & {
+  text_octets?: number;
+  html_octets?: number;
+  mail_id?: string;
+  user_id?: string;
+};
+
+/**
  * Normalises a parsed SearchCriterion into the flat `{ type, value }` shape that
  * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
  * otherwise the SQL builder would read the wrong field off the raw parser shape
@@ -385,7 +401,7 @@ export class Store {
     end: number,
     fields: string[],
     useUid: boolean = false
-  ): Promise<Map<string, Partial<Mail>>> => {
+  ): Promise<Map<string, StoreFetchedMail>> => {
     try {
       const { mailboxArg, isSent } = this.resolveMappedBox(box);
       const mailModels = await getMailsByRange(
@@ -398,10 +414,10 @@ export class Store {
         fields.flatMap((f) => this.mapFieldName(f))
       );
 
-      const mails = new Map<string, Partial<Mail>>();
+      const mails = new Map<string, StoreFetchedMail>();
 
       for (const [id, model] of mailModels) {
-        const mail: Partial<Mail> = {
+        const mail: StoreFetchedMail = {
           messageId: model.message_id,
           subject: model.subject,
           date: model.date,
@@ -414,6 +430,17 @@ export class Store {
           draft: model.draft,
           answered: model.answered,
         };
+        // Streaming-body handoff (BODY[] / RFC822 path). When
+        // `getRequestedFields` opted into the pg SUBSTRING stream, these
+        // four fields carry the identity + pre-measured octet counts the
+        // segment builder needs to emit `lazy-text` segments instead of
+        // loading the multi-MB text/html columns. Only-set-if-defined so
+        // existing consumers (bare-FLAGS fetches etc.) that never
+        // requested them see the same shape as before.
+        if (model.text_octets !== undefined) mail.text_octets = model.text_octets;
+        if (model.html_octets !== undefined) mail.html_octets = model.html_octets;
+        if (model.mail_id !== undefined) mail.mail_id = model.mail_id;
+        if (model.user_id !== undefined) mail.user_id = model.user_id;
         if (model.uid_domain !== undefined) {
           mail.uid = {
             domain: model.uid_domain,
