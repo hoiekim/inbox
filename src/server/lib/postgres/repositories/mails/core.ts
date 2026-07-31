@@ -15,7 +15,10 @@ import {
   HTML_LINE_COUNT,
 } from "../../models";
 import { getNextModseq, writeMailboxUid } from "./counters";
-import { computeFullMessageSize } from "../../../imap/session-utils";
+import {
+  computeFullMessageSize,
+  type FetchMailInput,
+} from "../../../imap/session-utils";
 
 export interface SaveMailInput {
   user_id: string;
@@ -81,18 +84,28 @@ export const saveMail = async (
     const modseq = await getNextModseq(input.user_id);
     const text = input.text ?? "";
     const html = input.html ?? "";
-    // Reconstruct just the MailType shape that `computeFullMessageSize`
-    // touches — `formatHeaders` reads `.text` from each address, plus
-    // subject/messageId/date; `buildMessageSegments` reads text/html/
-    // attachments. Attachments are already on disk by the time
-    // saveMail is called (saveBuffer in receive.ts:355 completes before
-    // pgSaveMail), so the internal `fs.statSync` per attachment works.
-    const mailForSize: Partial<MailType> = {
+    const date = input.date ?? new Date().toISOString();
+    // Reconstruct just the shape `computeFullMessageSize` touches, using
+    // the LAZY-BODY synthetics (text_octets / html_octets / mail_id /
+    // user_id) with text/html left undefined. This forces
+    // `wantsLazyBodies` true, so `hasText`/`hasHtml` derive from octet
+    // counts — the same predicate every subsequent FETCH uses on the
+    // row returned by `getMailsByRange` (session-utils.ts:207-215). A
+    // materialized shape here would take the `.trim()` branch and drift
+    // on whitespace-only bodies (SIZE would omit the part, FETCH BODY[]
+    // would include it — SIZE ≠ {N}).
+    //
+    // Attachments are already on disk by the time saveMail is called
+    // (saveBuffer in receive.ts:355 completes before pgSaveMail), so
+    // the internal `fs.statSync` per attachment works.
+    const mailForSize: FetchMailInput = {
       messageId: input.message_id,
-      date: input.date ?? new Date().toISOString(),
+      date,
       subject: input.subject,
-      text,
-      html,
+      text_octets: Buffer.byteLength(text, "utf8"),
+      html_octets: Buffer.byteLength(html, "utf8"),
+      mail_id,
+      user_id: input.user_id,
       attachments: input.attachments as MailType["attachments"] | undefined,
       from: input.from_text ? { value: [], text: input.from_text } : undefined,
       to: input.to_text ? { value: [], text: input.to_text } : undefined,
@@ -108,7 +121,7 @@ export const saveMail = async (
       user_id: input.user_id,
       message_id: input.message_id,
       subject: input.subject ?? "",
-      date: input.date ?? new Date().toISOString(),
+      date,
       html,
       text,
       // Populated here so a mail inserted after this PR is always a
