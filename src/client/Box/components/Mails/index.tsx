@@ -746,11 +746,8 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  // Render whatever list we have — a fresh success, OR the IndexedDB-seeded /
-  // last-good data retained through a failed background revalidation (v3 keeps
-  // query.data on error; only a genuine no-data error reaches the screen above).
-  // Gating on isSuccess alone would blank the pane the instant a revalidation
-  // failed, defeating the offline-read paint. (#618/#622)
+  // Paired with the error guard above: gating on isSuccess alone would blank
+  // the pane the instant a revalidation failed, so render retained data too.
   if (query.isSuccess || query.data) {
     const mails = Array.isArray(query.data) ? query.data : [];
     const pagedMails = mails.slice(0, 4 + 8 * page);
