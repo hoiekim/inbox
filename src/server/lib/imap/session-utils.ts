@@ -9,6 +9,7 @@ import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from ".
 import { formatHeaders } from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
+import { pgTextChunks } from "server";
 import { CHUNK_BYTES } from "./chunked-write";
 
 /**
@@ -92,7 +93,22 @@ export type MessageSegment =
   /** `source` base64-encoded; sliced so the encoded form is never one allocation. */
   | { kind: "base64"; source: string }
   /** An attachment file, base64-encoded, read and emitted in slices. */
-  | { kind: "attachment"; dataId: string; rawSize: number; filename: string };
+  | { kind: "attachment"; dataId: string; rawSize: number; filename: string }
+  /**
+   * A `mails.text` or `mails.html` column, streamed via chunked
+   * `SUBSTRING` reads and base64-encoded. `byteLength` is the raw
+   * `octet_length(<col>)` measured at range-read time (see
+   * `PartialMailModel.text_octets` / `html_octets`), so the encoded byte
+   * count is pinned before the first chunk yields — the `{N}` literal
+   * cannot race the stream.
+   */
+  | {
+      kind: "lazy-text";
+      source: "text" | "html";
+      mail_id: string;
+      user_id: string;
+      byteLength: number;
+    };
 
 /**
  * Byte length of `4 * ceil(n/3)`-format base64 encoding of `n` input octets.
@@ -146,26 +162,84 @@ const rewriteContentType = (headers: string, replacement: string): string =>
   headers.replace(/Content-Type: [^\r\n]+/, replacement);
 
 /**
+ * A mail argument that may carry either the materialized body strings
+ * (`text` / `html` on the `MailType` shape) or the streaming metadata (the
+ * four `text_octets` / `html_octets` / `mail_id` / `user_id` fields
+ * projected by `getMailsByRange`). When all four streaming fields are set
+ * and the strings are absent, `buildMessageSegments` emits `lazy-text`
+ * segments — the body is streamed from Postgres via chunked SUBSTRING
+ * reads instead of being held in Node's heap.
+ */
+export type FetchMailInput = Partial<MailType> & {
+  text_octets?: number;
+  html_octets?: number;
+  mail_id?: string;
+  user_id?: string;
+};
+
+/** True iff the four synthetic fields are all set AND neither string is loaded. */
+const wantsLazyBodies = (mail: FetchMailInput): boolean =>
+  typeof mail.text_octets === "number" &&
+  typeof mail.html_octets === "number" &&
+  typeof mail.mail_id === "string" &&
+  typeof mail.user_id === "string" &&
+  mail.text === undefined &&
+  mail.html === undefined;
+
+/**
  * The RFC 822 serialization of `mail`, as an ordered segment list.
  *
  * Attachment bodies are referenced by id + resolved size, never read, so
  * building the list costs one `stat` per attachment regardless of mail size.
+ *
+ * When the caller opts into streaming (`wantsLazyBodies` — the four
+ * synthetic fields set, no `text` / `html` strings), the text/html body
+ * parts are emitted as `lazy-text` segments that read the column in chunked
+ * SUBSTRING reads at stream time. Peak transient per BODY[] fetch drops
+ * from O(body-length) to O(chunk).
  */
 export const buildMessageSegments = (
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   docId?: string
 ): MessageSegment[] => {
   const headers = formatHeaders(mail, docId);
-  const hasText = !!mail.text && mail.text.trim().length > 0;
-  const hasHtml = !!mail.html && mail.html.trim().length > 0;
+  const isLazy = wantsLazyBodies(mail);
+  // In lazy mode, `hasText`/`hasHtml` derive from `octet_length()` — the
+  // materialized `.trim()` check isn't possible without loading the column.
+  // A non-zero octet count is treated as "has content" even if the content
+  // is whitespace-only. Whitespace-only bodies are pathological in real
+  // mail and callers that need the trim-check semantics stay on the
+  // materialized path (pass `mail.text` / `mail.html`).
+  const hasText = isLazy
+    ? mail.text_octets! > 0
+    : !!mail.text && mail.text.trim().length > 0;
+  const hasHtml = isLazy
+    ? mail.html_octets! > 0
+    : !!mail.html && mail.html.trim().length > 0;
   const hasAttachments = !!mail.attachments && mail.attachments.length > 0;
 
   const segments: MessageSegment[] = [];
   const literal = (value: string): void => {
     segments.push({ kind: "literal", value });
   };
-  const base64 = (source: string): void => {
-    segments.push({ kind: "base64", source });
+  // Picks a `lazy-text` segment in lazy mode, a `base64` segment otherwise.
+  // Both encode to identical wire bytes for the same input column (see the
+  // split-input parity tests on emitBase64 in commit 2).
+  const pushBody = (which: "text" | "html"): void => {
+    if (isLazy) {
+      segments.push({
+        kind: "lazy-text",
+        source: which,
+        mail_id: mail.mail_id!,
+        user_id: mail.user_id!,
+        byteLength: which === "text" ? mail.text_octets! : mail.html_octets!,
+      });
+    } else {
+      segments.push({
+        kind: "base64",
+        source: (which === "text" ? mail.text! : mail.html!),
+      });
+    }
   };
 
   if (!hasText && !hasHtml && !hasAttachments) {
@@ -174,13 +248,13 @@ export const buildMessageSegments = (
   }
   if (hasText && !hasHtml && !hasAttachments) {
     literal(`${headers}\r\n\r\n`);
-    base64(mail.text!);
+    pushBody("text");
     literal(`\r\n`);
     return segments;
   }
   if (!hasText && hasHtml && !hasAttachments) {
     literal(`${headers}\r\n\r\n`);
-    base64(mail.html!);
+    pushBody("html");
     literal(`\r\n`);
     return segments;
   }
@@ -194,11 +268,11 @@ export const buildMessageSegments = (
   const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
 
   /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
-  const bodyPart = (delimiter: string, contentType: string, source: string): void => {
+  const bodyPart = (delimiter: string, contentType: string, which: "text" | "html"): void => {
     literal(`--${delimiter}\r\n`);
     literal(`Content-Type: ${contentType}; charset=utf-8\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    base64(source);
+    pushBody(which);
     literal(`\r\n`);
   };
 
@@ -209,8 +283,8 @@ export const buildMessageSegments = (
         `Content-Type: multipart/alternative; boundary="${boundary}"`
       )}\r\n\r\n`
     );
-    bodyPart(boundary, "text/plain", mail.text!);
-    bodyPart(boundary, "text/html", mail.html!);
+    bodyPart(boundary, "text/plain", "text");
+    bodyPart(boundary, "text/html", "html");
     literal(`--${boundary}--`);
     return segments;
   }
@@ -226,13 +300,13 @@ export const buildMessageSegments = (
   if (hasText && hasHtml) {
     literal(`--${boundary}\r\n`);
     literal(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-    bodyPart(altBoundary, "text/plain", mail.text!);
-    bodyPart(altBoundary, "text/html", mail.html!);
+    bodyPart(altBoundary, "text/plain", "text");
+    bodyPart(altBoundary, "text/html", "html");
     literal(`--${altBoundary}--\r\n`);
   } else if (hasText) {
-    bodyPart(boundary, "text/plain", mail.text!);
+    bodyPart(boundary, "text/plain", "text");
   } else if (hasHtml) {
-    bodyPart(boundary, "text/html", mail.html!);
+    bodyPart(boundary, "text/html", "html");
   }
 
   for (const att of mail.attachments!) {
@@ -261,6 +335,11 @@ const segmentByteLength = (segment: MessageSegment): number => {
       return base64ByteLen(Buffer.byteLength(segment.source, "utf8"));
     case "attachment":
       return base64ByteLen(segment.rawSize);
+    case "lazy-text":
+      // The raw byte count comes from `octet_length()` at range-read time —
+      // measured server-side against the same value the stream will pull, so
+      // the `{N}` literal cannot disagree with the pgTextChunks output.
+      return base64ByteLen(segment.byteLength);
   }
 };
 
@@ -292,7 +371,7 @@ export const sumSegmentBytes = (segments: MessageSegment[]): number =>
  * — see `buildBodyResponsePart` for the correct pattern.
  */
 export const computeFullMessageSize = (
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   docId?: string
 ): number => sumSegmentBytes(buildMessageSegments(mail, docId));
 
@@ -329,45 +408,128 @@ async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown
  * is O(SLICE_RAW_BYTES) regardless of source length — both input and output
  * are chunked, matching `emitAttachment`'s streaming shape.
  *
- * Two invariants the chunking has to preserve:
- * 1. **Surrogate pairs stay whole.** `source` is UTF-16; slicing at code-
- *    unit boundaries can land between the high and low half of an emoji.
- *    Each isolated half round-trips to U+FFFD (3 bytes), so a split pair
- *    emits 6 bytes where the whole encodes to 4 — a 2-byte wire overrun vs.
- *    the pre-measured `{N}` literal, corrupting every subsequent response
- *    on the connection. `end` is nudged back one code unit when it would
- *    land after a high surrogate.
+ * `source` may be a whole string (the legacy shape — for callers that hold
+ * `mail.text` / `mail.html` in memory) OR an `AsyncIterable<string>` (the
+ * streaming shape — for the pg SUBSTRING chunk reader). Both feed the same
+ * carry-aware core so a source split into N chunks produces byte-identical
+ * output to the same source as one string.
+ *
+ * Three invariants the chunking has to preserve:
+ * 1. **Surrogate pairs stay whole.** JavaScript strings are UTF-16; slicing
+ *    at code-unit boundaries can land between the high and low half of an
+ *    emoji. Each isolated half round-trips to U+FFFD (3 bytes), so a split
+ *    pair emits 6 bytes where the whole encodes to 4 — a 2-byte wire
+ *    overrun vs. the pre-measured `{N}` literal, corrupting every
+ *    subsequent response on the connection. `end` is nudged back one code
+ *    unit when it would land after a high surrogate AND there is more input
+ *    coming (either later in the buffered string, or in a later upstream
+ *    chunk). The `unless-source-is-done` guard on that latter case is what
+ *    keeps a genuinely-lone high surrogate at the tail encoding to U+FFFD
+ *    (same as `Buffer.from(str, "utf8")`) instead of getting orphaned.
  * 2. **Intermediate slices are 3-byte-aligned raw.** Base64 encodes 3 raw
  *    bytes to 4 chars; a non-multiple-of-3 slice emits `=` padding, and
  *    padded slices concatenated ≠ base64 of the concatenated raw. Residual
  *    (0–2 bytes) carries to the next iteration; the final slice is emitted
  *    whole (padding at the end is legal).
+ * 3. **Bytes concatenate across upstream chunks.** For chunked sources, a
+ *    multi-byte UTF-8 sequence never straddles a chunk boundary at the
+ *    STRING level (`charBuf += value` keeps the string intact before UTF-8
+ *    encoding), and both the surrogate carry (a lone high surrogate at the
+ *    end of a buffered chunk) and the byte-alignment carry (0–2 residual
+ *    bytes) survive across upstream refills.
  */
-async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
-  if (source.length === 0) return;
+async function* emitBase64(
+  source: string | AsyncIterable<string>
+): AsyncGenerator<Buffer, void, unknown> {
+  if (typeof source === "string") {
+    if (source.length === 0) return;
+    yield* emitBase64Chunks(singleStringSource(source));
+    return;
+  }
+  yield* emitBase64Chunks(source);
+}
+
+/** Adapt a single string to the async chunk iterable shape. */
+async function* singleStringSource(s: string): AsyncGenerator<string, void, unknown> {
+  yield s;
+}
+
+async function* emitBase64Chunks(
+  source: AsyncIterable<string>
+): AsyncGenerator<Buffer, void, unknown> {
   // Worst-case UTF-8 expansion is 3 bytes per BMP code unit (surrogate pairs
   // are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing by
   // SLICE_RAW_BYTES/3 code units guarantees the encoded chunk stays under
   // SLICE_RAW_BYTES.
   const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3);
-  let carry: Buffer | null = null;
-  let offset = 0;
-  while (offset < source.length) {
-    let end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
-    // If `end` lands after a high surrogate and there's a next slice, the
-    // low surrogate would go to the next slice and both halves would
-    // encode to U+FFFD. Back off one code unit so the whole pair goes in
-    // the next slice.
-    if (end < source.length && isHighSurrogate(source.charCodeAt(end - 1))) {
-      end -= 1;
+  let byteCarry: Buffer | null = null;
+  let charBuf = "";
+  let done = false;
+  const it = source[Symbol.asyncIterator]();
+
+  const pullOne = async (): Promise<boolean> => {
+    if (done) return false;
+    const { value, done: d } = await it.next();
+    if (d) {
+      done = true;
+      return false;
     }
-    let bytes = Buffer.from(source.slice(offset, end), "utf8");
-    offset = end;
-    if (carry) {
-      bytes = Buffer.concat([carry, bytes] as unknown as Uint8Array[]);
-      carry = null;
+    if (typeof value === "string" && value.length > 0) {
+      charBuf += value;
+      return true;
     }
-    if (offset < source.length) {
+    return false;
+  };
+
+  const fillAtLeast = async (n: number): Promise<void> => {
+    // pullOne returns false on both done AND empty-string yields — either
+    // way don't spin. A well-behaved iterable eventually either yields
+    // content or ends; a pathological one that yields "" forever without
+    // done just stops filling, and the outer loop breaks on `charBuf.length
+    // === 0`.
+    while (charBuf.length < n && !done) {
+      if (!(await pullOne())) break;
+    }
+  };
+
+  while (charBuf.length > 0 || !done) {
+    // Need CHUNK_CODE_UNITS + 1 chars to detect a trailing high surrogate at
+    // position CHUNK_CODE_UNITS-1 with certainty; if upstream ends sooner,
+    // take whatever we have.
+    await fillAtLeast(CHUNK_CODE_UNITS + 1);
+    if (charBuf.length === 0) break;
+
+    let end = Math.min(CHUNK_CODE_UNITS, charBuf.length);
+    const isHighSurrogateAtEnd = isHighSurrogate(charBuf.charCodeAt(end - 1));
+    if (isHighSurrogateAtEnd) {
+      // Nudge back one code unit so the pair stays whole. Two cases:
+      //  (a) `end < charBuf.length` — the low half is in charBuf; the next
+      //      slice picks up the pair. Always nudge.
+      //  (b) `end === charBuf.length && !done` — the low half might still be
+      //      coming from upstream. Nudge and let the next iteration's fill
+      //      pull it in.
+      //  (c) `end === charBuf.length && done` — no more input; the high
+      //      surrogate is genuinely lone. Emit as-is (Buffer.from will encode
+      //      it to U+FFFD, matching the whole-string path).
+      if (end < charBuf.length || !done) end -= 1;
+    }
+
+    let bytes = Buffer.from(charBuf.slice(0, end), "utf8");
+    charBuf = charBuf.slice(end);
+
+    if (byteCarry) {
+      bytes = Buffer.concat([byteCarry, bytes] as unknown as Uint8Array[]);
+      byteCarry = null;
+    }
+
+    // Determine whether this is the FINAL slice: charBuf empty AND upstream
+    // exhausted. If charBuf is empty but upstream is still open, drain one
+    // more pull so the answer is definite (necessary so a residual only
+    // carries when there is actually more base64 to emit afterwards).
+    if (charBuf.length === 0 && !done) await pullOne();
+    const isFinal = charBuf.length === 0 && done;
+
+    if (!isFinal) {
       // Align to multiple-of-3 and carry the residual to keep base64
       // concatenation lossless.
       const residualLen = bytes.byteLength % 3;
@@ -375,7 +537,7 @@ async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown
         // Copy the trailing 1–2 bytes out so `bytes` can be GC'd — a
         // `subarray` view would pin the whole underlying ArrayBuffer.
         const tail = bytes.subarray(bytes.byteLength - residualLen);
-        carry = Buffer.from(tail as unknown as Uint8Array);
+        byteCarry = Buffer.from(tail as unknown as Uint8Array);
         bytes = bytes.subarray(0, bytes.byteLength - residualLen);
       }
     }
@@ -386,6 +548,15 @@ async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown
 
 const isHighSurrogate = (charCode: number): boolean =>
   charCode >= 0xd800 && charCode <= 0xdbff;
+
+/**
+ * Test-only handle on `emitBase64` — the split-input parity tests exercise
+ * it directly (feeding the same source as `[whole]` vs. `[chunkA, chunkB]`
+ * vs. `[char, char, ...]`) to guarantee an upstream chunk boundary can
+ * never desync the base64 output from the whole-string encoding. Prefixed
+ * with `_` so it reads as internal at every call site.
+ */
+export const _emitBase64ForTests = emitBase64;
 
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
@@ -486,6 +657,16 @@ export async function* streamFromSegments(
       case "attachment":
         yield* emitAttachment(segment);
         break;
+      case "lazy-text":
+        // Stream the mails.<source> column via chunked SUBSTRING reads.
+        // Both the char-carry (surrogate at chunk boundary) and byte-carry
+        // (3-byte alignment) inside emitBase64 survive across upstream
+        // pgTextChunks pulls, so the encoded output equals what a whole-
+        // string encode of the same column would produce.
+        yield* emitBase64(
+          pgTextChunks(segment.mail_id, segment.user_id, segment.source)
+        );
+        break;
     }
   }
 }
@@ -499,7 +680,7 @@ export async function* streamFromSegments(
  * `buildMessageSegments` result) for BODY[] / RFC822 — this function's
  * peak allocation is O(message), which is what #729 was about.
  */
-export const buildFullMessage = (mail: Partial<MailType>, docId?: string): string => {
+export const buildFullMessage = (mail: FetchMailInput, docId?: string): string => {
   const parts: string[] = [];
   for (const segment of buildMessageSegments(mail, docId)) {
     switch (segment.kind) {
@@ -509,6 +690,17 @@ export const buildFullMessage = (mail: Partial<MailType>, docId?: string): strin
       case "base64":
         parts.push(Buffer.from(segment.source, "utf8").toString("base64"));
         break;
+      case "lazy-text":
+        // The synchronous materializing path can't drive the pg SUBSTRING
+        // reader. Callers that need a materialized full message must load
+        // `mail.text` / `mail.html` up front — `getRequestedFields` picks
+        // the right shape for each BODY[...] section (TEXT + related keep
+        // the strings; FULL uses lazy fields).
+        throw new Error(
+          "buildFullMessage: cannot materialize a lazy-text segment. " +
+            "Caller must project mail.text / mail.html instead of the " +
+            "text_octets / html_octets streaming fields."
+        );
       case "attachment": {
         // Same length clamp as the streaming path, so a string built here and a
         // stream emitted there are byte-identical and both match `{N}`.

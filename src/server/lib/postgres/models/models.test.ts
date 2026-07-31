@@ -360,6 +360,38 @@ describe("PartialMailModel", () => {
       expect((e as ModelValidationError).message).toContain("totally_fake_col");
     }
   });
+
+  it("accepts the octet-length synthetic fields as numbers", () => {
+    // `text_octets` and `html_octets` are populated by `octet_length()` in
+    // the IMAP range query, not stored on the row. Verify they validate as
+    // numbers alongside a real column, and that they reject non-numbers so a
+    // mis-projected row surfaces the mismatch instead of silently coercing.
+    const pm = new PartialMailModel(
+      ["mail_id", "text_octets", "html_octets"],
+      {
+        mail_id: "aaaaaaaa-0000-0000-0000-000000000001",
+        text_octets: 12345,
+        html_octets: 67890,
+      }
+    );
+    expect(pm.text_octets).toBe(12345);
+    expect(pm.html_octets).toBe(67890);
+  });
+
+  it("rejects non-numeric text_octets / html_octets", () => {
+    expect(
+      () =>
+        new PartialMailModel(["text_octets"], {
+          text_octets: "12345" as unknown as number,
+        })
+    ).toThrow(ModelValidationError);
+    expect(
+      () =>
+        new PartialMailModel(["html_octets"], {
+          html_octets: null as unknown as number,
+        })
+    ).toThrow(ModelValidationError);
+  });
 });
 
 // ---------------------------------------------------------------------------

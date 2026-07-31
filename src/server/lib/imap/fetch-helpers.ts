@@ -154,8 +154,23 @@ export function getBodyContent(
 // Requested fields
 // ---------------------------------------------------------------------------
 
-export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailType> {
-  const fields = new Set<keyof MailType>(["uid"]);
+/**
+ * Union of `MailType`'s materialized field names and the four synthetic
+ * streaming fields (`text_octets` / `html_octets` / `mail_id` / `user_id`)
+ * the BODY[FULL] / RFC822 path adds to drive the pg SUBSTRING body stream.
+ * Widening the set type to include these keeps the strings out of Node's
+ * heap for large mails while still passing through the store's field-
+ * mapping layer unchanged (unknown fields flow through as-is).
+ */
+export type FetchRequestedField =
+  | keyof MailType
+  | "text_octets"
+  | "html_octets"
+  | "mail_id"
+  | "user_id";
+
+export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequestedField> {
+  const fields = new Set<FetchRequestedField>(["uid"]);
 
   for (const item of dataItems) {
     switch (item.type) {
@@ -226,12 +241,24 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<keyof MailTy
 
 export function addBodyFields(
   bodyFetch: BodyFetch,
-  fields: Set<keyof MailType>
+  fields: Set<FetchRequestedField>
 ): void {
   switch (bodyFetch.section.type) {
     case "FULL":
-      fields.add("text");
-      fields.add("html");
+      // Partial fetch (`BODY[]<start.length>`) falls through to
+      // `buildFullMessage`, a synchronous materializer that can't drive
+      // the async pg reader — it needs the whole `text` / `html`
+      // strings loaded, not the octet counts. Full-body pulls skip
+      // the strings and stream via `pgTextChunks`.
+      if (bodyFetch.partial) {
+        fields.add("text");
+        fields.add("html");
+      } else {
+        fields.add("text_octets");
+        fields.add("html_octets");
+        fields.add("mail_id");
+        fields.add("user_id");
+      }
       fields.add("subject");
       fields.add("from");
       fields.add("to");

@@ -20,6 +20,54 @@ import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
 
 /**
+ * Character-length chunk size for the SUBSTRING body-streaming reader. Chosen
+ * so the encoded UTF-8 chunk stays under SLICE_RAW_BYTES (48 KiB) in the
+ * emitBase64 pipeline: worst-case UTF-8 expansion is 4 bytes per character,
+ * so 12 000 chars → up to 48 000 bytes → fits safely under 49 152. Pg's
+ * SUBSTRING is CHARACTER-indexed, not byte-indexed, so the constant is in
+ * characters (code points), not bytes.
+ */
+export const PG_TEXT_CHUNK_CHARS = 12_000;
+
+/**
+ * Stream one mail row's `text` or `html` column in fixed-size character
+ * chunks. Each round-trip pulls at most PG_TEXT_CHUNK_CHARS characters via a
+ * `SUBSTRING(<col> FROM $off FOR $chunk)` query — the whole column never
+ * loads into Node's heap. Complements `getMailsByRange`'s `text_octets` /
+ * `html_octets` synthetic projections: the caller pre-measures the `{N}`
+ * literal from the octet count, then streams the body via this generator.
+ *
+ * Stops when a SUBSTRING call returns an empty string (Postgres serves an
+ * empty string for offsets past the column length, which is the natural
+ * terminator).
+ *
+ * The `sourceColumn` is a hard-coded literal, not user input — narrowed to
+ * "text" | "html" at the type level so it can be interpolated into the SQL
+ * safely.
+ */
+export async function* pgTextChunks(
+  mail_id: string,
+  user_id: string,
+  sourceColumn: "text" | "html",
+  chunkChars: number = PG_TEXT_CHUNK_CHARS
+): AsyncGenerator<string, void, unknown> {
+  // Postgres SUBSTRING(text FROM start FOR len): `start` is 1-indexed. We
+  // step by `chunkChars` chars each round-trip; a chunk shorter than
+  // `chunkChars` OR empty means we've drained the column.
+  let offset = 1;
+  for (;;) {
+    const sql = `SELECT SUBSTRING(${sourceColumn} FROM $3 FOR $4) AS chunk
+                 FROM mails WHERE mail_id = $1 AND user_id = $2`;
+    const result = await pool.query(sql, [mail_id, user_id, offset, chunkChars]);
+    const chunk = (result.rows[0]?.chunk ?? "") as string;
+    if (chunk.length === 0) return;
+    yield chunk;
+    if (chunk.length < chunkChars) return;
+    offset += chunk.length;
+  }
+}
+
+/**
  * Callers pass `mailbox` as the raw IMAP box path (e.g. `INBOX/accounts/amazon`,
  * `Sent Messages/accounts/claoie`, or a user-created box like `Archive`) — the
  * exact string the write side stores in `mail_mailbox_uid.mailbox`. `null` is
@@ -164,15 +212,26 @@ const getMailsByRangeUncoalesced = async (
     if (!safeFields.includes("mail_id")) {
       safeFields.unshift("mail_id");
     }
-    // `uid_mailbox` is a synthetic PartialMailModel field, not a mails column
-    // (see mail.ts:partialSyntheticFieldCheckers). Handle its projection
-    // separately from the mails-column SELECT list: for a per-mailbox query
-    // it comes from the JOIN alias `x.uid AS uid_mailbox`; for domain-scoped
-    // views it aliases `uid_domain` (the domain UID is the "mailbox" UID for
-    // INBOX / unified Sent Messages). Strip it from `mailsColumns` so the
-    // literal name never appears in the mails-side SELECT list.
+    // Synthetic PartialMailModel fields are not `mails` columns (see
+    // mail.ts:partialSyntheticFieldCheckers) — each has its own projection
+    // rule. `uid_mailbox` aliases the JOIN's per-mailbox UID (or `uid_domain`
+    // for domain-scoped views). `text_octets` / `html_octets` project
+    // `octet_length()` of the respective TEXT column so a stream caller can
+    // pre-measure the `{N}` literal without loading the body. Strip these
+    // names from the mails-side SELECT list so they never appear as literal
+    // column references.
     const wantsUidMailbox = safeFields.includes("uid_mailbox");
-    const mailsColumns = safeFields.filter((f) => f !== "uid_mailbox");
+    const wantsTextOctets = safeFields.includes("text_octets");
+    const wantsHtmlOctets = safeFields.includes("html_octets");
+    const syntheticNames = new Set(["uid_mailbox", "text_octets", "html_octets"]);
+    const mailsColumns = safeFields.filter((f) => !syntheticNames.has(f));
+
+    const octetProjections = (prefix: string): string => {
+      const parts: string[] = [];
+      if (wantsTextOctets) parts.push(`octet_length(${prefix}text) AS text_octets`);
+      if (wantsHtmlOctets) parts.push(`octet_length(${prefix}html) AS html_octets`);
+      return parts.length ? ", " + parts.join(", ") : "";
+    };
 
     if (mailbox === null) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
@@ -181,7 +240,7 @@ const getMailsByRangeUncoalesced = async (
       const uidMailboxAlias = wantsUidMailbox
         ? `, ${UID_DOMAIN} AS uid_mailbox`
         : "";
-      const fieldList = `${projection}${uidMailboxAlias}`;
+      const fieldList = `${projection}${uidMailboxAlias}${octetProjections("")}`;
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails
@@ -211,9 +270,10 @@ const getMailsByRangeUncoalesced = async (
       const uidMailboxAlias = wantsUidMailbox
         ? `${qualifiedFields ? ", " : ""}x.${UID} AS uid_mailbox`
         : "";
+      const octetsFragment = octetProjections("m.");
       const fieldList =
-        qualifiedFields.length + uidMailboxAlias.length > 0
-          ? `${qualifiedFields}${uidMailboxAlias}`
+        qualifiedFields.length + uidMailboxAlias.length + octetsFragment.length > 0
+          ? `${qualifiedFields}${uidMailboxAlias}${octetsFragment}`
           : "m.*";
       if (useUid) {
         sql = `

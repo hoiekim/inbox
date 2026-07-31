@@ -54,7 +54,8 @@ import {
   buildMessageSegments,
   streamFromSegments,
   getBodyPart,
-  getBodyPartHeaders
+  getBodyPartHeaders,
+  _emitBase64ForTests
 } from "./session-utils";
 import type {
   BodySection,
@@ -796,6 +797,122 @@ describe("streamFromSegments — emitBase64 input chunking", () => {
     // Headers-only, no body segment output between headers and terminating CRLF.
     expect(wire).toContain("MIME-Version: 1.0");
     expect(wire).not.toMatch(/base64\r\n\r\n[A-Za-z0-9+/=]+/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // emitBase64 chunked-source parity. Feeding the same source as one whole
+  // string vs. as an async iterable of N pieces must produce byte-identical
+  // output — the pg SUBSTRING streaming path relies on this. Any split at a
+  // surrogate pair, at a multi-byte UTF-8 continuation, or at a random code-
+  // unit boundary must round-trip correctly.
+  // ---------------------------------------------------------------------------
+
+  const drainStrChunks = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c);
+    return Buffer.concat(chunks);
+  };
+
+  const asyncOf = (items: string[]): AsyncIterable<string> => ({
+    async *[Symbol.asyncIterator]() {
+      for (const item of items) yield item;
+    },
+  });
+
+  const splitIntoNChunks = (s: string, n: number): string[] => {
+    const chunks: string[] = [];
+    const size = Math.ceil(s.length / n);
+    for (let i = 0; i < s.length; i += size) chunks.push(s.slice(i, i + size));
+    return chunks;
+  };
+
+  it("split-input parity: whole-string, 2-chunk, 10-chunk, 1000-chunk all match", async () => {
+    // ASCII case first — a clean cross-boundary test with no UTF-8 hazards,
+    // so any divergence is purely the chunking algorithm's fault.
+    const src = "a".repeat(100_000) + "-END-";
+    const whole = (await drainStrChunks(_emitBase64ForTests(src))).toString("utf8");
+    for (const n of [1, 2, 3, 10, 100, 1000]) {
+      const chunks = splitIntoNChunks(src, n);
+      const out = (
+        await drainStrChunks(_emitBase64ForTests(asyncOf(chunks)))
+      ).toString("utf8");
+      expect(out).toBe(whole);
+    }
+  });
+
+  it("split-input parity holds when a multi-byte UTF-8 sequence straddles a chunk boundary", async () => {
+    // "🚀" is a UTF-16 surrogate pair (2 code units → 4 UTF-8 bytes). Split
+    // the source such that the emoji lands at position 5000, then chunk it
+    // in ways that put the surrogate pair boundary at various places:
+    //   [len 5000 (before pair), len rest (from pair start)]
+    //   [len 5001 (mid-pair), len rest (from low surrogate)]
+    const src = "a".repeat(5000) + "🚀" + "b".repeat(5000);
+    const whole = (await drainStrChunks(_emitBase64ForTests(src))).toString("utf8");
+
+    // Split BEFORE the pair — clean chunk boundary.
+    const before = [src.slice(0, 5000), src.slice(5000)];
+    expect((await drainStrChunks(_emitBase64ForTests(asyncOf(before)))).toString("utf8"))
+      .toBe(whole);
+
+    // Split MID pair — chunk1 ends with the high surrogate, chunk2 starts
+    // with the low. Naive encode would drop each half to U+FFFD (3 bytes
+    // each) instead of the pair's 4 bytes. The char-carry across chunks
+    // keeps the pair whole.
+    const mid = [src.slice(0, 5001), src.slice(5001)];
+    expect((await drainStrChunks(_emitBase64ForTests(asyncOf(mid)))).toString("utf8"))
+      .toBe(whole);
+  });
+
+  it("split-input parity holds for a source split at every single code unit", async () => {
+    // Extreme case — every chunk is one code unit long. The high-surrogate
+    // carry has to bridge across two consecutive one-char chunks; the
+    // 3-byte-alignment carry has to bridge across dozens.
+    const src = "a".repeat(500) + "🚀 café ☕ 日本語 😀" + "b".repeat(500);
+    const whole = (await drainStrChunks(_emitBase64ForTests(src))).toString("utf8");
+    const oneCharEach = Array.from(src);
+    const out = (
+      await drainStrChunks(_emitBase64ForTests(asyncOf(oneCharEach)))
+    ).toString("utf8");
+    expect(out).toBe(whole);
+    // Confirm the emoji round-tripped through base64.
+    const decoded = Buffer.from(out, "base64").toString("utf8");
+    expect(decoded).toBe(src);
+  });
+
+  it("empty async source yields nothing", async () => {
+    const out = await drainStrChunks(_emitBase64ForTests(asyncOf([])));
+    expect(out.byteLength).toBe(0);
+  });
+
+  it("async source of only empty strings yields nothing", async () => {
+    const out = await drainStrChunks(
+      _emitBase64ForTests(asyncOf(["", "", ""]))
+    );
+    expect(out.byteLength).toBe(0);
+  });
+
+  it("split at every point across a source spanning a SLICE_RAW_BYTES boundary", async () => {
+    // Cross the 48 KiB slice boundary with a source that has a surrogate pair
+    // at a strategic location, then split it in a bunch of different places
+    // — each split point exercises a different code path in the carry logic.
+    const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3); // 16384
+    const filler = "x".repeat(CHUNK_CODE_UNITS + 100);
+    const src = filler + "🚀" + "y".repeat(100);
+    const whole = (await drainStrChunks(_emitBase64ForTests(src))).toString("utf8");
+
+    // Split at various offsets around the slice boundary.
+    for (const at of [1, 100, CHUNK_CODE_UNITS - 1, CHUNK_CODE_UNITS,
+                     CHUNK_CODE_UNITS + 1, CHUNK_CODE_UNITS + 100,
+                     CHUNK_CODE_UNITS + 101 /* mid pair */,
+                     CHUNK_CODE_UNITS + 102, src.length - 1]) {
+      const chunks = [src.slice(0, at), src.slice(at)];
+      const out = (
+        await drainStrChunks(_emitBase64ForTests(asyncOf(chunks)))
+      ).toString("utf8");
+      expect(out).toBe(whole);
+    }
   });
 
   it("preserves byte-for-byte parity with buildFullMessage for the same mail", async () => {
