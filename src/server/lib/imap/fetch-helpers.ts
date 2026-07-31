@@ -33,6 +33,7 @@ import {
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 import { withBodyBudget, withBodyBudgetStream } from "./body-budget";
+import { withStreamMutex } from "./stream-mutex";
 import {
   updateRfc822Size,
   updateLineCounts,
@@ -416,10 +417,17 @@ export async function buildBodyResponsePart(
   // before the first chunk yields and the count cannot disagree with the
   // payload. The stream holds only one 48 KiB slice at a time.
   //
-  // Skips the shared body-buffer cache (getSharedBodyResult): streaming makes
-  // each build cheap enough that caching gives no RSS win, and iOS Mail's
-  // abort-and-retry pattern becomes a re-stream from disk instead of a
-  // re-materialization. The cache is retained for TEXT / HEADER / partial.
+  // Skips the shared body-buffer cache (getSharedBodyResult): streaming
+  // keeps per-fetch peak sub-MB, so caching the resolved Buffer would
+  // add an O(body) materialization cost — the very cost #733 was
+  // written to eliminate. The cache is retained for TEXT / HEADER /
+  // partial where materialization is unavoidable anyway.
+  //
+  // Instead, `withStreamMutex(key, ...)` serializes SAME-KEY streams:
+  // one iOS-pipelined `UID FETCH X (UID BODY)` on the same UID runs to
+  // completion before the next fresh stream for that UID starts. Cuts
+  // duplicate PG round-trips + duplicate in-flight chunk buffers under
+  // the retry-storm shape without materializing.
   //
   // Still inside the body budget: this is the largest fetch shape, so leaving
   // it uncapped would let K concurrent sockets each stream a distinct large
@@ -439,10 +447,16 @@ export async function buildBodyResponsePart(
     // must emit it too.
     const segments = buildMessageSegments(mail, docId);
     const length = sumSegmentBytes(segments);
-    const stream = withBodyBudgetStream(async function* () {
-      yield* streamFromSegments(segments);
-      yield Buffer.from("\r\n", "utf8");
-    });
+    // Acquire the per-key mutex OUTSIDE the byte-budget so a queued
+    // same-key waiter doesn't pin a byte-slot while it waits. When it
+    // owns the key, it then acquires the byte budget for its stream.
+    const streamKey = bodyBufferKey(docId, sectionKey);
+    const stream = withStreamMutex(streamKey, () =>
+      withBodyBudgetStream(async function* () {
+        yield* streamFromSegments(segments);
+        yield Buffer.from("\r\n", "utf8");
+      })
+    );
     return {
       type: "stream",
       stream,
