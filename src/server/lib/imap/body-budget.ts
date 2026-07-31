@@ -5,12 +5,12 @@
  * concurrent body streams for the same `(mail, sectionKey)`, and
  * PR #710 coalesced the DB read the same way. Neither bounds the
  * AGGREGATE bytes in flight across DISTINCT concurrent large-body work
- * — a common iOS Mail / K-9 pattern is one client opening several
+ * — the common iOS Mail / K-9 pattern is one client opening several
  * account tabs at once and issuing `UID FETCH … BODY[]` in parallel
- * against different mailboxes / different UIDs. Under a count-only cap
- * (`IMAP_BODY_FETCH_CONCURRENCY=3`) three concurrent ~100 MB body
- * builds still crossed the 256 MiB cgroup and OOM-killed the container
- * (2026-07-30 23:52 UTC).
+ * against different mailboxes / different UIDs. A count-only cap of N
+ * concurrent builds still lets N × per-build peak RSS cross the
+ * container's cgroup ceiling, and no local per-build optimization
+ * prevents the aggregate from OOM-killing the container.
  *
  * This module holds two independent caps that acquires must both fit
  * under:
@@ -20,7 +20,7 @@
  *    where each is small.
  * 2. **Bytes in flight** — `IMAP_BODY_FETCH_MEMORY_MB` (default 128 MiB,
  *    half the 256 MiB cgroup). Bounds the AGGREGATE bytes reserved by
- *    in-flight builds — the case count alone doesn't catch.
+ *    in-flight builds — what the count cap alone doesn't catch.
  *
  * Callers wrap large-body work in `withBodyBudget(bytes, fn)` (or
  * `withBodyBudgetStream(bytes, makeStream)` for streams) and pass the
@@ -91,8 +91,18 @@ interface Waiter {
 const waitQueue: Waiter[] = [];
 
 /**
- * Per-request wait accumulator. Same shape as before — the memory cap
- * addition didn't alter its contract.
+ * Per-request wait accumulator. Bound at the top of the IMAP command
+ * handler via `runInBodyBudgetContext(fn)`; every `withBodyBudget` call
+ * that runs INSIDE `fn` (even across `await` boundaries and nested
+ * async work) adds its measured wait to the SAME `{ ms }` object.
+ * The handler reads the total from `getBodyBudgetWaitMs()` at the end.
+ *
+ * Load-bearing: without AsyncLocalStorage the wait latency would sit on
+ * a module-scoped variable that concurrent handlers overwrite (handler
+ * A yields inside `await withBodyBudget`, handler B on a different
+ * socket acquires and writes its OWN wait time to the shared cell,
+ * then A resumes and reads B's value). AsyncLocalStorage keeps each
+ * request's ledger separate.
  */
 const waitStore = new AsyncLocalStorage<{ ms: number }>();
 
