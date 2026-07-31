@@ -164,15 +164,26 @@ const getMailsByRangeUncoalesced = async (
     if (!safeFields.includes("mail_id")) {
       safeFields.unshift("mail_id");
     }
-    // `uid_mailbox` is a synthetic PartialMailModel field, not a mails column
-    // (see mail.ts:partialSyntheticFieldCheckers). Handle its projection
-    // separately from the mails-column SELECT list: for a per-mailbox query
-    // it comes from the JOIN alias `x.uid AS uid_mailbox`; for domain-scoped
-    // views it aliases `uid_domain` (the domain UID is the "mailbox" UID for
-    // INBOX / unified Sent Messages). Strip it from `mailsColumns` so the
-    // literal name never appears in the mails-side SELECT list.
+    // Synthetic PartialMailModel fields are not `mails` columns (see
+    // mail.ts:partialSyntheticFieldCheckers) — each has its own projection
+    // rule. `uid_mailbox` aliases the JOIN's per-mailbox UID (or `uid_domain`
+    // for domain-scoped views). `text_octets` / `html_octets` project
+    // `octet_length()` of the respective TEXT column so a stream caller can
+    // pre-measure the `{N}` literal without loading the body. Strip these
+    // names from the mails-side SELECT list so they never appear as literal
+    // column references.
     const wantsUidMailbox = safeFields.includes("uid_mailbox");
-    const mailsColumns = safeFields.filter((f) => f !== "uid_mailbox");
+    const wantsTextOctets = safeFields.includes("text_octets");
+    const wantsHtmlOctets = safeFields.includes("html_octets");
+    const syntheticNames = new Set(["uid_mailbox", "text_octets", "html_octets"]);
+    const mailsColumns = safeFields.filter((f) => !syntheticNames.has(f));
+
+    const octetProjections = (prefix: string): string => {
+      const parts: string[] = [];
+      if (wantsTextOctets) parts.push(`octet_length(${prefix}text) AS text_octets`);
+      if (wantsHtmlOctets) parts.push(`octet_length(${prefix}html) AS html_octets`);
+      return parts.length ? ", " + parts.join(", ") : "";
+    };
 
     if (mailbox === null) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
@@ -181,7 +192,7 @@ const getMailsByRangeUncoalesced = async (
       const uidMailboxAlias = wantsUidMailbox
         ? `, ${UID_DOMAIN} AS uid_mailbox`
         : "";
-      const fieldList = `${projection}${uidMailboxAlias}`;
+      const fieldList = `${projection}${uidMailboxAlias}${octetProjections("")}`;
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails
@@ -211,9 +222,10 @@ const getMailsByRangeUncoalesced = async (
       const uidMailboxAlias = wantsUidMailbox
         ? `${qualifiedFields ? ", " : ""}x.${UID} AS uid_mailbox`
         : "";
+      const octetsFragment = octetProjections("m.");
       const fieldList =
-        qualifiedFields.length + uidMailboxAlias.length > 0
-          ? `${qualifiedFields}${uidMailboxAlias}`
+        qualifiedFields.length + uidMailboxAlias.length + octetsFragment.length > 0
+          ? `${qualifiedFields}${uidMailboxAlias}${octetsFragment}`
           : "m.*";
       if (useUid) {
         sql = `

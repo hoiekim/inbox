@@ -320,6 +320,44 @@ describe("account-scoped reads use the raw mailbox path (#702 PR 2b-2)", () => {
   });
 });
 
+describe("getMailsByRange — text_octets / html_octets synthetic projection", () => {
+  // The IMAP BODY[] stream path pre-measures the `{N}` literal via
+  // `octet_length(text)` / `octet_length(html)` so it can advertise the
+  // exact wire size without loading the (potentially multi-MB) body into
+  // Node's heap. Static source check: the projection helper must emit the
+  // `octet_length(...) AS *_octets` alias for each requested synthetic
+  // field, prefix-qualified in the JOIN branch. A future refactor that
+  // silently drops either projection would revert the streaming save.
+  let source: string;
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
+  });
+
+  it("projects octet_length(text) AS text_octets when requested", () => {
+    expect(source).toMatch(/octet_length\(\$\{prefix\}text\)\s+AS\s+text_octets/);
+  });
+
+  it("projects octet_length(html) AS html_octets when requested", () => {
+    expect(source).toMatch(/octet_length\(\$\{prefix\}html\)\s+AS\s+html_octets/);
+  });
+
+  it("strips the synthetic names from the mails-column SELECT list", () => {
+    // The synthetic names would break the SELECT list if they leaked in
+    // (`m.text_octets` is not a column). The strip set names both.
+    expect(source).toContain('syntheticNames = new Set(["uid_mailbox", "text_octets", "html_octets"])');
+  });
+
+  it("passes the `m.` prefix in the JOIN branch so the octet_length is unambiguous", () => {
+    // The JOIN branch calls `octetProjections("m.")` so the alias refers to
+    // the mails table under its `m` alias, not the mapping table.
+    expect(source).toContain('octetProjections("m.")');
+    // The domain-scoped branch has no join, so no prefix.
+    expect(source).toContain('octetProjections("")');
+  });
+});
+
 describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
   // Static source check: the expunge write paths must go through
   // mailsTable.updateWhere with `updated: DB_NOW` in the data bag so the

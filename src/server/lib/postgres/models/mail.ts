@@ -270,18 +270,25 @@ export class MailModel extends Model<MailJSON, MailSchema> {
  *   partial.subject // string | undefined
  */
 /**
- * PartialMailModel-only synthetic fields — populated by a JOIN alias in the
- * repository layer, not stored on the `mails` table. Kept out of MailModel's
- * typeChecker so full-row constructor calls (via `mailsTable.query`) don't
- * fail when the alias is absent.
+ * PartialMailModel-only synthetic fields — populated by a JOIN alias or a
+ * function projection in the repository layer, not stored on the `mails`
+ * table. Kept out of MailModel's typeChecker so full-row constructor calls
+ * (via `mailsTable.query`) don't fail when the alias is absent.
  *
  * - `uid_mailbox` — the per-mailbox UID from `mail_mailbox_uid.uid`. Only set
  *   when `getMailsByRange` is called with a specific mailbox (account-scoped
  *   or user-created). Undefined for domain-scoped views (INBOX / unified
  *   Sent Messages) — those use `uid_domain`.
+ * - `text_octets` / `html_octets` — `octet_length()` of the corresponding
+ *   TEXT column, projected as an alias so a caller can pre-measure the
+ *   `{N}` literal for a BODY[] stream without materializing the body itself.
+ *   The body is then read in chunks via `SUBSTRING` (see the IMAP
+ *   fetch-helpers stream path).
  */
 const partialSyntheticFieldCheckers: Record<string, (v: unknown) => boolean> = {
   uid_mailbox: isNumber,
+  text_octets: isNumber,
+  html_octets: isNumber,
 };
 
 export class PartialMailModel {
@@ -323,6 +330,8 @@ export class PartialMailModel {
   readonly insight?: object | null;
   readonly uid_domain?: number;
   readonly uid_mailbox?: number;
+  readonly text_octets?: number;
+  readonly html_octets?: number;
   readonly modseq?: number;
   readonly spam_score?: number;
   readonly spam_reasons?: string[] | null;
