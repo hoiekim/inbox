@@ -1,15 +1,14 @@
 /**
  * Per-key mutex for streaming BODY[] serialization.
  *
- * iOS Mail pipelines multiple `UID FETCH X (UID BODY)` for the SAME
- * mail on ONE connection. Each starts a fresh stream through
- * `pgTextChunks` + attachment I/O; the streams run concurrently on
- * the single-consumer socket, each holding its own mail-row load and
- * chunk-in-flight allocations. The count-cap + byte-cap in
- * `body-budget.ts` bounds AGGREGATE work but not DUPLICATE work — 5
- * concurrent requests for UID 12188 still do 5 × PG round-trips + 5 ×
- * attachment reads + 5 × in-flight chunk buffers, all for one identical
- * response.
+ * IMAP clients (notably iOS Mail) pipeline multiple `UID FETCH X (UID
+ * BODY)` for the SAME mail on ONE connection. Each starts a fresh
+ * stream through `pgTextChunks` + attachment I/O; the streams run
+ * concurrently, each holding its own mail-row load and chunk-in-flight
+ * allocations. The count-cap + byte-cap in `body-budget.ts` bounds
+ * AGGREGATE work but not DUPLICATE work — N concurrent requests for
+ * the same UID still do N × PG round-trips + N × attachment reads +
+ * N × in-flight chunk buffers, all for one identical response.
  *
  * This module serializes same-key streams. When a second BODY[]
  * request arrives for a key that's already streaming, it queues; when
@@ -18,8 +17,9 @@
  * aggregate becomes 1 in-flight per key, not N.
  *
  * Trade-off: retries pay latency (each waits for the head to finish
- * writing to its own socket), but memory stays bounded and #733's
- * per-fetch sub-MB peak is preserved — no materialization anywhere.
+ * writing to its own socket), but memory stays bounded and the
+ * streaming path's per-fetch sub-MB peak is preserved — no
+ * materialization anywhere.
  *
  * A cache-and-share design (materialize once, tee to N sockets) would
  * cut latency further at the cost of the O(body) allocation this arc

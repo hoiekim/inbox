@@ -160,7 +160,6 @@ describe("stream-mutex", () => {
     // A consumer that pulls one chunk then breaks out — `.return()` fires
     // on the generator, which runs its `finally`. Same shape as
     // writeStreamToSocket returning on a dead socket.
-    const gate1 = defer<void>();
     let bodyStarted = false;
     let bodyReleased = false;
     const stream = withStreamMutex("k", async function* () {
@@ -193,8 +192,6 @@ describe("stream-mutex", () => {
     );
     await later;
     expect(ran).toBe(true);
-    // Reference gate1 to avoid an unused-variable lint.
-    gate1.resolve();
   });
 
   it("empty-body generator releases immediately", async () => {

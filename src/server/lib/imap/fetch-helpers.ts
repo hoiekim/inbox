@@ -419,9 +419,9 @@ export async function buildBodyResponsePart(
   //
   // Skips the shared body-buffer cache (getSharedBodyResult): streaming
   // keeps per-fetch peak sub-MB, so caching the resolved Buffer would
-  // add an O(body) materialization cost — the very cost #733 was
-  // written to eliminate. The cache is retained for TEXT / HEADER /
-  // partial where materialization is unavoidable anyway.
+  // add an O(body) materialization cost — the very cost the streaming
+  // rewrite was written to eliminate. The cache is retained for
+  // TEXT / HEADER / partial where materialization is unavoidable anyway.
   //
   // Instead, `withStreamMutex(key, ...)` serializes SAME-KEY streams:
   // one iOS-pipelined `UID FETCH X (UID BODY)` on the same UID runs to
