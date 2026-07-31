@@ -184,7 +184,10 @@ export const formatEnvelope = (mail: Partial<MailType>): string => {
 };
 
 export const formatBodyStructure = (
-  mail: Partial<MailType>,
+  mail: Partial<MailType> & {
+    text_octets?: number;
+    html_octets?: number;
+  },
   extensible = true
 ): string => {
   /**
@@ -196,15 +199,34 @@ export const formatBodyStructure = (
    * param-list/disposition/language/location on multiparts) is the extension
    * data — present only in BODYSTRUCTURE. The bare `BODY` data item is the
    * non-extensible form (RFC 3501 §6.4.5): pass extensible=false to drop it.
+   *
+   * Two paths for the text/html `size` + `lines` fields:
+   *  - **Cached** — when the caller projects `text_octets` / `html_octets`
+   *    (from `octet_length()`) + `text_line_count` / `html_line_count`
+   *    (persisted at INSERT time; see saveMail), the fields are derived
+   *    with no string in memory. `size = ceil(octets/3)*4` matches
+   *    `Buffer.byteLength(base64(content))` exactly; `lines` reads the
+   *    cached value verbatim. This is the OOM-fix path — a bare
+   *    `UID FETCH X BODYSTRUCTURE` doesn't materialize text/html at all.
+   *  - **Materialized** — when the caller passes `mail.text` / `mail.html`
+   *    directly (legacy in-memory shape used by tests + the cache-miss
+   *    fallback in fetch-helpers), we base64-encode + split on the string
+   *    the same way this function has always done. Semantically identical
+   *    to the cached path for any non-empty part.
    */
 
   const buildTextPart = (
     subtype: "plain" | "html",
-    content: string
+    content: string | undefined,
+    octets: number | undefined,
+    lineCount: number | null | undefined
   ): string => {
-    const encoded = encodeText(content);
-    const size = Buffer.byteLength(encoded, "utf-8");
-    const lines = content.split(/\r?\n/).length;
+    const size = typeof octets === "number"
+      ? Math.ceil(octets / 3) * 4
+      : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
+    const lines = typeof lineCount === "number"
+      ? lineCount
+      : (content ?? "").split(/\r?\n/).length;
 
     const parts = [
       "TEXT",
@@ -219,6 +241,10 @@ export const formatBodyStructure = (
 
     return `(${parts.join(" ")})`;
   };
+  const textPart = () =>
+    buildTextPart("plain", mail.text, mail.text_octets, mail.text_line_count);
+  const htmlPart = () =>
+    buildTextPart("html", mail.html, mail.html_octets, mail.html_line_count);
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
     const [type, subtype] = (
@@ -263,25 +289,30 @@ export const formatBodyStructure = (
   const multipartTail = (subtype: string): string =>
     extensible ? `"${subtype}" NIL NIL NIL NIL` : `"${subtype}"`;
 
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
+  // Same materialized-or-lazy shape formatHeaders uses (see
+  // hasMaterializedOrLazyBody): in lazy mode the trim() check isn't
+  // available so a whitespace-only column reads as has-content (rare
+  // real-world). Both paths agree on the has-body decision, which is
+  // load-bearing — formatHeaders and formatBodyStructure MUST take the
+  // same branch (`multipart/alternative` vs `text/plain`) or the wire
+  // response contradicts itself.
+  const hasText = hasMaterializedOrLazyBody(mail.text, mail.text_octets);
+  const hasHtml = hasMaterializedOrLazyBody(mail.html, mail.html_octets);
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
 
   // Case 1: Single text part (no HTML, no attachments)
   if (hasText && !hasHtml && !hasAttachments) {
-    return buildTextPart("plain", mail.text!);
+    return textPart();
   }
 
   // Case 2: Single HTML part (no text, no attachments)
   if (!hasText && hasHtml && !hasAttachments) {
-    return buildTextPart("html", mail.html!);
+    return htmlPart();
   }
 
   // Case 3: Text and HTML (multipart/alternative)
   if (hasText && hasHtml && !hasAttachments) {
-    const textPart = buildTextPart("plain", mail.text!);
-    const htmlPart = buildTextPart("html", mail.html!);
-    return `(${textPart} ${htmlPart} ${multipartTail("alternative")})`;
+    return `(${textPart()} ${htmlPart()} ${multipartTail("alternative")})`;
   }
 
   // Case 4: Content with attachments (multipart/mixed)
@@ -290,16 +321,14 @@ export const formatBodyStructure = (
 
     // If we have both text and HTML, create a multipart/alternative first
     if (hasText && hasHtml) {
-      const textPart = buildTextPart("plain", mail.text!);
-      const htmlPart = buildTextPart("html", mail.html!);
-      const alternativePart = `(${textPart} ${htmlPart} ${multipartTail(
+      const alternativePart = `(${textPart()} ${htmlPart()} ${multipartTail(
         "alternative"
       )})`;
       bodyParts.push(alternativePart);
     } else if (hasText) {
-      bodyParts.push(buildTextPart("plain", mail.text!));
+      bodyParts.push(textPart());
     } else if (hasHtml) {
-      bodyParts.push(buildTextPart("html", mail.html!));
+      bodyParts.push(htmlPart());
     }
 
     // Add attachment parts
@@ -310,8 +339,9 @@ export const formatBodyStructure = (
     return `(${bodyParts.join(" ")} ${multipartTail("mixed")})`;
   }
 
-  // Default case: empty text part
-  return buildTextPart("plain", "");
+  // Default case: empty text part (no lazy inputs either, so the
+  // materialized shape drives the count — split("") = [""], length 1).
+  return buildTextPart("plain", "", undefined, undefined);
 };
 
 export const formatFlags = (mail: Partial<MailType>): string[] => {

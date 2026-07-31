@@ -33,7 +33,12 @@ import {
 } from "./types";
 import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 import { withBodyBudget, withBodyBudgetStream } from "./body-budget";
-import { updateRfc822Size } from "../postgres/repositories/mails/core";
+import {
+  updateRfc822Size,
+  updateLineCounts,
+  getMailBody,
+  countLines,
+} from "../postgres/repositories/mails/core";
 // `getSharedBodyResult` already budget-gates INSIDE its singleflight
 // closure so coalesced callers share one slot (see body-buffer.ts +
 // hoiekim/inbox#726 / #727). The `withBodyBudget` import here is used
@@ -193,9 +198,22 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
         fields.add("answered");
         break;
 
+      // BODYSTRUCTURE (RFC 3501 §7.4.2) needs the `size` + `lines` count for
+      // each text/html part. Instead of projecting the multi-MB text/html
+      // columns and computing per-fetch (the last materialization gap after
+      // #731 / #739 — spiked RSS on bare `UID FETCH X BODYSTRUCTURE` batches),
+      // project the pre-measured `octet_length()` synthetics + persisted
+      // line-count columns. Cache miss (pre-migration NULL row) falls
+      // through to a targeted per-row `SELECT text, html` load in the
+      // BODYSTRUCTURE handler — see buildFetchResponsePart. Post-backfill
+      // this branch stops firing entirely.
       case "BODYSTRUCTURE":
-        fields.add("text");
-        fields.add("html");
+        fields.add("text_octets");
+        fields.add("html_octets");
+        fields.add("mail_id");
+        fields.add("user_id");
+        fields.add("text_line_count");
+        fields.add("html_line_count");
         fields.add("attachments");
         break;
 
@@ -506,8 +524,25 @@ export async function buildBodyResponsePart(
   return { type: "literal", content: finalContent, header, length };
 }
 
+/**
+ * A mail row that may carry the four synthetic streaming/measurement
+ * fields the getMailsByRange projection can add alongside the real
+ * MailModel columns: `text_octets` / `html_octets` (pre-measured
+ * `octet_length()` for the pg SUBSTRING body stream in BODY[] / RFC822,
+ * and for the BODYSTRUCTURE cached-size path here) + `mail_id` / `user_id`
+ * (identity for the same stream). Widening the fetch handler's input to
+ * this shape lets `BODYSTRUCTURE` read the octet count without a runtime
+ * cast at every access site.
+ */
+export type FetchMailInput = Partial<MailType> & {
+  text_octets?: number;
+  html_octets?: number;
+  mail_id?: string;
+  user_id?: string;
+};
+
 export async function buildFetchResponsePart(
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   item: FetchDataItem,
   docId: string,
   selectedMailbox: string,
@@ -577,7 +612,59 @@ export async function buildFetchResponsePart(
     case "BODYSTRUCTURE": {
       // extensible=false is the bare `BODY` data item: non-extensible structure
       // labelled `BODY` (RFC 3501 §6.4.5). extensible=true is full BODYSTRUCTURE.
-      const bodyStructure = formatBodyStructure(mail, item.extensible);
+      //
+      // Two-path resolution (mirrors RFC822.SIZE / #731):
+      //  1. **Cached hit** — the projection carries `text_octets` +
+      //     `html_octets` (from `octet_length()`) + persisted
+      //     `text_line_count` + `html_line_count` (populated at INSERT
+      //     time by saveMail, or by a bulk backfill). formatBodyStructure
+      //     derives `size` + `lines` from these with no string in memory:
+      //     BODYSTRUCTURE becomes a metadata-only fetch, closing the last
+      //     text/html materialization gap after #731 / #739.
+      //  2. **Cache-miss fallback** — a pre-migration row's line counts
+      //     sit NULL. Fetch just the text/html columns for THIS row
+      //     (`getMailBody` — one row, two TEXT columns, no attachments) so
+      //     formatBodyStructure has strings to base64+split. Fire-and-
+      //     forget persist backfills the row so its NEXT BODYSTRUCTURE
+      //     hits cache. Bounded per-row overhead during the transition;
+      //     after the bulk backfill this branch effectively stops firing.
+      const wantsPart = (
+        octets: number | undefined,
+        lineCount: number | null | undefined
+      ): boolean => typeof octets === "number" && octets > 0 && typeof lineCount !== "number";
+      const cacheMissText = wantsPart(mail.text_octets, mail.text_line_count);
+      const cacheMissHtml = wantsPart(mail.html_octets, mail.html_line_count);
+      let effectiveMail: Partial<MailType> & {
+        text_octets?: number;
+        html_octets?: number;
+      } = mail;
+      if (userId && (cacheMissText || cacheMissHtml)) {
+        const body = await getMailBody(userId, docId);
+        if (body) {
+          // Splice the strings onto a shallow copy so formatBodyStructure
+          // takes the materialized branch for the missing parts. The
+          // original `mail` (shared with other FETCH items in the same
+          // response) is left untouched.
+          effectiveMail = {
+            ...mail,
+            text: cacheMissText ? body.text : mail.text,
+            html: cacheMissHtml ? body.html : mail.html,
+          };
+          // Fire-and-forget: stamp the row so its next BODYSTRUCTURE hits
+          // cache. Recompute both counts unconditionally (idempotent) —
+          // one UPDATE round-trip either way.
+          const textLines = countLines(body.text);
+          const htmlLines = countLines(body.html);
+          void updateLineCounts(userId, docId, textLines, htmlLines).catch((err) => {
+            logger.warn("Failed to persist line counts", {
+              component: "imap.fetch",
+              mail_id: docId,
+              err: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+      }
+      const bodyStructure = formatBodyStructure(effectiveMail, item.extensible);
       const label = item.extensible ? "BODYSTRUCTURE" : "BODY";
       return { type: "simple", content: `${label} ${bodyStructure}` };
     }
@@ -621,7 +708,7 @@ export async function buildFetchResponsePart(
 }
 
 export async function buildFetchResponse(
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   dataItems: FetchDataItem[],
   docId: string,
   uid: number,

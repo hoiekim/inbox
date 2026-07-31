@@ -35,6 +35,8 @@ import {
   SPAM_REASONS,
   IS_SPAM,
   RFC822_SIZE,
+  TEXT_LINE_COUNT,
+  HTML_LINE_COUNT,
 } from "./common";
 import { Model, ModelValidationError, createTable, validateObject } from "./base";
 
@@ -84,6 +86,8 @@ export interface MailJSON {
   spam_reasons: string[] | null;
   is_spam: boolean;
   rfc822_size: number | null;
+  text_line_count: number | null;
+  html_line_count: number | null;
 }
 
 const mailSchema = {
@@ -130,6 +134,12 @@ const mailSchema = {
   // + persists on first observation. New rows also start NULL and populate
   // on their first RFC822.SIZE / RFC822 / BODY[] fetch.
   [RFC822_SIZE]: "BIGINT",
+  // Nullable — auto-migration stamps existing rows with NULL; new rows
+  // populate at INSERT time from the split of `text` / `html` (see
+  // saveMail), so post-migration only pre-existing rows sit NULL until
+  // their first BODYSTRUCTURE observation backfills them.
+  [TEXT_LINE_COUNT]: "INTEGER",
+  [HTML_LINE_COUNT]: "INTEGER",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
   search_vector: "TSVECTOR",
 };
@@ -171,6 +181,8 @@ export class MailModel extends Model<MailJSON, MailSchema> {
   declare spam_reasons: string[] | null;
   declare is_spam: boolean;
   declare rfc822_size: number | null;
+  declare text_line_count: number | null;
+  declare html_line_count: number | null;
   declare updated: string;
 
   static typeChecker = {
@@ -208,6 +220,10 @@ export class MailModel extends Model<MailJSON, MailSchema> {
     spam_reasons: isNullableArray,
     is_spam: isBoolean,
     rfc822_size: (v: unknown): v is number | null =>
+      v === null || typeof v === "number",
+    text_line_count: (v: unknown): v is number | null =>
+      v === null || typeof v === "number",
+    html_line_count: (v: unknown): v is number | null =>
       v === null || typeof v === "number",
     updated: isNullableString,
     search_vector: isNullableString,
@@ -253,6 +269,8 @@ export class MailModel extends Model<MailJSON, MailSchema> {
       spam_reasons: this.spam_reasons,
       is_spam: this.is_spam,
       rfc822_size: this.rfc822_size,
+      text_line_count: this.text_line_count,
+      html_line_count: this.html_line_count,
     };
   }
 }
@@ -337,6 +355,8 @@ export class PartialMailModel {
   readonly spam_reasons?: string[] | null;
   readonly is_spam?: boolean;
   readonly rfc822_size?: number | null;
+  readonly text_line_count?: number | null;
+  readonly html_line_count?: number | null;
   readonly updated?: string;
 
   constructor(fields: string[], data: unknown) {

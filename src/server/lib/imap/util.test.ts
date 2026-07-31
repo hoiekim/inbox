@@ -460,6 +460,36 @@ describe("IMAP util", () => {
       expect(result).toContain("PLAIN");
     });
 
+    // #740: BODYSTRUCTURE's `size` + `lines` derive from the persisted
+    // octet / line-count columns when the caller projects them (the
+    // BODYSTRUCTURE hot path — no text/html string materialization). The
+    // wire response for the same underlying content must be byte-identical
+    // whether we take the cached path or fall through to base64+split.
+    it("derives text-part size + lines from the cached synthetics with no strings loaded", () => {
+      const cached = formatBodyStructure({
+        text_octets: 30,
+        html_octets: 0,
+        text_line_count: 3,
+        html_line_count: 0,
+      });
+      // ceil(30/3)*4 = 40 octets base64, three lines.
+      expect(cached).toContain("BASE64 40 3");
+      // No HTML → single text part, not multipart.
+      expect(cached).not.toContain("alternative");
+    });
+
+    it("cached-shape output matches materialized-shape output for the same content", () => {
+      const text = "line one\r\nline two\r\nline three";
+      const materialized = formatBodyStructure({ text });
+      const cached = formatBodyStructure({
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: 0,
+        text_line_count: text.split(/\r?\n/).length,
+        html_line_count: 0,
+      });
+      expect(cached).toBe(materialized);
+    });
+
     // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
     // extension data: md5/disposition/language/location on single parts and
     // param-list/disposition/language/location on the multipart wrappers (#666).
