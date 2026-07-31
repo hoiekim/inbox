@@ -666,10 +666,10 @@ describe("getBodyPartHeaders", () => {
 });
 
 // ---------------------------------------------------------------------------
-// streamFromSegments + emitBase64 — regression coverage for the 2026-07-30
-// OOM. `emitBase64` used to allocate the whole raw source Buffer up front,
-// so a 500 KiB HTML body pinned 500 KiB per in-flight fetch. Now the input
-// is sliced too — peak transient must stay O(SLICE_RAW_BYTES).
+// streamFromSegments — emitBase64 input chunking. Peak transient must stay
+// O(SLICE_RAW_BYTES) (no full-source Buffer materialization) AND the emitted
+// bytes must round-trip to the source exactly, including at UTF-16 surrogate
+// pair boundaries and at non-multiple-of-3 slice boundaries.
 // ---------------------------------------------------------------------------
 
 describe("streamFromSegments — emitBase64 input chunking", () => {
@@ -743,11 +743,7 @@ describe("streamFromSegments — emitBase64 input chunking", () => {
     expect(decoded).toBe(text);
   });
 
-  it("handles multi-byte UTF-8 across slice boundaries", async () => {
-    // A body of emojis (each 4 UTF-8 bytes as a surrogate pair, 2 UTF-16 units)
-    // sized to straddle SLICE_RAW_BYTES. If the code-unit slicing miscounted
-    // the UTF-8 expansion, chunks could either be too big or split a codepoint.
-    // Rocket emoji: 🚀 = 4 UTF-8 bytes (2 UTF-16 units).
+  it("handles multi-byte UTF-8 (emoji) across slice boundaries", async () => {
     const emoji = "🚀".repeat(20000); // 80 000 UTF-8 bytes = 40 000 UTF-16 units
     const mail: Partial<MailType> = { text: emoji };
     const segments = buildMessageSegments(mail, "emoji");
@@ -760,6 +756,36 @@ describe("streamFromSegments — emitBase64 input chunking", () => {
     expect(bodyMatch).not.toBeNull();
     const decoded = Buffer.from(bodyMatch![1], "base64").toString("utf8");
     expect(decoded).toBe(emoji);
+  });
+
+  it("keeps a surrogate pair whole when it straddles a chunk boundary — no U+FFFD injection", async () => {
+    // CHUNK_CODE_UNITS = SLICE_RAW_BYTES / 3 = 49152 / 3 = 16384 code units.
+    // Place a surrogate pair EXACTLY at positions 16383 (high) + 16384 (low)
+    // so a naive `source.slice(0, 16384)` would split it. Each half would
+    // encode to U+FFFD (3 UTF-8 bytes) instead of the pair's 4 bytes,
+    // overshooting the pre-measured {N} by 2 bytes and desyncing the wire.
+    const filler = "a".repeat(16383);
+    const tail = "b".repeat(100);
+    const text = filler + "🚀" + tail;
+    const mail: Partial<MailType> = { text };
+    const segments = buildMessageSegments(mail, "surrogate-split");
+
+    // 1. Stream output must round-trip byte-for-byte, including the emoji.
+    const { concatenated } = await drainToBuffer(streamFromSegments(segments));
+    const wire = concatenated.toString("utf8");
+    const bodyMatch = wire.match(/base64\r\n\r\n([\s\S]*?)\r\n$/);
+    expect(bodyMatch).not.toBeNull();
+    const decoded = Buffer.from(bodyMatch![1], "base64").toString("utf8");
+    expect(decoded).toBe(text);
+    // Zero U+FFFD replacement characters in the decoded body.
+    expect(decoded.indexOf("�")).toBe(-1);
+
+    // 2. Emitted body byte-length must equal the pre-measured length —
+    // otherwise {N} desyncs and corrupts the IMAP connection.
+    const emittedBodyBytes = Buffer.byteLength(bodyMatch![1], "utf8");
+    const rawBytes = Buffer.byteLength(text, "utf8");
+    const expectedBodyBytes = Math.ceil(rawBytes / 3) * 4;
+    expect(emittedBodyBytes).toBe(expectedBodyBytes);
   });
 
   it("empty body yields no base64 output (short-circuit path)", async () => {

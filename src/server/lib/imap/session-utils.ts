@@ -325,52 +325,54 @@ async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown
 }
 
 /**
- * Emit `source` base64-encoded, one SLICE_RAW_BYTES slice at a time — with
- * the INPUT chunked too, so the raw source is never fully materialized as
- * one Buffer. Peak transient stays O(SLICE_RAW_BYTES) regardless of source
- * length, matching `emitAttachment`'s streaming shape.
+ * Emit `source` base64-encoded in sub-SLICE_RAW_BYTES slices. Peak transient
+ * is O(SLICE_RAW_BYTES) regardless of source length — both input and output
+ * are chunked, matching `emitAttachment`'s streaming shape.
  *
- * A previous version did `const raw = Buffer.from(source, "utf8")` up front,
- * which allocated the whole source (500+ KiB for large HTML mails) and held
- * it for the fetch's entire lifetime. Under concurrent iOS BODY[] fetches
- * that was the primary contributor to the 137→285 MB RSS climb on the
- * 2026-07-30 23:52 UTC OOM.
- *
- * Base64 constraint: each intermediate slice must be a multiple of 3 raw
- * bytes to avoid `=` padding chars mid-stream (padded slices concatenated
- * ≠ base64 of the concatenated raw). We encode into a fixed scratch Buffer,
- * emit the largest 3-byte-aligned prefix, and carry the 0–2 residual bytes
- * to the next iteration. The final slice is emitted whole (padding at the
- * end is legal).
+ * Two invariants the chunking has to preserve:
+ * 1. **Surrogate pairs stay whole.** `source` is UTF-16; slicing at code-
+ *    unit boundaries can land between the high and low half of an emoji.
+ *    Each isolated half round-trips to U+FFFD (3 bytes), so a split pair
+ *    emits 6 bytes where the whole encodes to 4 — a 2-byte wire overrun vs.
+ *    the pre-measured `{N}` literal, corrupting every subsequent response
+ *    on the connection. `end` is nudged back one code unit when it would
+ *    land after a high surrogate.
+ * 2. **Intermediate slices are 3-byte-aligned raw.** Base64 encodes 3 raw
+ *    bytes to 4 chars; a non-multiple-of-3 slice emits `=` padding, and
+ *    padded slices concatenated ≠ base64 of the concatenated raw. Residual
+ *    (0–2 bytes) carries to the next iteration; the final slice is emitted
+ *    whole (padding at the end is legal).
  */
 async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
   if (source.length === 0) return;
-  // Worst-case UTF-8 expansion of a JS string is 3 bytes per BMP code unit
-  // (surrogate pairs are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing
-  // by SLICE_RAW_BYTES/3 code units guarantees the encoded chunk fits under
-  // SLICE_RAW_BYTES without over-shooting. Under-shooting a bit (vs. filling
-  // scratch to the brim) is fine — the emit granularity is still ~48 KiB.
+  // Worst-case UTF-8 expansion is 3 bytes per BMP code unit (surrogate pairs
+  // are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing by
+  // SLICE_RAW_BYTES/3 code units guarantees the encoded chunk stays under
+  // SLICE_RAW_BYTES.
   const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3);
   let carry: Buffer | null = null;
   let offset = 0;
   while (offset < source.length) {
-    const end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
+    let end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
+    // If `end` lands after a high surrogate and there's a next slice, the
+    // low surrogate would go to the next slice and both halves would
+    // encode to U+FFFD. Back off one code unit so the whole pair goes in
+    // the next slice.
+    if (end < source.length && isHighSurrogate(source.charCodeAt(end - 1))) {
+      end -= 1;
+    }
     let bytes = Buffer.from(source.slice(offset, end), "utf8");
     offset = end;
     if (carry) {
-      // Prepend the 0–2 unencoded residual bytes from the previous slice.
-      // Small concat (≤ SLICE_RAW_BYTES+2 bytes), unavoidable to keep the
-      // base64 alignment invariant. Cast to Uint8Array[] because Node's
-      // Buffer.concat signature is Uint8Array<ArrayBufferLike>[]-typed and
-      // Buffer's ArrayBuffer parameter doesn't line up under the current @types/node.
       bytes = Buffer.concat([carry, bytes] as unknown as Uint8Array[]);
       carry = null;
     }
     if (offset < source.length) {
-      // Not the final slice — align to a multiple of 3 and carry the residual.
+      // Align to multiple-of-3 and carry the residual to keep base64
+      // concatenation lossless.
       const residualLen = bytes.byteLength % 3;
       if (residualLen > 0) {
-        // Copy the trailing 1-2 bytes out so `bytes` can be GC'd; otherwise a
+        // Copy the trailing 1–2 bytes out so `bytes` can be GC'd — a
         // `subarray` view would pin the whole underlying ArrayBuffer.
         const tail = bytes.subarray(bytes.byteLength - residualLen);
         carry = Buffer.from(tail as unknown as Uint8Array);
@@ -381,6 +383,9 @@ async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown
     yield Buffer.from(bytes.toString("base64"), "utf8");
   }
 }
+
+const isHighSurrogate = (charCode: number): boolean =>
+  charCode >= 0xd800 && charCode <= 0xdbff;
 
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
