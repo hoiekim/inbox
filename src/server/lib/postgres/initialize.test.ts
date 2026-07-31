@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll } from "bun:test";
+import { mailsTable } from "./models/mail";
+import { buildCreateIndex } from "./database";
 
 // getMailHeaders and getMailHeadersDelta filter rows with a jsonb `@>`
 // containment OR across the address columns (buildHeaderAddressCondition in
@@ -6,22 +8,17 @@ import { describe, it, expect, beforeAll } from "bun:test";
 // (jsonb_path_ops) index or the planner seq-scans the whole mailbox on every
 // account open and delta poll — O(mailbox) instead of O(matches) (#679).
 //
-// These invariants only manifest against a live Postgres planner, so — per the
-// repo's established SQL-shape-guard style (see http.test.ts) — this asserts on
-// the source: every address column the containment filter touches must have a
-// matching GIN index declared in initialize.ts. Adding a 6th address column to
-// the OR-union without an index, or dropping an index, fails this test.
+// The index set is declared on the model, so that half asserts on the real
+// definition. The filter side only manifests against a live planner, so — per
+// the repo's established SQL-shape-guard style (see http.test.ts) — it is read
+// off the source. Adding a 6th address column to the OR-union without an index,
+// or dropping an index, fails this test.
 describe("initialize — GIN index coverage for the address containment filter", () => {
-  let initializeSource: string;
   let conditionSource: string;
 
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    initializeSource = await fs.readFile(
-      path.join(import.meta.dir, "initialize.ts"),
-      "utf8"
-    );
     conditionSource = await fs.readFile(
       path.join(import.meta.dir, "repositories/mails/http.ts"),
       "utf8"
@@ -41,17 +38,11 @@ describe("initialize — GIN index coverage for the address containment filter",
     return [...fn.matchAll(/(\w+)\s+@>/g)].map((m) => m[1]).sort();
   };
 
-  // Columns given a jsonb_path_ops GIN index in initialize.ts. They are emitted
-  // by a `for (const column of [...]) { ... gin (${column} jsonb_path_ops) }`
-  // loop, so match the loop (asserting it still emits a jsonb_path_ops GIN
-  // index) and read the column array it iterates.
-  const ginIndexedColumns = () => {
-    const loop = initializeSource.match(
-      /for \(const column of \[([\s\S]*?)\]\)\s*\{[\s\S]*?gin \(\$\{column\} jsonb_path_ops\)/
-    );
-    if (!loop) throw new Error("address GIN index loop not found in initialize.ts");
-    return [...loop[1].matchAll(/"(\w+)"/g)].map((m) => m[1]).sort();
-  };
+  const ginIndexedColumns = () =>
+    mailsTable.indexes
+      .filter((i) => i.using === "gin" && i.opclass === "jsonb_path_ops")
+      .map((i) => i.column)
+      .sort();
 
   it("every address column the containment filter touches has a GIN index", () => {
     const filtered = new Set(filteredAddressColumns());
@@ -77,5 +68,33 @@ describe("initialize — GIN index coverage for the address containment filter",
       "from_address",
       "to_address",
     ]);
+  });
+
+  it("emits a jsonb_path_ops GIN index, not a btree, for each address column", () => {
+    for (const column of ginIndexedColumns()) {
+      expect(buildCreateIndex("mails", column, undefined, "gin", "jsonb_path_ops")).toBe(
+        `CREATE INDEX IF NOT EXISTS idx_mails_${column}_gin ` +
+          `ON mails USING gin (${column} jsonb_path_ops)`
+      );
+    }
+  });
+
+  // A GIN index must not take the name buildCreateIndex would generate for a
+  // btree on the same column: the model loop creates btrees first, so a name
+  // collision would make `CREATE INDEX IF NOT EXISTS` silently no-op the GIN
+  // index and revert the optimization with no error and no failing test.
+  const indexNameOf = (sql: string) => {
+    const match = sql.match(/CREATE INDEX IF NOT EXISTS (\w+) /);
+    if (!match) throw new Error(`no index name in: ${sql}`);
+    return match[1];
+  };
+
+  it("names GIN indexes distinctly from the btree on the same column", () => {
+    for (const column of ginIndexedColumns()) {
+      const gin = indexNameOf(
+        buildCreateIndex("mails", column, undefined, "gin", "jsonb_path_ops")
+      );
+      expect(gin).not.toBe(indexNameOf(buildCreateIndex("mails", column)));
+    }
   });
 });

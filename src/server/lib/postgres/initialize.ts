@@ -86,7 +86,13 @@ export const initializePostgres = async (): Promise<void> => {
     // Create indexes after migrations ensure all columns exist
     for (const table of tables) {
       for (const idx of table.indexes) {
-        const createIndexSql = buildCreateIndex(table.name, idx.column);
+        const createIndexSql = buildCreateIndex(
+          table.name,
+          idx.column,
+          undefined,
+          idx.using,
+          idx.opclass
+        );
         await pool.query(createIndexSql);
       }
     }
@@ -96,26 +102,6 @@ export const initializePostgres = async (): Promise<void> => {
       CREATE INDEX IF NOT EXISTS idx_mails_search 
       ON mails USING GIN(search_vector)
     `);
-
-    // GIN indexes for the per-account address containment (@>) filter shared by
-    // getMailHeaders and getMailHeadersDelta (buildHeaderAddressCondition in
-    // repositories/mails/http.ts). Without these the planner seq-scans the user's
-    // whole mailbox on every account open and every delta poll — O(mailbox) instead
-    // of O(matches). jsonb_path_ops is the smallest opclass that supports @>.
-    // Kept raw here (not in the model's `indexes` block) because buildCreateIndex only
-    // emits single-column btree; this mirrors the idx_mails_search GIN index above.
-    for (const column of [
-      "to_address",
-      "cc_address",
-      "bcc_address",
-      "envelope_to",
-      "from_address",
-    ]) {
-      await pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_mails_${column}
-        ON mails USING gin (${column} jsonb_path_ops)
-      `);
-    }
 
     // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
     // the reindex — all three derived from `searchVectorExpression` so the

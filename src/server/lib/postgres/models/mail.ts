@@ -413,6 +413,14 @@ export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
     { column: MODSEQ },
     { column: IS_SPAM },
     { column: EXPUNGED },
+    // Address containment (@>) filters for the per-account reads —
+    // buildHeaderAddressCondition in repositories/mails/http.ts. jsonb_path_ops
+    // is the smallest opclass that supports @>.
+    { column: TO_ADDRESS, using: "gin", opclass: "jsonb_path_ops" },
+    { column: CC_ADDRESS, using: "gin", opclass: "jsonb_path_ops" },
+    { column: BCC_ADDRESS, using: "gin", opclass: "jsonb_path_ops" },
+    { column: ENVELOPE_TO, using: "gin", opclass: "jsonb_path_ops" },
+    { column: FROM_ADDRESS, using: "gin", opclass: "jsonb_path_ops" },
   ],
   ModelClass: MailModel,
   supportsSoftDelete: false,
