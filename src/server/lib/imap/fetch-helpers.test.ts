@@ -48,10 +48,12 @@ const writeAttachment = (id: string, data: Buffer): Buffer => {
 
 import {
   getRequestedFields,
+  addBodyFields,
   buildFetchResponsePart,
   buildBodyResponsePart,
   convertSequenceSet,
   FetchResponsePart,
+  FetchRequestedField,
 } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
 import { BodyFetch, SequenceSet } from "./types";
@@ -1421,5 +1423,75 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
       "INBOX"
     );
     expect(part).toBeNull();
+  });
+});
+
+describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+html", () => {
+  // Regression for reviewoie R1 HIGH on #739: iOS Mail's chunked large-body
+  // pull uses `BODY[]<0.65536>`, then `BODY[]<65536.65536>`, etc. The lazy
+  // shape (`text_octets` + `html_octets` instead of the strings) cannot
+  // drive the sync materializer in buildFullMessage — partial FULL falls
+  // through to `getBodyContent → buildFullMessage`, which throws on lazy
+  // segments. addBodyFields must project `text` + `html` when `partial` is
+  // set so buildFullMessage has real strings to slice.
+
+  const mail: Partial<MailType> = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<partial@local>",
+    date: new Date("2026-07-31T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "partial",
+    text: "plain body content",
+    html: "<p>rich body content</p>",
+    attachments: [] as unknown as MailType["attachments"],
+  };
+
+  it("returns a simple part (not a stream) for BODY[]<0.100>", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "FULL" },
+        partial: { start: 0, length: 100 },
+      },
+      "doc-partial",
+      "INBOX"
+    );
+    expect(part).not.toBeNull();
+    // Partial goes through the materializing path — `simple` (or `literal`,
+    // depending on section-key shape); the important invariant is "does not
+    // throw" AND "is not a stream".
+    expect(part!.type).not.toBe("stream");
+  });
+
+  it("addBodyFields for BODY[FULL] with partial projects text + html (materialized), not the lazy synthetics", () => {
+    const fields = new Set<FetchRequestedField>();
+    addBodyFields(
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "FULL" },
+        partial: { start: 0, length: 100 },
+      },
+      fields
+    );
+    expect(fields.has("text")).toBe(true);
+    expect(fields.has("html")).toBe(true);
+    expect(fields.has("text_octets" as FetchRequestedField)).toBe(false);
+    expect(fields.has("html_octets" as FetchRequestedField)).toBe(false);
+  });
+
+  it("addBodyFields for non-partial BODY[FULL] still projects the lazy synthetics", () => {
+    const fields = new Set<FetchRequestedField>();
+    addBodyFields(
+      { type: "BODY", peek: false, section: { type: "FULL" } },
+      fields
+    );
+    expect(fields.has("text_octets" as FetchRequestedField)).toBe(true);
+    expect(fields.has("html_octets" as FetchRequestedField)).toBe(true);
+    expect(fields.has("text")).toBe(false);
+    expect(fields.has("html")).toBe(false);
   });
 });

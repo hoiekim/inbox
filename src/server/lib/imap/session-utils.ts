@@ -467,18 +467,29 @@ async function* emitBase64Chunks(
   let done = false;
   const it = source[Symbol.asyncIterator]();
 
-  const pullOne = async (): Promise<void> => {
-    if (done) return;
+  const pullOne = async (): Promise<boolean> => {
+    if (done) return false;
     const { value, done: d } = await it.next();
     if (d) {
       done = true;
-      return;
+      return false;
     }
-    if (typeof value === "string" && value.length > 0) charBuf += value;
+    if (typeof value === "string" && value.length > 0) {
+      charBuf += value;
+      return true;
+    }
+    return false;
   };
 
   const fillAtLeast = async (n: number): Promise<void> => {
-    while (charBuf.length < n && !done) await pullOne();
+    // pullOne returns false on both done AND empty-string yields — either
+    // way don't spin. A well-behaved iterable eventually either yields
+    // content or ends; a pathological one that yields "" forever without
+    // done just stops filling, and the outer loop breaks on `charBuf.length
+    // === 0`.
+    while (charBuf.length < n && !done) {
+      if (!(await pullOne())) break;
+    }
   };
 
   while (charBuf.length > 0 || !done) {

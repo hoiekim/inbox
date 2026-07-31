@@ -245,15 +245,20 @@ export function addBodyFields(
 ): void {
   switch (bodyFetch.section.type) {
     case "FULL":
-      // Streaming body — request `octet_length()` of each column via the
-      // synthetic projections rather than the multi-MB column values. The
-      // `{N}` literal is pre-measured from the octets and the body flows
-      // through `pgTextChunks` at stream time. `mail_id` and `user_id`
-      // give the streaming reader the row identity to pull from.
-      fields.add("text_octets");
-      fields.add("html_octets");
-      fields.add("mail_id");
-      fields.add("user_id");
+      // Partial fetch (`BODY[]<start.length>`) falls through to
+      // `buildFullMessage`, a synchronous materializer that can't drive
+      // the async pg reader — it needs the whole `text` / `html`
+      // strings loaded, not the octet counts. Full-body pulls skip
+      // the strings and stream via `pgTextChunks`.
+      if (bodyFetch.partial) {
+        fields.add("text");
+        fields.add("html");
+      } else {
+        fields.add("text_octets");
+        fields.add("html_octets");
+        fields.add("mail_id");
+        fields.add("user_id");
+      }
       fields.add("subject");
       fields.add("from");
       fields.add("to");
