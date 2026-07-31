@@ -1087,3 +1087,117 @@ describe("buildCriterionClause — combinators don't orphan bound params (#672)"
     expect(values).toEqual(["user-1", false, "%x%"]);
   });
 });
+
+describe("INBOX quarantines spam (#605)", () => {
+  const load = async () => await import(".");
+
+  describe("quarantinesSpam", () => {
+    it("covers INBOX itself", async () => {
+      const { quarantinesSpam } = await load();
+      expect(quarantinesSpam(null, false)).toBe(true);
+    });
+
+    it("covers INBOX's per-account sub-views", async () => {
+      const { quarantinesSpam } = await load();
+      expect(quarantinesSpam("INBOX/accounts/alice", false)).toBe(true);
+    });
+
+    it("leaves the unified Sent view alone — sent mail is never classified", async () => {
+      const { quarantinesSpam } = await load();
+      expect(quarantinesSpam(null, true)).toBe(false);
+      expect(quarantinesSpam("Sent Messages/accounts/alice", true)).toBe(false);
+    });
+
+    it("leaves user-created mailboxes alone — an explicit COPY stays visible", async () => {
+      const { quarantinesSpam } = await load();
+      expect(quarantinesSpam("Archive", false)).toBe(false);
+      // A user-created box whose name merely starts with the folder's letters
+      // is not an accounts sub-view; only the full `INBOX/accounts/` path is.
+      expect(quarantinesSpam("INBOX/accountsish", false)).toBe(false);
+      expect(quarantinesSpam("INBOX/accounts", false)).toBe(false);
+    });
+  });
+
+  describe("SQL emitters", () => {
+    it("emit the is_spam predicate for a quarantining box", async () => {
+      const { membershipExpression, membershipCondition } = await load();
+      expect(membershipExpression(null, false)).toBe("is_spam = FALSE");
+      expect(membershipCondition(null, false)).toBe(" AND is_spam = FALSE");
+    });
+
+    it("qualify the column with the caller's alias", async () => {
+      const { membershipExpression, membershipCondition } = await load();
+      expect(membershipExpression("INBOX/accounts/alice", false, "m.")).toBe(
+        "m.is_spam = FALSE"
+      );
+      expect(membershipCondition("INBOX/accounts/alice", false, "m.")).toBe(
+        " AND m.is_spam = FALSE"
+      );
+    });
+
+    it("degrade to a no-op every non-quarantining box can interpolate", async () => {
+      const { membershipExpression, membershipCondition } = await load();
+      // `TRUE` keeps `COUNT(*) FILTER (WHERE …)` well-formed; "" appends
+      // cleanly to an existing WHERE. Neither needs a caller-side branch.
+      expect(membershipExpression("Archive", false)).toBe("TRUE");
+      expect(membershipCondition("Archive", false)).toBe("");
+      expect(membershipExpression(null, true)).toBe("TRUE");
+      expect(membershipCondition(null, true)).toBe("");
+    });
+  });
+
+  describe("every mailbox-scoped site applies the rule (source regression)", () => {
+    // One missed site desynchronises INBOX's membership: e.g. a filtered
+    // `getAllUids` (the seq→UID map) against an unfiltered `countMessages`
+    // makes EXISTS exceed the addressable sequence range.
+    let source: string;
+
+    beforeAll(async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
+    });
+
+    // [public name, symbol that actually builds the SQL] — getMailsByRange is a
+    // single-flight wrapper whose query lives in the uncoalesced impl.
+    const fns: [string, string][] = [
+      ["countMessages", "countMessages"],
+      ["getMailsByRange", "getMailsByRangeUncoalesced"],
+      ["setMailFlags", "setMailFlags"],
+      ["searchMailsByUid", "searchMailsByUid"],
+      ["getAllUids", "getAllUids"],
+      ["getFirstUnseenUid", "getFirstUnseenUid"],
+      ["expungeDeletedMails", "expungeDeletedMails"],
+      ["expungeMailsByUid", "expungeMailsByUid"],
+    ];
+
+    it.each(fns)("%s consults the membership rule", (_name, symbol) => {
+      const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
+      expect(body, `body not found for ${symbol}`).not.toBeNull();
+      expect(body![0]).toMatch(
+        /membershipCondition|membershipExpression|quarantinesSpam/
+      );
+    });
+
+    it("never filters MAX(uid) — UIDNEXT must not regress on a spam-mark", () => {
+      // mailbox-ops emits `max_uid + 1` as UIDNEXT, which RFC 3501 §2.3.1.1
+      // requires to exceed every UID ever assigned and never to decrease. The
+      // counts are FILTERed; the MAX is deliberately not.
+      const body = source.match(/export const countMessages[\s\S]*?\n};/)![0];
+      expect(body).toMatch(/COUNT\(\*\) FILTER \(WHERE \$\{membership\}\)/);
+      const maxUidLines = body
+        .split("\n")
+        .filter((line) => line.includes("as max_uid"));
+      // One per branch: domain-scoped (uid_domain) and per-mailbox (x.uid).
+      expect(maxUidLines).toHaveLength(2);
+      for (const line of maxUidLines) expect(line).not.toContain("FILTER");
+    });
+
+    it("does not exclude \\Deleted mail from INBOX", () => {
+      // `mails.deleted` is the IMAP \Deleted flag; RFC 3501 §6.4.3 keeps those
+      // messages in the mailbox until EXPUNGE. Only `expunged` removes them.
+      expect(source).not.toMatch(/AND\s+\$\{?DELETED\}?\s*=\s*FALSE/);
+      expect(source).not.toMatch(/AND\s+deleted\s*=\s*FALSE/);
+    });
+  });
+});

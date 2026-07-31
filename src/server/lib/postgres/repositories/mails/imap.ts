@@ -15,6 +15,7 @@ import {
   MAIL_MAILBOX_UID,
   MAILBOX,
   UID,
+  IS_SPAM,
 } from "../../models";
 import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
@@ -88,6 +89,60 @@ export async function* pgTextChunks(
  * stay on `mails.uid_domain` and don't participate in the per-mailbox mapping.
  */
 
+/**
+ * Prefix of the per-account received boxes (`INBOX/accounts/<local-part>`).
+ * Mirrors `ACCOUNTS_FOLDER` in `imap/util.ts`, which cannot be imported here:
+ * that module pulls from the `server` barrel, which re-exports this repository.
+ */
+const INBOX_ACCOUNTS_PREFIX = "INBOX/accounts/";
+
+/**
+ * Whether a mailbox quarantines spam-classified mail — true for the INBOX tree
+ * only.
+ *
+ * INBOX (`mailbox === null`, `sent = false`) has no address condition at all,
+ * and its per-account sub-views match purely on delivery address, so a
+ * spam-classified mail lands in both simply by having been received. The HTTP
+ * client already quarantines those rows into a dedicated Spam view; excluding
+ * them here gives IMAP the same inbox membership instead of showing spam
+ * intermixed with ham and counting it toward EXISTS/UNSEEN.
+ *
+ * Deliberately narrow on two axes:
+ * - **Sent is never classified.** `is_spam` is only ever written on received
+ *   mail, so the unified `Sent Messages` view and its sub-boxes are untouched.
+ * - **User-created mailboxes keep their contents.** A mail the user COPYed into
+ *   `Archive` is an explicit placement; the classifier does not get to hide it.
+ *
+ * Note this is not extended to `deleted`: `mails.deleted` is the IMAP
+ * `\Deleted` flag, and RFC 3501 §6.4.3 requires `\Deleted` messages to stay in
+ * the mailbox until EXPUNGE removes them. Soft-deleted mail leaving INBOX is a
+ * `Trash` mailbox question (#725), not an INBOX predicate.
+ */
+export const quarantinesSpam = (mailbox: string | null, sent: boolean): boolean =>
+  !sent && (mailbox === null || mailbox.startsWith(INBOX_ACCOUNTS_PREFIX));
+
+/**
+ * Boolean expression selecting the rows a mailbox actually contains. `TRUE` for
+ * every box that shows spam, so callers can interpolate it unconditionally.
+ * `prefix` qualifies the column for queries that alias `mails` (e.g. `"m."`).
+ */
+export const membershipExpression = (
+  mailbox: string | null,
+  sent: boolean,
+  prefix: string = ""
+): string => (quarantinesSpam(mailbox, sent) ? `${prefix}${IS_SPAM} = FALSE` : "TRUE");
+
+/**
+ * The same rule as a suffix for an existing `WHERE`, empty when the box shows
+ * spam so it appends cleanly to any clause.
+ */
+export const membershipCondition = (
+  mailbox: string | null,
+  sent: boolean,
+  prefix: string = ""
+): string =>
+  quarantinesSpam(mailbox, sent) ? ` AND ${prefix}${IS_SPAM} = FALSE` : "";
+
 export const countMessages = async (
   user_id: string,
   mailbox: string | null,
@@ -97,13 +152,22 @@ export const countMessages = async (
     let sql: string;
     let values: ParamValue[];
 
+    // `total` / `unread` describe what the mailbox contains, so they honour the
+    // membership rule. `max_uid` deliberately does NOT: it backs UIDNEXT
+    // (mailbox-ops emits `max_uid + 1`), and RFC 3501 §2.3.1.1 requires UIDNEXT
+    // to be greater than every UID ever assigned in the mailbox and never to
+    // decrease. Filtering it would make UIDNEXT fall back the moment the
+    // highest-UID mail got spam-marked, and hand a later arrival a UID the
+    // client had already been promised was unused.
+    const membership = membershipExpression(mailbox, sent);
+
     if (mailbox === null) {
       // Domain-wide count (INBOX / unified Sent Messages) — still keyed on
       // uid_domain, unchanged by #702's per-mailbox mapping migration.
       sql = `
         SELECT
-          COUNT(*) as total,
-          SUM(CASE WHEN read = FALSE THEN 1 ELSE 0 END) as unread,
+          COUNT(*) FILTER (WHERE ${membership}) as total,
+          COUNT(*) FILTER (WHERE read = FALSE AND ${membership}) as unread,
           COALESCE(MAX(${UID_DOMAIN}), 0) as max_uid
         FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
@@ -118,10 +182,11 @@ export const countMessages = async (
       // backfilled — e.g. the 140 rows the one-shot script skipped over
       // duplicate-UID collisions from a #617-era race — have no mapping
       // row and are intentionally invisible to reads.
+      const joinMembership = membershipExpression(mailbox, sent, "m.");
       sql = `
         SELECT
-          COUNT(*) as total,
-          SUM(CASE WHEN m.read = FALSE THEN 1 ELSE 0 END) as unread,
+          COUNT(*) FILTER (WHERE ${joinMembership}) as total,
+          COUNT(*) FILTER (WHERE m.read = FALSE AND ${joinMembership}) as unread,
           COALESCE(MAX(x.${UID}), 0) as max_uid
         FROM mails m
         JOIN ${MAIL_MAILBOX_UID} x
@@ -268,11 +333,12 @@ const getMailsByRangeUncoalesced = async (
         ? `, ${UID_DOMAIN} AS uid_mailbox`
         : "";
       const fieldList = `${projection}${uidMailboxAlias}${octetProjections("")}`;
+      const membership = membershipCondition(mailbox, sent);
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails
           WHERE user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4
-            AND expunged = FALSE${modseqDomainClause}
+            AND expunged = FALSE${membership}${modseqDomainClause}
           ORDER BY ${UID_DOMAIN} ASC
         `;
         values = [user_id, sent, start, Math.min(end, 999999999)];
@@ -280,7 +346,7 @@ const getMailsByRangeUncoalesced = async (
       } else {
         sql = `
           SELECT ${fieldList} FROM mails
-          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE${modseqDomainClause}
+          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE${membership}${modseqDomainClause}
           ORDER BY ${UID_DOMAIN} ASC
           OFFSET $3 LIMIT $4
         `;
@@ -304,6 +370,7 @@ const getMailsByRangeUncoalesced = async (
         qualifiedFields.length + uidMailboxAlias.length + octetsFragment.length > 0
           ? `${qualifiedFields}${uidMailboxAlias}${octetsFragment}`
           : "m.*";
+      const membership = membershipCondition(mailbox, sent, "m.");
       if (useUid) {
         sql = `
           SELECT ${fieldList} FROM mails m
@@ -313,7 +380,7 @@ const getMailsByRangeUncoalesced = async (
             AND x.${MAIL_ID} = m.${MAIL_ID}
           WHERE m.${USER_ID} = $1 AND m.${SENT} = $2
             AND x.${UID} >= $4 AND x.${UID} <= $5
-            AND m.${EXPUNGED} = FALSE${modseqMailboxClause}
+            AND m.${EXPUNGED} = FALSE${membership}${modseqMailboxClause}
           ORDER BY x.${UID} ASC
         `;
         values = [user_id, sent, mailbox, start, Math.min(end, 999999999)];
@@ -325,7 +392,7 @@ const getMailsByRangeUncoalesced = async (
             ON x.${USER_ID} = m.${USER_ID}
             AND x.${MAILBOX} = $3
             AND x.${MAIL_ID} = m.${MAIL_ID}
-          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE${modseqMailboxClause}
+          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE${membership}${modseqMailboxClause}
           ORDER BY x.${UID} ASC
           OFFSET $4 LIMIT $5
         `;
@@ -440,10 +507,16 @@ export const setMailFlags = async (
     let updateSql: string;
     let baseValues: ParamValue[];
 
+    // A STORE addresses messages *in the selected mailbox*, so it has to see
+    // the same set the reads do — otherwise `UID STORE 1:* +FLAGS (\Deleted)`
+    // on INBOX would flag quarantined spam the client was never shown, and the
+    // following EXPUNGE would destroy it.
+    const membership = membershipCondition(mailbox, sent);
+
     if (mailbox === null) {
       const returningCols = `${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
-        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4`;
+        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
@@ -453,7 +526,7 @@ export const setMailFlags = async (
       } else {
         const whereClause = `mail_id IN (
           SELECT mail_id FROM mails
-          WHERE user_id = $1 AND sent = $2
+          WHERE user_id = $1 AND sent = $2${membership}
           ORDER BY ${UID_DOMAIN} ASC
           OFFSET $3 LIMIT 1
         )`;
@@ -473,7 +546,7 @@ export const setMailFlags = async (
       if (useUid) {
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
           AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
-          AND x.${UID} >= $4 AND x.${UID} <= $5`;
+          AND x.${UID} >= $4 AND x.${UID} <= $5${membershipCondition(mailbox, sent, "m.")}`;
         selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
         // UPDATE ... FROM syntax joins the mapping to the target mails
         // rows. Postgres semantics: rows matching the join get updated
@@ -487,8 +560,17 @@ export const setMailFlags = async (
       } else {
         // Sequence-number path: match a single row at the OFFSETth
         // position in the mailbox's UID-ordered list.
+        // A sequence number counts only the messages the mailbox shows, so this
+        // OFFSET has to walk the same filtered list `getAllUids` builds. The
+        // join onto `mails` is emitted only for a box that actually filters —
+        // every other box keeps the mapping-only scan it had.
+        const membershipJoin = quarantinesSpam(mailbox, sent)
+          ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
+             AND ${membershipExpression(mailbox, sent, "z.")}`
+          : "";
         const targetSubquery = `(
           SELECT y.${MAIL_ID} FROM ${MAIL_MAILBOX_UID} y
+          ${membershipJoin}
           WHERE y.${USER_ID} = $1 AND y.${MAILBOX} = $3
           ORDER BY y.${UID} ASC
           OFFSET $4 LIMIT 1
@@ -784,8 +866,12 @@ export const searchMailsByUid = async (
     // `${uidField} >= $N`, so the alias needs to be qualified.
     const uidField = mailbox === null ? UID_DOMAIN : `x.${UID}`;
 
-    // Always exclude expunged messages from search
+    // Always exclude expunged messages from search, and anything the mailbox
+    // doesn't show — SEARCH must not return UIDs the client can't FETCH.
     const conditions: string[] = ["m.user_id = $1", "m.sent = $2", "m.expunged = FALSE"];
+    if (quarantinesSpam(mailbox, sent)) {
+      conditions.push(membershipExpression(mailbox, sent, "m."));
+    }
     const values: ParamValue[] = [user_id, sent];
 
     // Base table + optional mailbox join
@@ -845,7 +931,7 @@ export const getAllUids = async (
     if (mailbox === null) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
-        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE${membershipCondition(mailbox, sent)}
         ORDER BY ${UID_DOMAIN} ASC
       `;
       values = [user_id, sent];
@@ -856,7 +942,7 @@ export const getAllUids = async (
           ON x.${USER_ID} = m.${USER_ID}
           AND x.${MAILBOX} = $3
           AND x.${MAIL_ID} = m.${MAIL_ID}
-        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE${membershipCondition(mailbox, sent, "m.")}
         ORDER BY x.${UID} ASC
       `;
       values = [user_id, sent, mailbox];
@@ -888,7 +974,7 @@ export const getFirstUnseenUid = async (
     if (mailbox === null) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
-        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE
+        WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE${membershipCondition(mailbox, sent)}
         ORDER BY ${UID_DOMAIN} ASC
         LIMIT 1
       `;
@@ -900,7 +986,7 @@ export const getFirstUnseenUid = async (
           ON x.${USER_ID} = m.${USER_ID}
           AND x.${MAILBOX} = $3
           AND x.${MAIL_ID} = m.${MAIL_ID}
-        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE AND m.read = FALSE
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE AND m.read = FALSE${membershipCondition(mailbox, sent, "m.")}
         ORDER BY x.${UID} ASC
         LIMIT 1
       `;
@@ -927,10 +1013,21 @@ export const expungeDeletedMails = async (
   sent: boolean
 ): Promise<number[]> => {
   try {
+    // EXPUNGE removes `\Deleted` messages *from the selected mailbox*, so a
+    // quarantined mail is out of reach here too — otherwise an INBOX EXPUNGE
+    // would collect spam the client never saw and could not have flagged.
+    const quarantined = quarantinesSpam(mailbox, sent);
+
     if (mailbox === null) {
       // Domain-wide expunge — still on uid_domain, unchanged.
       const rows = await mailsTable.updateWhere(
-        { [USER_ID]: user_id, [SENT]: sent, [DELETED]: true, [EXPUNGED]: false },
+        {
+          [USER_ID]: user_id,
+          [SENT]: sent,
+          [DELETED]: true,
+          [EXPUNGED]: false,
+          ...(quarantined ? { [IS_SPAM]: false } : {}),
+        },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
         { [EXPUNGED]: true, updated: DB_NOW, [MODSEQ]: await getNextModseq(user_id) },
@@ -951,7 +1048,7 @@ export const expungeDeletedMails = async (
         AND x.${MAILBOX} = $3
         AND x.${MAIL_ID} = m.${MAIL_ID}
       WHERE m.${USER_ID} = $1 AND m.${SENT} = $2
-        AND m.${DELETED} = TRUE AND m.${EXPUNGED} = FALSE
+        AND m.${DELETED} = TRUE AND m.${EXPUNGED} = FALSE${membershipCondition(mailbox, sent, "m.")}
     `;
     const selectResult = await pool.query(selectSql, [user_id, sent, mailbox]);
     if (selectResult.rows.length === 0) return [];
@@ -1000,6 +1097,10 @@ export const expungeMailsByUid = async (
 ): Promise<number[]> => {
   if (uids.length === 0) return [];
   try {
+    // Same membership rule as EXPUNGE: MOVE's source-side removal only ever
+    // addresses UIDs the selected mailbox actually holds.
+    const quarantined = quarantinesSpam(mailbox, sent);
+
     if (mailbox === null) {
       // Domain-wide: simple equality on user_id+sent + IN(uids).
       const rows = await mailsTable.updateWhere(
@@ -1008,6 +1109,7 @@ export const expungeMailsByUid = async (
           [SENT]: sent,
           [EXPUNGED]: false,
           [UID_DOMAIN]: { op: "IN", value: uids },
+          ...(quarantined ? { [IS_SPAM]: false } : {}),
         },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
@@ -1031,7 +1133,7 @@ export const expungeMailsByUid = async (
       WHERE m.${USER_ID} = $1
         AND m.${SENT} = $2
         AND x.${UID} IN (${uidPlaceholders})
-        AND m.${EXPUNGED} = FALSE
+        AND m.${EXPUNGED} = FALSE${membershipCondition(mailbox, sent, "m.")}
     `;
     const selectValues: ParamValue[] = [user_id, sent, mailbox, ...uids];
     const selectResult = await pool.query(selectSql, selectValues);
