@@ -329,45 +329,117 @@ async function* emitLiteral(value: string): AsyncGenerator<Buffer, void, unknown
  * is O(SLICE_RAW_BYTES) regardless of source length — both input and output
  * are chunked, matching `emitAttachment`'s streaming shape.
  *
- * Two invariants the chunking has to preserve:
- * 1. **Surrogate pairs stay whole.** `source` is UTF-16; slicing at code-
- *    unit boundaries can land between the high and low half of an emoji.
- *    Each isolated half round-trips to U+FFFD (3 bytes), so a split pair
- *    emits 6 bytes where the whole encodes to 4 — a 2-byte wire overrun vs.
- *    the pre-measured `{N}` literal, corrupting every subsequent response
- *    on the connection. `end` is nudged back one code unit when it would
- *    land after a high surrogate.
+ * `source` may be a whole string (the legacy shape — for callers that hold
+ * `mail.text` / `mail.html` in memory) OR an `AsyncIterable<string>` (the
+ * streaming shape — for the pg SUBSTRING chunk reader). Both feed the same
+ * carry-aware core so a source split into N chunks produces byte-identical
+ * output to the same source as one string.
+ *
+ * Three invariants the chunking has to preserve:
+ * 1. **Surrogate pairs stay whole.** JavaScript strings are UTF-16; slicing
+ *    at code-unit boundaries can land between the high and low half of an
+ *    emoji. Each isolated half round-trips to U+FFFD (3 bytes), so a split
+ *    pair emits 6 bytes where the whole encodes to 4 — a 2-byte wire
+ *    overrun vs. the pre-measured `{N}` literal, corrupting every
+ *    subsequent response on the connection. `end` is nudged back one code
+ *    unit when it would land after a high surrogate AND there is more input
+ *    coming (either later in the buffered string, or in a later upstream
+ *    chunk). The `unless-source-is-done` guard on that latter case is what
+ *    keeps a genuinely-lone high surrogate at the tail encoding to U+FFFD
+ *    (same as `Buffer.from(str, "utf8")`) instead of getting orphaned.
  * 2. **Intermediate slices are 3-byte-aligned raw.** Base64 encodes 3 raw
  *    bytes to 4 chars; a non-multiple-of-3 slice emits `=` padding, and
  *    padded slices concatenated ≠ base64 of the concatenated raw. Residual
  *    (0–2 bytes) carries to the next iteration; the final slice is emitted
  *    whole (padding at the end is legal).
+ * 3. **Bytes concatenate across upstream chunks.** For chunked sources, a
+ *    multi-byte UTF-8 sequence never straddles a chunk boundary at the
+ *    STRING level (`charBuf += value` keeps the string intact before UTF-8
+ *    encoding), and both the surrogate carry (a lone high surrogate at the
+ *    end of a buffered chunk) and the byte-alignment carry (0–2 residual
+ *    bytes) survive across upstream refills.
  */
-async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown> {
-  if (source.length === 0) return;
+async function* emitBase64(
+  source: string | AsyncIterable<string>
+): AsyncGenerator<Buffer, void, unknown> {
+  if (typeof source === "string") {
+    if (source.length === 0) return;
+    yield* emitBase64Chunks(singleStringSource(source));
+    return;
+  }
+  yield* emitBase64Chunks(source);
+}
+
+/** Adapt a single string to the async chunk iterable shape. */
+async function* singleStringSource(s: string): AsyncGenerator<string, void, unknown> {
+  yield s;
+}
+
+async function* emitBase64Chunks(
+  source: AsyncIterable<string>
+): AsyncGenerator<Buffer, void, unknown> {
   // Worst-case UTF-8 expansion is 3 bytes per BMP code unit (surrogate pairs
   // are 2 units → 4 bytes = 2 bytes/unit, cheaper). Slicing by
   // SLICE_RAW_BYTES/3 code units guarantees the encoded chunk stays under
   // SLICE_RAW_BYTES.
   const CHUNK_CODE_UNITS = Math.floor(SLICE_RAW_BYTES / 3);
-  let carry: Buffer | null = null;
-  let offset = 0;
-  while (offset < source.length) {
-    let end = Math.min(offset + CHUNK_CODE_UNITS, source.length);
-    // If `end` lands after a high surrogate and there's a next slice, the
-    // low surrogate would go to the next slice and both halves would
-    // encode to U+FFFD. Back off one code unit so the whole pair goes in
-    // the next slice.
-    if (end < source.length && isHighSurrogate(source.charCodeAt(end - 1))) {
-      end -= 1;
+  let byteCarry: Buffer | null = null;
+  let charBuf = "";
+  let done = false;
+  const it = source[Symbol.asyncIterator]();
+
+  const pullOne = async (): Promise<void> => {
+    if (done) return;
+    const { value, done: d } = await it.next();
+    if (d) {
+      done = true;
+      return;
     }
-    let bytes = Buffer.from(source.slice(offset, end), "utf8");
-    offset = end;
-    if (carry) {
-      bytes = Buffer.concat([carry, bytes] as unknown as Uint8Array[]);
-      carry = null;
+    if (typeof value === "string" && value.length > 0) charBuf += value;
+  };
+
+  const fillAtLeast = async (n: number): Promise<void> => {
+    while (charBuf.length < n && !done) await pullOne();
+  };
+
+  while (charBuf.length > 0 || !done) {
+    // Need CHUNK_CODE_UNITS + 1 chars to detect a trailing high surrogate at
+    // position CHUNK_CODE_UNITS-1 with certainty; if upstream ends sooner,
+    // take whatever we have.
+    await fillAtLeast(CHUNK_CODE_UNITS + 1);
+    if (charBuf.length === 0) break;
+
+    let end = Math.min(CHUNK_CODE_UNITS, charBuf.length);
+    const isHighSurrogateAtEnd = isHighSurrogate(charBuf.charCodeAt(end - 1));
+    if (isHighSurrogateAtEnd) {
+      // Nudge back one code unit so the pair stays whole. Two cases:
+      //  (a) `end < charBuf.length` — the low half is in charBuf; the next
+      //      slice picks up the pair. Always nudge.
+      //  (b) `end === charBuf.length && !done` — the low half might still be
+      //      coming from upstream. Nudge and let the next iteration's fill
+      //      pull it in.
+      //  (c) `end === charBuf.length && done` — no more input; the high
+      //      surrogate is genuinely lone. Emit as-is (Buffer.from will encode
+      //      it to U+FFFD, matching the whole-string path).
+      if (end < charBuf.length || !done) end -= 1;
     }
-    if (offset < source.length) {
+
+    let bytes = Buffer.from(charBuf.slice(0, end), "utf8");
+    charBuf = charBuf.slice(end);
+
+    if (byteCarry) {
+      bytes = Buffer.concat([byteCarry, bytes] as unknown as Uint8Array[]);
+      byteCarry = null;
+    }
+
+    // Determine whether this is the FINAL slice: charBuf empty AND upstream
+    // exhausted. If charBuf is empty but upstream is still open, drain one
+    // more pull so the answer is definite (necessary so a residual only
+    // carries when there is actually more base64 to emit afterwards).
+    if (charBuf.length === 0 && !done) await pullOne();
+    const isFinal = charBuf.length === 0 && done;
+
+    if (!isFinal) {
       // Align to multiple-of-3 and carry the residual to keep base64
       // concatenation lossless.
       const residualLen = bytes.byteLength % 3;
@@ -375,7 +447,7 @@ async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown
         // Copy the trailing 1–2 bytes out so `bytes` can be GC'd — a
         // `subarray` view would pin the whole underlying ArrayBuffer.
         const tail = bytes.subarray(bytes.byteLength - residualLen);
-        carry = Buffer.from(tail as unknown as Uint8Array);
+        byteCarry = Buffer.from(tail as unknown as Uint8Array);
         bytes = bytes.subarray(0, bytes.byteLength - residualLen);
       }
     }
@@ -386,6 +458,15 @@ async function* emitBase64(source: string): AsyncGenerator<Buffer, void, unknown
 
 const isHighSurrogate = (charCode: number): boolean =>
   charCode >= 0xd800 && charCode <= 0xdbff;
+
+/**
+ * Test-only handle on `emitBase64` — the split-input parity tests exercise
+ * it directly (feeding the same source as `[whole]` vs. `[chunkA, chunkB]`
+ * vs. `[char, char, ...]`) to guarantee an upstream chunk boundary can
+ * never desync the base64 output from the whole-string encoding. Prefixed
+ * with `_` so it reads as internal at every call site.
+ */
+export const _emitBase64ForTests = emitBase64;
 
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
