@@ -212,8 +212,8 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
         fields.add("html_octets");
         fields.add("mail_id");
         fields.add("user_id");
-        fields.add("text_line_count" as keyof MailType);
-        fields.add("html_line_count" as keyof MailType);
+        fields.add("text_line_count");
+        fields.add("html_line_count");
         fields.add("attachments");
         break;
 
