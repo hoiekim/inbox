@@ -154,12 +154,17 @@ export const countMessages = async (
     let values: ParamValue[];
 
     // `total` / `unread` describe what the mailbox contains, so they honour the
-    // membership rule. `max_uid` deliberately does NOT: it backs UIDNEXT
-    // (mailbox-ops emits `max_uid + 1`), and RFC 3501 §2.3.1.1 requires UIDNEXT
-    // to be greater than every UID ever assigned in the mailbox and never to
-    // decrease. Filtering it would make UIDNEXT fall back the moment the
-    // highest-UID mail got spam-marked, and hand a later arrival a UID the
-    // client had already been promised was unused.
+    // membership rule. `max_uid` deliberately does not: it backs UIDNEXT
+    // (mailbox-ops emits `max_uid + 1`), which RFC 3501 §2.3.1.1 requires to
+    // exceed every UID assigned in the mailbox. Filtering it would drop UIDNEXT
+    // the moment the highest-UID mail got spam-marked, handing a later arrival
+    // a UID the client had been promised was unused.
+    //
+    // This keeps membership from moving UIDNEXT; it does not make UIDNEXT
+    // monotonic in general. `max_uid` is still a MAX over live rows, so an
+    // EXPUNGE or a hard delete of the highest-UID mail lowers it — a
+    // pre-existing gap that wants UIDNEXT sourced from `mail_uid_counters`
+    // instead. Tracked in #743.
     const membership = membershipExpression(mailbox, sent);
 
     if (mailbox === null) {

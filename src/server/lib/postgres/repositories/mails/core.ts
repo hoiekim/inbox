@@ -444,9 +444,12 @@ export const deleteMail = async (
  * training on idempotent re-marks while still surfacing real auth failures.
  *
  * The flip moves the mail in or out of IMAP's INBOX (see `quarantinesSpam`), so
- * it advances the mod-sequence the way every other membership change does —
- * otherwise a CONDSTORE client resyncing off an unchanged HIGHESTMODSEQ (RFC
- * 7162 §3.1.2) concludes nothing happened and keeps serving the stale row. As
+ * it advances the mod-sequence the way every other membership change does. That
+ * keeps HIGHESTMODSEQ honest — without it a CONDSTORE client (RFC 7162 §3.1.2)
+ * reads an unchanged value and concludes the mailbox never changed. It is not
+ * on its own enough to evict the row: with no VANISHED channel, a client learns
+ * the message is gone only on its next SELECT. Emitting that removal mid-session
+ * is #742. As
  * on the expunge paths, the mod-sequence is reserved before the row count is
  * known; an idempotent re-mark matches no row, so the reserved value simply
  * goes unused and HIGHESTMODSEQ (a MAX over stamped rows) stays put.

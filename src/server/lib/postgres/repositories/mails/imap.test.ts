@@ -1171,12 +1171,31 @@ describe("INBOX quarantines spam (#605)", () => {
       ["expungeMailsByUid", "expungeMailsByUid"],
     ];
 
-    it.each(fns)("%s consults the membership rule", (_name, symbol) => {
+    // Minimum applications per function — one per SQL-bearing branch, so a
+    // whole-function presence check can't pass while one branch loses the
+    // rule. Dropping it from just the `mailbox === null` branch of getAllUids
+    // (INBOX's own seq->UID map) is the mutation this guards: quarantined UIDs
+    // reappear in the map past the filtered EXISTS, and `FETCH <last seq>`
+    // addresses a message the client was told does not exist.
+    const applications: Record<string, number> = {
+      countMessages: 2,
+      getMailsByRangeUncoalesced: 2,
+      setMailFlags: 4,
+      searchMailsByUid: 1,
+      getAllUids: 2,
+      getFirstUnseenUid: 2,
+      expungeDeletedMails: 2,
+      expungeMailsByUid: 2,
+    };
+
+    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol) => {
       const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
       expect(body, `body not found for ${symbol}`).not.toBeNull();
-      expect(body![0]).toMatch(
-        /membershipCondition|membershipExpression|quarantinesSpam/
-      );
+      const hits =
+        body![0].match(
+          /membershipCondition\(|membershipExpression\(|quarantinesSpam\(/g
+        ) ?? [];
+      expect(hits.length).toBeGreaterThanOrEqual(applications[symbol]);
     });
 
     it("never filters MAX(uid) — UIDNEXT must not regress on a spam-mark", () => {
@@ -1203,6 +1222,21 @@ describe("INBOX quarantines spam (#605)", () => {
         expect(membershipExpression(box, false)).toBe("is_spam = FALSE");
         expect(membershipCondition(box, false)).toBe(" AND is_spam = FALSE");
       }
+    });
+
+    it("stamps a mod-sequence when a spam flip moves a mail out of INBOX", async () => {
+      // The flip is a membership change, so it has to advance HIGHESTMODSEQ or
+      // a CONDSTORE client reads an unchanged value and never resyncs. The
+      // repository's own tests mock this module, so pin the write at the source.
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const core = await fs.readFile(path.join(import.meta.dir, "core.ts"), "utf8");
+      const body = core.match(/export const markMailSpam[\s\S]*?\n};/)![0];
+      expect(body).toMatch(/modseq\s*=\s*\$4/);
+      expect(body).toContain("getNextModseq(user_id)");
+      // The idempotence guard must survive — a re-mark of the same value has to
+      // match no row so the reserved value goes unused.
+      expect(body).toContain("is_spam IS DISTINCT FROM $1");
     });
 
     it("keeps the seq-number OFFSET list in step with getAllUids", () => {
