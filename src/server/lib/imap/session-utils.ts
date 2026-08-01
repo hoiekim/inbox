@@ -647,27 +647,127 @@ export async function* streamFromSegments(
   segments: MessageSegment[]
 ): AsyncGenerator<Buffer, void, unknown> {
   for (const segment of segments) {
-    switch (segment.kind) {
-      case "literal":
-        yield* emitLiteral(segment.value);
-        break;
-      case "base64":
-        yield* emitBase64(segment.source);
-        break;
-      case "attachment":
-        yield* emitAttachment(segment);
-        break;
-      case "lazy-text":
-        // Stream the mails.<source> column via chunked SUBSTRING reads.
-        // Both the char-carry (surrogate at chunk boundary) and byte-carry
-        // (3-byte alignment) inside emitBase64 survive across upstream
-        // pgTextChunks pulls, so the encoded output equals what a whole-
-        // string encode of the same column would produce.
-        yield* emitBase64(
-          pgTextChunks(segment.mail_id, segment.user_id, segment.source)
-        );
-        break;
+    yield* streamOneSegment(segment);
+  }
+}
+
+/**
+ * Consume `source` from the byte offset `skip`, emit at most `take` bytes,
+ * then stop. Sub-chunk trimming happens at the intersection of `source`'s
+ * chunk boundaries and the [skip, skip+take) window — so a large chunk that
+ * straddles the window gets sliced to only its overlap, and the tail of
+ * `source` past `skip+take` is never pulled.
+ *
+ * Peak transient stays chunk-bounded by construction: at any moment we hold
+ * one `Buffer` view (a `subarray` of the upstream chunk) or nothing. The
+ * upstream generator is closed on early return via for-await semantics
+ * (`.return()` on the iterator), so if the underlying source holds resources
+ * (pgTextChunks cursor, fs descriptor) they release the moment the take is
+ * satisfied. That's the mechanism that makes a partial-fetch BODY[] pull
+ * exactly its `<start.length>` window and stop, instead of driving the
+ * segment through to completion.
+ */
+async function* sliceStream(
+  source: AsyncIterable<Buffer>,
+  skip: number,
+  take: number
+): AsyncGenerator<Buffer, void, unknown> {
+  if (take <= 0) return;
+  let skipped = 0;
+  let taken = 0;
+  for await (const chunk of source) {
+    if (taken >= take) return;
+    let start = 0;
+    if (skipped < skip) {
+      const skipHere = Math.min(chunk.byteLength, skip - skipped);
+      skipped += skipHere;
+      start = skipHere;
     }
+    if (start >= chunk.byteLength) continue;
+    const remaining = take - taken;
+    const end = Math.min(chunk.byteLength, start + remaining);
+    // subarray is a view; copy out so early-return releases the upstream
+    // chunk's backing ArrayBuffer instead of pinning it.
+    const view = chunk.subarray(start, end);
+    const emit =
+      view.byteLength === chunk.byteLength
+        ? chunk
+        : Buffer.from(view as unknown as Uint8Array);
+    taken += emit.byteLength;
+    yield emit;
+    if (taken >= take) return;
+  }
+}
+
+/**
+ * Emit exactly the bytes `[start, start+length)` of the segment
+ * concatenation. Same output as `Buffer.concat(...streamFromSegments(segs))
+ * .subarray(start, start + length)`, but never materializes the whole
+ * concatenation and stops pulling the moment `take` is satisfied.
+ *
+ * Byte-offset walk: for each segment we know its exact wire byte count
+ * (`segmentByteLength`), so we skip segments entirely before the window,
+ * stop on the first segment entirely after it, and slice-in-flight through
+ * `sliceStream` on the ones that overlap.
+ *
+ * This is the streaming path for `BODY[]<start.length>` — the RFC 3501
+ * §6.4.5 partial-fetch form. iOS Mail uses it for essentially every
+ * body fetch (verified via #758 attribution: 25/25 partial vs 0/25 full
+ * stream in the sample window). Before this fn, partial fell to
+ * `buildFullMessage` which materialized the whole RFC 2822 serialization
+ * then sliced; peak allocation was O(message). With this: O(chunk).
+ *
+ * Load-bearing invariant (same as `streamFromSegments`): the caller MUST
+ * share ONE segment list with `sumSegmentBytes` for the range-clamp math —
+ * a second `buildMessageSegments` call would `stat` attachment files a
+ * second time and can race the measurement, producing a wire-length
+ * disagreement.
+ */
+export async function* streamPartialFromSegments(
+  segments: MessageSegment[],
+  start: number,
+  length: number
+): AsyncGenerator<Buffer, void, unknown> {
+  if (length <= 0) return;
+  const end = start + length;
+  let cumulative = 0;
+  for (const segment of segments) {
+    if (cumulative >= end) return;
+    const segBytes = segmentByteLength(segment);
+    const segStart = cumulative;
+    const segEnd = cumulative + segBytes;
+    cumulative = segEnd;
+    if (segEnd <= start) continue;
+    const skipInSeg = Math.max(0, start - segStart);
+    const takeInSeg = Math.min(segBytes, end - segStart) - skipInSeg;
+    if (takeInSeg <= 0) continue;
+    // Emit this segment through its own generator, then trim via
+    // sliceStream. Peak allocation matches `streamFromSegments` for the
+    // same segment kind — chunk-bounded, no per-segment materialization
+    // beyond what the emitter itself already holds transiently.
+    yield* sliceStream(streamOneSegment(segment), skipInSeg, takeInSeg);
+  }
+}
+
+/** Stream exactly one segment as `streamFromSegments` would for that kind. */
+async function* streamOneSegment(
+  segment: MessageSegment
+): AsyncGenerator<Buffer, void, unknown> {
+  switch (segment.kind) {
+    case "literal":
+      yield* emitLiteral(segment.value);
+      break;
+    case "base64":
+      yield* emitBase64(segment.source);
+      break;
+    case "attachment":
+      yield* emitAttachment(segment);
+      break;
+    case "lazy-text":
+      yield* emitBase64(
+        pgTextChunks(segment.mail_id, segment.user_id, segment.source)
+      );
+      break;
   }
 }
 

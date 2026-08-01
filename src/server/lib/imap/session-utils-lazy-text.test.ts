@@ -67,7 +67,9 @@ mock.module("pg", pgMock);
 const {
   buildMessageSegments,
   streamFromSegments,
+  streamPartialFromSegments,
   computeFullMessageSize,
+  sumSegmentBytes,
 } = await import("./session-utils");
 const { resetPool } = await import("../postgres/client");
 const { pgTextChunks, PG_TEXT_CHUNK_CHARS } = await import(
@@ -462,5 +464,170 @@ describe("buildMessageSegments — lazy mode wire parity", () => {
     expect(substringCalls.length).toBeGreaterThanOrEqual(
       Math.floor(html.length / PG_TEXT_CHUNK_CHARS)
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamPartialFromSegments — RFC 3501 §6.4.5 BODY[]<start.length> path
+// ---------------------------------------------------------------------------
+
+describe("streamPartialFromSegments — byte-range slice", () => {
+  const drainToBuffer = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c);
+    return Buffer.concat(chunks as unknown as Uint8Array[]);
+  };
+
+  const baseHeaders = {
+    subject: "partial-range",
+    messageId: "<partial-range@test>",
+    date: "2026-08-01T00:00:00Z",
+    from: { text: "a@example.com", value: [{ address: "a@example.com", name: "" }] },
+    to: { text: "b@example.com", value: [{ address: "b@example.com", name: "" }] },
+    envelopeTo: [{ address: "b@example.com", name: "" }],
+  } as const;
+
+  // The parity invariant: streamPartialFromSegments(segs, start, length) is
+  // byte-identical to the substring of the full concatenation. Sweeps a
+  // grid of offsets across a body large enough to exercise multiple
+  // pg SUBSTRING pulls per segment, both crossing and staying inside
+  // individual segments.
+  it("emits exactly the [start, start+length) slice of the full segment concat", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    // ~50 KB text + ~200 KB html — small enough for the full concat to
+    // fit in a test buffer, big enough that the html segment alone
+    // spans multiple PG_TEXT_CHUNK_CHARS pulls.
+    const text = "plain-body ".repeat(4500);
+    const html = "<p>rich body</p>".repeat(12000);
+    columnStore.set("mail-partial:text", text);
+    columnStore.set("mail-partial:html", html);
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-partial",
+        user_id: "user-1",
+      } as never,
+      "docId-partial"
+    );
+    const full = await drainToBuffer(streamFromSegments(segments));
+    const total = full.byteLength;
+
+    // Grid of (start, length) pairs designed to hit: (a) start-of-message,
+    // (b) mid-segment cuts, (c) segment-boundary crossings, (d) end-of-body,
+    // (e) length exceeding remaining bytes.
+    const cases: Array<[number, number]> = [
+      [0, 100],
+      [0, total],
+      [1, 1000],
+      [Math.floor(total / 3), Math.floor(total / 3)],
+      [total - 10, 10],
+      [total - 100, 100_000], // over-request → clamp
+    ];
+    for (const [start, length] of cases) {
+      const slice = await drainToBuffer(
+        streamPartialFromSegments(segments, start, length)
+      );
+      const expected = full.subarray(start, Math.min(total, start + length));
+      expect(
+        slice.equals(expected as unknown as Uint8Array),
+        `mismatch at start=${start} length=${length}: got ${slice.byteLength}B, expected ${expected.byteLength}B`
+      ).toBe(true);
+    }
+  });
+
+  it("returns an empty stream when start is at or past total", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    columnStore.set("mail-empty-slice:text", "hello");
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 5,
+        html_octets: 0,
+        mail_id: "mail-empty-slice",
+        user_id: "user-1",
+      } as never,
+      "docId-empty-slice"
+    );
+    const total = sumSegmentBytes(segments) - 2; // exclude WIRE_TRAILER; partial has no trailer
+    const past = await drainToBuffer(
+      streamPartialFromSegments(segments, total + 100, 500)
+    );
+    expect(past.byteLength).toBe(0);
+    const zeroLen = await drainToBuffer(
+      streamPartialFromSegments(segments, 0, 0)
+    );
+    expect(zeroLen.byteLength).toBe(0);
+  });
+
+  it("peak chunk stays O(chunk) on a large lazy body — never materializes the whole slice", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    // 800 KB html body — a whole-message materialize would be ~1.1 MB.
+    const html = "z".repeat(800_000);
+    columnStore.set("mail-partial-big:html", html);
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-partial-big",
+        user_id: "user-1",
+      } as never,
+      "docId-partial-big"
+    );
+    // Request a 400 KB slice from the middle of the message.
+    const totalMsg = sumSegmentBytes(segments) - 2;
+    const start = Math.floor(totalMsg / 3);
+    const length = Math.min(400_000, totalMsg - start);
+    let maxChunk = 0;
+    let emitted = 0;
+    for await (const chunk of streamPartialFromSegments(segments, start, length)) {
+      emitted += chunk.byteLength;
+      if (chunk.byteLength > maxChunk) maxChunk = chunk.byteLength;
+    }
+    expect(emitted).toBe(length);
+    // Peak transient chunk is ~64 KiB (base64 of SLICE_RAW_BYTES). The
+    // 400 KB slice never appears as a single Buffer.
+    expect(maxChunk).toBeLessThan(80 * 1024);
+    // Each SUBSTRING pull is still bounded by PG_TEXT_CHUNK_CHARS.
+    for (const call of substringCalls) {
+      expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
+    }
+  });
+
+  it("stops pulling upstream once the slice is satisfied — early-return releases the pg cursor", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const html = "y".repeat(500_000);
+    columnStore.set("mail-early-return:html", html);
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-early-return",
+        user_id: "user-1",
+      } as never,
+      "docId-early-return"
+    );
+
+    // Request only the first 2000 bytes — reader should stop within the
+    // first couple of SUBSTRING pulls, not drain the whole column.
+    for await (const _ of streamPartialFromSegments(segments, 0, 2000)) {
+      // consume
+    }
+    // A drain of the full column would need ~500_000 / PG_TEXT_CHUNK_CHARS
+    // = ~42 pulls. Early-return should keep it to a small constant.
+    expect(substringCalls.length).toBeLessThan(5);
   });
 });
