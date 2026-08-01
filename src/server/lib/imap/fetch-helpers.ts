@@ -290,10 +290,19 @@ export function addBodyFields(
       break;
 
     case "TEXT":
-      // BODY[TEXT] streams via `streamBodyFromSegments` (segments minus
-      // the top-level header literal) — same lazy synthetics as FULL so
-      // the text/html columns get pulled via chunked SUBSTRING at emit
-      // time. Materialized text/html no longer projected here.
+      // BODY[TEXT]: non-partial streams via `streamBodyFromSegments`
+      // (segments minus the top-level header literal). Partial TEXT
+      // falls through to `getBodyContent → buildFullMessage`, which
+      // requires materialized `text` / `html` strings — projecting them
+      // keeps partial correct AND makes `.MIME` / `.HEADER` sub-section
+      // handling (`getBodyPartHeaders`, which reads `mail.text.trim()`)
+      // work. Cost: `wantsLazyBodies` returns false when the strings
+      // are present, so `buildMessageSegments` emits `base64` segments
+      // instead of `lazy-text` — the non-partial TEXT stream is still
+      // chunk-bounded on the output side but `mail.text` / `mail.html`
+      // sit in memory for the fetch's duration.
+      fields.add("text");
+      fields.add("html");
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");
@@ -354,13 +363,16 @@ export function addBodyFields(
     }
 
     case "MIME_PART":
-      // BODY[<part>] streams via `streamPartBodyFromSegments` (segment
-      // filter by partPath). Text/html parts pull via chunked
-      // SUBSTRING; attachment parts read via `emitAttachment`. Same
-      // lazy synthetics as FULL. `.HEADER` / `.MIME` sub-sections
-      // (small MIME header block) fall through to the materialized
-      // path in `getBodyContent`, which needs headers only — no body
-      // strings — so still no `text` / `html` projection required.
+      // BODY[<part>]: non-partial bare/.TEXT streams via
+      // `streamPartBodyFromSegments` (segment filter by partPath).
+      // Partial fetches AND `.MIME` / `.HEADER` sub-sections fall
+      // through to `getBodyPart` / `getBodyPartHeaders`, both of
+      // which use `mail.text.trim()` to decide part existence.
+      // Projecting materialized `text` / `html` keeps those correct.
+      // Same trade-off as TEXT: non-partial bare/.TEXT still streams
+      // chunk-bounded on output but the source strings sit in memory.
+      fields.add("text");
+      fields.add("html");
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");

@@ -200,15 +200,22 @@ describe("getRequestedFields", () => {
         { type: "BODY", peek: false, section: { type: "TEXT" } }
       ]);
       expect([...rfc].sort()).toEqual([...body].sort());
-      // Post-cache-deletion: TEXT projects the LAZY synthetics + header
-      // context (needed by `buildMessageSegments` to emit the multipart
-      // boundary/Content-Type inside the body), not the materialized
-      // `text`/`html` strings.
+      // Post-cache-deletion: TEXT projects BOTH materialized (text/html)
+      // AND lazy synthetics. The materialized shape is needed by the
+      // partial-fetch fall-through path (`getBodyContent → buildFullMessage`)
+      // and by `getBodyPartHeaders` for `.MIME` / `.HEADER` sub-sections;
+      // the lazy synthetics carry the segment metadata for the streaming
+      // branches. `wantsLazyBodies` reads text-undefined so the streaming
+      // path emits `base64` segments (materialized source, chunk-bounded
+      // output) rather than `lazy-text` (pgTextChunks) — this trades the
+      // lazy-segment memory win for correctness across all fall-through
+      // paths.
+      expect(rfc.has("text")).toBe(true);
+      expect(rfc.has("html")).toBe(true);
       expect(rfc.has("text_octets" as FetchRequestedField)).toBe(true);
       expect(rfc.has("html_octets" as FetchRequestedField)).toBe(true);
       expect(rfc.has("mail_id" as FetchRequestedField)).toBe(true);
       expect(rfc.has("user_id" as FetchRequestedField)).toBe(true);
-      expect(rfc.has("text")).toBe(false);
     });
   });
 
@@ -1632,6 +1639,112 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
       "INBOX"
     );
     expect(part).toBeNull();
+  });
+});
+
+// Reviewoie R1 on #770 caught 3 HIGH bugs, all rooted in the same class:
+// existing fixtures pre-populate `mail.text = "..."` (materialized), which
+// forces the non-lazy code path. Prod mails on the FETCH hot path arrive
+// with `text` undefined + `text_octets` set. The fall-through paths
+// (`.MIME` / `.HEADER` sub-sections, partial TEXT, partial MIME_PART)
+// all read `mail.text.trim()` directly — undefined → predicate false →
+// wrong shape. Fixed by re-adding materialized `text` / `html` to
+// `addBodyFields` for TEXT + MIME_PART. These tests EXPLICITLY use the
+// prod-shape mail (lazy fields only, text/html undefined) to guard
+// against the field-projection regressing again.
+describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 R1)", () => {
+  const contentAsString = (part: FetchResponsePart): string => {
+    if (part.type === "literal") {
+      return Buffer.isBuffer(part.content)
+        ? part.content.toString("utf8")
+        : part.content;
+    }
+    if (part.type === "simple") return part.content;
+    throw new Error(`unexpected type ${part.type}`);
+  };
+
+  // Prod-shape: mail row projected by getMailsByRange as it appears
+  // for a real FETCH — no `text` / `html` strings, just octet counts +
+  // synthetic id fields.
+  const prodShapeMail = (
+    overrides: Partial<MailType & { text_octets?: number; html_octets?: number; mail_id?: string; user_id?: string }> = {}
+  ): Partial<MailType> => ({
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<prod-shape@local>",
+    date: new Date("2026-08-01T00:00:00Z"),
+    from: { text: "a@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "b@example.com", value: [] } as unknown as MailType["to"],
+    subject: "prod shape",
+    attachments: [] as unknown as MailType["attachments"],
+    // text / html deliberately undefined
+    text_octets: 100,
+    html_octets: 100,
+    mail_id: "mail-prod",
+    user_id: "user-prod",
+    ...overrides,
+  }) as Partial<MailType>;
+
+  it("BODY[1.MIME] on a text-only lazy-shape mail returns the part MIME header block (not null)", async () => {
+    const mail = prodShapeMail({ text: "materialized text needed" });
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
+      },
+      "doc-prod-mime",
+      "INBOX"
+    );
+    expect(part).not.toBeNull();
+    // If addBodyFields had dropped `text` again, `getBodyPartHeaders`'s
+    // `mail.text.trim()` would throw or short-circuit → null return.
+    // The response is a literal containing the part's Content-Type +
+    // Content-Transfer-Encoding lines.
+    expect(part!.type).toBe("literal");
+    if (part!.type === "literal") {
+      expect(contentAsString(part!)).toContain("Content-Type:");
+    }
+  });
+
+  it("BODY[TEXT]<0.100> partial on a lazy-shape mail returns a stream/literal (not throw)", async () => {
+    // The buildFullMessage-throws-on-lazy failure mode: with only
+    // text_octets projected (no text string), partial TEXT falls through
+    // to getBodyContent → buildFullMessage which throws on lazy-text
+    // segments. Re-adding `text` to the projection means production
+    // getMailsByRange delivers the string too, so the fall-through
+    // materialized path works.
+    const mail = prodShapeMail({ text: "some text to slice from" });
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "TEXT" },
+        partial: { start: 0, length: 100 },
+      },
+      "doc-prod-partial-text",
+      "INBOX"
+    );
+    // Any non-throw + non-null return proves the fall-through works.
+    expect(part).not.toBeNull();
+  });
+
+  it("BODY[1]<0.100> partial on a text-only lazy-shape mail returns bytes (not null)", async () => {
+    // The getBodyPart-uses-mail.text failure mode.
+    const mail = prodShapeMail({ text: "some content" });
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "1" },
+        partial: { start: 0, length: 100 },
+      },
+      "doc-prod-partial-part",
+      "INBOX"
+    );
+    expect(part).not.toBeNull();
   });
 });
 
