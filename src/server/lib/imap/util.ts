@@ -348,8 +348,8 @@ export const formatBodyStructure = (
   }
 
   // Default case: empty text part (no lazy inputs either, so the
-  // materialized shape drives the count — split("") = [""], length 1).
-  return buildTextPart("plain", "", undefined, undefined);
+  // materialized shape drives the size — encodeText("") = "", 0 octets).
+  return buildTextPart("plain", "", undefined);
 };
 
 export const formatFlags = (mail: Partial<MailType>): string[] => {
