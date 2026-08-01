@@ -77,11 +77,41 @@ describe("IMAP util", () => {
       );
     });
 
-    it("should handle address with empty name", () => {
+    it("should emit NIL as addr-name for an empty name", () => {
       const addresses: MailAddressValueType[] = [
         { name: "", address: "john@example.com" }
       ];
-      expect(formatAddressList(addresses)).toBe('("" NIL "john" "example.com")');
+      expect(formatAddressList(addresses)).toBe(
+        '(NIL NIL "john" "example.com")'
+      );
+    });
+
+    it("should emit NIL as addr-name for an absent name", () => {
+      const addresses: MailAddressValueType[] = [
+        { address: "john@example.com" } as MailAddressValueType
+      ];
+      expect(formatAddressList(addresses)).toBe(
+        '(NIL NIL "john" "example.com")'
+      );
+    });
+
+    it("should not quote a whitespace-only name away — it is a present name", () => {
+      const addresses: MailAddressValueType[] = [
+        { name: " ", address: "john@example.com" }
+      ];
+      expect(formatAddressList(addresses)).toBe(
+        '(" " NIL "john" "example.com")'
+      );
+    });
+
+    it("should mix NIL and quoted addr-names within one list", () => {
+      const addresses: MailAddressValueType[] = [
+        { name: "", address: "john@example.com" },
+        { name: "Jane Smith", address: "jane@example.com" }
+      ];
+      expect(formatAddressList(addresses)).toBe(
+        '(NIL NIL "john" "example.com") ("Jane Smith" NIL "jane" "example.com")'
+      );
     });
 
     it("should escape quotes in name", () => {
@@ -315,6 +345,26 @@ describe("IMAP util", () => {
       expect(result).toContain('(("Jane" NIL "jane" "example.com"))');
       // ...and the absent reply-to/cc/bcc are bare NIL, not (NIL).
       expect(result).not.toContain("(NIL)");
+    });
+
+    it("emits a no-display-name address as NIL addr-name inside a present address", () => {
+      // A bare `From: sender@example.com` / `To: recipient@example.com`. The
+      // address structure is present, so it stays parenthesized, but each
+      // addr-name is the bare atom NIL.
+      const mail: Partial<MailType> = {
+        from: {
+          text: "sender@example.com",
+          value: [{ name: "", address: "sender@example.com" }]
+        },
+        to: {
+          text: "recipient@example.com",
+          value: [{ name: "", address: "recipient@example.com" }]
+        }
+      };
+      const result = formatEnvelope(mail);
+      expect(result).toContain('((NIL NIL "sender" "example.com"))');
+      expect(result).toContain('((NIL NIL "recipient" "example.com"))');
+      expect(result).not.toContain('""');
     });
   });
 
