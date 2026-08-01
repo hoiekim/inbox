@@ -1689,43 +1689,44 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
   // return this exact shape (lazy fields only), and the fall-through
   // paths (`.MIME`/`.HEADER` → `getBodyPartHeaders`, partial TEXT →
   // `buildFullMessage`, partial MIME_PART bare → `getBodyPart`) would
-  // all fail because they read `mail.text.trim()` directly. Under the
-  // CURRENT code these paths ALSO fail — that's the point: a
-  // regression that reintroduced the projection defect wouldn't be
+  // all fail. The specific failure mode differs per path:
+  //   - `getBodyPartHeaders` / `getBodyPart`: predicates
+  //     `mail.text && mail.text.trim().length > 0` short-circuit on
+  //     undefined → hasText/hasHtml degrade to false → silent
+  //     null-return (response part dropped from the FETCH tuple with
+  //     no diagnostic).
+  //   - `buildFullMessage`: throws
+  //     "buildFullMessage: cannot materialize a lazy-text segment"
+  //     when segments are lazy.
+  // Under the CURRENT code these paths ALSO fail — that's the point:
+  // a regression that reintroduced the projection defect wouldn't be
   // caught by these tests (they'd match the failing-shape from BOTH
   // directions). The load-bearing regression guard is the
   // `getRequestedFields` describe at :214-215 asserting `text`/`html`
   // ARE projected. These tests document the fall-through paths that
   // depend on that projection — a paired documentation of the
   // failure surface.
-  it("BODY[1.MIME] on lazy-only mail (text/html undefined) — documents fall-through dependency", async () => {
+  it("BODY[1.MIME] on lazy-only mail (text/html undefined) — silent null-return via short-circuit", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
-    // Without materialized text, getBodyPartHeaders' `mail.text.trim()`
-    // throws — the current code path is UNSAFE for this shape. The
-    // projection guarantees `text`/`html` are populated when this
-    // code path reaches getBodyPartHeaders (see the getRequestedFields
-    // test that asserts `text`/`html` in the field set). This test
-    // documents the invariant: mail arriving at getBodyPartHeaders
-    // MUST have `mail.text` populated.
-    let threw = false;
-    let result: FetchResponsePart | null = null;
-    try {
-      result = await buildBodyResponsePart(
-        mail,
-        {
-          type: "BODY",
-          peek: true,
-          section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
-        },
-        "doc-prod-mime-lazy",
-        "INBOX"
-      );
-    } catch {
-      threw = true;
-    }
-    // Either throw OR degrade to null — both prove the projection
-    // MUST include `text`/`html` for correctness.
-    expect(threw || result === null).toBe(true);
+    // `getBodyPartHeaders`'s predicate is
+    // `mail.text && mail.text.trim().length > 0` — undefined
+    // short-circuits before `.trim()`, `hasText`/`hasHtml` degrade to
+    // falsy, and the early `!hasAttachments && !hasText && !hasHtml
+    // → return null` fires. Silent null-return (NOT a throw) — the
+    // response part is dropped from the FETCH tuple with no
+    // diagnostic. That's the class of wrong-shape bug the projection
+    // guards against.
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
+      },
+      "doc-prod-mime-lazy",
+      "INBOX"
+    );
+    expect(part).toBeNull();
   });
 
   it("BODY[TEXT]<0.100> on lazy-only mail — buildFullMessage throws on lazy segments", async () => {
