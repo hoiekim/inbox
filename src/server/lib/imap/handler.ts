@@ -558,6 +558,31 @@ export class ImapRequestHandler {
       const arrayBuffersDeltaKB = Math.round(
         (memAfter.arrayBuffers - memBefore.arrayBuffers) / 1024
       );
+      // Attribution of which BODY[] variant a FETCH command uses. `partial`
+      // = the client sent `BODY[]<start.length>` (partial fetch) → routes
+      // to the materialized `buildFullMessage` path (loads text+html
+      // strings into V8 heap). Absence of `.partial` on a FULL BODY[]
+      // request → routes to the lazy-body streaming path (`pgTextChunks`
+      // + `emitBase64`, sub-MB peak). Under an iOS retry storm, this
+      // integer tells us which path is actually driving the RSS climb
+      // #757 is chasing. Non-FETCH commands set both to 0.
+      let bodyFullPartial = 0;
+      let bodyFullStream = 0;
+      const collectBodyShapes = (r: ImapRequest): void => {
+        if (r.type === "UID") { collectBodyShapes(r.data.request); return; }
+        if (r.type !== "FETCH") return;
+        for (const item of r.data.dataItems ?? []) {
+          if (item.type === "BODY" && item.section.type === "FULL") {
+            if (item.partial) bodyFullPartial += 1;
+            else bodyFullStream += 1;
+          } else if (item.type === "RFC822") {
+            // RFC822 aliases BODY[] — same code path split.
+            if ("partial" in item && (item as { partial?: unknown }).partial) bodyFullPartial += 1;
+            else bodyFullStream += 1;
+          }
+        }
+      };
+      collectBodyShapes(request);
       const payload = {
         component: "imap",
         tag,
@@ -575,6 +600,8 @@ export class ImapRequestHandler {
         heapTotalDeltaKB,
         externalDeltaKB,
         arrayBuffersDeltaKB,
+        bodyFullPartial,
+        bodyFullStream,
         responseBytes,
         durationMs,
         waitedForBodyBudgetMs,
