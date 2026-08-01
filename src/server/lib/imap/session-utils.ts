@@ -88,19 +88,44 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
  * connection.
  */
 export type MessageSegment =
-  /** Emitted verbatim; measured with `Buffer.byteLength`. */
-  | { kind: "literal"; value: string }
-  /** `source` base64-encoded; sliced so the encoded form is never one allocation. */
-  | { kind: "base64"; source: string }
-  /** An attachment file, base64-encoded, read and emitted in slices. */
-  | { kind: "attachment"; dataId: string; rawSize: number; filename: string }
+  /**
+   * Emitted verbatim; measured with `Buffer.byteLength`.
+   *
+   * `role` distinguishes structural framing (`"headers"` = the top-level
+   * RFC 2822 header block, `"framing"` = MIME boundary / part header /
+   * closing delimiter) from body-content literals (rare — typically
+   * absent, since text/html/attachment payloads use their own segment
+   * kinds). The `BODY[TEXT]` streamer uses `role === "headers"` to skip
+   * the top header block and emit everything after; the `BODY[<part>]`
+   * streamer uses `partPath` to select only the part-body segments.
+   */
+  | { kind: "literal"; value: string; role?: "headers" | "framing" }
+  /**
+   * `source` base64-encoded; sliced so the encoded form is never one
+   * allocation. `partPath` (when set) is the RFC 3501 part number this
+   * body belongs to (`"1"`, `"1.2"`, `"2"`, ...) — used by
+   * `BODY[<part>]` to select this segment.
+   */
+  | { kind: "base64"; source: string; partPath?: string }
+  /**
+   * An attachment file, base64-encoded, read and emitted in slices.
+   * `partPath` = its RFC 3501 part number for `BODY[<part>]` addressing.
+   */
+  | {
+      kind: "attachment";
+      dataId: string;
+      rawSize: number;
+      filename: string;
+      partPath?: string;
+    }
   /**
    * A `mails.text` or `mails.html` column, streamed via chunked
    * `SUBSTRING` reads and base64-encoded. `byteLength` is the raw
    * `octet_length(<col>)` measured at range-read time (see
    * `PartialMailModel.text_octets` / `html_octets`), so the encoded byte
    * count is pinned before the first chunk yields — the `{N}` literal
-   * cannot race the stream.
+   * cannot race the stream. `partPath` = RFC 3501 part number for
+   * `BODY[<part>]` addressing.
    */
   | {
       kind: "lazy-text";
@@ -108,6 +133,7 @@ export type MessageSegment =
       mail_id: string;
       user_id: string;
       byteLength: number;
+      partPath?: string;
     };
 
 /**
@@ -219,13 +245,20 @@ export const buildMessageSegments = (
   const hasAttachments = !!mail.attachments && mail.attachments.length > 0;
 
   const segments: MessageSegment[] = [];
-  const literal = (value: string): void => {
-    segments.push({ kind: "literal", value });
+  // `role` distinguishes the top-level RFC 2822 header block from MIME
+  // framing so `BODY[TEXT]` (skip headers, emit rest) and
+  // `BODY[<part>]` (select by partPath) can both filter without a
+  // second segment build. Default is `"framing"`; the header-block
+  // literal explicitly uses `"headers"`.
+  const literal = (value: string, role: "headers" | "framing" = "framing"): void => {
+    segments.push({ kind: "literal", value, role });
   };
   // Picks a `lazy-text` segment in lazy mode, a `base64` segment otherwise.
   // Both encode to identical wire bytes for the same input column (see the
-  // split-input parity tests on emitBase64 in commit 2).
-  const pushBody = (which: "text" | "html"): void => {
+  // split-input parity tests on emitBase64 in commit 2). `partPath` is the
+  // RFC 3501 part number this body belongs to (`"1"`, `"1.2"`, `"2"`, ...) —
+  // stamps the segment so `BODY[<part>]` can filter to just this one.
+  const pushBody = (which: "text" | "html", partPath?: string): void => {
     if (isLazy) {
       segments.push({
         kind: "lazy-text",
@@ -233,28 +266,30 @@ export const buildMessageSegments = (
         mail_id: mail.mail_id!,
         user_id: mail.user_id!,
         byteLength: which === "text" ? mail.text_octets! : mail.html_octets!,
+        partPath,
       });
     } else {
       segments.push({
         kind: "base64",
         source: (which === "text" ? mail.text! : mail.html!),
+        partPath,
       });
     }
   };
 
   if (!hasText && !hasHtml && !hasAttachments) {
-    literal(`${headers}\r\n\r\n`);
+    literal(`${headers}\r\n\r\n`, "headers");
     return segments;
   }
   if (hasText && !hasHtml && !hasAttachments) {
-    literal(`${headers}\r\n\r\n`);
-    pushBody("text");
+    literal(`${headers}\r\n\r\n`, "headers");
+    pushBody("text", "1");
     literal(`\r\n`);
     return segments;
   }
   if (!hasText && hasHtml && !hasAttachments) {
-    literal(`${headers}\r\n\r\n`);
-    pushBody("html");
+    literal(`${headers}\r\n\r\n`, "headers");
+    pushBody("html", "1");
     literal(`\r\n`);
     return segments;
   }
@@ -268,45 +303,62 @@ export const buildMessageSegments = (
   const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
 
   /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
-  const bodyPart = (delimiter: string, contentType: string, which: "text" | "html"): void => {
+  const bodyPart = (
+    delimiter: string,
+    contentType: string,
+    which: "text" | "html",
+    partPath: string
+  ): void => {
     literal(`--${delimiter}\r\n`);
     literal(`Content-Type: ${contentType}; charset=utf-8\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n\r\n`);
-    pushBody(which);
+    pushBody(which, partPath);
     literal(`\r\n`);
   };
 
   if (hasText && hasHtml && !hasAttachments) {
+    // multipart/alternative — top-level parts 1 (text) and 2 (html).
     literal(
       `${rewriteContentType(
         headers,
         `Content-Type: multipart/alternative; boundary="${boundary}"`
-      )}\r\n\r\n`
+      )}\r\n\r\n`,
+      "headers"
     );
-    bodyPart(boundary, "text/plain", "text");
-    bodyPart(boundary, "text/html", "html");
+    bodyPart(boundary, "text/plain", "text", "1");
+    bodyPart(boundary, "text/html", "html", "2");
     literal(`--${boundary}--`);
     return segments;
   }
 
-  // hasAttachments — multipart/mixed
+  // hasAttachments — multipart/mixed. Part numbering per RFC 3501 §6.4.5 +
+  // `getBodyPart`:
+  //   - text+html: alternative wrapper is part 1 with sub-parts 1.1 (text)
+  //     and 1.2 (html); attachments start at part 2.
+  //   - text-only or html-only: the single body is part 1; attachments
+  //     start at part 2.
   literal(
     `${rewriteContentType(
       headers,
       `Content-Type: multipart/mixed; boundary="${boundary}"`
-    )}\r\n\r\n`
+    )}\r\n\r\n`,
+    "headers"
   );
 
+  let nextAttachmentPart = 1;
   if (hasText && hasHtml) {
     literal(`--${boundary}\r\n`);
     literal(`Content-Type: multipart/alternative; boundary="${altBoundary}"\r\n\r\n`);
-    bodyPart(altBoundary, "text/plain", "text");
-    bodyPart(altBoundary, "text/html", "html");
+    bodyPart(altBoundary, "text/plain", "text", "1.1");
+    bodyPart(altBoundary, "text/html", "html", "1.2");
     literal(`--${altBoundary}--\r\n`);
+    nextAttachmentPart = 2;
   } else if (hasText) {
-    bodyPart(boundary, "text/plain", "text");
+    bodyPart(boundary, "text/plain", "text", "1");
+    nextAttachmentPart = 2;
   } else if (hasHtml) {
-    bodyPart(boundary, "text/html", "html");
+    bodyPart(boundary, "text/html", "html", "1");
+    nextAttachmentPart = 2;
   }
 
   for (const att of mail.attachments!) {
@@ -318,9 +370,11 @@ export const buildMessageSegments = (
       kind: "attachment",
       dataId: att.content.data,
       rawSize: resolveAttachmentRawSize(att.content.data),
-      filename: att.filename
+      filename: att.filename,
+      partPath: String(nextAttachmentPart),
     });
     literal(`\r\n`);
+    nextAttachmentPart += 1;
   }
   literal(`--${boundary}--`);
   return segments;
@@ -751,6 +805,67 @@ export async function* streamPartialFromSegments(
     yield* sliceStream(streamOneSegment(segment), skipInSeg, takeInSeg);
   }
 }
+
+/**
+ * Stream only the segments after the top-level header block — the payload
+ * of `BODY[TEXT]` per RFC 3501 §6.4.5 ("Refers to the text body of the
+ * message, omitting the header"). The header literal is tagged
+ * `role: "headers"` by `buildMessageSegments`; the emitter skips exactly
+ * that one and emits the rest verbatim, so multipart boundaries and
+ * per-part MIME headers are preserved. Same peak-chunk bound as
+ * `streamFromSegments`.
+ *
+ * Load-bearing invariant: the caller must share ONE segment list with
+ * `sumBodyBytes` for its `{N}` (or with a `pre-length` computed by
+ * summing `segmentByteLength(seg)` for the emitted subset).
+ */
+export async function* streamBodyFromSegments(
+  segments: MessageSegment[]
+): AsyncGenerator<Buffer, void, unknown> {
+  for (const segment of segments) {
+    if (segment.kind === "literal" && segment.role === "headers") continue;
+    yield* streamOneSegment(segment);
+  }
+}
+
+/** Byte length of the `BODY[TEXT]` payload — everything except the header literal. */
+export const sumBodyBytes = (segments: MessageSegment[]): number =>
+  segments.reduce((acc, segment) => {
+    if (segment.kind === "literal" && segment.role === "headers") return acc;
+    return acc + segmentByteLength(segment);
+  }, 0);
+
+/**
+ * Stream just the body content segment(s) belonging to RFC 3501 part
+ * number `partPath` — the payload of `BODY[<partPath>]` (bare number or
+ * `.TEXT` subsection; per this codebase's synthetic-part scheme in
+ * `getBodyPart`, both resolve to the same base64 body without the
+ * part's MIME headers). Matches `buildMessageSegments`' partPath
+ * tagging exactly, so `BODY[1]` on a text-only mail yields the text's
+ * base64 segment, `BODY[2]` on a text+html mail yields the html's
+ * base64 segment, etc.
+ */
+export async function* streamPartBodyFromSegments(
+  segments: MessageSegment[],
+  partPath: string
+): AsyncGenerator<Buffer, void, unknown> {
+  for (const segment of segments) {
+    if (segment.kind === "literal") continue;
+    if (segment.partPath !== partPath) continue;
+    yield* streamOneSegment(segment);
+  }
+}
+
+/** Byte length of the `BODY[<partPath>]` payload — sum of matching body segments. */
+export const sumPartBodyBytes = (
+  segments: MessageSegment[],
+  partPath: string
+): number =>
+  segments.reduce((acc, segment) => {
+    if (segment.kind === "literal") return acc;
+    if (segment.partPath !== partPath) return acc;
+    return acc + segmentByteLength(segment);
+  }, 0);
 
 /** Stream exactly one segment as `streamFromSegments` would for that kind. */
 async function* streamOneSegment(

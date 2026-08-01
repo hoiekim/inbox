@@ -134,9 +134,12 @@ export class ImapSession {
    * so the kernel/OS outbound queue doesn't have to buffer the entire
    * multi-MB body in one shot, and awaits `drain` between chunks whenever
    * `socket.write` reports its high-water mark reached. This is the write
-   * path FETCH BODY responses take once the payload is a shared Buffer
-   * from `getSharedBodyResult` — resolves after every chunk is queued and
-   * the socket is under its high-water mark again.
+   * path FETCH BODY responses take when the payload lands as a Buffer
+   * (the residual materialized paths — partial non-FULL sections,
+   * header-like sub-sections). Large-body streaming paths (FULL, TEXT,
+   * MIME_PART bare/`.TEXT`) use `writeStream` instead. Resolves after
+   * every chunk is queued and the socket is under its high-water mark
+   * again.
    *
    * The `payload` parameter is a Buffer specifically so V8 can GC the
    * intermediate JS string that `buildFullMessage` produced, and so
