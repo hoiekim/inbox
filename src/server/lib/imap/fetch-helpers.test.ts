@@ -975,13 +975,14 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     attachments: [],
   };
 
-  it("derives size + lines from cached columns without loading text/html", async () => {
+  it("derives size from the cached octet column without loading text/html", async () => {
     // The load-bearing case. Row carries the lazy projection shape only
-    // — `text_octets` (raw octet count) + `text_line_count` (persisted at
-    // INSERT). Neither `text` nor `html` string is on the mail, so
-    // formatBodyStructure MUST NOT reach for them. If the cached path
-    // were bypassed and buildTextPart fell through to computing from the
-    // absent string, `lines` would come out as 1 (empty split) — not 42.
+    // — `text_octets` (raw octet count). Neither `text` nor `html` string
+    // is on the mail, so formatBodyStructure MUST NOT reach for them. If
+    // the cached path were bypassed and buildTextPart fell through to
+    // encoding the absent string, `size` would come out as 0 — not 44.
+    // `lines` is 1 on both paths: it measures the unfolded-base64 body
+    // the server actually serves, not the decoded text (RFC 3501 §7.4.2).
     const mailWithCache: FetchMailInput = {
       ...base,
       text_octets: 33, // 33 raw bytes → base64 encodes to ceil(33/3)*4 = 44
@@ -1002,11 +1003,11 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
       // Format: ("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" <size> <lines>)
       // Type/subtype/encoding must be quoted strings (RFC 3501 §9).
       expect(part!.content).toContain('"TEXT" "PLAIN"');
-      expect(part!.content).toContain('"BASE64" 44 42');
+      expect(part!.content).toContain('"BASE64" 44 1');
     }
   });
 
-  it("emits multipart/alternative from cached counts for a text+html mail with no strings loaded", async () => {
+  it("emits multipart/alternative from cached octets for a text+html mail with no strings loaded", async () => {
     const mailWithCache: FetchMailInput = {
       ...base,
       text_octets: 6, // → base64 8
@@ -1022,10 +1023,10 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     );
     expect(part!.type).toBe("simple");
     if (part!.type === "simple") {
-      // Both parts + the alternative wrapper. Both must derive from cache
-      // (no strings on mail — would `NaN` or 0 on materialized fallback).
-      expect(part!.content).toContain('"BASE64" 8 2');
-      expect(part!.content).toContain('"BASE64" 20 5');
+      // Both parts + the alternative wrapper. Both sizes must derive from
+      // cache (no strings on mail — would be 0 on a materialized fallback).
+      expect(part!.content).toContain('"BASE64" 8 1');
+      expect(part!.content).toContain('"BASE64" 20 1');
       expect(part!.content).toContain('"alternative"');
     }
   });
