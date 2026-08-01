@@ -35,6 +35,17 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = stored.slice(start, start + take);
     return { rows: [{ chunk }], rowCount: 1 };
   }
+  // Fail loud if a SUBSTRING call arrives in a shape the mock doesn't
+  // recognize — silently returning empty rows would surface as "body vs
+  // empty string" downstream, which reads as a data bug instead of a mock
+  // out-of-date bug. The ::int casts are load-bearing (see pgTextChunks
+  // in imap.ts), so any drift needs a matching mock update.
+  if (/SUBSTRING/i.test(sql)) {
+    throw new Error(
+      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks SQL. ` +
+      `Expected /SUBSTRING\\((text|html)\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+    );
+  }
   return { rows: [], rowCount: 0 };
 });
 
