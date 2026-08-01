@@ -317,7 +317,8 @@ export class ImapRequestHandler {
     // lets triage disambiguate.
     const session = this.session;
     const startedAt = performance.now();
-    const rssBefore = process.memoryUsage.rss();
+    const memBefore = process.memoryUsage();
+    const rssBefore = memBefore.rss;
     const bytesBefore = session.bytesWritten;
 
     // Bind a body-budget wait ledger to this command's async scope so
@@ -492,7 +493,8 @@ export class ImapRequestHandler {
       logger.error("Error handling IMAP request", { component: "imap", tag, type: request.type }, error);
       session.write(`${tag} BAD Internal server error\r\n`);
     } finally {
-      const rssAfter = process.memoryUsage.rss();
+      const memAfter = process.memoryUsage();
+      const rssAfter = memAfter.rss;
       const socket = session.socket;
       const rssDeltaMB = Math.round((rssAfter - rssBefore) / 1_048_576);
       const responseBytes = session.bytesWritten - bytesBefore;
@@ -538,6 +540,49 @@ export class ImapRequestHandler {
       // module-global cell would race with concurrent commands on
       // other sockets.
       const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
+      // Attribution of the per-command RSS delta by memory class. `rss` is
+      // OS-reported (Node process resident) — the other four are V8/Node
+      // internal counters that partition where the growth actually lives:
+      //   heapUsed / heapTotal — V8 JS heap (objects, strings, closures)
+      //   external            — Buffers + typed arrays bound to a V8 wrapper
+      //   arrayBuffers        — subset of `external` for ArrayBuffer backing
+      //                         stores (raw Buffer allocations sit here)
+      // Under a same-socket pipelined burst, seeing external/arrayBuffers
+      // climb points at Buffer accumulation (pgTextChunks / socket outbound
+      // / attachment reads); seeing heapUsed climb points at retained JS
+      // references (mail-row copies, segment lists); seeing rss climb
+      // without any of the above pointing at Node-internal buffers.
+      const heapUsedDeltaKB = Math.round((memAfter.heapUsed - memBefore.heapUsed) / 1024);
+      const heapTotalDeltaKB = Math.round((memAfter.heapTotal - memBefore.heapTotal) / 1024);
+      const externalDeltaKB = Math.round((memAfter.external - memBefore.external) / 1024);
+      const arrayBuffersDeltaKB = Math.round(
+        (memAfter.arrayBuffers - memBefore.arrayBuffers) / 1024
+      );
+      // Attribution of which BODY[] variant a FETCH command uses. `partial`
+      // = the client sent `BODY[]<start.length>` (partial fetch) → routes
+      // to the materialized `buildFullMessage` path (loads text+html
+      // strings into V8 heap). Absence of `.partial` on a FULL BODY[]
+      // request → routes to the lazy-body streaming path (`pgTextChunks`
+      // + `emitBase64`, sub-MB peak). Under an iOS retry storm, this
+      // integer tells us which path is actually driving the RSS climb
+      // #757 is chasing. Non-FETCH commands set both to 0.
+      let bodyFullPartial = 0;
+      let bodyFullStream = 0;
+      const collectBodyShapes = (r: ImapRequest): void => {
+        if (r.type === "UID") { collectBodyShapes(r.data.request); return; }
+        if (r.type !== "FETCH") return;
+        for (const item of r.data.dataItems ?? []) {
+          if (item.type === "BODY" && item.section.type === "FULL") {
+            if (item.partial) bodyFullPartial += 1;
+            else bodyFullStream += 1;
+          } else if (item.type === "RFC822") {
+            // RFC822 aliases BODY[] — same code path split.
+            if ("partial" in item && (item as { partial?: unknown }).partial) bodyFullPartial += 1;
+            else bodyFullStream += 1;
+          }
+        }
+      };
+      collectBodyShapes(request);
       const payload = {
         component: "imap",
         tag,
@@ -547,6 +592,16 @@ export class ImapRequestHandler {
         rssBeforeMB: Math.round(rssBefore / 1_048_576),
         rssAfterMB: Math.round(rssAfter / 1_048_576),
         rssDeltaMB,
+        heapUsedAfterMB: Math.round(memAfter.heapUsed / 1_048_576),
+        heapTotalAfterMB: Math.round(memAfter.heapTotal / 1_048_576),
+        externalAfterMB: Math.round(memAfter.external / 1_048_576),
+        arrayBuffersAfterMB: Math.round(memAfter.arrayBuffers / 1_048_576),
+        heapUsedDeltaKB,
+        heapTotalDeltaKB,
+        externalDeltaKB,
+        arrayBuffersDeltaKB,
+        bodyFullPartial,
+        bodyFullStream,
         responseBytes,
         durationMs,
         waitedForBodyBudgetMs,

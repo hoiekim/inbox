@@ -219,7 +219,8 @@ async function _processFetchMessages(
         await markRead(store.getUser().id, id);
       }
     } catch (error) {
-      logger.error("Error processing message", { component: "imap", seqNum }, error);
+      const stack = error instanceof Error ? error.stack : String(error);
+      logger.error("Error processing message", { component: "imap", seqNum, stack }, error);
     }
   }
 }
