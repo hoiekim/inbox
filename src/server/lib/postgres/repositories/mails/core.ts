@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { MailType } from "common";
 import { logger } from "../../../logger";
 import { pool } from "../../client";
 import { ParamValue } from "../../database";
@@ -14,6 +15,10 @@ import {
   HTML_LINE_COUNT,
 } from "../../models";
 import { getNextModseq, writeMailboxUid } from "./counters";
+import {
+  computeFullMessageSize,
+  type FetchMailInput,
+} from "../../../imap/session-utils";
 
 export interface SaveMailInput {
   user_id: string;
@@ -79,12 +84,44 @@ export const saveMail = async (
     const modseq = await getNextModseq(input.user_id);
     const text = input.text ?? "";
     const html = input.html ?? "";
+    const date = input.date ?? new Date().toISOString();
+    // Reconstruct just the shape `computeFullMessageSize` touches, using
+    // the LAZY-BODY synthetics (text_octets / html_octets / mail_id /
+    // user_id) with text/html left undefined. This forces
+    // `wantsLazyBodies` true, so `hasText`/`hasHtml` derive from octet
+    // counts — the same predicate every subsequent FETCH uses on the
+    // row returned by `getMailsByRange` (session-utils.ts:207-215). A
+    // materialized shape here would take the `.trim()` branch and drift
+    // on whitespace-only bodies (SIZE would omit the part, FETCH BODY[]
+    // would include it — SIZE ≠ {N}).
+    //
+    // Attachments are already on disk by the time saveMail is called
+    // (saveBuffer in receive.ts:355 completes before pgSaveMail), so
+    // the internal `fs.statSync` per attachment works.
+    const mailForSize: FetchMailInput = {
+      messageId: input.message_id,
+      date,
+      subject: input.subject,
+      text_octets: Buffer.byteLength(text, "utf8"),
+      html_octets: Buffer.byteLength(html, "utf8"),
+      mail_id,
+      user_id: input.user_id,
+      attachments: input.attachments as MailType["attachments"] | undefined,
+      from: input.from_text ? { value: [], text: input.from_text } : undefined,
+      to: input.to_text ? { value: [], text: input.to_text } : undefined,
+      cc: input.cc_text ? { value: [], text: input.cc_text } : undefined,
+      bcc: input.bcc_text ? { value: [], text: input.bcc_text } : undefined,
+      replyTo: input.reply_to_text
+        ? { value: [], text: input.reply_to_text }
+        : undefined,
+    };
+    const rfc822_size = computeFullMessageSize(mailForSize, mail_id);
     const data: Record<string, ParamValue | object | null> = {
       mail_id,
       user_id: input.user_id,
       message_id: input.message_id,
       subject: input.subject ?? "",
-      date: input.date ?? new Date().toISOString(),
+      date,
       html,
       text,
       // Populated here so a mail inserted after this PR is always a
@@ -96,6 +133,11 @@ export const saveMail = async (
       // so a stored 1 for an empty column is never surfaced.
       [TEXT_LINE_COUNT]: countLines(text),
       [HTML_LINE_COUNT]: countLines(html),
+      // Same shape as line counts: populate at INSERT so the RFC822.SIZE
+      // fetch handler's cache-hit branch fires from the first observation.
+      // The lazy-populate fallback in fetch-helpers stays as a safety net
+      // for pre-migration rows.
+      [RFC822_SIZE]: rfc822_size,
       from_address: input.from_address ? JSON.stringify(input.from_address) : null,
       from_text: input.from_text ?? null,
       to_address: input.to_address ? JSON.stringify(input.to_address) : null,
