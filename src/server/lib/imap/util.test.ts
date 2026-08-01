@@ -88,7 +88,7 @@ describe("IMAP util", () => {
 
     it("should emit NIL as addr-name for an absent name", () => {
       const addresses: MailAddressValueType[] = [
-        { address: "john@example.com" } as MailAddressValueType
+        { address: "john@example.com" }
       ];
       expect(formatAddressList(addresses)).toBe(
         '(NIL NIL "john" "example.com")'

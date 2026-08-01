@@ -58,10 +58,9 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
       const [local, domain] = address.split("@");
       if (!local || !domain) return null;
 
-      // RFC 3501 §9: `addr-name = nstring`. An address whose header carried no
-      // display name has no personal name at all, which is the bare atom NIL —
-      // not `""`, which a client reads as a present-but-empty name and renders
-      // as a blank From/To instead of falling back to the address.
+      // RFC 3501 §9: `addr-name = nstring`. A header that carried no display
+      // name has no personal name at all — the bare atom NIL, not `""`, which
+      // clients read as a present-but-empty name.
       const addrName = name ? `"${name.replace(/"/g, '\\"')}"` : "NIL";
 
       return `(${addrName} NIL "${local}" "${domain}")`;
