@@ -200,7 +200,15 @@ describe("getRequestedFields", () => {
         { type: "BODY", peek: false, section: { type: "TEXT" } }
       ]);
       expect([...rfc].sort()).toEqual([...body].sort());
-      expect(rfc.has("text")).toBe(true);
+      // Post-cache-deletion: TEXT projects the LAZY synthetics + header
+      // context (needed by `buildMessageSegments` to emit the multipart
+      // boundary/Content-Type inside the body), not the materialized
+      // `text`/`html` strings.
+      expect(rfc.has("text_octets" as FetchRequestedField)).toBe(true);
+      expect(rfc.has("html_octets" as FetchRequestedField)).toBe(true);
+      expect(rfc.has("mail_id" as FetchRequestedField)).toBe(true);
+      expect(rfc.has("user_id" as FetchRequestedField)).toBe(true);
+      expect(rfc.has("text")).toBe(false);
     });
   });
 
@@ -316,10 +324,24 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
       docId,
       mailbox
     );
-    expect(rfc!.type).toBe("literal");
-    if (rfc!.type === "literal" && body!.type === "literal") {
-      expect(contentAsString(rfc)).toBe(contentAsString(body));
-      expect(rfc!.header).toBe("RFC822.TEXT");
+    // Post-cache-deletion: TEXT + RFC822.TEXT both route through the
+    // segment-walk streamer. Drain the stream to cross-check bytes
+    // instead of comparing `content`.
+    expect(rfc!.type).toBe("stream");
+    expect(body!.type).toBe("stream");
+    if (rfc!.type === "stream" && body!.type === "stream") {
+      const drain = async (s: AsyncIterable<Buffer>): Promise<Buffer> => {
+        const chunks: Buffer[] = [];
+        for await (const c of s) chunks.push(c);
+        return Buffer.concat(chunks as unknown as Uint8Array[]);
+      };
+      const [rfcBytes, bodyBytes] = await Promise.all([
+        drain(rfc.stream),
+        drain(body.stream),
+      ]);
+      expect(rfcBytes.equals(bodyBytes as unknown as Uint8Array)).toBe(true);
+      expect(rfc.header).toBe("RFC822.TEXT");
+      expect(rfc.length).toBe(body.length);
     }
   });
 });
@@ -1420,15 +1442,31 @@ describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
   const partOf = async (fetch: BodyFetch) => {
     const part = await buildBodyResponsePart(mail, fetch, docId, mailbox);
     expect(part).not.toBeNull();
-    if (part!.type !== "literal") throw new Error("expected literal part");
-    // The advertised {N} literal must equal the emitted octets.
-    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
-    // Give tests a stringy `content` alongside the raw part — they all treat
-    // it as UTF-8 text.
-    return {
-      ...part,
-      content: contentAsString(part),
-    };
+    // Post-cache-deletion: MIME_PART bare/`.TEXT` returns a stream (via
+    // `streamPartBodyFromSegments`); `.HEADER`/`.MIME` still returns a
+    // literal (materialized MIME header block). Normalize both into a
+    // stringy `content` + verified `length` so the assertions below
+    // stay uniform.
+    if (part!.type === "literal") {
+      expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+      return {
+        header: part!.header,
+        length: part!.length,
+        content: contentAsString(part!),
+      };
+    }
+    if (part!.type === "stream") {
+      const chunks: Buffer[] = [];
+      for await (const c of part!.stream) chunks.push(c);
+      const buffered = Buffer.concat(chunks as unknown as Uint8Array[]);
+      expect(buffered.byteLength).toBe(part!.length);
+      return {
+        header: part!.header,
+        length: part!.length,
+        content: buffered.toString("utf8"),
+      };
+    }
+    throw new Error(`unexpected part type: ${part!.type}`);
   };
 
   it("BODY[1.MIME] returns part 1 MIME header block, keyed BODY[1.MIME]", async () => {

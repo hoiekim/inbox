@@ -22,7 +22,11 @@ import {
   computeFullMessageSize,
   streamFromSegments,
   streamPartialFromSegments,
+  streamBodyFromSegments,
+  streamPartBodyFromSegments,
   sumSegmentBytes,
+  sumBodyBytes,
+  sumPartBodyBytes,
   WIRE_TRAILER,
   getBodyPart,
   getBodyPartHeaders,
@@ -33,7 +37,6 @@ import {
   BodySection,
   FetchDataItem,
 } from "./types";
-import { bodyBufferKey, getSharedBodyResult } from "./body-buffer";
 import { withBodyBudget, withBodyBudgetStream } from "./body-budget";
 import { withStreamMutex } from "./stream-mutex";
 import {
@@ -42,22 +45,21 @@ import {
   getMailBody,
   countLines,
 } from "../postgres/repositories/mails/core";
-// `getSharedBodyResult` already budget-gates INSIDE its singleflight
-// closure so coalesced callers share one slot (see body-buffer.ts +
-// hoiekim/inbox#726 / #727). The `withBodyBudget` import here is used
-// on the PARTIAL-fetch branch below, which bypasses the shared-body
-// cache but still materializes the full body via `buildFullMessage`
-// before slicing — same RSS scaling concern, so same gate.
+// `withBodyBudget` gates the small remaining set of paths that still
+// materialize before emitting: partial fetches on non-FULL non-header
+// sections (BODY[TEXT]<...>, BODY[<part>]<...>), which fall through to
+// `getBodyContent` + `applyPartialFetch`. Same RSS scaling concern the
+// budget existed to protect against, so same gate.
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
 // ---------------------------------------------------------------------------
 
 // `content` is a string for small parts (headers, simple attributes) and a
-// Buffer for large body payloads that flow through the shared body-buffer
-// cache — one Buffer reference is shared across every coalesced FETCH
-// handler for the same (mail, section), so heap footprint stays flat under
-// duplicate-FETCH storms. See `body-buffer.ts`.
+// Buffer for the small residual materialized paths (header-like sections,
+// partial fetches on non-FULL sections). All large-body paths (FULL,
+// TEXT, MIME_PART) emit via `type: "stream"` — see stream-mutex.ts +
+// #755 for the per-key mutex that serializes concurrent same-key streams.
 //
 // **stream** variant: BODY[] / RFC822 for a fetch that streams its bytes
 // directly to the socket via `streamFromSegments`, never materializing
@@ -288,9 +290,26 @@ export function addBodyFields(
       break;
 
     case "TEXT":
-      fields.add("text");
-      fields.add("html");
+      // BODY[TEXT] streams via `streamBodyFromSegments` (segments minus
+      // the top-level header literal) — same lazy synthetics as FULL so
+      // the text/html columns get pulled via chunked SUBSTRING at emit
+      // time. Materialized text/html no longer projected here.
+      fields.add("text_octets");
+      fields.add("html_octets");
+      fields.add("mail_id");
+      fields.add("user_id");
       fields.add("attachments");
+      // Header context needed for `formatHeaders` (which
+      // `buildMessageSegments` calls to emit the multipart boundary +
+      // Content-Type declaration inside the body content).
+      fields.add("subject");
+      fields.add("from");
+      fields.add("to");
+      fields.add("cc");
+      fields.add("bcc");
+      fields.add("replyTo");
+      fields.add("date");
+      fields.add("messageId");
       break;
 
     case "HEADER":
@@ -335,9 +354,26 @@ export function addBodyFields(
     }
 
     case "MIME_PART":
-      fields.add("text");
-      fields.add("html");
+      // BODY[<part>] streams via `streamPartBodyFromSegments` (segment
+      // filter by partPath). Text/html parts pull via chunked
+      // SUBSTRING; attachment parts read via `emitAttachment`. Same
+      // lazy synthetics as FULL. `.HEADER` / `.MIME` sub-sections
+      // (small MIME header block) fall through to the materialized
+      // path in `getBodyContent`, which needs headers only — no body
+      // strings — so still no `text` / `html` projection required.
+      fields.add("text_octets");
+      fields.add("html_octets");
+      fields.add("mail_id");
+      fields.add("user_id");
       fields.add("attachments");
+      fields.add("subject");
+      fields.add("from");
+      fields.add("to");
+      fields.add("cc");
+      fields.add("bcc");
+      fields.add("replyTo");
+      fields.add("date");
+      fields.add("messageId");
       break;
   }
 }
@@ -390,40 +426,26 @@ export async function buildBodyResponsePart(
   // label the response part with the item the client requested.
   const sectionKey = keyOverride ?? getBodySectionKey(section);
 
-  // Fast path for large body sections (FULL / TEXT / bare MIME_PART): route
-  // the serialization through the shared body-buffer cache so N concurrent
-  // FETCH handlers for the same (docId, sectionKey) share one Buffer
-  // instead of each independently rebuilding a multi-MB string. Skips
-  // partial fetches (`<start.length>`) because their key would need the
-  // slice bounds and concurrent slices of the same body are uncommon
-  // enough that the coalescing benefit doesn't offset the added logic.
+  // Large-body sections (FULL, TEXT, bare/`.TEXT` MIME_PART — partial
+  // too) all take the segment-walk streaming path: `buildMessageSegments`
+  // builds the ordered segment list once, `sumSegmentBytes` /
+  // `sumBodyBytes` / `sumPartBodyBytes` measure the exact wire byte
+  // count (one `stat` per attachment, no reads) so `{N}` is pinned
+  // before the first chunk yields, and the appropriate `stream*Segments`
+  // generator yields chunk-bounded Buffers to the socket. Peak transient
+  // per fetch is O(chunk) regardless of body size — no materialized
+  // full-body Buffer anywhere.
   //
-  // Preserving the three response shapes the string path returns is
-  // load-bearing (see `body-buffer.ts` docs):
+  // Cache is deleted (was `body-buffer.ts`): streaming makes it
+  // unnecessary. Retention shapes the pre-cache-deletion code returned:
   //  - `getBodyContent` → null: the whole part is dropped from the FETCH
-  //    response (e.g. `BODY[99]` on a 2-part message).
+  //    response (e.g. `BODY[99]` on a 2-part message) → still returned
+  //    as `null` from `buildBodyResponsePart` for the MIME_PART branch
+  //    when `sumPartBodyBytes === 0`.
   //  - `getBodyContent` → "":   emit `<sectionKey> NIL` (e.g.
-  //    `BODY[TEXT]` on a mail with no text/html/attachments).
-  //  - non-empty: emit a `{N}\r\n<octets>` literal, with the trailing
-  //    `\r\n` INCLUDED in the cached value (so the {N} literal length
-  //    matches the emitted octets — building the CRLF per caller after
-  //    the cache would defeat the coalescing entirely for the wire
-  //    check).
-  // FULL section (BODY[] / RFC822): stream the body directly to the socket.
-  // `computeFullMessageSize` measures the same segment list the stream emits
-  // (one `stat` per attachment, no reads), so the writer can advertise `{N}`
-  // before the first chunk yields and the count cannot disagree with the
-  // payload. The stream holds only one 48 KiB slice at a time.
-  //
-  // Skips the shared body-buffer cache (getSharedBodyResult): streaming
-  // keeps per-fetch peak sub-MB, so caching the resolved Buffer would
-  // add an O(body) materialization cost — the very cost the streaming
-  // rewrite was written to eliminate. The cache is retained for
-  // non-partial TEXT / MIME_PART body, where materialization is
-  // unavoidable via `getBodyContent`. Partial BODY[] now streams too
-  // (via `streamPartialFromSegments`), so the cache is no longer on
-  // that path either — the segment walker slices in-flight to the
-  // requested byte range without pulling more upstream than needed.
+  //    `BODY[TEXT]` on a mail with no text/html/attachments) → still
+  //    returned as a simple NIL when `sumBodyBytes === 0`.
+  //  - non-empty: emit a `{N}\r\n<octets>` stream (was: cached literal).
   //
   // Instead, `withStreamMutex(key, ...)` serializes SAME-KEY streams:
   // one iOS-pipelined `UID FETCH X (UID BODY)` on the same UID runs to
@@ -462,7 +484,7 @@ export async function buildBodyResponsePart(
     // Acquire the per-key mutex OUTSIDE the byte-budget so a queued
     // same-key waiter doesn't pin a byte-slot while it waits. When it
     // owns the key, it then acquires the byte budget for its stream.
-    const streamKey = bodyBufferKey(docId, sectionKey);
+    const streamKey = `${docId}::${sectionKey}`;
     if (partial) {
       // RFC 3501 §6.4.5: `BODY[]<start.length>` returns bytes
       // [start, start+length) of the RFC 2822 serialization. When
@@ -506,30 +528,72 @@ export async function buildBodyResponsePart(
     };
   }
 
-  if (!partial && !isHeaderLikeSection(section)) {
-    // Non-FULL, non-partial, non-header-like sections (currently
-    // TEXT / MIME_PART body): route through the shared body-buffer
-    // cache. TEXT is bounded by html+text size (rarely large); the
-    // cache still earns its keep here on repeated FETCH BODY[TEXT].
-    const cached = await getSharedBodyResult(
-      bodyBufferKey(docId, sectionKey),
-      () => {
-        const raw = getBodyContent(mail, section, docId);
-        if (raw === null) return { kind: "omit" };
-        if (raw === "") return { kind: "nil" };
-        return { kind: "content", text: raw + "\r\n" };
-      }
-    );
-    if (cached.kind === "omit") return null;
-    if (cached.kind === "nil") {
+  if (!partial && !isHeaderLikeSection(section) && section.type === "TEXT") {
+    // BODY[TEXT] — RFC 3501 §6.4.5 "text body of the message, omitting
+    // the header." Streamed by walking the segments and skipping the
+    // top-level header literal, then appending the same one-CRLF wire
+    // trailer the pre-cache-deletion path did (`raw + "\r\n"`). Peak
+    // per fetch stays O(chunk), matching FULL BODY[] since the same
+    // emitters back both.
+    const segments = buildMessageSegments(mail, docId);
+    const bodyBytes = sumBodyBytes(segments);
+    if (bodyBytes === 0) {
       return { type: "simple", content: `${sectionKey} NIL` };
     }
+    const streamKey = `${docId}::${sectionKey}`;
+    const stream = withStreamMutex(streamKey, () =>
+      withBodyBudgetStream(async function* () {
+        yield* streamBodyFromSegments(segments);
+        yield Buffer.from("\r\n", "utf8");
+      })
+    );
     return {
-      type: "literal",
-      content: cached.buffer,
+      type: "stream",
+      stream,
       header: sectionKey,
-      length: cached.buffer.byteLength,
+      length: bodyBytes + WIRE_TRAILER,
     };
+  }
+
+  if (!partial && !isHeaderLikeSection(section) && section.type === "MIME_PART") {
+    // BODY[<part>] — RFC 3501 §6.4.5. `.HEADER` / `.MIME` return the
+    // part's MIME header block (materialized, cheap — see the
+    // header-like fallthrough below via `getBodyContent`). Bare number
+    // and `.TEXT` both return the part's body base64-encoded; in this
+    // codebase's synthetic-part scheme (see `getBodyPart`) they
+    // resolve identically. Streamed via the same segment walker,
+    // filtered to the requested partPath.
+    const subSection = section.subSection;
+    if (subSection === "HEADER" || subSection === "MIME") {
+      // Fall through to the materialized path below — the part MIME
+      // header block is small and cheap.
+    } else {
+      const partPath = section.partNumber;
+      const segments = buildMessageSegments(mail, docId);
+      const partBytes = sumPartBodyBytes(segments, partPath);
+      if (partBytes === 0) {
+        // `buildMessageSegments` only pushes a body segment when the
+        // source has non-empty content (`hasText`/`hasHtml`/attachment
+        // count > 0), so `partBytes === 0` means the requested part
+        // doesn't exist in this mail's structure — matches the old
+        // `getBodyPart(...) === null` → `kind: "omit"` → return null
+        // behavior. Empty-body-of-existing-part is unreachable here.
+        return null;
+      }
+      const streamKey = `${docId}::${sectionKey}`;
+      const stream = withStreamMutex(streamKey, () =>
+        withBodyBudgetStream(async function* () {
+          yield* streamPartBodyFromSegments(segments, partPath);
+          yield Buffer.from("\r\n", "utf8");
+        })
+      );
+      return {
+        type: "stream",
+        stream,
+        header: sectionKey,
+        length: partBytes + WIRE_TRAILER,
+      };
+    }
   }
 
   // Partial fetch (`BODY[]<start.length>`) and header-like sections
@@ -801,11 +865,12 @@ export async function buildFetchResponse(
 
 /**
  * Async writer for large payloads with socket-level backpressure. Called
- * for `literal` parts whose `content` is a `Buffer` (i.e. flowed through
- * the shared body-buffer cache). Chunks the write so V8 doesn't hold the
- * whole payload in an outbound queue simultaneously, and awaits `drain`
- * when `socket.write` reports back-pressure. `writeChunked` returning
- * without an error means the payload is drained to the OS.
+ * for `literal` parts whose `content` is a `Buffer` (the residual
+ * materialized paths — header-like sections, partial non-FULL sections).
+ * Chunks the write so V8 doesn't hold the whole payload in an outbound
+ * queue simultaneously, and awaits `drain` when `socket.write` reports
+ * back-pressure. `writeChunked` returning without an error means the
+ * payload is drained to the OS.
  */
 export type WriteChunked = (payload: Buffer) => Promise<void>;
 

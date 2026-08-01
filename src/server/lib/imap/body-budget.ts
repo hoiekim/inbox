@@ -1,16 +1,16 @@
 /**
  * Global counting semaphore for large-body FETCH work.
  *
- * `getSharedBodyResult` (`body-buffer.ts`) already coalesces IDENTICAL
- * concurrent body serializations for the same `(mail, sectionKey)`.
+ * The per-key stream mutex (`stream-mutex.ts`) serializes IDENTICAL
+ * concurrent body streams for the same `(mail, sectionKey)`, and
  * PR #710 coalesced the DB read the same way. Neither bounds the
  * NUMBER of DISTINCT concurrent large-body serializations across
  * sockets — a common iOS Mail / K-9 pattern is one client opening
  * several account tabs at once and issuing `UID FETCH … BODY[]` in
  * parallel against different mailboxes / different UIDs. Each in-flight
- * body materializes a multi-MB Buffer; the container's RSS scales
- * linearly with distinct in-flight count and can OOM despite the
- * two prior fixes.
+ * body allocates its per-chunk emitter transient; the container's RSS
+ * scales linearly with distinct in-flight count and can OOM despite the
+ * per-key coalescing.
  *
  * This module puts a hard bound on that count. Callers wrap their
  * large-body serialization in `withBodyBudget(fn)`; if the running

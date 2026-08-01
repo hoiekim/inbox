@@ -68,6 +68,10 @@ const {
   buildMessageSegments,
   streamFromSegments,
   streamPartialFromSegments,
+  streamBodyFromSegments,
+  streamPartBodyFromSegments,
+  sumBodyBytes,
+  sumPartBodyBytes,
   computeFullMessageSize,
   sumSegmentBytes,
 } = await import("./session-utils");
@@ -629,5 +633,185 @@ describe("streamPartialFromSegments — byte-range slice", () => {
     // A drain of the full column would need ~500_000 / PG_TEXT_CHUNK_CHARS
     // = ~42 pulls. Early-return should keep it to a small constant.
     expect(substringCalls.length).toBeLessThan(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamBodyFromSegments — BODY[TEXT] path (segments minus header literal)
+// ---------------------------------------------------------------------------
+
+describe("streamBodyFromSegments — TEXT payload = full concat minus header block", () => {
+  const drainToBuffer = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c);
+    return Buffer.concat(chunks as unknown as Uint8Array[]);
+  };
+
+  const baseHeaders = {
+    subject: "text-payload",
+    messageId: "<text-payload@test>",
+    date: "2026-08-01T00:00:00Z",
+    from: { text: "a@example.com", value: [{ address: "a@example.com", name: "" }] },
+    to: { text: "b@example.com", value: [{ address: "b@example.com", name: "" }] },
+    envelopeTo: [{ address: "b@example.com", name: "" }],
+  } as const;
+
+  it("BODY[TEXT] bytes == full BODY[] bytes minus the initial header block", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const text = "plain-body ".repeat(3000);
+    const html = "<p>rich body</p>".repeat(8000);
+    columnStore.set("mail-textonly:text", text);
+    columnStore.set("mail-textonly:html", html);
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-textonly",
+        user_id: "user-1",
+      } as never,
+      "docId-textonly"
+    );
+    const full = await drainToBuffer(streamFromSegments(segments));
+    const body = await drainToBuffer(streamBodyFromSegments(segments));
+
+    // The header literal is the first segment. Its byte length is what
+    // separates FULL from TEXT.
+    const headerSeg = segments[0];
+    expect(headerSeg.kind).toBe("literal");
+    const headerBytes =
+      headerSeg.kind === "literal"
+        ? Buffer.byteLength(headerSeg.value, "utf8")
+        : 0;
+
+    expect(body.byteLength).toBe(full.byteLength - headerBytes);
+    // The TEXT payload should equal the FULL payload with its header block removed.
+    expect(
+      body.equals(full.subarray(headerBytes) as unknown as Uint8Array)
+    ).toBe(true);
+    // sumBodyBytes agrees with the drained count.
+    expect(sumBodyBytes(segments)).toBe(body.byteLength);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamPartBodyFromSegments — BODY[<partPath>] path (filter by partPath)
+// ---------------------------------------------------------------------------
+
+describe("streamPartBodyFromSegments — MIME_PART payload = body segment(s) at partPath", () => {
+  const drainToBuffer = async (
+    stream: AsyncIterable<Buffer>
+  ): Promise<Buffer> => {
+    const chunks: Buffer[] = [];
+    for await (const c of stream) chunks.push(c);
+    return Buffer.concat(chunks as unknown as Uint8Array[]);
+  };
+
+  const baseHeaders = {
+    subject: "part-payload",
+    messageId: "<part-payload@test>",
+    date: "2026-08-01T00:00:00Z",
+    from: { text: "a@example.com", value: [{ address: "a@example.com", name: "" }] },
+    to: { text: "b@example.com", value: [{ address: "b@example.com", name: "" }] },
+    envelopeTo: [{ address: "b@example.com", name: "" }],
+  } as const;
+
+  it("text-only mail: BODY[1] emits the base64-encoded text body", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const text = "Hello, world!";
+    columnStore.set("mail-part-txt:text", text);
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: 0,
+        mail_id: "mail-part-txt",
+        user_id: "user-1",
+      } as never,
+      "docId-part-txt"
+    );
+    const part1 = await drainToBuffer(streamPartBodyFromSegments(segments, "1"));
+    // The base64 encoding of the text column, byte-for-byte.
+    const expected = Buffer.from(text, "utf8").toString("base64");
+    expect(part1.toString("utf8")).toBe(expected);
+    expect(sumPartBodyBytes(segments, "1")).toBe(part1.byteLength);
+  });
+
+  it("multipart/alternative (text+html): BODY[1] = text, BODY[2] = html", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const text = "plain-body-alt";
+    const html = "<p>rich-body-alt</p>";
+    columnStore.set("mail-part-alt:text", text);
+    columnStore.set("mail-part-alt:html", html);
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-part-alt",
+        user_id: "user-1",
+      } as never,
+      "docId-part-alt"
+    );
+    const part1 = await drainToBuffer(streamPartBodyFromSegments(segments, "1"));
+    const part2 = await drainToBuffer(streamPartBodyFromSegments(segments, "2"));
+    expect(part1.toString("utf8")).toBe(Buffer.from(text, "utf8").toString("base64"));
+    expect(part2.toString("utf8")).toBe(Buffer.from(html, "utf8").toString("base64"));
+    // Bogus partPath drains to empty.
+    expect(sumPartBodyBytes(segments, "99")).toBe(0);
+  });
+
+  it("multipart/mixed with text+html+attachments: 1.1, 1.2, 2 all resolve", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const text = "plain-body-mixed";
+    const html = "<p>rich-body-mixed</p>";
+    columnStore.set("mail-part-mix:text", text);
+    columnStore.set("mail-part-mix:html", html);
+    // No attachment file on disk — `emitAttachment` will yield the
+    // MISSING_ATTACHMENT_NOTICE base64 padded to advertised length,
+    // which is fine for filter-parity purposes.
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: Buffer.byteLength(text, "utf8"),
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-part-mix",
+        user_id: "user-1",
+        attachments: [
+          {
+            content: { data: "no-such-att-id" },
+            filename: "a.bin",
+            contentType: "application/octet-stream",
+            size: 100,
+          },
+        ] as never,
+      } as never,
+      "docId-part-mix"
+    );
+    const part11 = await drainToBuffer(
+      streamPartBodyFromSegments(segments, "1.1")
+    );
+    const part12 = await drainToBuffer(
+      streamPartBodyFromSegments(segments, "1.2")
+    );
+    const part2 = await drainToBuffer(streamPartBodyFromSegments(segments, "2"));
+    expect(part11.toString("utf8")).toBe(Buffer.from(text, "utf8").toString("base64"));
+    expect(part12.toString("utf8")).toBe(Buffer.from(html, "utf8").toString("base64"));
+    // Part 2 = attachment content (missing → notice bytes)
+    expect(part2.byteLength).toBeGreaterThan(0);
+    // Sum functions agree with drained counts.
+    expect(sumPartBodyBytes(segments, "1.1")).toBe(part11.byteLength);
+    expect(sumPartBodyBytes(segments, "1.2")).toBe(part12.byteLength);
+    expect(sumPartBodyBytes(segments, "2")).toBe(part2.byteLength);
+    // Non-existent parts return 0 bytes.
+    expect(sumPartBodyBytes(segments, "3")).toBe(0);
+    expect(sumPartBodyBytes(segments, "1.3")).toBe(0);
   });
 });
