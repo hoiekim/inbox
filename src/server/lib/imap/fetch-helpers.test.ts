@@ -1643,6 +1643,45 @@ describe("buildFetchResponsePart partial BODY[]<start.length> streams through se
     }
   });
 
+  it("emits EXACTLY `part.length` bytes on iOS's chunked <off.N> sequence (wire-trailer parity)", async () => {
+    // Reviewoie #769 R1 caught: partial FULL was using `sumSegmentBytes`
+    // (trailer-inclusive) as the total-bytes ceiling, but
+    // `streamPartialFromSegments` never emits the trailer — so any
+    // partial reaching end-of-body advertised `{N}` two bytes larger
+    // than what actually landed on the wire. iOS's chunked sync sends
+    // `<0.65536>`, `<65536.65536>`, ..., `<last.65536>` — the last
+    // chunk always hits this, corrupting every subsequent tagged
+    // response. This test drains each stream and cross-checks the
+    // count instead of asserting only on `part.length`.
+    const chunkSize = 250;
+    let start = 0;
+    for (let i = 0; i < 10; i += 1) {
+      const part = await buildFetchResponsePart(
+        mail,
+        {
+          type: "BODY",
+          peek: false,
+          section: { type: "FULL" },
+          partial: { start, length: chunkSize },
+        },
+        `doc-partial-chunked-${i}`,
+        "INBOX"
+      );
+      if (!part) break;
+      if (part.type === "simple") break; // NIL at end
+      expect(part.type).toBe("stream");
+      if (part.type !== "stream") break;
+      let emitted = 0;
+      for await (const chunk of part.stream) emitted += chunk.byteLength;
+      expect(
+        emitted,
+        `wire desync at chunk ${i} <${start}.${chunkSize}>: advertised ${part.length}, emitted ${emitted}`
+      ).toBe(part.length);
+      if (part.length < chunkSize) break; // reached end
+      start += chunkSize;
+    }
+  });
+
   it("clamps length to available bytes when start+length exceeds total", async () => {
     // For this small mail, requesting 100_000_000 bytes at offset 0
     // must return a stream advertising the actual full body length,

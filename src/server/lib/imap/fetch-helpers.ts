@@ -23,6 +23,7 @@ import {
   streamFromSegments,
   streamPartialFromSegments,
   sumSegmentBytes,
+  WIRE_TRAILER,
   getBodyPart,
   getBodyPartHeaders,
   getBodySectionKey,
@@ -447,7 +448,17 @@ export async function buildBodyResponsePart(
     // which `sumSegmentBytes` counts (via WIRE_TRAILER), so the stream
     // must emit it too.
     const segments = buildMessageSegments(mail, docId);
+    // `sumSegmentBytes` includes the 2-byte wire trailer (`\r\n`) that the
+    // non-partial FULL branch appends after streaming the segments. RFC
+    // 3501 §6.4.5 partial fetches address bytes of the RFC 2822
+    // serialization only — the wire trailer is IMAP framing, not part of
+    // the message. Using the trailer-inclusive total for the partial
+    // range would let `<0.total>` (or any range that reaches the end)
+    // advertise 2 more bytes than `streamPartialFromSegments` actually
+    // emits — a wire desync where the next tagged response's leading
+    // bytes get consumed as body.
     const totalBodyLength = sumSegmentBytes(segments);
+    const partialAddressableBytes = totalBodyLength - WIRE_TRAILER;
     // Acquire the per-key mutex OUTSIDE the byte-budget so a queued
     // same-key waiter doesn't pin a byte-slot while it waits. When it
     // owns the key, it then acquires the byte budget for its stream.
@@ -455,16 +466,16 @@ export async function buildBodyResponsePart(
     if (partial) {
       // RFC 3501 §6.4.5: `BODY[]<start.length>` returns bytes
       // [start, start+length) of the RFC 2822 serialization. When
-      // `start >= totalBodyLength` return NIL — the octet range is
+      // `start >= partialAddressableBytes` return NIL — the octet range is
       // vacuous. Otherwise clamp `length` to what's actually available
       // so the `{N}` literal advertises the true emitted count.
       const { start, length: requestedLength } = partial;
-      if (start >= totalBodyLength) {
+      if (start >= partialAddressableBytes) {
         return { type: "simple", content: `${sectionKey} NIL` };
       }
       const emittedLength = Math.min(
         requestedLength,
-        totalBodyLength - start
+        partialAddressableBytes - start
       );
       const partialStream = withStreamMutex(streamKey, () =>
         withBodyBudgetStream(async function* () {

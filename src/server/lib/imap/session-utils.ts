@@ -346,8 +346,11 @@ const segmentByteLength = (segment: MessageSegment): number => {
 /**
  * Trailing `\r\n` the wire response appends after the body serialization.
  * `RFC822.SIZE` includes it so `SIZE == {N}` holds for `BODY[]`.
+ * Exported so the partial-fetch code path in `buildBodyResponsePart` can
+ * subtract it from `sumSegmentBytes(segments)` — partial fetches address
+ * RFC 2822 bytes only and don't include the IMAP wire trailer.
  */
-const WIRE_TRAILER = 2;
+export const WIRE_TRAILER = 2;
 
 /**
  * Sum the exact WIRE byte count for an already-built segment list. Used by
