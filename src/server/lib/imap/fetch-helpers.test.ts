@@ -928,7 +928,13 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
 });
 
 describe("getRequestedFields BODYSTRUCTURE cached-column projection (#740)", () => {
-  it("projects text_octets + html_octets + line-count columns, NOT text/html", () => {
+  // The load-bearing invariant. BODYSTRUCTURE's projection MUST NOT include
+  // `text` / `html` after #740 — a bare `UID FETCH X BODYSTRUCTURE` was
+  // materializing multi-MB text/html per UID just to derive the `lines`
+  // field. Projection is the pre-measured octet counts alone: that is
+  // everything body-fld-octets needs, and body-fld-lines is a constant.
+  // There is no per-row fallback left, so this holds for every row.
+  it("projects text_octets + html_octets, NOT text/html", () => {
     const fields = getRequestedFields([
       { type: "BODYSTRUCTURE", extensible: true },
     ]);
@@ -937,8 +943,6 @@ describe("getRequestedFields BODYSTRUCTURE cached-column projection (#740)", () 
       "html_octets",
       "mail_id",
       "user_id",
-      "text_line_count",
-      "html_line_count",
       "attachments",
     ] as const) {
       expect(fields.has(f as FetchRequestedField)).toBe(true);
@@ -987,15 +991,12 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
       ...base,
       text_octets: 33, // 33 raw bytes → base64 encodes to ceil(33/3)*4 = 44
       html_octets: 0,
-      text_line_count: 42,
-      html_line_count: 0,
     };
     const part = await buildFetchResponsePart(
       mailWithCache,
       { type: "BODYSTRUCTURE", extensible: true },
       docId,
       mailbox
-      // userId omitted intentionally: no persist step should fire on a hit.
     );
     expect(part!.type).toBe("simple");
     if (part!.type === "simple") {
@@ -1012,8 +1013,6 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
       ...base,
       text_octets: 6, // → base64 8
       html_octets: 15, // → base64 20
-      text_line_count: 2,
-      html_line_count: 5,
     };
     const part = await buildFetchResponsePart(
       mailWithCache,
@@ -1032,10 +1031,10 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
   });
 
   it("materialized-caller shape (mail.text / mail.html as strings) still works — same size + lines", async () => {
-    // The util.test.ts + cache-miss fallback caller shape. When the strings
-    // ARE loaded, formatBodyStructure base64+splits them the same way it
-    // has always done. Same wire bytes as the cached path for the same
-    // input, so callers can be mixed without divergence.
+    // The util.test.ts caller shape. When the strings ARE loaded,
+    // formatBodyStructure base64-encodes them directly. Same wire bytes as
+    // the octet-projection path for the same input, so callers can be
+    // mixed without divergence.
     const materialized: Partial<MailType> = {
       ...base,
       text: "line one\r\nline two\r\nline three",
@@ -1046,8 +1045,6 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
       // Same octets (materialized string is 30 bytes) + same line count (3).
       text_octets: Buffer.byteLength("line one\r\nline two\r\nline three", "utf8"),
       html_octets: 0,
-      text_line_count: 3,
-      html_line_count: 0,
     };
     const mat = await buildFetchResponsePart(
       materialized,

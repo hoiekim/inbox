@@ -408,43 +408,6 @@ export const updateRfc822Size = async (
 export const countLines = (content: string): number =>
   content.split(/\r?\n/).length;
 
-/**
- * Persist the derived `text_line_count` + `html_line_count` for a mail on
- * the first BODYSTRUCTURE FETCH that computes them (backfill path for
- * pre-migration rows — new rows populate at INSERT time above).
- *
- * Same shape + rationale as `updateRfc822Size`: no `updated` bump so the
- * CONDSTORE mod-sequence isn't churned; idempotent, so concurrent
- * writers of the same values collide harmlessly; fire-and-forget from
- * the caller.
- */
-export const updateLineCounts = async (
-  user_id: string,
-  mail_id: string,
-  text_line_count: number,
-  html_line_count: number
-): Promise<void> => {
-  await mailsTable.updateWhere(
-    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-    { [TEXT_LINE_COUNT]: text_line_count, [HTML_LINE_COUNT]: html_line_count }
-  );
-};
-
-export const getMailBody = async (
-  user_id: string,
-  mail_id: string
-): Promise<{ text: string; html: string } | null> => {
-  const result = await pool.query(
-    `SELECT text, html FROM mails WHERE mail_id = $1 AND user_id = $2`,
-    [mail_id, user_id]
-  );
-  if (result.rows.length === 0) return null;
-  return {
-    text: (result.rows[0].text as string | null) ?? "",
-    html: (result.rows[0].html as string | null) ?? "",
-  };
-};
-
 export const markMailRead = async (
   user_id: string,
   mail_id: string

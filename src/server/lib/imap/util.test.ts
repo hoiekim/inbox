@@ -782,7 +782,6 @@ describe("IMAP util", () => {
     // extension data: md5/disposition/language/location on single parts and
     // param-list/disposition/language/location on the multipart wrappers (#666).
     describe("non-extensible form (extensible=false)", () => {
-
       it("drops the multipart/alternative extension tail", () => {
         const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
         const ext = formatBodyStructure(mail, true);
