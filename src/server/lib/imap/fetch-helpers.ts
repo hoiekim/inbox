@@ -21,7 +21,9 @@ import {
   buildMessageSegments,
   computeFullMessageSize,
   streamFromSegments,
+  streamPartialFromSegments,
   sumSegmentBytes,
+  WIRE_TRAILER,
   getBodyPart,
   getBodyPartHeaders,
   getBodySectionKey,
@@ -264,20 +266,16 @@ export function addBodyFields(
 ): void {
   switch (bodyFetch.section.type) {
     case "FULL":
-      // Partial fetch (`BODY[]<start.length>`) falls through to
-      // `buildFullMessage`, a synchronous materializer that can't drive
-      // the async pg reader — it needs the whole `text` / `html`
-      // strings loaded, not the octet counts. Full-body pulls skip
-      // the strings and stream via `pgTextChunks`.
-      if (bodyFetch.partial) {
-        fields.add("text");
-        fields.add("html");
-      } else {
-        fields.add("text_octets");
-        fields.add("html_octets");
-        fields.add("mail_id");
-        fields.add("user_id");
-      }
+      // Both full and partial FULL BODY[] fetches route through the
+      // segment-walk streamer (`streamFromSegments` / `streamPartialFromSegments`).
+      // The lazy synthetics (`text_octets` / `html_octets` / `mail_id` /
+      // `user_id`) let the emitter pull the text/html columns via
+      // chunked pg SUBSTRING at emit time instead of materializing the
+      // strings up front — peak stays O(chunk) for both variants.
+      fields.add("text_octets");
+      fields.add("html_octets");
+      fields.add("mail_id");
+      fields.add("user_id");
       fields.add("subject");
       fields.add("from");
       fields.add("to");
@@ -421,7 +419,11 @@ export async function buildBodyResponsePart(
   // keeps per-fetch peak sub-MB, so caching the resolved Buffer would
   // add an O(body) materialization cost — the very cost the streaming
   // rewrite was written to eliminate. The cache is retained for
-  // TEXT / HEADER / partial where materialization is unavoidable anyway.
+  // non-partial TEXT / MIME_PART body, where materialization is
+  // unavoidable via `getBodyContent`. Partial BODY[] now streams too
+  // (via `streamPartialFromSegments`), so the cache is no longer on
+  // that path either — the segment walker slices in-flight to the
+  // requested byte range without pulling more upstream than needed.
   //
   // Instead, `withStreamMutex(key, ...)` serializes SAME-KEY streams:
   // one iOS-pipelined `UID FETCH X (UID BODY)` on the same UID runs to
@@ -433,7 +435,7 @@ export async function buildBodyResponsePart(
   // it uncapped would let K concurrent sockets each stream a distinct large
   // body while the budget covered only the cheaper paths. The slot is held for
   // the stream's whole lifetime and released even if the consumer abandons it.
-  if (!partial && !isHeaderLikeSection(section) && section.type === "FULL") {
+  if (!isHeaderLikeSection(section) && section.type === "FULL") {
     // Build the segment list ONCE — reproducing it inside the stream
     // would `stat` attachment files a second time, and a file whose size
     // changed between calls (upload-in-progress, mid-write race, etc.)
@@ -446,11 +448,50 @@ export async function buildBodyResponsePart(
     // which `sumSegmentBytes` counts (via WIRE_TRAILER), so the stream
     // must emit it too.
     const segments = buildMessageSegments(mail, docId);
-    const length = sumSegmentBytes(segments);
+    // `sumSegmentBytes` includes the 2-byte wire trailer (`\r\n`) that the
+    // non-partial FULL branch appends after streaming the segments. RFC
+    // 3501 §6.4.5 partial fetches address bytes of the RFC 2822
+    // serialization only — the wire trailer is IMAP framing, not part of
+    // the message. Using the trailer-inclusive total for the partial
+    // range would let `<0.total>` (or any range that reaches the end)
+    // advertise 2 more bytes than `streamPartialFromSegments` actually
+    // emits — a wire desync where the next tagged response's leading
+    // bytes get consumed as body.
+    const totalBodyLength = sumSegmentBytes(segments);
+    const partialAddressableBytes = totalBodyLength - WIRE_TRAILER;
     // Acquire the per-key mutex OUTSIDE the byte-budget so a queued
     // same-key waiter doesn't pin a byte-slot while it waits. When it
     // owns the key, it then acquires the byte budget for its stream.
     const streamKey = bodyBufferKey(docId, sectionKey);
+    if (partial) {
+      // RFC 3501 §6.4.5: `BODY[]<start.length>` returns bytes
+      // [start, start+length) of the RFC 2822 serialization. When
+      // `start >= partialAddressableBytes` return NIL — the octet range is
+      // vacuous. Otherwise clamp `length` to what's actually available
+      // so the `{N}` literal advertises the true emitted count.
+      const { start, length: requestedLength } = partial;
+      if (start >= partialAddressableBytes) {
+        return { type: "simple", content: `${sectionKey} NIL` };
+      }
+      const emittedLength = Math.min(
+        requestedLength,
+        partialAddressableBytes - start
+      );
+      const partialStream = withStreamMutex(streamKey, () =>
+        withBodyBudgetStream(async function* () {
+          yield* streamPartialFromSegments(segments, start, emittedLength);
+        })
+      );
+      // The origin-octet header form is `BODY[<section>]<start>` per
+      // §7.4.2 msg-att-static — no length echo; the `{N}` literal
+      // already carries the count.
+      return {
+        type: "stream",
+        stream: partialStream,
+        header: `${sectionKey}<${start}>`,
+        length: emittedLength,
+      };
+    }
     const stream = withStreamMutex(streamKey, () =>
       withBodyBudgetStream(async function* () {
         yield* streamFromSegments(segments);
@@ -461,7 +502,7 @@ export async function buildBodyResponsePart(
       type: "stream",
       stream,
       header: sectionKey,
-      length,
+      length: totalBodyLength,
     };
   }
 

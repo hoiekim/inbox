@@ -1597,14 +1597,16 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
   });
 });
 
-describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+html", () => {
-  // iOS Mail's chunked large-body
-  // pull uses `BODY[]<0.65536>`, then `BODY[]<65536.65536>`, etc. The lazy
-  // shape (`text_octets` + `html_octets` instead of the strings) cannot
-  // drive the sync materializer in buildFullMessage — partial FULL falls
-  // through to `getBodyContent → buildFullMessage`, which throws on lazy
-  // segments. addBodyFields must project `text` + `html` when `partial` is
-  // set so buildFullMessage has real strings to slice.
+describe("buildFetchResponsePart partial BODY[]<start.length> streams through segments", () => {
+  // iOS Mail's chunked large-body pull uses `BODY[]<0.65536>`, then
+  // `BODY[]<65536.65536>`, etc. Under the segment-walk streamer, partial
+  // fetches take the SAME shape as non-partial full fetches — they
+  // project the LAZY synthetics (`text_octets` / `html_octets` +
+  // `mail_id` / `user_id`) and stream through `streamPartialFromSegments`,
+  // slicing in-flight to the requested [start, start+length) window.
+  // Peak stays O(chunk) regardless of body size, which is the whole
+  // point of #757's kill-materialized-fallback direction — cache is
+  // not needed when the stream itself is byte-range-aware.
 
   const mail: Partial<MailType> = {
     uid: { account: 1, domain: 1 } as MailType["uid"],
@@ -1618,7 +1620,7 @@ describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+
     attachments: [] as unknown as MailType["attachments"],
   };
 
-  it("returns a simple part (not a stream) for BODY[]<0.100>", async () => {
+  it("returns a stream part for BODY[]<0.100>", async () => {
     const part = await buildFetchResponsePart(
       mail,
       {
@@ -1631,14 +1633,103 @@ describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+
       "INBOX"
     );
     expect(part).not.toBeNull();
-    // Partial goes through the materializing path — `simple` (or `literal`,
-    // depending on section-key shape); the important invariant is "does not
-    // throw" AND "is not a stream".
-    expect(part!.type).not.toBe("stream");
+    expect(part!.type).toBe("stream");
+    // Header carries the origin-octet form (`<start>`), no length echo
+    // per RFC 3501 §7.4.2 msg-att-static.
+    if (part!.type === "stream") {
+      expect(part!.header).toBe("BODY[]<0>");
+      expect(part!.length).toBeLessThanOrEqual(100);
+      expect(part!.length).toBeGreaterThan(0);
+    }
   });
 
-  it("addBodyFields for BODY[FULL] with partial projects text + html (materialized), not the lazy synthetics", () => {
-    const fields = new Set<FetchRequestedField>();
+  it("emits EXACTLY `part.length` bytes on chunked <off.N> partial sequence (wire-trailer parity)", async () => {
+    // Reviewoie #769 R1 caught: partial FULL was using `sumSegmentBytes`
+    // (trailer-inclusive) as the total-bytes ceiling, but
+    // `streamPartialFromSegments` never emits the trailer — so any
+    // partial reaching end-of-body advertised `{N}` two bytes larger
+    // than what actually landed on the wire. iOS's real chunked sync
+    // uses `<0.65536>`, `<65536.65536>`, ..., `<last.65536>` — the last
+    // chunk always hits this, corrupting every subsequent tagged
+    // response. This test walks the same *pattern* at a much smaller
+    // chunk (250 B) against a small in-memory mail, so at least three
+    // iterations fire and the last one lands < chunkSize with the
+    // clamp active. Drains each stream and cross-checks the count
+    // instead of asserting only on `part.length` — the parity test in
+    // session-utils compared against `streamFromSegments` (which also
+    // excludes the trailer, so its parity held) and missed this class.
+    const chunkSize = 250;
+    let start = 0;
+    for (let i = 0; i < 10; i += 1) {
+      const part = await buildFetchResponsePart(
+        mail,
+        {
+          type: "BODY",
+          peek: false,
+          section: { type: "FULL" },
+          partial: { start, length: chunkSize },
+        },
+        `doc-partial-chunked-${i}`,
+        "INBOX"
+      );
+      if (!part) break;
+      if (part.type === "simple") break; // NIL at end
+      expect(part.type).toBe("stream");
+      if (part.type !== "stream") break;
+      let emitted = 0;
+      for await (const chunk of part.stream) emitted += chunk.byteLength;
+      expect(
+        emitted,
+        `wire desync at chunk ${i} <${start}.${chunkSize}>: advertised ${part.length}, emitted ${emitted}`
+      ).toBe(part.length);
+      if (part.length < chunkSize) break; // reached end
+      start += chunkSize;
+    }
+  });
+
+  it("clamps length to available bytes when start+length exceeds total", async () => {
+    // For this small mail, requesting 100_000_000 bytes at offset 0
+    // must return a stream advertising the actual full body length,
+    // not 100_000_000 (which would desync the {N} literal).
+    const part = await buildFetchResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "FULL" },
+        partial: { start: 0, length: 100_000_000 },
+      },
+      "doc-partial-clamp",
+      "INBOX"
+    );
+    expect(part!.type).toBe("stream");
+    if (part!.type === "stream") {
+      // Real body is a few hundred bytes; sanity-check the length was clamped.
+      expect(part!.length).toBeLessThan(100_000_000);
+      expect(part!.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns NIL when start is past end-of-body", async () => {
+    const part = await buildFetchResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "FULL" },
+        partial: { start: 100_000_000, length: 100 },
+      },
+      "doc-partial-past-end",
+      "INBOX"
+    );
+    expect(part!.type).toBe("simple");
+    if (part!.type === "simple") {
+      expect(part!.content).toContain("NIL");
+    }
+  });
+
+  it("addBodyFields for BODY[FULL] with partial projects the same LAZY synthetics as non-partial", () => {
+    const partialFields = new Set<FetchRequestedField>();
     addBodyFields(
       {
         type: "BODY",
@@ -1646,23 +1737,22 @@ describe("buildFetchResponsePart partial BODY[]<start.length> materializes text+
         section: { type: "FULL" },
         partial: { start: 0, length: 100 },
       },
-      fields
+      partialFields
     );
-    expect(fields.has("text")).toBe(true);
-    expect(fields.has("html")).toBe(true);
-    expect(fields.has("text_octets" as FetchRequestedField)).toBe(false);
-    expect(fields.has("html_octets" as FetchRequestedField)).toBe(false);
-  });
-
-  it("addBodyFields for non-partial BODY[FULL] still projects the lazy synthetics", () => {
-    const fields = new Set<FetchRequestedField>();
+    const fullFields = new Set<FetchRequestedField>();
     addBodyFields(
       { type: "BODY", peek: false, section: { type: "FULL" } },
-      fields
+      fullFields
     );
-    expect(fields.has("text_octets" as FetchRequestedField)).toBe(true);
-    expect(fields.has("html_octets" as FetchRequestedField)).toBe(true);
-    expect(fields.has("text")).toBe(false);
-    expect(fields.has("html")).toBe(false);
+    // Both variants project the lazy synthetics — the field set is
+    // identical because both take the segment-walk streaming path.
+    for (const f of ["text_octets", "html_octets", "mail_id", "user_id"] as const) {
+      expect(partialFields.has(f as FetchRequestedField)).toBe(true);
+      expect(fullFields.has(f as FetchRequestedField)).toBe(true);
+    }
+    for (const f of ["text", "html"] as const) {
+      expect(partialFields.has(f as FetchRequestedField)).toBe(false);
+      expect(fullFields.has(f as FetchRequestedField)).toBe(false);
+    }
   });
 });
