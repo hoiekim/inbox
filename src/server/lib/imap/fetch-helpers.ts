@@ -438,15 +438,21 @@ export async function buildBodyResponsePart(
   // label the response part with the item the client requested.
   const sectionKey = keyOverride ?? getBodySectionKey(section);
 
-  // Large-body sections (FULL, TEXT, bare/`.TEXT` MIME_PART — partial
-  // too) all take the segment-walk streaming path: `buildMessageSegments`
-  // builds the ordered segment list once, `sumSegmentBytes` /
-  // `sumBodyBytes` / `sumPartBodyBytes` measure the exact wire byte
-  // count (one `stat` per attachment, no reads) so `{N}` is pinned
-  // before the first chunk yields, and the appropriate `stream*Segments`
-  // generator yields chunk-bounded Buffers to the socket. Peak transient
-  // per fetch is O(chunk) regardless of body size — no materialized
-  // full-body Buffer anywhere.
+  // Non-header-like body sections (FULL, TEXT, bare/`.TEXT` MIME_PART —
+  // and partial FULL) take the segment-walk streaming path:
+  // `buildMessageSegments` builds the ordered segment list once,
+  // `sumSegmentBytes` / `sumBodyBytes` / `sumPartBodyBytes` measure the
+  // exact wire byte count (one `stat` per attachment, no reads) so
+  // `{N}` is pinned before the first chunk yields, and the appropriate
+  // `stream*Segments` generator yields chunk-bounded Buffers to the
+  // socket. Peak transient on the output side is O(chunk) for all
+  // section variants; for FULL the SOURCE is also chunk-bounded (lazy
+  // text/html + attachment reads); for TEXT / MIME_PART the source
+  // strings sit in memory for the fetch's duration because the
+  // fall-through paths (`.MIME` / `.HEADER`, partial variants) need
+  // materialized `mail.text` / `mail.html` for correctness. Completing
+  // the lazy migration for those paths is tracked as a follow-up
+  // under #757.
   //
   // Cache is deleted (was `body-buffer.ts`): streaming makes it
   // unnecessary. Retention shapes the pre-cache-deletion code returned:
@@ -544,9 +550,14 @@ export async function buildBodyResponsePart(
     // BODY[TEXT] — RFC 3501 §6.4.5 "text body of the message, omitting
     // the header." Streamed by walking the segments and skipping the
     // top-level header literal, then appending the same one-CRLF wire
-    // trailer the pre-cache-deletion path did (`raw + "\r\n"`). Peak
-    // per fetch stays O(chunk), matching FULL BODY[] since the same
-    // emitters back both.
+    // trailer the pre-cache-deletion path did (`raw + "\r\n"`). Output
+    // stays chunk-bounded via `emitBase64`; the SOURCE is
+    // `mail.text` / `mail.html` held in memory (`addBodyFields` projects
+    // both materialized + lazy, and `wantsLazyBodies` returns false
+    // when strings are present, so segments are `base64`-kind not
+    // `lazy-text`). FULL still uses lazy synthetics — peak per FULL
+    // fetch is O(chunk), TEXT is O(sizeof(mail.text) + sizeof(mail.html))
+    // + O(chunk).
     const segments = buildMessageSegments(mail, docId);
     const bodyBytes = sumBodyBytes(segments);
     if (bodyBytes === 0) {

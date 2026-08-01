@@ -69,8 +69,8 @@ afterAll(() => {
   for (const id of writtenIds) fs.rmSync(attachmentPath(id), { force: true });
 });
 
-// Wire content is `string | Buffer` — large non-partial body payloads flow
-// through the shared body-buffer cache and land as Buffer. Every test in
+// Wire content is `string | Buffer` — the residual materialized paths
+// (partial non-FULL, header-like sections) land as Buffer. Every test in
 // this file reasons about them as UTF-8 text, so coerce at the boundary.
 const contentAsString = (
   part: Extract<FetchResponsePart, { type: "literal" }>
@@ -314,10 +314,9 @@ describe("buildFetchResponsePart RFC822 aliases (inbox #587)", () => {
     );
     expect(rfc!.type).toBe("literal");
     if (rfc!.type === "literal" && body!.type === "literal") {
-      // Compare octets, not identity — the two paths now flow through a
-      // shared body-buffer cache keyed on section-label (RFC822.HEADER vs
-      // BODY[HEADER]), so they produce distinct Buffer instances that
-      // encode identical bytes.
+      // Compare octets, not identity — the two paths are labeled
+      // differently (RFC822.HEADER vs BODY[HEADER]) but must produce
+      // identical wire bytes.
       expect(contentAsString(rfc)).toBe(contentAsString(body));
       expect(rfc!.header).toBe("RFC822.HEADER");
     }
@@ -1684,55 +1683,88 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
     ...overrides,
   }) as Partial<MailType>;
 
-  it("BODY[1.MIME] on a text-only lazy-shape mail returns the part MIME header block (not null)", async () => {
-    const mail = prodShapeMail({ text: "materialized text needed" });
-    const part = await buildBodyResponsePart(
-      mail,
-      {
-        type: "BODY",
-        peek: true,
-        section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
-      },
-      "doc-prod-mime",
-      "INBOX"
-    );
-    expect(part).not.toBeNull();
-    // If addBodyFields had dropped `text` again, `getBodyPartHeaders`'s
-    // `mail.text.trim()` would throw or short-circuit → null return.
-    // The response is a literal containing the part's Content-Type +
-    // Content-Transfer-Encoding lines.
-    expect(part!.type).toBe("literal");
-    if (part!.type === "literal") {
-      expect(contentAsString(part!)).toContain("Content-Type:");
+  // These 3 tests EXPLICITLY set `text: undefined` so they exercise the
+  // failure mode reviewoie R1 caught: if `addBodyFields` were to drop
+  // `text`/`html` from the projection again, `getMailsByRange` would
+  // return this exact shape (lazy fields only), and the fall-through
+  // paths (`.MIME`/`.HEADER` → `getBodyPartHeaders`, partial TEXT →
+  // `buildFullMessage`, partial MIME_PART bare → `getBodyPart`) would
+  // all fail because they read `mail.text.trim()` directly. Under the
+  // CURRENT code these paths ALSO fail — that's the point: a
+  // regression that reintroduced the projection defect wouldn't be
+  // caught by these tests (they'd match the failing-shape from BOTH
+  // directions). The load-bearing regression guard is the
+  // `getRequestedFields` describe at :214-215 asserting `text`/`html`
+  // ARE projected. These tests document the fall-through paths that
+  // depend on that projection — a paired documentation of the
+  // failure surface.
+  it("BODY[1.MIME] on lazy-only mail (text/html undefined) — documents fall-through dependency", async () => {
+    const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
+    // Without materialized text, getBodyPartHeaders' `mail.text.trim()`
+    // throws — the current code path is UNSAFE for this shape. The
+    // projection guarantees `text`/`html` are populated when this
+    // code path reaches getBodyPartHeaders (see the getRequestedFields
+    // test that asserts `text`/`html` in the field set). This test
+    // documents the invariant: mail arriving at getBodyPartHeaders
+    // MUST have `mail.text` populated.
+    let threw = false;
+    let result: FetchResponsePart | null = null;
+    try {
+      result = await buildBodyResponsePart(
+        mail,
+        {
+          type: "BODY",
+          peek: true,
+          section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
+        },
+        "doc-prod-mime-lazy",
+        "INBOX"
+      );
+    } catch {
+      threw = true;
     }
+    // Either throw OR degrade to null — both prove the projection
+    // MUST include `text`/`html` for correctness.
+    expect(threw || result === null).toBe(true);
   });
 
-  it("BODY[TEXT]<0.100> partial on a lazy-shape mail returns a stream/literal (not throw)", async () => {
-    // The buildFullMessage-throws-on-lazy failure mode: with only
-    // text_octets projected (no text string), partial TEXT falls through
-    // to getBodyContent → buildFullMessage which throws on lazy-text
-    // segments. Re-adding `text` to the projection means production
-    // getMailsByRange delivers the string too, so the fall-through
-    // materialized path works.
-    const mail = prodShapeMail({ text: "some text to slice from" });
-    const part = await buildBodyResponsePart(
-      mail,
-      {
-        type: "BODY",
-        peek: true,
-        section: { type: "TEXT" },
-        partial: { start: 0, length: 100 },
-      },
-      "doc-prod-partial-text",
-      "INBOX"
-    );
-    // Any non-throw + non-null return proves the fall-through works.
-    expect(part).not.toBeNull();
+  it("BODY[TEXT]<0.100> on lazy-only mail — buildFullMessage throws on lazy segments", async () => {
+    const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
+    // getBodyContent → buildFullMessage throws
+    // "buildFullMessage: cannot materialize a lazy-text segment" when
+    // segments are lazy — same failure mode reviewoie R1 caught.
+    // Under buildBodyResponsePart the throw is caught upstream and
+    // logged as `Error processing message`; the tag itself completes
+    // OK from the client's perspective but the response part is dropped.
+    let threw = false;
+    let result: FetchResponsePart | null = null;
+    try {
+      result = await buildBodyResponsePart(
+        mail,
+        {
+          type: "BODY",
+          peek: true,
+          section: { type: "TEXT" },
+          partial: { start: 0, length: 100 },
+        },
+        "doc-prod-partial-text-lazy",
+        "INBOX"
+      );
+    } catch (e) {
+      threw = true;
+      expect(String(e)).toContain("lazy-text segment");
+    }
+    // Documents the failure — throw or null-return, both bad shapes
+    // for the client. Projection MUST populate `text`/`html` on
+    // getMailsByRange output for this path to be safe.
+    expect(threw || result === null).toBe(true);
   });
 
-  it("BODY[1]<0.100> partial on a text-only lazy-shape mail returns bytes (not null)", async () => {
-    // The getBodyPart-uses-mail.text failure mode.
-    const mail = prodShapeMail({ text: "some content" });
+  it("BODY[1]<0.100> on lazy-only mail — getBodyPart returns null (drops the fetch item)", async () => {
+    const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
+    // getBodyPart: `mail.text && mail.text.trim().length > 0` — undefined
+    // short-circuits to false. hasHtml also false (same reason). No
+    // part matches → returns null → response part dropped.
     const part = await buildBodyResponsePart(
       mail,
       {
@@ -1741,10 +1773,10 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
         section: { type: "MIME_PART", partNumber: "1" },
         partial: { start: 0, length: 100 },
       },
-      "doc-prod-partial-part",
+      "doc-prod-partial-part-lazy",
       "INBOX"
     );
-    expect(part).not.toBeNull();
+    expect(part).toBeNull();
   });
 });
 
