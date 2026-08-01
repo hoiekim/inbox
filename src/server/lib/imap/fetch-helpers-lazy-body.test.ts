@@ -27,7 +27,7 @@ const substringCalls: Array<{ column: "text" | "html"; take: number; returnedCha
 const columnStore = new Map<string, string>();
 
 const mockQuery = mock(async (sql: string, values: unknown[]) => {
-  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3\s+FOR\s+\$4\)/);
+  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/);
   if (substringMatch) {
     const column = substringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
@@ -36,6 +36,16 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = stored.slice(start, start + take);
     substringCalls.push({ column, take, returnedChars: chunk.length });
     return { rows: [{ chunk }], rowCount: 1 };
+  }
+  // Fail loud on unrecognized SUBSTRING — mirrors the guard in
+  // session-utils-lazy-text.test.ts. A silent {rows: []} would surface as
+  // downstream body-vs-empty assertion failures rather than "the mock
+  // regex is stale."
+  if (/SUBSTRING/i.test(sql)) {
+    throw new Error(
+      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks SQL. ` +
+      `Expected /SUBSTRING\\((text|html)\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+    );
   }
   // Any other query (e.g. rfc822_size persist) just no-ops with an empty
   // result — the fetch test doesn't need to persist anywhere.

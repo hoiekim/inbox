@@ -54,9 +54,22 @@ export async function* pgTextChunks(
   // Postgres SUBSTRING(text FROM start FOR len): `start` is 1-indexed. We
   // step by `chunkChars` chars each round-trip; a chunk shorter than
   // `chunkChars` OR empty means we've drained the column.
+  //
+  // The `$3::int FOR $4::int` casts are LOAD-BEARING. `pg` sends JS
+  // number params as text with no OID hint, so Postgres has to infer
+  // types from the SUBSTRING call site. Three overloads share the
+  // shape:
+  //   substring(text, int, int)       — numeric offsets (what we want)
+  //   substring(text, text, text)     — SIMILAR TO pattern + escape char
+  //   substring(text, text)           — regex pattern
+  // Postgres picks (2) for two-text params, then reads $4 (`"12000"`)
+  // as the ESCAPE CHARACTER — which must be exactly one character —
+  // and throws `invalid escape string`. Every lazy-body BODY[] stream
+  // fails on the first chunk with no client-side surface (the response
+  // never assembles). Explicit `::int` casts pin the intended overload.
   let offset = 1;
   for (;;) {
-    const sql = `SELECT SUBSTRING(${sourceColumn} FROM $3 FOR $4) AS chunk
+    const sql = `SELECT SUBSTRING(${sourceColumn} FROM $3::int FOR $4::int) AS chunk
                  FROM mails WHERE mail_id = $1 AND user_id = $2`;
     const result = await pool.query(sql, [mail_id, user_id, offset, chunkChars]);
     const chunk = (result.rows[0]?.chunk ?? "") as string;

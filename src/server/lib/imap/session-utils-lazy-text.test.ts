@@ -24,7 +24,7 @@ const columnStore = new Map<string, string>();
 const mockQuery = mock(async (sql: string, values: unknown[]) => {
   // Route SUBSTRING(text FROM ... FOR ...) / SUBSTRING(html FROM ... FOR ...)
   // through the columnStore. Every non-SUBSTRING query returns empty rows.
-  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3\s+FOR\s+\$4\)/);
+  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/);
   if (substringMatch) {
     const column = substringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
@@ -34,6 +34,17 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const start = Math.max(0, offset - 1);
     const chunk = stored.slice(start, start + take);
     return { rows: [{ chunk }], rowCount: 1 };
+  }
+  // Fail loud if a SUBSTRING call arrives in a shape the mock doesn't
+  // recognize — silently returning empty rows would surface as "body vs
+  // empty string" downstream, which reads as a data bug instead of a mock
+  // out-of-date bug. The ::int casts are load-bearing (see pgTextChunks
+  // in imap.ts), so any drift needs a matching mock update.
+  if (/SUBSTRING/i.test(sql)) {
+    throw new Error(
+      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks SQL. ` +
+      `Expected /SUBSTRING\\((text|html)\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+    );
   }
   return { rows: [], rowCount: 0 };
 });
