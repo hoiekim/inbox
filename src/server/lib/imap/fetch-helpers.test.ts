@@ -1643,16 +1643,21 @@ describe("buildFetchResponsePart partial BODY[]<start.length> streams through se
     }
   });
 
-  it("emits EXACTLY `part.length` bytes on iOS's chunked <off.N> sequence (wire-trailer parity)", async () => {
+  it("emits EXACTLY `part.length` bytes on chunked <off.N> partial sequence (wire-trailer parity)", async () => {
     // Reviewoie #769 R1 caught: partial FULL was using `sumSegmentBytes`
     // (trailer-inclusive) as the total-bytes ceiling, but
     // `streamPartialFromSegments` never emits the trailer — so any
     // partial reaching end-of-body advertised `{N}` two bytes larger
-    // than what actually landed on the wire. iOS's chunked sync sends
-    // `<0.65536>`, `<65536.65536>`, ..., `<last.65536>` — the last
+    // than what actually landed on the wire. iOS's real chunked sync
+    // uses `<0.65536>`, `<65536.65536>`, ..., `<last.65536>` — the last
     // chunk always hits this, corrupting every subsequent tagged
-    // response. This test drains each stream and cross-checks the
-    // count instead of asserting only on `part.length`.
+    // response. This test walks the same *pattern* at a much smaller
+    // chunk (250 B) against a small in-memory mail, so at least three
+    // iterations fire and the last one lands < chunkSize with the
+    // clamp active. Drains each stream and cross-checks the count
+    // instead of asserting only on `part.length` — the parity test in
+    // session-utils compared against `streamFromSegments` (which also
+    // excludes the trailer, so its parity held) and missed this class.
     const chunkSize = 250;
     let start = 0;
     for (let i = 0; i < 10; i += 1) {
