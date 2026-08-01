@@ -175,12 +175,10 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Populated at insert so BODYSTRUCTURE cache hits never fall back to
-      // the string-load path in fetch-helpers. Rows that predate this write
-      // sit NULL until their first BODYSTRUCTURE observation backfills them.
-      // The `""` split yields `[""]` (length 1), matching buildTextPart's
-      // math for an empty part; its `hasText` predicate skips it, so a
-      // stored 1 for an empty column is never surfaced.
+      // Decoded line counts. No read path consumes them: BODYSTRUCTURE's
+      // body-fld-lines measures the transfer-encoded body, which unfolded
+      // base64 makes a constant. Retained so the columns stay populated
+      // until their removal is decided (see hoiekim/inbox#764).
       [TEXT_LINE_COUNT]: countLines(text),
       [HTML_LINE_COUNT]: countLines(html),
       // Same shape as line counts: populate at INSERT so the RFC822.SIZE
@@ -395,15 +393,10 @@ export const updateRfc822Size = async (
 };
 
 /**
- * Line count for the BODYSTRUCTURE `lines` field — the exact expression
- * buildTextPart in imap/util.ts uses to derive the field from the raw
- * text/html column. Kept here so INSERT-time population and read-side
- * fallback compute agree by construction.
- *
- * Note: `"".split(/\r?\n/)` yields `[""]` (length 1). That matches the
- * pre-existing buildTextPart math but the BODYSTRUCTURE emit path skips
- * empty parts via `hasText` / `hasHtml`, so a stored 1 for an empty
- * column is never surfaced on the wire.
+ * Decoded line count of a body column, for `text_line_count` /
+ * `html_line_count`. Nothing reads those columns — BODYSTRUCTURE's
+ * body-fld-lines describes the transfer-encoded body (RFC 3501 §7.4.2),
+ * not the decoded text. Removal is tracked in hoiekim/inbox#764.
  */
 export const countLines = (content: string): number =>
   content.split(/\r?\n/).length;
