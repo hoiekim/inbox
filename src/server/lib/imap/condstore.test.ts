@@ -436,15 +436,23 @@ describe("CONDSTORE — STORE flag echo carries MODSEQ", () => {
 // FETCH — the modseq column is only pulled from the store when needed
 // ---------------------------------------------------------------------------
 
-const recordingFetchStore = (captured: { fields: string[] }): Store =>
+interface FetchCapture {
+  fields: string[];
+  changedSince?: number;
+}
+
+const recordingFetchStore = (captured: FetchCapture): Store =>
   ({
     getMessages: async (
       _box: string,
       _start: number,
       _end: number,
-      fields: string[]
+      fields: string[],
+      _useUid: boolean,
+      changedSince?: number
     ) => {
       captured.fields = fields;
+      captured.changedSince = changedSince;
       const m = new Map<string, Partial<MailType>>();
       m.set("doc1", {
         uid: { domain: 8, account: 8 },
@@ -462,13 +470,14 @@ const recordingFetchStore = (captured: { fields: string[] }): Store =>
 
 const runFetch = async (
   dataItems: FetchDataItem[],
-  condstoreEnabled: boolean
+  condstoreEnabled: boolean,
+  changedSince?: number
 ) => {
-  const captured = { fields: [] as string[] };
+  const captured: FetchCapture = { fields: [] };
   const lines: string[] = [];
   await fetchMessagesTyped(
     "A1",
-    { sequenceSet: { type: "uid", ranges: [{ start: 8 }] }, dataItems },
+    { sequenceSet: { type: "uid", ranges: [{ start: 8 }] }, dataItems, changedSince },
     true,
     recordingFetchStore(captured),
     "INBOX",
@@ -504,5 +513,121 @@ describe("CONDSTORE — FETCH pulls the modseq column only when needed", () => {
     const { captured, out } = await runFetch([{ type: "FLAGS" }], false);
     expect(captured.fields).not.toContain("modseq");
     expect(out).not.toContain("MODSEQ");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 (#609) — FETCH CHANGEDSINCE: parsing, filter threading, implicit MODSEQ
+// ---------------------------------------------------------------------------
+
+const fetchDataOf = (line: string) => {
+  const result = parseCommand(line);
+  expect(result.success).toBe(true);
+  const request = result.value!.request;
+  // A plain FETCH is `{ type: "FETCH", data }`; a UID FETCH wraps it as
+  // `{ type: "UID", data: { command: "FETCH", request: { type: "FETCH", data } } }`.
+  if (request.type === "FETCH") return request.data;
+  if (request.type === "UID" && request.data.request.type === "FETCH") {
+    return request.data.request.data;
+  }
+  throw new Error("not a FETCH command");
+};
+
+describe("CONDSTORE phase 3 — FETCH CHANGEDSINCE parsing", () => {
+  it("parses a trailing (CHANGEDSINCE n) modifier off a plain FETCH", () => {
+    const data = fetchDataOf("A1 FETCH 1:* (FLAGS) (CHANGEDSINCE 12345)");
+    expect(data.changedSince).toBe(12345);
+    expect(data.dataItems.map((i) => i.type)).toEqual(["FLAGS"]);
+  });
+
+  it("parses (CHANGEDSINCE n) off a UID FETCH", () => {
+    const data = fetchDataOf("A1 UID FETCH 1:* (FLAGS UID) (CHANGEDSINCE 7)");
+    expect(data.changedSince).toBe(7);
+  });
+
+  it("parses CHANGEDSINCE 0 as a real value (not falsy-dropped)", () => {
+    const data = fetchDataOf("A1 FETCH 1 (FLAGS) (CHANGEDSINCE 0)");
+    expect(data.changedSince).toBe(0);
+  });
+
+  it("leaves changedSince undefined when no modifier group is present", () => {
+    const data = fetchDataOf("A1 FETCH 1 (FLAGS)");
+    expect(data.changedSince).toBeUndefined();
+  });
+
+  it("rejects an unknown FETCH modifier with a parse failure (BAD)", () => {
+    const result = parseCommand("A1 FETCH 1 (FLAGS) (BOGUS 1)");
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects CHANGEDSINCE with no mod-sequence value", () => {
+    const result = parseCommand("A1 FETCH 1 (FLAGS) (CHANGEDSINCE)");
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("CONDSTORE phase 3 — CHANGEDSINCE threading + implicit MODSEQ", () => {
+  it("threads changedSince through to store.getMessages", async () => {
+    const { captured } = await runFetch([{ type: "FLAGS" }], false, 100);
+    expect(captured.changedSince).toBe(100);
+  });
+
+  it("pulls the modseq column for a CHANGEDSINCE fetch even without ENABLE", async () => {
+    const { captured } = await runFetch([{ type: "FLAGS" }], false, 100);
+    expect(captured.fields).toContain("modseq");
+  });
+
+  it("emits `MODSEQ (n)` implicitly for a CHANGEDSINCE fetch even without ENABLE", async () => {
+    // RFC 4551 §3.3.1: CHANGEDSINCE implies the MODSEQ data item.
+    const { out } = await runFetch([{ type: "FLAGS" }], false, 100);
+    expect(out).toContain("MODSEQ (5)");
+  });
+
+  it("does not thread changedSince when the modifier is absent", async () => {
+    const { captured } = await runFetch([{ type: "FLAGS" }], false);
+    expect(captured.changedSince).toBeUndefined();
+  });
+});
+
+describe("CONDSTORE phase 3 — FETCH CHANGEDSINCE persistently enables CONDSTORE", () => {
+  // RFC 4551 §3.3.1: a CHANGEDSINCE fetch automatically enables CONDSTORE for
+  // the session, so a later plain FETCH also carries MODSEQ.
+  const buildSession = async () => {
+    const { session, writes } = makeSession();
+    // Reach past auth/select: the guards only check these three fields.
+    (session as unknown as { authenticated: boolean }).authenticated = true;
+    (session as unknown as { store: Store }).store = recordingFetchStore({
+      fields: [],
+    });
+    (session as unknown as { selectedMailbox: string }).selectedMailbox = "INBOX";
+    (session as unknown as { seqState: SequenceState }).seqState =
+      seqStateFor([8]);
+    return { session, writes };
+  };
+
+  it("a CHANGEDSINCE fetch flips the session condstore flag", async () => {
+    const { session, writes } = await buildSession();
+    await session.fetchMessagesTyped(
+      "A1",
+      {
+        sequenceSet: { type: "uid", ranges: [{ start: 8 }] },
+        dataItems: [{ type: "FLAGS" }],
+        changedSince: 3,
+      },
+      true
+    );
+    // This response carries MODSEQ...
+    expect(writes.join("")).toContain("MODSEQ (5)");
+    // ...and a subsequent plain fetch (no CHANGEDSINCE) now carries it too.
+    const before = writes.length;
+    await session.fetchMessagesTyped(
+      "A2",
+      {
+        sequenceSet: { type: "uid", ranges: [{ start: 8 }] },
+        dataItems: [{ type: "FLAGS" }],
+      },
+      true
+    );
+    expect(writes.slice(before).join("")).toContain("MODSEQ (5)");
   });
 });

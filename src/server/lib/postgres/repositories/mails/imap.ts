@@ -173,7 +173,8 @@ export const getMailsByRange = async (
   start: number,
   end: number,
   useUid: boolean,
-  fields: string[] = ["*"]
+  fields: string[] = ["*"],
+  changedSince?: number
 ): Promise<Map<string, PartialMailModel>> => {
   const sortedFields = [...fields].sort();
   const inflightKey = JSON.stringify([
@@ -184,9 +185,10 @@ export const getMailsByRange = async (
     end,
     useUid,
     sortedFields,
+    changedSince ?? null,
   ]);
   return singleFlight(inflightKey, () => getMailsByRangeUncoalesced(
-    user_id, mailbox, sent, start, end, useUid, fields
+    user_id, mailbox, sent, start, end, useUid, fields, changedSince
   ));
 };
 
@@ -197,7 +199,8 @@ const getMailsByRangeUncoalesced = async (
   start: number,
   end: number,
   useUid: boolean,
-  fields: string[]
+  fields: string[],
+  changedSince?: number
 ): Promise<Map<string, PartialMailModel>> => {
   try {
     let sql: string;
@@ -246,6 +249,17 @@ const getMailsByRangeUncoalesced = async (
       return parts.length ? ", " + parts.join(", ") : "";
     };
 
+    // RFC 4551 CHANGEDSINCE: filter to messages whose mod-sequence exceeds the
+    // requested value in the same range query (O(rows-changed), not a JS
+    // post-filter over the whole window). `modseq` is BIGINT NOT NULL DEFAULT 1
+    // so every row has a value — `CHANGEDSINCE 0` returns all, `CHANGEDSINCE 1`
+    // drops the never-modified baseline. The predicate references the param
+    // appended after each branch's fixed argument list ($5 domain, $6 per-box).
+    const modseqDomainClause =
+      changedSince !== undefined ? ` AND ${MODSEQ} > $5` : "";
+    const modseqMailboxClause =
+      changedSince !== undefined ? ` AND m.${MODSEQ} > $6` : "";
+
     if (mailbox === null) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
       // uid_domain, unchanged by the per-mailbox mapping migration.
@@ -258,18 +272,20 @@ const getMailsByRangeUncoalesced = async (
         sql = `
           SELECT ${fieldList} FROM mails
           WHERE user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4
-            AND expunged = FALSE
+            AND expunged = FALSE${modseqDomainClause}
           ORDER BY ${UID_DOMAIN} ASC
         `;
         values = [user_id, sent, start, Math.min(end, 999999999)];
+        if (changedSince !== undefined) values.push(changedSince);
       } else {
         sql = `
           SELECT ${fieldList} FROM mails
-          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
+          WHERE user_id = $1 AND sent = $2 AND expunged = FALSE${modseqDomainClause}
           ORDER BY ${UID_DOMAIN} ASC
           OFFSET $3 LIMIT $4
         `;
         values = [user_id, sent, start - 1, end - start + 1];
+        if (changedSince !== undefined) values.push(changedSince);
       }
     } else {
       // Per-mailbox query — JOIN `mail_mailbox_uid` to fetch the
@@ -297,10 +313,11 @@ const getMailsByRangeUncoalesced = async (
             AND x.${MAIL_ID} = m.${MAIL_ID}
           WHERE m.${USER_ID} = $1 AND m.${SENT} = $2
             AND x.${UID} >= $4 AND x.${UID} <= $5
-            AND m.${EXPUNGED} = FALSE
+            AND m.${EXPUNGED} = FALSE${modseqMailboxClause}
           ORDER BY x.${UID} ASC
         `;
         values = [user_id, sent, mailbox, start, Math.min(end, 999999999)];
+        if (changedSince !== undefined) values.push(changedSince);
       } else {
         sql = `
           SELECT ${fieldList} FROM mails m
@@ -308,11 +325,12 @@ const getMailsByRangeUncoalesced = async (
             ON x.${USER_ID} = m.${USER_ID}
             AND x.${MAILBOX} = $3
             AND x.${MAIL_ID} = m.${MAIL_ID}
-          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+          WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE${modseqMailboxClause}
           ORDER BY x.${UID} ASC
           OFFSET $4 LIMIT $5
         `;
         values = [user_id, sent, mailbox, start - 1, end - start + 1];
+        if (changedSince !== undefined) values.push(changedSince);
       }
     }
 

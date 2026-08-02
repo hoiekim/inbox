@@ -400,7 +400,8 @@ export class Store {
     start: number,
     end: number,
     fields: string[],
-    useUid: boolean = false
+    useUid: boolean = false,
+    changedSince?: number
   ): Promise<Map<string, StoreFetchedMail>> => {
     try {
       const { mailboxArg, isSent } = this.resolveMappedBox(box);
@@ -411,7 +412,8 @@ export class Store {
         start,
         end,
         useUid,
-        fields.flatMap((f) => this.mapFieldName(f))
+        fields.flatMap((f) => this.mapFieldName(f)),
+        changedSince
       );
 
       const mails = new Map<string, StoreFetchedMail>();
