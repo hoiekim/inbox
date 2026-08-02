@@ -30,8 +30,11 @@ export const registerServiceWorker = async (): Promise<void> => {
 /**
  * Tear down the SW and every Cache Storage entry on logout so the next user on
  * this browser can't be served the previous user's cached shell or asset set.
- * Pairs with `clearCachedQueries()` (the IndexedDB query-cache clear) at the
- * logout site.
+ * `unregister()` stops the worker from controlling *future* loads; the active
+ * worker keeps controlling the current document until the next navigation. That
+ * gap is harmless here because Cache Storage is already emptied below, so the
+ * still-active worker falls through to the network. Pairs with
+ * `clearCachedQueries()` (the IndexedDB query-cache clear) at the logout site.
  */
 export const unregisterServiceWorker = async (): Promise<void> => {
   if ("serviceWorker" in navigator) {
