@@ -47,12 +47,15 @@ const MailBody = ({ mailId }: Props) => {
 
   const iframeElement = useRef<HTMLIFrameElement>(null);
   const pendingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const pendingFrames = useRef<number[]>([]);
 
-  // Cancel all pending timers when the component unmounts
+  // Cancel all pending timers/frames when the component unmounts
   useEffect(() => {
     return () => {
       pendingTimers.current.forEach(clearTimeout);
       pendingTimers.current = [];
+      pendingFrames.current.forEach(cancelAnimationFrame);
+      pendingFrames.current = [];
     };
   }, []);
 
@@ -236,8 +239,22 @@ const MailBody = ({ mailId }: Props) => {
       // content, so `scrollHeight` read in the handler reflects the new
       // size — robust under keyboard activation and slow renders, where
       // the body-level click listener's setTimeout(50) heuristic misses.
+      // Defer the resize past the current layout pass with a double
+      // requestAnimationFrame: mutating the iframe height synchronously
+      // inside `toggle` re-enters the browser's ResizeObserver
+      // notification cycle within the same frame, which it cannot
+      // complete and reports as a global "ResizeObserver loop completed
+      // with undelivered notifications" error.
       Array.from(content.querySelectorAll("details")).forEach((det) => {
-        det.addEventListener("toggle", () => adjustMailContentSize(iframeDom));
+        det.addEventListener("toggle", () => {
+          const outer = requestAnimationFrame(() => {
+            const inner = requestAnimationFrame(() =>
+              adjustMailContentSize(iframeDom)
+            );
+            pendingFrames.current.push(inner);
+          });
+          pendingFrames.current.push(outer);
+        });
       });
 
       adjustMailContentSize(iframeDom);
