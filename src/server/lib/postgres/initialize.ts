@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
-import { checkSchemaAtTarget, runMigrations } from "./migration";
+import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
@@ -36,6 +37,33 @@ const tables: Table<unknown, Schema>[] = [
   mailgunEventsTable,
 ];
 
+// Digest of every input the slow-path DDL consumes. Any code change to a
+// table schema, its indexes, its constraints, `searchVectorDdl()`,
+// `searchVectorReindexSql()`, or the raw-DDL sentinels below changes this
+// digest — the fast path only short-circuits when the DB reflects THIS
+// exact code's DDL, so trigger-body-only and index-only PRs (which a
+// name-check would silently miss) correctly fall through to the slow path.
+//
+// The two raw-DDL sentinels below track DDL sites that aren't captured by
+// table.schema / table.indexes / searchVector*. Any edit to one of those
+// blocks in this file must also edit its sentinel string, or a boot
+// against a DB with the older DDL will silently fast-path past the fix.
+export const CURRENT_SCHEMA_HASH: string = ((): string => {
+  const parts: string[] = [];
+  for (const t of tables) {
+    parts.push(`t:${t.name}`);
+    parts.push(JSON.stringify(t.schema));
+    parts.push(JSON.stringify(t.indexes));
+    parts.push(JSON.stringify(t.constraints ?? []));
+  }
+  parts.push(...searchVectorDdl());
+  parts.push(searchVectorReindexSql());
+  // Raw-DDL sentinels — bump the version tag when the block changes.
+  parts.push("raw:idx_mails_search:GIN(search_vector):v1");
+  parts.push("raw:uidAccountCheck:702-pr3:v1");
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+})();
+
 export const postgresIsAvailable = async (): Promise<void> => {
   const maxRetries = 30;
   let retries = 0;
@@ -65,19 +93,22 @@ export const initializePostgres = async (): Promise<void> => {
 
   await postgresIsAvailable();
 
-  // Fast-path: on the happy path (steady-state boot, no schema change
-  // deployed), the DB is already at target and we can skip the entire
-  // DDL block below — CREATE TABLE × 10 + runMigrations (advisory-lock
-  // transaction) + CREATE INDEX × 20+ + trigger DDL + `uidAccountCheck`.
-  // That's ~35+ round-trips, each subject to `statement_timeout`. The
-  // pre-flight is one `information_schema.columns` query. Under a
-  // restart where the PG instance is under load from other containers,
-  // the old path can crashloop (2026-08-01 17:19-17:22 PDT — 5
-  // consecutive `Failed to create tables / Query read timeout` before
-  // the 6th restart stuck). See `checkSchemaAtTarget` for the exact
-  // criterion; any mismatch OR query failure falls through to the
-  // authoritative slow path, so this is a strictly-safe optimization.
-  if (await checkSchemaAtTarget(tables.map((t) => ({ name: t.name, schema: t.schema })))) {
+  // Fast-path: on the happy path (steady-state boot, no DDL change
+  // deployed), the DB's `schema_meta.schema_hash` matches
+  // `CURRENT_SCHEMA_HASH` and we skip the entire DDL block below —
+  // CREATE TABLE × 10 + runMigrations (advisory-lock transaction) +
+  // CREATE INDEX × 20+ + trigger DDL + `uidAccountCheck`. That's ~35+
+  // round-trips, each subject to `statement_timeout`. The pre-flight is
+  // one SELECT. Under a restart where the PG instance is under load
+  // from other containers, the old path can crashloop (2026-08-01
+  // 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query
+  // read timeout` before the 6th restart stuck).
+  //
+  // Any mismatch (marker missing, hash different, query failure) falls
+  // through to the authoritative slow path. The slow path always writes
+  // `schema_meta.schema_hash = CURRENT_SCHEMA_HASH` on success, so the
+  // next boot fast-paths.
+  if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH)) {
     logger.info("[Fast-path] Schema already at target — skipping DDL.");
     logger.info("Database tables created/verified successfully.");
     return;
@@ -165,6 +196,11 @@ export const initializePostgres = async (): Promise<void> => {
         client.release();
       }
     }
+
+    // Record the marker so subsequent boots can fast-path. Written AFTER
+    // every DDL succeeded — if any step above threw, we don't want the
+    // marker in the DB.
+    await writeSchemaMarker(CURRENT_SCHEMA_HASH);
 
     logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
