@@ -207,6 +207,11 @@ export abstract class Table<
     return result.rows.length > 0 ? new this.ModelClass(result.rows[0]) : null;
   }
 
+  /** The builders stamp `updated` only where the DDL declares the column. */
+  private get stampUpdated(): boolean {
+    return "updated" in this.schema;
+  }
+
   async insert(
     data: QueryData,
     returning?: string[]
@@ -214,7 +219,8 @@ export abstract class Table<
     const { sql, values } = buildInsert(
       this.name,
       data as Record<string, ParamValue>,
-      returning ?? [this.primaryKey]
+      returning ?? [this.primaryKey],
+      { stampUpdated: this.stampUpdated }
     );
     const result = await pool.query(sql, values);
     return result.rows.length > 0 ? result.rows[0] : null;
@@ -227,6 +233,7 @@ export abstract class Table<
   ): Promise<Record<string, unknown> | null> {
     const query = buildUpdate(this.name, this.primaryKey, primaryKeyValue, data, {
       returning: returning ?? [this.primaryKey],
+      stampUpdated: this.stampUpdated,
     });
     if (!query) return null;
     const result = await pool.query(query.sql, query.values);
@@ -241,16 +248,23 @@ export abstract class Table<
       updateColumns:
         updateColumns ?? Object.keys(data).filter((k) => k !== this.primaryKey),
       returning: ["*"],
+      stampUpdated: this.stampUpdated,
     });
     const result = await pool.query(sql, values);
     return result.rows.length > 0 ? result.rows[0] : null;
   }
 
   async softDelete(primaryKeyValue: ParamValue): Promise<boolean> {
+    if (!("is_deleted" in this.schema)) {
+      throw new Error(
+        `${this.name} declares no is_deleted column — use hardDelete or deleteWhere`
+      );
+    }
     const { sql, values } = buildSoftDelete(
       this.name,
       this.primaryKey,
-      primaryKeyValue
+      primaryKeyValue,
+      { stampUpdated: this.stampUpdated }
     );
     const result = await pool.query(sql, values);
     return result.rowCount !== null && result.rowCount > 0;

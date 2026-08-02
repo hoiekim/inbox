@@ -23,7 +23,8 @@ import {
 export const version = "1";
 export const index = "inbox" + (version ? `-${version}` : "");
 
-const tables: Table<unknown, Schema>[] = [
+/** Every table the app owns, in DDL-creation order (FK dependencies first). */
+export const tables: Table<unknown, Schema>[] = [
   usersTable,
   sessionsTable,
   mailboxesTable, // Must be before mails due to foreign key reference
