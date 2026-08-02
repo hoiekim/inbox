@@ -418,13 +418,15 @@ export async function runMigrations(
  *
  * Correctness. `expectedHash` is computed at import time from every input
  * the slow path emits DDL for: table schemas + indexes + constraints,
- * `searchVectorDdl()`, `searchVectorReindexSql()`, and one sentinel per
- * raw DDL block (`idx_mails_search`, `uidAccountCheck`). Any code change
- * to those inputs — including trigger-body-only edits and index-only PRs
- * that a name-check would silently miss — automatically changes the hash,
- * so the fast path short-circuits ONLY when the DB reflects THIS exact
- * code's DDL. Whitespace changes in schema definition strings also change
- * the hash, which is fine (the slow path is idempotent).
+ * `searchVectorDdl()`, `searchVectorReindexSql()`, and the literal text of
+ * each raw-DDL const in `initialize.ts` (`IDX_MAILS_SEARCH_SQL`,
+ * `UID_ACCOUNT_CHECK_SQL`, `UID_ACCOUNT_BUMP_USERS_SQL`,
+ * `UID_ACCOUNT_DROP_COLUMN_SQL`). Because those same const strings are what
+ * the slow path also issues via `pool.query` / `client.query`, any edit to
+ * a raw block automatically drifts the digest — including trigger-body-only
+ * edits and index-only PRs that a name-check would silently miss.
+ * Whitespace changes in schema definition strings also change the hash,
+ * which is fine (the slow path is idempotent).
  *
  * Rolling deploys. If old and new versions coexist, an old boot with hash
  * X sees the newer marker Y → returns false → runs slow path → overwrites
