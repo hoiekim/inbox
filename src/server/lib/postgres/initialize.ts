@@ -37,17 +37,38 @@ const tables: Table<unknown, Schema>[] = [
   mailgunEventsTable,
 ];
 
+// Raw DDL that isn't captured by `table.schema` / `table.indexes` /
+// `searchVector*`. Extracted as module-scoped constants so their literal
+// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string the
+// slow path issues. That way any edit to a raw block automatically
+// changes the digest (no descriptive-sentinel discipline required).
+const IDX_MAILS_SEARCH_SQL = `
+      CREATE INDEX IF NOT EXISTS idx_mails_search
+      ON mails USING GIN(search_vector)
+    `;
+
+const UID_ACCOUNT_CHECK_SQL = `
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'mails'
+        AND column_name = 'uid_account'
+      LIMIT 1
+    `;
+
+const UID_ACCOUNT_BUMP_USERS_SQL = `
+          UPDATE users
+          SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
+          WHERE imap_uid_validity IS NOT NULL
+        `;
+
+const UID_ACCOUNT_DROP_COLUMN_SQL = `ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`;
+
 // Digest of every input the slow-path DDL consumes. Any code change to a
 // table schema, its indexes, its constraints, `searchVectorDdl()`,
-// `searchVectorReindexSql()`, or the raw-DDL sentinels below changes this
+// `searchVectorReindexSql()`, or the raw DDL constants above changes this
 // digest — the fast path only short-circuits when the DB reflects THIS
 // exact code's DDL, so trigger-body-only and index-only PRs (which a
 // name-check would silently miss) correctly fall through to the slow path.
-//
-// The two raw-DDL sentinels below track DDL sites that aren't captured by
-// table.schema / table.indexes / searchVector*. Any edit to one of those
-// blocks in this file must also edit its sentinel string, or a boot
-// against a DB with the older DDL will silently fast-path past the fix.
 export const CURRENT_SCHEMA_HASH: string = ((): string => {
   const parts: string[] = [];
   for (const t of tables) {
@@ -58,9 +79,10 @@ export const CURRENT_SCHEMA_HASH: string = ((): string => {
   }
   parts.push(...searchVectorDdl());
   parts.push(searchVectorReindexSql());
-  // Raw-DDL sentinels — bump the version tag when the block changes.
-  parts.push("raw:idx_mails_search:GIN(search_vector):v1");
-  parts.push("raw:uidAccountCheck:702-pr3:v1");
+  parts.push(IDX_MAILS_SEARCH_SQL);
+  parts.push(UID_ACCOUNT_CHECK_SQL);
+  parts.push(UID_ACCOUNT_BUMP_USERS_SQL);
+  parts.push(UID_ACCOUNT_DROP_COLUMN_SQL);
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 })();
 
@@ -141,10 +163,7 @@ export const initializePostgres = async (): Promise<void> => {
     }
 
     // Create GIN index for full-text search on mails
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_mails_search 
-      ON mails USING GIN(search_vector)
-    `);
+    await pool.query(IDX_MAILS_SEARCH_SQL);
 
     // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
     // the reindex — all three derived from `searchVectorExpression` so the
@@ -158,13 +177,7 @@ export const initializePostgres = async (): Promise<void> => {
     // any client that was caching UIDs against the retired column resyncs
     // (RFC 3501 §2.3.1.1). Both steps are gated on the column's presence so
     // subsequent restarts are no-ops.
-    const uidAccountCheck = await pool.query(`
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'mails'
-        AND column_name = 'uid_account'
-      LIMIT 1
-    `);
+    const uidAccountCheck = await pool.query(UID_ACCOUNT_CHECK_SQL);
     if ((uidAccountCheck.rowCount ?? 0) > 0) {
       logger.info("[Migration] #702 PR 3 — bumping imap_uid_validity and dropping mails.uid_account");
       const client = await pool.connect();
@@ -173,11 +186,7 @@ export const initializePostgres = async (): Promise<void> => {
         // Bump UIDVALIDITY per user. FLOOR(EXTRACT(EPOCH FROM NOW())) matches
         // the seed used by `getImapUidValidity` on first IMAP access — a
         // monotonically-increasing unix-seconds value.
-        await client.query(`
-          UPDATE users
-          SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
-          WHERE imap_uid_validity IS NOT NULL
-        `);
+        await client.query(UID_ACCOUNT_BUMP_USERS_SQL);
         // IF EXISTS so a concurrent rolling-deploy loser (raced through the
         // presence check above, then found the winner had already dropped
         // the column) completes cleanly instead of throwing. Postgres emits
@@ -186,7 +195,7 @@ export const initializePostgres = async (): Promise<void> => {
         // bumps UIDVALIDITY a second time. Functionally fine (a
         // few-seconds-later UIDVALIDITY bump is still monotonically
         // increasing), just not idempotent to the same-second value.
-        await client.query(`ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`);
+        await client.query(UID_ACCOUNT_DROP_COLUMN_SQL);
         await client.query("COMMIT");
         logger.info("[Migration] #702 PR 3 — done");
       } catch (error) {

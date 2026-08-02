@@ -136,4 +136,35 @@ describe("initializePostgres — fast-path integration", () => {
     const ddlCalls = seenSql.filter((sql) => ddlPattern.test(sql));
     expect(ddlCalls).toEqual([]);
   });
+
+  it("writes the marker with CURRENT_SCHEMA_HASH after the slow path succeeds", async () => {
+    // Symmetric counterpart: with no marker present, the slow path must
+    // run AND end by writing the marker. A refactor that drops the
+    // writeSchemaMarker call reintroduces the crashloop pattern this PR
+    // is fixing, and this test locks that invariant in.
+    const { initializePostgres, CURRENT_SCHEMA_HASH } = await import("./initialize");
+
+    const seenCalls: Array<{ sql: string; values: unknown[] | undefined }> = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
+      seenCalls.push({ sql, values });
+      // No marker present — force slow path.
+      if (sql.includes("schema_meta") && /SELECT\s+value/i.test(sql)) {
+        return { rows: [], rowCount: 0 };
+      }
+      // Everything else (DDL, migration probes, advisory locks, etc.)
+      // succeeds trivially so the slow path runs to completion.
+      return { rows: [], rowCount: 0 };
+    });
+
+    await initializePostgres();
+
+    const markerWrite = seenCalls.find(
+      ({ sql, values }) =>
+        typeof sql === "string" &&
+        sql.includes("INSERT INTO schema_meta") &&
+        Array.isArray(values) &&
+        values[0] === CURRENT_SCHEMA_HASH
+    );
+    expect(markerWrite).toBeDefined();
+  });
 });
