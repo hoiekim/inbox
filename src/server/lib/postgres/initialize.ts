@@ -47,22 +47,6 @@ const IDX_MAILS_SEARCH_SQL = `
       ON mails USING GIN(search_vector)
     `;
 
-const UID_ACCOUNT_CHECK_SQL = `
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'mails'
-        AND column_name = 'uid_account'
-      LIMIT 1
-    `;
-
-const UID_ACCOUNT_BUMP_USERS_SQL = `
-          UPDATE users
-          SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
-          WHERE imap_uid_validity IS NOT NULL
-        `;
-
-const UID_ACCOUNT_DROP_COLUMN_SQL = `ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`;
-
 // Digest of every input the slow-path DDL consumes. Any code change to a
 // table schema, its indexes, its constraints, `searchVectorDdl()`,
 // `searchVectorReindexSql()`, or the raw DDL constants above changes this
@@ -80,9 +64,6 @@ export const CURRENT_SCHEMA_HASH: string = ((): string => {
   parts.push(...searchVectorDdl());
   parts.push(searchVectorReindexSql());
   parts.push(IDX_MAILS_SEARCH_SQL);
-  parts.push(UID_ACCOUNT_CHECK_SQL);
-  parts.push(UID_ACCOUNT_BUMP_USERS_SQL);
-  parts.push(UID_ACCOUNT_DROP_COLUMN_SQL);
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 })();
 
@@ -119,7 +100,7 @@ export const initializePostgres = async (): Promise<void> => {
   // deployed), the DB's `schema_meta.schema_hash` matches
   // `CURRENT_SCHEMA_HASH` and we skip the entire DDL block below —
   // CREATE TABLE × 10 + runMigrations (advisory-lock transaction) +
-  // CREATE INDEX × 20+ + trigger DDL + `uidAccountCheck`. That's ~35+
+  // CREATE INDEX × 20+ + trigger DDL. That's ~35+
   // round-trips, each subject to `statement_timeout`. The pre-flight is
   // one SELECT. Under a restart where the PG instance is under load
   // from other containers, the old path can crashloop (2026-08-01
@@ -170,41 +151,6 @@ export const initializePostgres = async (): Promise<void> => {
     // trigger and the direct write can't drift apart. See search-vector.ts.
     for (const sql of searchVectorDdl()) await pool.query(sql);
     await pool.query(searchVectorReindexSql());
-
-    // #702 PR 3: retire `mails.uid_account` — `mail_mailbox_uid.uid` is now
-    // the sole per-mailbox UID source. Drop the column when it still exists,
-    // and bump every user's `imap_uid_validity` in the same transaction so
-    // any client that was caching UIDs against the retired column resyncs
-    // (RFC 3501 §2.3.1.1). Both steps are gated on the column's presence so
-    // subsequent restarts are no-ops.
-    const uidAccountCheck = await pool.query(UID_ACCOUNT_CHECK_SQL);
-    if ((uidAccountCheck.rowCount ?? 0) > 0) {
-      logger.info("[Migration] #702 PR 3 — bumping imap_uid_validity and dropping mails.uid_account");
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        // Bump UIDVALIDITY per user. FLOOR(EXTRACT(EPOCH FROM NOW())) matches
-        // the seed used by `getImapUidValidity` on first IMAP access — a
-        // monotonically-increasing unix-seconds value.
-        await client.query(UID_ACCOUNT_BUMP_USERS_SQL);
-        // IF EXISTS so a concurrent rolling-deploy loser (raced through the
-        // presence check above, then found the winner had already dropped
-        // the column) completes cleanly instead of throwing. Postgres emits
-        // a NOTICE not an error for a missing column, so the loser's
-        // transaction still COMMITs — including its own UPDATE users, which
-        // bumps UIDVALIDITY a second time. Functionally fine (a
-        // few-seconds-later UIDVALIDITY bump is still monotonically
-        // increasing), just not idempotent to the same-second value.
-        await client.query(UID_ACCOUNT_DROP_COLUMN_SQL);
-        await client.query("COMMIT");
-        logger.info("[Migration] #702 PR 3 — done");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    }
 
     // Record the marker so subsequent boots can fast-path. Written AFTER
     // every DDL succeeded — if any step above threw, we don't want the
