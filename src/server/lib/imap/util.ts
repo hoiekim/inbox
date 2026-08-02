@@ -58,10 +58,12 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
       const [local, domain] = address.split("@");
       if (!local || !domain) return null;
 
-      // Escape quotes in name
-      const escapedName = name.replace(/"/g, '\\"');
+      // RFC 3501 §9: `addr-name = nstring`. A header that carried no display
+      // name has no personal name at all — the bare atom NIL, not `""`, which
+      // clients read as a present-but-empty name.
+      const addrName = name ? `"${name.replace(/"/g, '\\"')}"` : "NIL";
 
-      return `("${escapedName}" NIL "${local}" "${domain}")`;
+      return `(${addrName} NIL "${local}" "${domain}")`;
     })
     .filter((item) => item !== null)
     .join(" ");
