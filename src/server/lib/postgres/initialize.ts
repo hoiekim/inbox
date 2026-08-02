@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
-import { runMigrations } from "./migration";
+import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
@@ -36,6 +37,36 @@ const tables: Table<unknown, Schema>[] = [
   mailgunEventsTable,
 ];
 
+// Raw DDL that isn't captured by `table.schema` / `table.indexes` /
+// `searchVector*`. Extracted as module-scoped constants so their literal
+// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string the
+// slow path issues. That way any edit to a raw block automatically
+// changes the digest (no descriptive-sentinel discipline required).
+const IDX_MAILS_SEARCH_SQL = `
+      CREATE INDEX IF NOT EXISTS idx_mails_search
+      ON mails USING GIN(search_vector)
+    `;
+
+// Digest of every input the slow-path DDL consumes. Any code change to a
+// table schema, its indexes, its constraints, `searchVectorDdl()`,
+// `searchVectorReindexSql()`, or the raw DDL constants above changes this
+// digest — the fast path only short-circuits when the DB reflects THIS
+// exact code's DDL, so trigger-body-only and index-only PRs (which a
+// name-check would silently miss) correctly fall through to the slow path.
+export const CURRENT_SCHEMA_HASH: string = ((): string => {
+  const parts: string[] = [];
+  for (const t of tables) {
+    parts.push(`t:${t.name}`);
+    parts.push(JSON.stringify(t.schema));
+    parts.push(JSON.stringify(t.indexes));
+    parts.push(JSON.stringify(t.constraints ?? []));
+  }
+  parts.push(...searchVectorDdl());
+  parts.push(searchVectorReindexSql());
+  parts.push(IDX_MAILS_SEARCH_SQL);
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+})();
+
 export const postgresIsAvailable = async (): Promise<void> => {
   const maxRetries = 30;
   let retries = 0;
@@ -65,6 +96,27 @@ export const initializePostgres = async (): Promise<void> => {
 
   await postgresIsAvailable();
 
+  // Fast-path: on the happy path (steady-state boot, no DDL change
+  // deployed), the DB's `schema_meta.schema_hash` matches
+  // `CURRENT_SCHEMA_HASH` and we skip the entire DDL block below —
+  // CREATE TABLE × 10 + runMigrations (advisory-lock transaction) +
+  // CREATE INDEX × 20+ + trigger DDL. That's ~35+
+  // round-trips, each subject to `statement_timeout`. The pre-flight is
+  // one SELECT. Under a restart where the PG instance is under load
+  // from other containers, the old path can crashloop (2026-08-01
+  // 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query
+  // read timeout` before the 6th restart stuck).
+  //
+  // Any mismatch (marker missing, hash different, query failure) falls
+  // through to the authoritative slow path. The slow path always writes
+  // `schema_meta.schema_hash = CURRENT_SCHEMA_HASH` on success, so the
+  // next boot fast-paths.
+  if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH)) {
+    logger.info("[Fast-path] Schema already at target — skipping DDL.");
+    logger.info("Database tables created/verified successfully.");
+    return;
+  }
+
   try {
     // Create tables if they don't exist
     for (const table of tables) {
@@ -92,10 +144,7 @@ export const initializePostgres = async (): Promise<void> => {
     }
 
     // Create GIN index for full-text search on mails
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_mails_search 
-      ON mails USING GIN(search_vector)
-    `);
+    await pool.query(IDX_MAILS_SEARCH_SQL);
 
     // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
     // the reindex — all three derived from `searchVectorExpression` so the
@@ -103,50 +152,10 @@ export const initializePostgres = async (): Promise<void> => {
     for (const sql of searchVectorDdl()) await pool.query(sql);
     await pool.query(searchVectorReindexSql());
 
-    // #702 PR 3: retire `mails.uid_account` — `mail_mailbox_uid.uid` is now
-    // the sole per-mailbox UID source. Drop the column when it still exists,
-    // and bump every user's `imap_uid_validity` in the same transaction so
-    // any client that was caching UIDs against the retired column resyncs
-    // (RFC 3501 §2.3.1.1). Both steps are gated on the column's presence so
-    // subsequent restarts are no-ops.
-    const uidAccountCheck = await pool.query(`
-      SELECT 1 FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'mails'
-        AND column_name = 'uid_account'
-      LIMIT 1
-    `);
-    if ((uidAccountCheck.rowCount ?? 0) > 0) {
-      logger.info("[Migration] #702 PR 3 — bumping imap_uid_validity and dropping mails.uid_account");
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        // Bump UIDVALIDITY per user. FLOOR(EXTRACT(EPOCH FROM NOW())) matches
-        // the seed used by `getImapUidValidity` on first IMAP access — a
-        // monotonically-increasing unix-seconds value.
-        await client.query(`
-          UPDATE users
-          SET imap_uid_validity = FLOOR(EXTRACT(EPOCH FROM NOW()))::INTEGER
-          WHERE imap_uid_validity IS NOT NULL
-        `);
-        // IF EXISTS so a concurrent rolling-deploy loser (raced through the
-        // presence check above, then found the winner had already dropped
-        // the column) completes cleanly instead of throwing. Postgres emits
-        // a NOTICE not an error for a missing column, so the loser's
-        // transaction still COMMITs — including its own UPDATE users, which
-        // bumps UIDVALIDITY a second time. Functionally fine (a
-        // few-seconds-later UIDVALIDITY bump is still monotonically
-        // increasing), just not idempotent to the same-second value.
-        await client.query(`ALTER TABLE mails DROP COLUMN IF EXISTS uid_account`);
-        await client.query("COMMIT");
-        logger.info("[Migration] #702 PR 3 — done");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-    }
+    // Record the marker so subsequent boots can fast-path. Written AFTER
+    // every DDL succeeded — if any step above threw, we don't want the
+    // marker in the DB.
+    await writeSchemaMarker(CURRENT_SCHEMA_HASH);
 
     logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
