@@ -1,7 +1,7 @@
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex } from "./database";
-import { runMigrations } from "./migration";
+import { checkSchemaAtTarget, runMigrations } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
@@ -64,6 +64,24 @@ export const initializePostgres = async (): Promise<void> => {
   logger.info("PostgreSQL initialization started.");
 
   await postgresIsAvailable();
+
+  // Fast-path: on the happy path (steady-state boot, no schema change
+  // deployed), the DB is already at target and we can skip the entire
+  // DDL block below — CREATE TABLE × 10 + runMigrations (advisory-lock
+  // transaction) + CREATE INDEX × 20+ + trigger DDL + `uidAccountCheck`.
+  // That's ~35+ round-trips, each subject to `statement_timeout`. The
+  // pre-flight is one `information_schema.columns` query. Under a
+  // restart where the PG instance is under load from other containers,
+  // the old path can crashloop (2026-08-01 17:19-17:22 PDT — 5
+  // consecutive `Failed to create tables / Query read timeout` before
+  // the 6th restart stuck). See `checkSchemaAtTarget` for the exact
+  // criterion; any mismatch OR query failure falls through to the
+  // authoritative slow path, so this is a strictly-safe optimization.
+  if (await checkSchemaAtTarget(tables.map((t) => ({ name: t.name, schema: t.schema })))) {
+    logger.info("[Fast-path] Schema already at target — skipping DDL.");
+    logger.info("Database tables created/verified successfully.");
+    return;
+  }
 
   try {
     // Create tables if they don't exist

@@ -395,3 +395,91 @@ export async function runMigrations(
     client.release();
   }
 }
+
+/**
+ * Fast-path pre-flight for `initializePostgres`: read `information_schema`
+ * once and check whether every expected table + column already exists in
+ * the DB. On the happy path (steady-state, no schema change deployed) this
+ * one query replaces the ~35+ DDL round-trips `initializePostgres` would
+ * otherwise issue (CREATE TABLE IF NOT EXISTS × 10 + advisory-lock
+ * migration transaction + CREATE INDEX IF NOT EXISTS × 20+ + trigger DDL
+ * + reindex + `uidAccountCheck`), each of which can queue behind
+ * concurrent PG work and hit `statement_timeout`. Under a prod restart
+ * where the postgres instance is under load from other containers, the
+ * old path can take the crashloop pattern seen at 2026-08-01
+ * 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query read
+ * timeout` before the 6th restart stuck.
+ *
+ * Returns `true` iff every table in `expectedTables` exists AND every
+ * column in each table's schema exists in the DB. Returns `false` on
+ * any mismatch OR on query error — the caller falls back to the slow
+ * path, which is authoritative. The fast path is a strictly-safe
+ * optimization: false-negative = slow path runs (no correctness cost);
+ * false-positive is impossible because the check IS the correctness
+ * criterion.
+ *
+ * Does NOT verify indexes or triggers. Rationale: the slow path's
+ * index + trigger DDL is idempotent (`CREATE INDEX IF NOT EXISTS`,
+ * `CREATE OR REPLACE FUNCTION`), but changes to those definitions that
+ * aren't accompanied by schema changes won't take effect until a
+ * schema mismatch triggers the slow path. Practical risk: low —
+ * index/trigger changes almost always accompany schema changes. If
+ * that assumption breaks, add `pg_indexes` / `pg_trigger` checks here.
+ */
+export async function checkSchemaAtTarget(
+  expectedTables: Array<{ name: string; schema: Schema }>
+): Promise<boolean> {
+  try {
+    // One round-trip: all columns for all tables in the public schema.
+    const result = await pool.query<{
+      table_name: string;
+      column_name: string;
+    }>(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+    `);
+
+    // Group DB columns by table.
+    const dbColumns = new Map<string, Set<string>>();
+    for (const row of result.rows) {
+      let set = dbColumns.get(row.table_name);
+      if (!set) {
+        set = new Set();
+        dbColumns.set(row.table_name, set);
+      }
+      set.add(row.column_name);
+    }
+
+    // Every expected table must exist AND every expected column must be
+    // present in the DB. Extra columns in the DB (from a rolled-back
+    // schema change or manual intervention) are ignored — the fast path
+    // is a "target reached" check, not a "no drift" check.
+    for (const table of expectedTables) {
+      const cols = dbColumns.get(table.name);
+      if (!cols) {
+        logger.info(
+          `[Fast-path] Table ${table.name} missing — falling back to slow path`
+        );
+        return false;
+      }
+      for (const expectedCol of Object.keys(table.schema)) {
+        if (!cols.has(expectedCol)) {
+          logger.info(
+            `[Fast-path] Column ${table.name}.${expectedCol} missing — falling back to slow path`
+          );
+          return false;
+        }
+      }
+    }
+
+    return true;
+  } catch (error: unknown) {
+    // Any query failure → be conservative, let the slow path run.
+    const message = error instanceof Error ? error.message : String(error);
+    logger.info(
+      `[Fast-path] information_schema check failed (${message}) — falling back to slow path`
+    );
+    return false;
+  }
+}
