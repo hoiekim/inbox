@@ -38,6 +38,10 @@ export type Constraints = string[];
 
 export interface IndexDefinition {
   column: string;
+  /** Index method. Omit for the btree default. */
+  using?: "gin" | "gist";
+  /** Operator class, e.g. `jsonb_path_ops` for a `@>` containment filter. */
+  opclass?: string;
 }
 
 export type PropertyChecker<T> = {

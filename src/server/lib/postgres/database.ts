@@ -58,10 +58,18 @@ export function buildCreateTable(
 export function buildCreateIndex(
   tableName: string,
   column: string,
-  indexName?: string
+  indexName?: string,
+  using?: string,
+  opclass?: string
 ): string {
-  const name = indexName || `idx_${tableName}_${column}`;
-  return `CREATE INDEX IF NOT EXISTS ${name} ON ${tableName}(${column})`;
+  // Non-btree indexes take a method suffix so they can't collide with the
+  // btree name for the same column — `CREATE INDEX IF NOT EXISTS` would
+  // silently no-op the second one, reverting the optimization with no error.
+  const suffix = using ? `_${using}` : "";
+  const name = indexName || `idx_${tableName}_${column}${suffix}`;
+  const target = opclass ? `${column} ${opclass}` : column;
+  const method = using ? ` USING ${using}` : "";
+  return `CREATE INDEX IF NOT EXISTS ${name} ON ${tableName}${method} (${target})`;
 }
 
 export function prepareParamValue(value: ParamValue): ParamValue {

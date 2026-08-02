@@ -138,7 +138,13 @@ export const initializePostgres = async (): Promise<void> => {
     // Create indexes after migrations ensure all columns exist
     for (const table of tables) {
       for (const idx of table.indexes) {
-        const createIndexSql = buildCreateIndex(table.name, idx.column);
+        const createIndexSql = buildCreateIndex(
+          table.name,
+          idx.column,
+          undefined,
+          idx.using,
+          idx.opclass
+        );
         await pool.query(createIndexSql);
       }
     }
