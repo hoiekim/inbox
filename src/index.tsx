@@ -12,10 +12,18 @@ import "./index.scss";
 
 // Report unhandled JS errors to server
 window.addEventListener("error", (event) => {
+  // The browser sanitizes `message` to "Script error." and nulls `error` when
+  // the throw came from a cross-origin script (browser extension, CDN chunk).
+  // `filename`/`lineno`/`colno` survive that sanitization for same-origin code
+  // and expose the extension/CDN URL for cross-origin code, so an otherwise
+  // opaque report still says where it came from.
   const body = JSON.stringify({
     message: event.message,
     stack: event.error?.stack ?? "",
     url: window.location.href,
+    filename: event.filename || undefined,
+    lineno: event.lineno || undefined,
+    colno: event.colno || undefined,
   });
   navigator.sendBeacon("/api/client-error", new Blob([body], { type: "application/json" }));
 });
