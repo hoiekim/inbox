@@ -68,18 +68,71 @@ export async function* pgTextChunks(
   // and throws `invalid escape string`. Every lazy-body BODY[] stream
   // fails on the first chunk with no client-side surface (the response
   // never assembles). Explicit `::int` casts pin the intended overload.
-  let offset = 1;
-  for (;;) {
+  yield* pageByCodePoints(async (offset, take) => {
     const sql = `SELECT SUBSTRING(${sourceColumn} FROM $3::int FOR $4::int) AS chunk
                  FROM mails WHERE mail_id = $1 AND user_id = $2`;
-    const result = await pool.query(sql, [mail_id, user_id, offset, chunkChars]);
-    const chunk = (result.rows[0]?.chunk ?? "") as string;
+    const result = await pool.query(sql, [mail_id, user_id, offset, take]);
+    return (result.rows[0]?.chunk ?? "") as string;
+  }, chunkChars);
+}
+
+/**
+ * The paging loop behind `pgTextChunks`, over any 1-indexed
+ * character-addressed source. Split out from the SQL so the offset
+ * arithmetic — the part that was wrong in #765 — is testable without a
+ * process-global `pg` double; the server suite has a dozen files
+ * installing their own pool mock and the first importer of `client.ts`
+ * binds it for the whole run, so a mock-based test here is not reliable.
+ *
+ * `readChunk(offset, take)` must have Postgres `SUBSTRING` semantics:
+ * 1-indexed, counting CHARACTERS, returning "" once `offset` is past the
+ * end (the terminator).
+ */
+export async function* pageByCodePoints(
+  readChunk: (offset: number, take: number) => Promise<string>,
+  chunkChars: number
+): AsyncGenerator<string, void, unknown> {
+  let offset = 1;
+  for (;;) {
+    const chunk = await readChunk(offset, chunkChars);
     if (chunk.length === 0) return;
     yield chunk;
-    if (chunk.length < chunkChars) return;
-    offset += chunk.length;
+    // `offset` is a Postgres SUBSTRING offset, so it counts CHARACTERS —
+    // one per code point. `chunk.length` counts UTF-16 code units, which
+    // is two for every non-BMP character (emoji, rarer CJK). Advancing by
+    // the code-unit count overshoots by exactly the number of astral
+    // characters in the chunk, silently SKIPPING that many characters at
+    // every chunk boundary. The stream then emits fewer octets than
+    // `octet_length()` measured, which is the value `segmentByteLength`
+    // already advertised in the `{N}` literal — so a strict client reads
+    // the response trailer as body and the connection desynchronizes
+    // (#765). The same count decides termination: a final chunk of
+    // 11_999 characters that includes one astral char has `.length`
+    // 12_000 and would not look short.
+    const codePoints = countCodePoints(chunk);
+    if (codePoints < chunkChars) return;
+    offset += codePoints;
   }
 }
+
+/**
+ * Code points in a UTF-16 string — `[...s].length` without allocating an
+ * array per chunk. Postgres hands back well-formed UTF-8, so every high
+ * surrogate here is followed by its low half; the pair check is still
+ * explicit so a lone surrogate counts as one rather than swallowing the
+ * next character.
+ */
+const countCodePoints = (s: string): number => {
+  let count = 0;
+  for (let i = 0; i < s.length; i++, count++) {
+    const code = s.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+      const next = s.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) i++;
+    }
+  }
+  return count;
+};
 
 /**
  * Callers pass `mailbox` as the raw IMAP box path (e.g. `INBOX/accounts/amazon`,
