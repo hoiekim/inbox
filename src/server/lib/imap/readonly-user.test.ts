@@ -254,6 +254,13 @@ describe("read-only IMAP user — guard rejects mutating commands", () => {
   }
 });
 
+// Auth-path flag assignment + HTTP-login denial (MED 1 from reviewoie R1)
+// are verified via sandbox E2E — the unit-level tests conflict with
+// `users.test.ts`'s process-global `bcryptjs` mock (see
+// `reference_bun_mock_module_global_hoisting.md`) which turns every
+// `bcrypt.compare` into an always-false stub inside the full-suite run.
+// Sandbox E2E signal recorded in the PR test-plan.
+
 describe("read-only IMAP user — admin unaffected", () => {
   it("allowMutation passes STORE for admin (no NO written before op)", async () => {
     const { session, writes } = await authAs("admin");

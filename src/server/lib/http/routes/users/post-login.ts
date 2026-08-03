@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { MaskedUser } from "common";
 import { getUser } from "server";
+import { READONLY_USERNAME } from "../../../postgres/initialize";
 import { Route } from "../route";
 import { getClientIp, loginLimiter } from "../../rate-limit";
 
@@ -46,6 +47,17 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     const ip = getClientIp(req);
 
     if (!pwMatches || !signedUser) {
+      loginLimiter.recordFailure(ip);
+      return { status: "failed", message: "Invalid credentials." };
+    }
+
+    // Read-only user is IMAP-only. Refusing the HTTP session here — rather
+    // than trying to gate each mutating HTTP route — is what makes the
+    // "readonly = no mail-state mutation" guarantee hold at the identity
+    // boundary. Same-shape error as bad credentials so a caller with the
+    // readonly credential can't distinguish "wrong password" from "wrong
+    // surface" (no signal to probe).
+    if (signedUser.username === READONLY_USERNAME) {
       loginLimiter.recordFailure(ip);
       return { status: "failed", message: "Invalid credentials." };
     }
