@@ -57,7 +57,7 @@ import {
   FetchMailInput,
 } from "./fetch-helpers";
 import { formatEnvelope } from "./util";
-import { BodyFetch, SequenceSet } from "./types";
+import { BodyFetch, BodySection, SequenceSet } from "./types";
 import {
   withBodyBudget,
   bodyBudgetCapacity,
@@ -200,22 +200,77 @@ describe("getRequestedFields", () => {
         { type: "BODY", peek: false, section: { type: "TEXT" } }
       ]);
       expect([...rfc].sort()).toEqual([...body].sort());
-      // Post-cache-deletion: TEXT projects BOTH materialized (text/html)
-      // AND lazy synthetics. The materialized shape is needed by the
-      // partial-fetch fall-through path (`getBodyContent → buildFullMessage`)
-      // and by `getBodyPartHeaders` for `.MIME` / `.HEADER` sub-sections;
-      // the lazy synthetics carry the segment metadata for the streaming
-      // branches. `wantsLazyBodies` reads text-undefined so the streaming
-      // path emits `base64` segments (materialized source, chunk-bounded
-      // output) rather than `lazy-text` (pgTextChunks) — this trades the
-      // lazy-segment memory win for correctness across all fall-through
-      // paths.
-      expect(rfc.has("text")).toBe(true);
-      expect(rfc.has("html")).toBe(true);
+      // #757: TEXT projects ONLY the lazy synthetics, exactly like
+      // BODY[]. Both the partial and non-partial TEXT branches stream
+      // through the segment walker now, so nothing under TEXT needs the
+      // materialized strings — and projecting them would flip
+      // `wantsLazyBodies` to false, putting O(sizeof(text)+sizeof(html))
+      // back on the V8 heap for every command.
+      expect(rfc.has("text")).toBe(false);
+      expect(rfc.has("html")).toBe(false);
       expect(rfc.has("text_octets" as FetchRequestedField)).toBe(true);
       expect(rfc.has("html_octets" as FetchRequestedField)).toBe(true);
       expect(rfc.has("mail_id" as FetchRequestedField)).toBe(true);
       expect(rfc.has("user_id" as FetchRequestedField)).toBe(true);
+    });
+  });
+
+  // #757: the per-command allocation that survived a same-socket
+  // pipelined burst. `getRequestedFields` drives the SQL projection, so
+  // a shape that adds `text`/`html` pulls the multi-MB columns into V8's
+  // heap for the whole command — 14 of those back-to-back is the
+  // 144 → 272 MB RSS climb the issue recorded. Only the two sub-sections
+  // that genuinely cannot stream may ask for them.
+  describe("body-column projection is lazy-only except for .MIME / .HEADER (#757)", () => {
+    const bodyFetch = (section: BodySection, partial?: { start: number; length: number }) =>
+      getRequestedFields([
+        { type: "BODY", peek: true, section, ...(partial ? { partial } : {}) },
+      ]);
+
+    const lazyOnlyCases: [string, BodySection, { start: number; length: number }?][] = [
+      ["BODY[]", { type: "FULL" }, undefined],
+      ["BODY[]<0.100>", { type: "FULL" }, { start: 0, length: 100 }],
+      ["BODY[TEXT]", { type: "TEXT" }, undefined],
+      ["BODY[TEXT]<0.100>", { type: "TEXT" }, { start: 0, length: 100 }],
+      ["BODY[1]", { type: "MIME_PART", partNumber: "1" }, undefined],
+      ["BODY[1]<0.100>", { type: "MIME_PART", partNumber: "1" }, { start: 0, length: 100 }],
+      ["BODY[1.TEXT]", { type: "MIME_PART", partNumber: "1", subSection: "TEXT" }, undefined],
+    ];
+
+    for (const [label, section, partial] of lazyOnlyCases) {
+      it(`${label} projects the lazy synthetics and NOT text/html`, () => {
+        const fields = bodyFetch(section, partial);
+        expect(fields.has("text")).toBe(false);
+        expect(fields.has("html")).toBe(false);
+        for (const f of ["text_octets", "html_octets", "mail_id", "user_id"] as const) {
+          expect(fields.has(f as FetchRequestedField)).toBe(true);
+        }
+      });
+    }
+
+    // `getBodyPartHeaders` decides part existence off `mail.text.trim()`
+    // and has no streaming counterpart, so these two keep the strings.
+    for (const sub of ["MIME", "HEADER"] as const) {
+      it(`BODY[1.${sub}] still projects text/html — getBodyPartHeaders needs them`, () => {
+        const fields = bodyFetch({ type: "MIME_PART", partNumber: "1", subSection: sub });
+        expect(fields.has("text")).toBe(true);
+        expect(fields.has("html")).toBe(true);
+      });
+    }
+
+    // Union semantics: one FETCH asking for both shapes must still get
+    // the materialized columns, or the .MIME half silently drops.
+    it("BODY[TEXT] + BODY[1.MIME] in one FETCH projects text/html for the .MIME half", () => {
+      const fields = getRequestedFields([
+        { type: "BODY", peek: true, section: { type: "TEXT" } },
+        {
+          type: "BODY",
+          peek: true,
+          section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
+        },
+      ]);
+      expect(fields.has("text")).toBe(true);
+      expect(fields.has("html")).toBe(true);
     });
   });
 
@@ -1347,12 +1402,15 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     const part = await buildBodyResponsePart(mail, fetch, "doc-1", "INBOX");
 
     expect(part).not.toBeNull();
-    expect(part!.type).toBe("literal");
-    if (part!.type !== "literal") throw new Error("expected literal part");
+    // #757: partial TEXT streams through the segment walker now instead
+    // of materializing via `buildFullMessage` + slicing. The literal-length
+    // invariant below is unchanged — only the carrier is.
+    expect(part!.type).toBe("stream");
+    const emitted = await contentAsStringAny(part!);
     // The {N} literal header must match the bytes that follow it on the wire;
     // before the fix the partial branch appended an uncounted CRLF, advertising
     // {10} while emitting 12 octets and desyncing the client's parse.
-    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    expect(Buffer.byteLength(emitted, "utf8")).toBe(part!.length);
     // A <0.10> partial returns exactly 10 octets — no trailing CRLF.
     expect(part!.length).toBe(10);
     // inbox #640: the response partial marker is the single origin octet only
@@ -1361,7 +1419,79 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     expect(part!.header).toContain("<0>");
     expect(part!.header).not.toContain("<0.10>");
     expect(part!.header).not.toMatch(/<\d+\.\d+>/);
-    expect(part!.content.endsWith("\r\n")).toBe(false);
+    expect(emitted.endsWith("\r\n")).toBe(false);
+  });
+
+  it("slices the SAME octets the non-partial BODY[TEXT] stream emits", async () => {
+    // The load-bearing equivalence: `<start.length>` addresses a window of
+    // the section's own wire bytes. Walking a different subset than
+    // `sumBodyBytes` measured would desync the literal — this pins the two
+    // together by construction rather than by arithmetic.
+    const full = await buildBodyResponsePart(
+      mail,
+      { type: "BODY", peek: false, section: { type: "TEXT" } },
+      "doc-1",
+      "INBOX"
+    );
+    const fullBody = await contentAsStringAny(full!);
+    // Non-partial appends the IMAP wire trailer; the partial range does not
+    // address it (RFC 3501 §6.4.5).
+    const addressable = fullBody.slice(0, -2);
+
+    for (const [start, length] of [[0, 10], [5, 8], [3, 1]] as const) {
+      const part = await buildBodyResponsePart(
+        mail,
+        { type: "BODY", peek: false, section: { type: "TEXT" }, partial: { start, length } },
+        "doc-1",
+        "INBOX"
+      );
+      expect(await contentAsStringAny(part!)).toBe(
+        addressable.slice(start, start + length)
+      );
+    }
+  });
+
+  it("clamps a range that overruns the section and NILs one that starts past it", async () => {
+    const full = await buildBodyResponsePart(
+      mail,
+      { type: "BODY", peek: false, section: { type: "TEXT" } },
+      "doc-1",
+      "INBOX"
+    );
+    const addressable = (await contentAsStringAny(full!)).slice(0, -2);
+
+    // Overrun: `{N}` must advertise what is actually available, not what
+    // was asked for — otherwise the client waits for octets never sent.
+    const overrun = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "TEXT" },
+        partial: { start: 4, length: 1_000_000 },
+      },
+      "doc-1",
+      "INBOX"
+    );
+    expect(overrun!.type).toBe("stream");
+    expect(overrun!.length).toBe(addressable.length - 4);
+    expect(Buffer.byteLength(await contentAsStringAny(overrun!), "utf8")).toBe(
+      overrun!.length
+    );
+
+    // Vacuous: start at or past the end emits NIL, not a zero-octet literal.
+    const vacuous = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: false,
+        section: { type: "TEXT" },
+        partial: { start: addressable.length, length: 10 },
+      },
+      "doc-1",
+      "INBOX"
+    );
+    expect(vacuous).toEqual({ type: "simple", content: "BODY[TEXT] NIL" });
   });
 
   it("matches literal length to emitted octets at a non-zero offset too", async () => {
@@ -1375,8 +1505,9 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     const part = await buildBodyResponsePart(mail, fetch, "doc-1", "INBOX");
 
     expect(part).not.toBeNull();
-    if (part!.type !== "literal") throw new Error("expected literal part");
-    expect(Buffer.byteLength(part!.content, "utf8")).toBe(part!.length);
+    expect(part!.type).toBe("stream");
+    const emitted = await contentAsStringAny(part!);
+    expect(Buffer.byteLength(emitted, "utf8")).toBe(part!.length);
     expect(part!.length).toBe(8);
     // inbox #640: single origin octet only — not the request's `<start.length>`.
     expect(part!.header).toContain("<5>");
@@ -1652,16 +1783,6 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
 // prod-shape mail (lazy fields only, text/html undefined) to guard
 // against the field-projection regressing again.
 describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 R1)", () => {
-  const contentAsString = (part: FetchResponsePart): string => {
-    if (part.type === "literal") {
-      return Buffer.isBuffer(part.content)
-        ? part.content.toString("utf8")
-        : part.content;
-    }
-    if (part.type === "simple") return part.content;
-    throw new Error(`unexpected type ${part.type}`);
-  };
-
   // Prod-shape: mail row projected by getMailsByRange as it appears
   // for a real FETCH — no `text` / `html` strings, just octet counts +
   // synthetic id fields.
@@ -1683,29 +1804,22 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
     ...overrides,
   }) as Partial<MailType>;
 
-  // These 3 tests EXPLICITLY set `text: undefined` so they exercise the
-  // failure mode reviewoie R1 caught: if `addBodyFields` were to drop
-  // `text`/`html` from the projection again, `getMailsByRange` would
-  // return this exact shape (lazy fields only), and the fall-through
-  // paths (`.MIME`/`.HEADER` → `getBodyPartHeaders`, partial TEXT →
-  // `buildFullMessage`, partial MIME_PART bare → `getBodyPart`) would
-  // all fail. The specific failure mode differs per path:
-  //   - `getBodyPartHeaders` / `getBodyPart`: predicates
-  //     `mail.text && mail.text.trim().length > 0` short-circuit on
-  //     undefined → hasText/hasHtml degrade to false → silent
-  //     null-return (response part dropped from the FETCH tuple with
-  //     no diagnostic).
-  //   - `buildFullMessage`: throws
-  //     "buildFullMessage: cannot materialize a lazy-text segment"
-  //     when segments are lazy.
-  // Under the CURRENT code these paths ALSO fail — that's the point:
-  // a regression that reintroduced the projection defect wouldn't be
-  // caught by these tests (they'd match the failing-shape from BOTH
-  // directions). The load-bearing regression guard is the
-  // `getRequestedFields` describe at :214-215 asserting `text`/`html`
-  // ARE projected. These tests document the fall-through paths that
-  // depend on that projection — a paired documentation of the
-  // failure surface.
+  // These tests EXPLICITLY set `text: undefined` so the mail arrives in
+  // the shape `getMailsByRange` now returns for every body-bearing
+  // section: lazy fields only, no materialized strings.
+  //
+  // Before #757, partial TEXT fell through to `buildFullMessage` (which
+  // THROWS "cannot materialize a lazy-text segment" on this shape) and
+  // partial bare MIME_PART fell through to `getBodyPart` (whose
+  // `mail.text && mail.text.trim().length > 0` predicate short-circuits
+  // on undefined → silent null-return, response part dropped from the
+  // FETCH tuple with no diagnostic). Both now take the segment walker
+  // and stream correctly — that is the fix, asserted positively below.
+  //
+  // `.MIME` / `.HEADER` is the one sub-section with no streaming
+  // counterpart, so it still depends on the projection keeping
+  // `text`/`html`; its null-return on a lazy-only mail stays pinned as
+  // the guard for that dependency.
   it("BODY[1.MIME] on lazy-only mail (text/html undefined) — silent null-return via short-circuit", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
     // `getBodyPartHeaders`'s predicate is
@@ -1729,43 +1843,29 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
     expect(part).toBeNull();
   });
 
-  it("BODY[TEXT]<0.100> on lazy-only mail — buildFullMessage throws on lazy segments", async () => {
+  it("BODY[TEXT]<0.100> on lazy-only mail streams — no buildFullMessage, no throw", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
-    // getBodyContent → buildFullMessage throws
-    // "buildFullMessage: cannot materialize a lazy-text segment" when
-    // segments are lazy — same failure mode reviewoie R1 caught.
-    // Under buildBodyResponsePart the throw is caught upstream and
-    // logged as `Error processing message`; the tag itself completes
-    // OK from the client's perspective but the response part is dropped.
-    let threw = false;
-    let result: FetchResponsePart | null = null;
-    try {
-      result = await buildBodyResponsePart(
-        mail,
-        {
-          type: "BODY",
-          peek: true,
-          section: { type: "TEXT" },
-          partial: { start: 0, length: 100 },
-        },
-        "doc-prod-partial-text-lazy",
-        "INBOX"
-      );
-    } catch (e) {
-      threw = true;
-      expect(String(e)).toContain("lazy-text segment");
-    }
-    // Documents the failure — throw or null-return, both bad shapes
-    // for the client. Projection MUST populate `text`/`html` on
-    // getMailsByRange output for this path to be safe.
-    expect(threw || result === null).toBe(true);
+    const part = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "TEXT" },
+        partial: { start: 0, length: 100 },
+      },
+      "doc-prod-partial-text-lazy",
+      "INBOX"
+    );
+    expect(part).not.toBeNull();
+    expect(part!.type).toBe("stream");
+    expect(part!.header).toBe("BODY[TEXT]<0>");
+    // 100 text octets + 100 html octets base64-encode well past 100 wire
+    // bytes, so the request's length is served in full.
+    expect(part!.length).toBe(100);
   });
 
-  it("BODY[1]<0.100> on lazy-only mail — getBodyPart returns null (drops the fetch item)", async () => {
+  it("BODY[1]<0.100> on lazy-only mail streams the part instead of dropping it", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
-    // getBodyPart: `mail.text && mail.text.trim().length > 0` — undefined
-    // short-circuits to false. hasHtml also false (same reason). No
-    // part matches → returns null → response part dropped.
     const part = await buildBodyResponsePart(
       mail,
       {
@@ -1777,7 +1877,12 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
       "doc-prod-partial-part-lazy",
       "INBOX"
     );
-    expect(part).toBeNull();
+    expect(part).not.toBeNull();
+    expect(part!.type).toBe("stream");
+    expect(part!.header).toBe("BODY[1]<0>");
+    // text_octets is 100 → base64 is ceil(100/3)*4 = 136 wire bytes for
+    // part 1, so a <0.100> window is fully served.
+    expect(part!.length).toBe(100);
   });
 });
 
