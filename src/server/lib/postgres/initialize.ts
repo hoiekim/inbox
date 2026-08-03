@@ -203,3 +203,34 @@ export const initializeAdminUser = async (): Promise<void> => {
     );
   }
 };
+
+/**
+ * Bootstraps a read-only IMAP-facing user (`READONLY_USERNAME`). Mirrors
+ * `initializeAdminUser` in shape and idempotency (upsert on the reserved
+ * username) so a diagnostic/observer client can log in without any risk
+ * of mutating mail state.
+ *
+ * Read-only enforcement lives in the IMAP session layer (see
+ * `imap/session.ts`'s `isReadOnlyUser` check): STORE / COPY / MOVE /
+ * APPEND / EXPUNGE / CREATE / DELETE / RENAME / SUBSCRIBE / UNSUBSCRIBE
+ * return `NO [READ-ONLY]` when the authenticated user's username equals
+ * this account's — so the guarantee is enforced by identity, not by DB
+ * permissions.
+ */
+export const READONLY_USERNAME = "readonly";
+
+export const initializeReadonlyUser = async (): Promise<void> => {
+  const { READONLY_PASSWORD } = process.env;
+
+  const existing = await searchUser({ username: READONLY_USERNAME });
+  const result = await writeUser({
+    user_id: existing?.user_id,
+    username: READONLY_USERNAME,
+    password: READONLY_PASSWORD || READONLY_USERNAME,
+    // Same domain rationale as admin (see initializeAdminUser above).
+    email: `${READONLY_USERNAME}@${process.env.EMAIL_DOMAIN || "localhost"}`,
+  });
+  if (!result?._id) throw new Error("Failed to create read-only user");
+
+  logger.info("Successfully initialized read-only IMAP user.");
+};

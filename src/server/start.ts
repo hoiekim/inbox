@@ -3,6 +3,7 @@ import "./config";
 import {
   initializePostgres,
   initializeAdminUser,
+  initializeReadonlyUser,
   push,
   initializeImap,
   initializeSmtp,
@@ -44,6 +45,7 @@ process.on("uncaughtException", async (error) => {
 const start = async () => {
   await initializePostgres();
   await initializeAdminUser();
+  await initializeReadonlyUser();
   push.initPush();
   const httpServer = await initializeHttp();
   const smtpServers = await initializeSmtp();
