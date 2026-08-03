@@ -774,14 +774,10 @@ export async function copyMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      // Dual-write toward #702 PR-2b: mirror the account UID into the
-      // `mail_mailbox_uid` map when the destination is account-scoped.
-      // Domain-scoped destinations (INBOX, unified Sent Messages) skip —
-      // the mapping only tracks account UID spaces.
-      const ok = await store.storeMail(
-        newMail,
-        destIsDomainScoped ? undefined : destMailbox,
-      );
+      // storeMail derives the rest from the destination: the
+      // `mail_mailbox_uid` mapping for a mapped box (#702 PR-2b), and the
+      // membership flag for a utility folder.
+      const ok = await store.storeMail(newMail, destMailbox);
       if (!ok) {
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
         return;
@@ -1044,13 +1040,8 @@ export async function moveMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      // Dual-write toward #702 PR-2b: mirror the account UID into the
-      // `mail_mailbox_uid` map when the destination is account-scoped.
-      // Domain-scoped destinations skip — see COPY for full rationale.
-      const ok = await store.storeMail(
-        newMail,
-        destIsDomainScoped ? undefined : destMailbox,
-      );
+      // Same destination handling as COPY — see there.
+      const ok = await store.storeMail(newMail, destMailbox);
       if (!ok) {
         // Pre-deletion failure: copies already stored in the destination
         // linger; the source is untouched. Client can re-issue MOVE.
@@ -1176,12 +1167,9 @@ export async function appendMessage(
     mail.uid.domain = domainUid;
     mail.uid.account = accountUid;
 
-    // Dual-write toward #702 PR-2b: mirror the account UID into the
-    // `mail_mailbox_uid` map when the APPEND target is account-scoped.
-    const result = await store.storeMail(
-      mail,
-      isDomainScoped(targetMailbox) ? undefined : targetMailbox,
-    );
+    // storeMail derives the mapping row and the utility-folder placement
+    // flag from the target box.
+    const result = await store.storeMail(mail, targetMailbox);
 
     const uid = isDomainScoped(targetMailbox) ? mail.uid.domain : mail.uid.account;
 

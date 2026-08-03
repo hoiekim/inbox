@@ -18,8 +18,10 @@ import {
   isAccountsFolder,
   isInbox,
   isSentMessagesAccountsFolder,
+  isUtilityFolder,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
+  UTILITY_FOLDERS,
 } from "./util";
 import { Store } from "./store";
 import { StatusItem } from "./types";
@@ -49,7 +51,7 @@ export async function createMailbox(
   // Without this guard, the DB would accept the INSERT (no row named
   // "inbox" exists) and leave a phantom user-mailbox row that's de-duped
   // out of LIST but lingers in the table.
-  if (isInbox(cleanName)) {
+  if (isInbox(cleanName) || isUtilityFolder(cleanName)) {
     write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);
     return;
   }
@@ -89,6 +91,13 @@ export async function deleteMailbox(
   // get a misleading "does not exist" instead of the correct refusal.
   if (isInbox(cleanName)) {
     write(`${tag} NO [CANNOT] Cannot delete INBOX\r\n`);
+    return;
+  }
+  // Same reason INBOX is refused: a utility folder is a server-defined view
+  // with no row behind it, so `deleteMailboxByName` would report "does not
+  // exist" for a box the client can see in LIST.
+  if (isUtilityFolder(cleanName)) {
+    write(`${tag} NO [CANNOT] Cannot delete system mailbox\r\n`);
     return;
   }
   try {
@@ -137,8 +146,12 @@ export async function renameMailbox(
     write(`${tag} NO [CANNOT] RENAME INBOX is not supported\r\n`);
     return;
   }
-  // Target must not collide with the synthetic INBOX either.
-  if (isInbox(cleanNew)) {
+  if (isUtilityFolder(cleanOld)) {
+    write(`${tag} NO [CANNOT] Cannot rename system mailbox\r\n`);
+    return;
+  }
+  // Target must not collide with a synthetic mailbox either.
+  if (isInbox(cleanNew) || isUtilityFolder(cleanNew)) {
     write(`${tag} NO [ALREADYEXISTS] Target mailbox already exists\r\n`);
     return;
   }
@@ -282,6 +295,13 @@ export async function statusMailbox(
 // ---------------------------------------------------------------------------
 
 export function getMailboxAttributes(box: string, allBoxes: string[]): string {
+  // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
+  // in a plain LIST response, which is how a client maps a role to a box name
+  // without guessing at the name.
+  const utility = UTILITY_FOLDERS.find((folder) => folder.name === box);
+  if (utility) {
+    return `${utility.specialUse} \\HasNoChildren`;
+  }
   if (isAccountsFolder(box)) {
     return "\\HasChildren \\Noselect";
   }

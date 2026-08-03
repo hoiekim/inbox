@@ -32,6 +32,8 @@ import {
   isSentBox,
   isAccountsFolder,
   isSentMessagesAccountsFolder,
+  utilityPlacement,
+  UTILITY_FOLDERS,
   ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
@@ -219,12 +221,14 @@ export class Store {
    * searchMailsByUid/expungeDeletedMails/expungeMailsByUid). `mailboxArg` is
    * the raw box path — the same string the write side stores in
    * `mail_mailbox_uid.mailbox` — for account-scoped, sent-account-scoped, AND
-   * user-created mailboxes (`Archive`, etc.). `null` for the two domain-scoped
-   * views (`INBOX`, unified `Sent Messages`), which stay on `mails.uid_domain`.
+   * user-created mailboxes (`Archive`, etc.), and the lookup key for a utility
+   * folder's membership predicate. `null` only for `INBOX` and the unified
+   * `Sent Messages`, the two views that select their rows by scope alone and so
+   * have nothing for the repository to key on.
    */
   private resolveMappedBox(box: string): { mailboxArg: string | null; isSent: boolean } {
     const isSent = isSentBox(box);
-    const mailboxArg = isDomainScoped(box) ? null : box;
+    const mailboxArg = isInbox(box) || box === SENT_MESSAGES_FOLDER ? null : box;
     return { mailboxArg, isSent };
   }
 
@@ -258,6 +262,13 @@ export class Store {
 
     const mailboxes: string[] = [];
     addMailbox("INBOX");
+
+    // Utility folders are listed unconditionally: a client needs `Drafts` to
+    // exist before it has a draft to APPEND into it, and RFC 6154 role
+    // discovery only works if the box is in LIST. They are added ahead of the
+    // user-created boxes below so a same-named user box de-dupes into the
+    // server-defined view rather than shadowing it.
+    UTILITY_FOLDERS.forEach(({ name }) => addMailbox(name));
 
     // Add Sent Messages (unified across all accounts) if any sent mail exists
     if (sentStats.length > 0) {
@@ -628,15 +639,22 @@ export class Store {
   };
 
   /**
-   * Store a new mail message. `mailbox` is the destination path
-   * (`COPY dest`, `MOVE dest`, `APPEND target`) — passed through to
-   * `pgSaveMail` for the account-scoped `mail_mailbox_uid` mapping.
-   * Caller passes `undefined` for domain-scoped destinations (INBOX,
-   * unified `Sent Messages`) so the mapping only records account-space
-   * UIDs. Undefined here + `pgSaveMail`'s guard skips the mapping write.
+   * Store a new mail message. `destination` is the box the write names
+   * (`COPY dest`, `MOVE dest`, `APPEND target`); it decides two things:
+   *
+   * - **Mapping.** Only a mapped destination gets a `mail_mailbox_uid` row.
+   *   Domain-scoped destinations (INBOX, unified `Sent Messages`, the utility
+   *   folders) enumerate by `uid_domain` and record no mapping.
+   * - **Placement.** A utility folder selects its rows by flag, so a write that
+   *   names one sets that flag here rather than relying on the client to have
+   *   sent it — an APPEND to `Drafts` without `\Draft` would otherwise land
+   *   somewhere the client did not ask for.
    */
-  storeMail = async (mail: Mail, mailbox?: string): Promise<boolean> => {
+  storeMail = async (mail: Mail, destination?: string): Promise<boolean> => {
     try {
+      const placement = destination ? utilityPlacement(destination) : undefined;
+      const mailbox =
+        destination && !isDomainScoped(destination) ? destination : undefined;
       const input: SaveMailInput = {
         user_id: this.user.id,
         message_id: mail.messageId,
@@ -667,6 +685,7 @@ export class Store {
         uid_domain: mail.uid?.domain,
         uid_mailbox: mail.uid?.account,
         mailbox,
+        ...placement,
       };
 
       const result = await pgSaveMail(input);

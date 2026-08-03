@@ -362,6 +362,41 @@ export const ACCOUNTS_FOLDER = "INBOX/accounts";
 export const SENT_MESSAGES_FOLDER = "Sent Messages";
 export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
 
+/**
+ * Server-defined utility mailboxes: flag-derived views of the user's mail that
+ * exist whether or not anything currently matches, the way `Drafts` and `Junk`
+ * do on Gmail and Outlook.
+ *
+ * - `specialUse` is the RFC 6154 attribute LIST reports, so a client can find
+ *   each box by role instead of by name.
+ * - `placement` is what a write into the box has to set for the row to actually
+ *   be in it. These views select by flag, so a COPY / MOVE / APPEND that names
+ *   one and does not set the flag would report success and leave the message
+ *   nowhere the client can see it.
+ *
+ * The matching read-side predicate lives in `repositories/mails/views.ts`,
+ * which this module cannot import (the repository is re-exported by the
+ * `server` barrel this file pulls from). `views.test.ts` pins the two together.
+ */
+export const UTILITY_FOLDERS: {
+  name: string;
+  specialUse: string;
+  placement: { draft?: boolean; is_spam?: boolean };
+}[] = [
+  { name: "Drafts", specialUse: "\\Drafts", placement: { draft: true } },
+  { name: "Junk", specialUse: "\\Junk", placement: { is_spam: true } },
+];
+
+/** Returns true for a server-defined utility mailbox (`Drafts`, `Junk`). */
+export const isUtilityFolder = (box: string): boolean =>
+  UTILITY_FOLDERS.some((folder) => folder.name === box);
+
+/** The flags a mail must carry to land in `box`, or `undefined` for any other box. */
+export const utilityPlacement = (
+  box: string
+): { draft?: boolean; is_spam?: boolean } | undefined =>
+  UTILITY_FOLDERS.find((folder) => folder.name === box)?.placement;
+
 /** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {
   const localPart = accountName.split("@")[0];
@@ -395,19 +430,21 @@ export const isInbox = (box: string): boolean => {
 };
 
 /**
- * Returns true for the domain-scoped mailboxes — INBOX and the unified
- * "Sent Messages" folder — whose UID space is `uid_domain` rather than
- * the per-mailbox UID (`mail_mailbox_uid.uid`). This mirrors both
- * `Store.resolveBox` and `resolveMappedBox` — the former returns
- * `accountName === null`, the latter returns `mailboxArg === null` for
- * exactly these two paths. FETCH / COPY / MOVE / APPEND must gate on this
- * predicate (not `isInbox` alone): the unified Sent folder is domain-scoped
- * too, so keying its emitted UID off the per-mailbox UID makes
- * `uidToSeqNumber` miss (messages silently dropped from FETCH, wrong
- * COPYUID source UIDs). See #702.
+ * Returns true for the mailboxes whose UID space is `uid_domain` rather than
+ * the per-mailbox UID (`mail_mailbox_uid.uid`): INBOX, the unified
+ * "Sent Messages" folder, and the utility folders. None of them hold mapping
+ * rows. FETCH / COPY / MOVE / APPEND must gate on this predicate (not `isInbox`
+ * alone): the unified Sent folder is domain-scoped too, so keying its emitted
+ * UID off the per-mailbox UID makes `uidToSeqNumber` miss (messages silently
+ * dropped from FETCH, wrong COPYUID source UIDs). See #702.
+ *
+ * Not the same question as "does the repository take `null` for this box":
+ * a utility folder is domain-scoped but still passes its name, because that is
+ * what its membership predicate is keyed on. `Store.resolveMappedBox` draws
+ * that second line.
  */
 export const isDomainScoped = (box: string): boolean => {
-  return isInbox(box) || box === SENT_MESSAGES_FOLDER;
+  return isInbox(box) || box === SENT_MESSAGES_FOLDER || isUtilityFolder(box);
 };
 
 /** Returns true for the accounts/ parent folder itself (non-selectable). */
