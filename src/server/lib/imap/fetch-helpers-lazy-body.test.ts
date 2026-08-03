@@ -202,4 +202,121 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
     // never touches the pg reader.
     expect(substringCalls.length).toBe(0);
   });
+
+  // #757: BODY[] was the only section on the lazy path. TEXT and
+  // MIME_PART projected the materialized `text`/`html` columns, so each
+  // command held O(sizeof(text) + sizeof(html)) in V8's heap for its
+  // whole duration — invisible to the concurrency and bytes-in-flight
+  // budgets (#727 / #753), which bound CONCURRENT builds and a
+  // same-socket pipeline is serial by construction
+  // (`handler.ts` awaits each `handleRequest`). 14 of these back to back
+  // is the 144 → 272 MB climb the issue recorded. These tests pin every
+  // body-bearing section onto the chunked reader.
+  const sectionCases: Array<{
+    label: string;
+    fetch: Parameters<typeof buildFetchResponsePart>[1];
+  }> = [
+    { label: "BODY[TEXT]", fetch: { type: "BODY", peek: true, section: { type: "TEXT" } } },
+    {
+      label: "BODY[1]",
+      fetch: { type: "BODY", peek: true, section: { type: "MIME_PART", partNumber: "1" } },
+    },
+    {
+      label: "BODY[1.TEXT]",
+      fetch: {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "1", subSection: "TEXT" },
+      },
+    },
+    { label: "RFC822.TEXT", fetch: { type: "RFC822.TEXT" } },
+  ];
+
+  for (const { label, fetch } of sectionCases) {
+    it(`${label} streams a 500 KB lazy body through chunked SUBSTRING, never one allocation`, async () => {
+      substringCalls.length = 0;
+      columnStore.clear();
+      const html = "<p>" + "z".repeat(500 * 1024 - 8) + "</p>";
+      columnStore.set(`mail-${label}:html`, html);
+
+      const mail = {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: `mail-${label}`,
+        user_id: "user-1",
+      } as never;
+
+      const part = await buildFetchResponsePart(mail, fetch, `mail-${label}`, "INBOX");
+
+      expect(part).not.toBeNull();
+      expect(part!.type).toBe("stream");
+      if (part!.type !== "stream") throw new Error("expected stream");
+
+      let emitted = 0;
+      let maxChunk = 0;
+      for await (const chunk of part.stream) {
+        emitted += chunk.byteLength;
+        if (chunk.byteLength > maxChunk) maxChunk = chunk.byteLength;
+      }
+
+      expect(emitted).toBe(part.length);
+      expect(maxChunk).toBeLessThan(80 * 1024);
+      // The whole point: the column arrived in bounded pulls. A regression
+      // that re-added `text`/`html` to the projection would make
+      // `wantsLazyBodies` false, emit `base64` segments off the
+      // materialized string, and fire ZERO SUBSTRING calls.
+      expect(substringCalls.length).toBeGreaterThanOrEqual(
+        Math.floor(html.length / PG_TEXT_CHUNK_CHARS)
+      );
+      for (const call of substringCalls) {
+        expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
+      }
+    });
+  }
+
+  it("a partial BODY[TEXT] window stops pulling once its range is satisfied", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const html = "<p>" + "w".repeat(500 * 1024 - 8) + "</p>";
+    columnStore.set("mail-partial-text:html", html);
+
+    const mail = {
+      ...baseHeaders,
+      text_octets: 0,
+      html_octets: Buffer.byteLength(html, "utf8"),
+      mail_id: "mail-partial-text",
+      user_id: "user-1",
+    } as never;
+
+    const part = await buildFetchResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "TEXT" },
+        partial: { start: 0, length: 64 * 1024 },
+      },
+      "mail-partial-text",
+      "INBOX"
+    );
+
+    expect(part).not.toBeNull();
+    expect(part!.type).toBe("stream");
+    if (part!.type !== "stream") throw new Error("expected stream");
+
+    let emitted = 0;
+    for await (const chunk of part.stream) emitted += chunk.byteLength;
+    expect(emitted).toBe(part.length);
+    expect(part.length).toBe(64 * 1024);
+
+    // iOS Mail pulls a large body as a sequence of 64 KiB partial windows.
+    // Each window must read only its own slice — driving the full 500 KB
+    // column per window would make the pipeline O(n²) in round-trips and
+    // put the whole body back in flight. `sliceStream` closes the upstream
+    // generator via for-await `.return()` the moment `take` is satisfied.
+    const fullBodyPulls = Math.floor(html.length / PG_TEXT_CHUNK_CHARS);
+    expect(substringCalls.length).toBeGreaterThan(0);
+    expect(substringCalls.length).toBeLessThan(fullBodyPulls);
+  });
 });

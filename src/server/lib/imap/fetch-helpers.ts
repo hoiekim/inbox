@@ -24,9 +24,12 @@ import {
   streamPartialFromSegments,
   streamBodyFromSegments,
   streamPartBodyFromSegments,
+  selectBodySegments,
+  selectPartBodySegments,
   sumSegmentBytes,
   sumBodyBytes,
   sumPartBodyBytes,
+  MessageSegment,
   WIRE_TRAILER,
   getBodyPart,
   getBodyPartHeaders,
@@ -37,7 +40,7 @@ import {
   BodySection,
   FetchDataItem,
 } from "./types";
-import { withBodyBudget, withBodyBudgetStream } from "./body-budget";
+import { withBodyBudgetStream } from "./body-budget";
 import { withStreamMutex } from "./stream-mutex";
 import {
   updateRfc822Size,
@@ -45,21 +48,20 @@ import {
   getMailBody,
   countLines,
 } from "../postgres/repositories/mails/core";
-// `withBodyBudget` gates the small remaining set of paths that still
-// materialize before emitting: partial fetches on non-FULL non-header
-// sections (BODY[TEXT]<...>, BODY[<part>]<...>), which fall through to
-// `getBodyContent` + `applyPartialFetch`. Same RSS scaling concern the
-// budget existed to protect against, so same gate.
+// Only the stream form of the budget is used now: every body-bearing
+// section streams, and the sections that still materialize (header-like)
+// are a few KiB each — gating those would queue them behind multi-MB
+// streams for no memory benefit.
 
 // ---------------------------------------------------------------------------
 // FetchResponsePart types (local to the fetch subsystem)
 // ---------------------------------------------------------------------------
 
 // `content` is a string for small parts (headers, simple attributes) and a
-// Buffer for the small residual materialized paths (header-like sections,
-// partial fetches on non-FULL sections). All large-body paths (FULL,
-// TEXT, MIME_PART) emit via `type: "stream"` — see stream-mutex.ts +
-// #755 for the per-key mutex that serializes concurrent same-key streams.
+// Buffer for the residual materialized paths (header-like sections only).
+// All body-bearing paths (FULL, TEXT, MIME_PART — partial included) emit
+// via `type: "stream"` — see stream-mutex.ts + #755 for the per-key mutex
+// that serializes concurrent same-key streams.
 //
 // **stream** variant: BODY[] / RFC822 for a fetch that streams its bytes
 // directly to the socket via `streamFromSegments`, never materializing
@@ -290,19 +292,15 @@ export function addBodyFields(
       break;
 
     case "TEXT":
-      // BODY[TEXT]: non-partial streams via `streamBodyFromSegments`
-      // (segments minus the top-level header literal). Partial TEXT
-      // falls through to `getBodyContent → buildFullMessage`, which
-      // requires materialized `text` / `html` strings — projecting them
-      // keeps partial correct AND makes `.MIME` / `.HEADER` sub-section
-      // handling (`getBodyPartHeaders`, which reads `mail.text.trim()`)
-      // work. Cost: `wantsLazyBodies` returns false when the strings
-      // are present, so `buildMessageSegments` emits `base64` segments
-      // instead of `lazy-text` — the non-partial TEXT stream is still
-      // chunk-bounded on the output side but `mail.text` / `mail.html`
-      // sit in memory for the fetch's duration.
-      fields.add("text");
-      fields.add("html");
+      // BODY[TEXT] — partial AND non-partial now take the segment-walk
+      // streaming path (`streamBodyFromSegments` / `streamPartialSubset`
+      // over `selectBodySegments`), so neither needs the materialized
+      // strings. Projecting only the lazy synthetics keeps
+      // `wantsLazyBodies` true, which makes `buildMessageSegments` emit
+      // `lazy-text` segments — the text/html columns are read in chunked
+      // pg SUBSTRING at emit time instead of being pulled into V8's heap
+      // for the fetch's duration. Peak per TEXT fetch drops from
+      // O(sizeof(text) + sizeof(html)) to O(chunk), matching FULL.
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");
@@ -363,16 +361,24 @@ export function addBodyFields(
     }
 
     case "MIME_PART":
-      // BODY[<part>]: non-partial bare/.TEXT streams via
-      // `streamPartBodyFromSegments` (segment filter by partPath).
-      // Partial fetches AND `.MIME` / `.HEADER` sub-sections fall
-      // through to `getBodyPart` / `getBodyPartHeaders`, both of
-      // which use `mail.text.trim()` to decide part existence.
-      // Projecting materialized `text` / `html` keeps those correct.
-      // Same trade-off as TEXT: non-partial bare/.TEXT still streams
-      // chunk-bounded on output but the source strings sit in memory.
-      fields.add("text");
-      fields.add("html");
+      // BODY[<part>]: bare / `.TEXT` stream via
+      // `streamPartBodyFromSegments` / `streamPartialSubset` over
+      // `selectPartBodySegments` — lazy synthetics only, same O(chunk)
+      // bound as TEXT and FULL.
+      //
+      // `.MIME` / `.HEADER` still fall through to `getBodyPartHeaders`,
+      // which decides part existence off `mail.text.trim()` and cannot
+      // drive the SUBSTRING reader, so those two keep the materialized
+      // strings. They return a part's MIME header block — a few hundred
+      // bytes — so the projection cost is bounded by the mail's body size
+      // only for a request shape no bulk client issues in a loop.
+      if (
+        bodyFetch.section.subSection === "HEADER" ||
+        bodyFetch.section.subSection === "MIME"
+      ) {
+        fields.add("text");
+        fields.add("html");
+      }
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");
@@ -424,6 +430,49 @@ function isHeaderLikeSection(section: BodySection): boolean {
   );
 }
 
+/**
+ * `BODY[<section>]<start.length>` over an already-selected segment subset.
+ *
+ * The FULL branch has its own copy of this clamp because it subtracts
+ * `WIRE_TRAILER` from a trailer-inclusive total; TEXT and MIME_PART measure
+ * their subsets with `sumBodyBytes` / `sumPartBodyBytes`, which are already
+ * trailer-free, so `addressableBytes` arrives correct and both share this.
+ *
+ * RFC 3501 §6.4.5: `start` past the end is a vacuous range — emit NIL rather
+ * than a zero-octet literal. Otherwise clamp `length` to what is actually
+ * available so the `{N}` literal advertises the true emitted count.
+ *
+ * Load-bearing: `segments` must be the SAME subset `addressableBytes` was
+ * summed over. `streamPartialFromSegments` walks cumulative byte offsets, so
+ * clamping against a different subset than the walk would desync the wire.
+ */
+function streamPartialSubset(
+  segments: MessageSegment[],
+  addressableBytes: number,
+  partial: { start: number; length: number },
+  sectionKey: string,
+  streamKey: string
+): FetchResponsePart {
+  const { start, length: requestedLength } = partial;
+  if (start >= addressableBytes) {
+    return { type: "simple", content: `${sectionKey} NIL` };
+  }
+  const emittedLength = Math.min(requestedLength, addressableBytes - start);
+  const stream = withStreamMutex(streamKey, () =>
+    withBodyBudgetStream(async function* () {
+      yield* streamPartialFromSegments(segments, start, emittedLength);
+    })
+  );
+  // Origin-octet header form is `BODY[<section>]<start>` per §7.4.2
+  // msg-att-static — no length echo; the `{N}` literal carries the count.
+  return {
+    type: "stream",
+    stream,
+    header: `${sectionKey}<${start}>`,
+    length: emittedLength,
+  };
+}
+
 export async function buildBodyResponsePart(
   mail: Partial<MailType>,
   bodyFetch: BodyFetch,
@@ -438,21 +487,24 @@ export async function buildBodyResponsePart(
   // label the response part with the item the client requested.
   const sectionKey = keyOverride ?? getBodySectionKey(section);
 
-  // Non-header-like body sections (FULL, TEXT, bare/`.TEXT` MIME_PART —
-  // and partial FULL) take the segment-walk streaming path:
-  // `buildMessageSegments` builds the ordered segment list once,
-  // `sumSegmentBytes` / `sumBodyBytes` / `sumPartBodyBytes` measure the
-  // exact wire byte count (one `stat` per attachment, no reads) so
-  // `{N}` is pinned before the first chunk yields, and the appropriate
-  // `stream*Segments` generator yields chunk-bounded Buffers to the
-  // socket. Peak transient on the output side is O(chunk) for all
-  // section variants; for FULL the SOURCE is also chunk-bounded (lazy
-  // text/html + attachment reads); for TEXT / MIME_PART the source
-  // strings sit in memory for the fetch's duration because the
-  // fall-through paths (`.MIME` / `.HEADER`, partial variants) need
-  // materialized `mail.text` / `mail.html` for correctness. Completing
-  // the lazy migration for those paths is tracked as a follow-up
-  // under #757.
+  // EVERY non-header-like body section (FULL, TEXT, bare/`.TEXT`
+  // MIME_PART — partial and non-partial alike) takes the segment-walk
+  // streaming path: `buildMessageSegments` builds the ordered segment
+  // list once, `sumSegmentBytes` / `sumBodyBytes` / `sumPartBodyBytes`
+  // measure the exact wire byte count (one `stat` per attachment, no
+  // reads) so `{N}` is pinned before the first chunk yields, and the
+  // appropriate `stream*Segments` generator yields chunk-bounded Buffers
+  // to the socket.
+  //
+  // Both the SOURCE and the output side are now O(chunk) for all of
+  // them: `getRequestedFields` projects only the lazy synthetics for
+  // these shapes, so `buildMessageSegments` emits `lazy-text` segments
+  // that pull the column in chunked pg SUBSTRING reads at emit time.
+  // Before this, TEXT and MIME_PART projected the materialized
+  // `mail.text` / `mail.html`, so each command held
+  // O(sizeof(text) + sizeof(html)) in V8's heap for its duration — the
+  // per-command allocation that survived a same-socket pipelined burst
+  // long enough to stack up under GC lag (#757).
   //
   // Cache is deleted (was `body-buffer.ts`): streaming makes it
   // unnecessary. Retention shapes the pre-cache-deletion code returned:
@@ -546,24 +598,36 @@ export async function buildBodyResponsePart(
     };
   }
 
-  if (!partial && !isHeaderLikeSection(section) && section.type === "TEXT") {
+  if (!isHeaderLikeSection(section) && section.type === "TEXT") {
     // BODY[TEXT] — RFC 3501 §6.4.5 "text body of the message, omitting
     // the header." Streamed by walking the segments and skipping the
     // top-level header literal, then appending the same one-CRLF wire
-    // trailer the pre-cache-deletion path did (`raw + "\r\n"`). Output
-    // stays chunk-bounded via `emitBase64`; the SOURCE is
-    // `mail.text` / `mail.html` held in memory (`addBodyFields` projects
-    // both materialized + lazy, and `wantsLazyBodies` returns false
-    // when strings are present, so segments are `base64`-kind not
-    // `lazy-text`). FULL still uses lazy synthetics — peak per FULL
-    // fetch is O(chunk), TEXT is O(sizeof(mail.text) + sizeof(mail.html))
-    // + O(chunk).
+    // trailer the pre-cache-deletion path did (`raw + "\r\n"`). Both
+    // sides are chunk-bounded: `emitBase64` on output, `lazy-text`
+    // segments on input (`addBodyFields` projects the synthetics only,
+    // so `wantsLazyBodies` holds). Peak per TEXT fetch is O(chunk),
+    // same as FULL.
+    //
+    // `<start.length>` addresses the TEXT section's own octets, which is
+    // exactly `bodyBytes` — the one-CRLF wire trailer below is IMAP
+    // framing appended after the section, not part of it, so the partial
+    // range must NOT include it (same reasoning as the FULL branch's
+    // `totalBodyLength - WIRE_TRAILER`).
     const segments = buildMessageSegments(mail, docId);
     const bodyBytes = sumBodyBytes(segments);
     if (bodyBytes === 0) {
       return { type: "simple", content: `${sectionKey} NIL` };
     }
     const streamKey = `${docId}::${sectionKey}`;
+    if (partial) {
+      return streamPartialSubset(
+        selectBodySegments(segments),
+        bodyBytes,
+        partial,
+        sectionKey,
+        streamKey
+      );
+    }
     const stream = withStreamMutex(streamKey, () =>
       withBodyBudgetStream(async function* () {
         yield* streamBodyFromSegments(segments);
@@ -578,7 +642,7 @@ export async function buildBodyResponsePart(
     };
   }
 
-  if (!partial && !isHeaderLikeSection(section) && section.type === "MIME_PART") {
+  if (!isHeaderLikeSection(section) && section.type === "MIME_PART") {
     // BODY[<part>] — RFC 3501 §6.4.5. `.HEADER` / `.MIME` return the
     // part's MIME header block (materialized, cheap — see the
     // header-like fallthrough below via `getBodyContent`). Bare number
@@ -604,6 +668,15 @@ export async function buildBodyResponsePart(
         return null;
       }
       const streamKey = `${docId}::${sectionKey}`;
+      if (partial) {
+        return streamPartialSubset(
+          selectPartBodySegments(segments, partPath),
+          partBytes,
+          partial,
+          sectionKey,
+          streamKey
+        );
+      }
       const stream = withStreamMutex(streamKey, () =>
         withBodyBudgetStream(async function* () {
           yield* streamPartBodyFromSegments(segments, partPath);
@@ -619,17 +692,14 @@ export async function buildBodyResponsePart(
     }
   }
 
-  // Partial fetch (`BODY[]<start.length>`) and header-like sections
-  // (`BODY[HEADER.FIELDS ...]`) fall through here. Partial STILL
-  // materializes the full body via `buildFullMessage` before slicing
-  // in `applyPartialFetch`, so the RSS scaling concern is the same as
-  // the shared-body path — gate through the budget. Header-like
-  // sections are cheap (≤ a few KiB) and don't need gating; hop over
-  // them with an immediate acquire/release by only gating when the
-  // request is a partial.
-  const content = partial
-    ? await withBodyBudget(() => Promise.resolve(getBodyContent(mail, section, docId)))
-    : getBodyContent(mail, section, docId);
+  // Only header-like sections reach here now: `BODY[HEADER]`,
+  // `BODY[HEADER.FIELDS ...]`, and a MIME part's `.HEADER` / `.MIME`.
+  // Every body-bearing section (FULL, TEXT, bare/`.TEXT` MIME_PART) is
+  // handled above, partial included, so no path below materializes a
+  // body and the body budget no longer has anything to protect here —
+  // gating a header block behind it would just queue a few-KiB response
+  // behind multi-MB streams.
+  const content = getBodyContent(mail, section, docId);
   if (content === null) {
     return null;
   }
