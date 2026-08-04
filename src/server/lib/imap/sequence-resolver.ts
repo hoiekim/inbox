@@ -123,9 +123,58 @@ export function resolveUidRangeSentinel(
 
 /**
  * Count messages covered by a sequence set (clamped to actual mailbox size).
- * Used for FETCH limit checks.
+ * Used for FETCH limit checks — feeds the `requestedCount > cap` gate in
+ * `fetchMessagesTyped`, so mis-counting = clamp skipped = cap bypassed.
+ *
+ * `isUidCommand` mirrors the split in `clampSequenceSetToFirst` above:
+ * the parser stamps every set with `type: "sequence"`, so the caller is
+ * the source of truth for axis. On the UID axis a seq-position-based
+ * count is wrong twice over: `UID FETCH 10051:*` on a pruned mailbox
+ * (UIDs 10001..19950) counts 1 (seq-clamp of 10051 → maxSeq → 1) even
+ * though the request covers 9900 real UIDs; downstream then over-fetches
+ * because the cap gate never fired. Instead, intersect each range with
+ * `seqToUid` (already monotonic per RFC 3501 §2.3.1.1) via binary search
+ * so each range is O(log N) rather than O(N).
  */
-export function countSequenceSetMessages(seqToUid: number[], sequenceSet: SequenceSet): number {
+export function countSequenceSetMessages(
+  seqToUid: number[],
+  sequenceSet: SequenceSet,
+  isUidCommand: boolean
+): number {
+  if (isUidCommand) {
+    if (seqToUid.length === 0) return 0;
+    const maxUid = seqToUid[seqToUid.length - 1];
+    let count = 0;
+    for (const range of sequenceSet.ranges) {
+      const rawStart = range.start;
+      const rawEnd = range.end ?? range.start;
+      // MAX_SAFE_INTEGER is the `*` sentinel — resolves to the highest UID.
+      const startUid = rawStart === Number.MAX_SAFE_INTEGER ? maxUid : rawStart;
+      const endUid = rawEnd === Number.MAX_SAFE_INTEGER ? maxUid : rawEnd;
+      const lo = Math.min(startUid, endUid);
+      const hi = Math.max(startUid, endUid);
+      // First index >= lo.
+      let left = 0;
+      let right = seqToUid.length;
+      while (left < right) {
+        const mid = (left + right) >>> 1;
+        if (seqToUid[mid] < lo) left = mid + 1;
+        else right = mid;
+      }
+      const startIdx = left;
+      // First index > hi.
+      left = startIdx;
+      right = seqToUid.length;
+      while (left < right) {
+        const mid = (left + right) >>> 1;
+        if (seqToUid[mid] <= hi) left = mid + 1;
+        else right = mid;
+      }
+      count += left - startIdx;
+    }
+    return count;
+  }
+
   const maxSeq = seqToUid.length;
   let count = 0;
   for (const range of sequenceSet.ranges) {

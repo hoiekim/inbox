@@ -227,39 +227,120 @@ describe("uidToSeqNumber", () => {
   });
 });
 
-describe("countSequenceSetMessages", () => {
+describe("countSequenceSetMessages — SEQ axis (isUidCommand=false)", () => {
   const uids = [10, 20, 30, 40, 50];
 
   it("counts a single-message range", () => {
     const set: SequenceSet = { ranges: [{ start: 2 }] };
-    expect(countSequenceSetMessages(uids, set)).toBe(1);
+    expect(countSequenceSetMessages(uids, set, false)).toBe(1);
   });
 
   it("counts a start:end range", () => {
     const set: SequenceSet = { ranges: [{ start: 2, end: 4 }] };
-    expect(countSequenceSetMessages(uids, set)).toBe(3);
+    expect(countSequenceSetMessages(uids, set, false)).toBe(3);
   });
 
   it("clamps ranges beyond mailbox size", () => {
     const set: SequenceSet = { ranges: [{ start: 3, end: 100 }] };
-    expect(countSequenceSetMessages(uids, set)).toBe(3);
+    expect(countSequenceSetMessages(uids, set, false)).toBe(3);
   });
 
   it("sums multiple ranges", () => {
     const set: SequenceSet = {
       ranges: [{ start: 1, end: 2 }, { start: 4 }],
     };
-    expect(countSequenceSetMessages(uids, set)).toBe(3);
+    expect(countSequenceSetMessages(uids, set, false)).toBe(3);
   });
 
   it("clamps both start and end to 0 on empty mailbox", () => {
     const set: SequenceSet = { ranges: [{ start: 1, end: 10 }] };
-    expect(countSequenceSetMessages([], set)).toBe(1);
+    expect(countSequenceSetMessages([], set, false)).toBe(1);
   });
 
   it("returns 0 for empty sequence set", () => {
     const set: SequenceSet = { ranges: [] };
-    expect(countSequenceSetMessages(uids, set)).toBe(0);
+    expect(countSequenceSetMessages(uids, set, false)).toBe(0);
+  });
+});
+
+describe("countSequenceSetMessages — UID axis (isUidCommand=true)", () => {
+  // Load-bearing shape: mailbox UIDs don't start at 1 (retention prune /
+  // UIDVALIDITY bump). SEQ-axis counting on this mailbox would return 1
+  // for `UID FETCH 10051:*` (seq-clamp to maxSeq=9950 → both endpoints
+  // resolve to 9950 → 1). Cap gate would skip the clamp, and downstream
+  // `store.getMessages(10051, 19950)` would return all 9900 rows.
+  // Counting via UID intersection returns the correct 9900, cap fires,
+  // clamp runs, downstream fetches the first 50 UIDs only.
+  const pruned = Array.from({ length: 9950 }, (_, i) => 10001 + i);
+  const set = (ranges: SequenceSet["ranges"]): SequenceSet => ({
+    type: "sequence",
+    ranges,
+  });
+
+  it("counts real UIDs, not seq positions, on a pruned mailbox with a `n:*` range", () => {
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 10051, end: Number.MAX_SAFE_INTEGER }]), true)
+    ).toBe(9900);
+  });
+
+  it("counts 0 when the range is entirely below the mailbox's UIDs", () => {
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 1, end: 500 }]), true)
+    ).toBe(0);
+  });
+
+  it("counts 0 when the range is entirely above the mailbox's UIDs", () => {
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 50000, end: 60000 }]), true)
+    ).toBe(0);
+  });
+
+  it("counts the intersection when the range partially overlaps", () => {
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 9900, end: 10100 }]), true)
+    ).toBe(100);
+  });
+
+  it("`*:*` on empty mailbox counts 0 (never dereferences seqToUid[-1])", () => {
+    expect(
+      countSequenceSetMessages(
+        [],
+        set([{ start: Number.MAX_SAFE_INTEGER, end: Number.MAX_SAFE_INTEGER }]),
+        true
+      )
+    ).toBe(0);
+  });
+
+  it("counts a bare single-UID range (end=undefined)", () => {
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 10500 }]), true)
+    ).toBe(1);
+  });
+
+  it("counts multiple ranges by summing per-range intersections", () => {
+    expect(
+      countSequenceSetMessages(
+        pruned,
+        set([
+          { start: 10001, end: 10005 },  // 5 UIDs
+          { start: 15000, end: 15003 },  // 4 UIDs
+          { start: 50000, end: 60000 },  // 0 UIDs (both endpoints above max)
+        ]),
+        true
+      )
+    ).toBe(9);
+  });
+
+  it("returns 0 on empty sequence set", () => {
+    expect(countSequenceSetMessages(pruned, set([]), true)).toBe(0);
+  });
+
+  it("handles reversed ranges (RFC 3501 §9: `10:3` ≡ `3:10`)", () => {
+    // Both endpoints below the mailbox's UIDs → 0 either way; the point
+    // is that the counter doesn't return a negative or NaN when start > end.
+    expect(
+      countSequenceSetMessages(pruned, set([{ start: 10100, end: 10000 }]), true)
+    ).toBe(100);
   });
 });
 

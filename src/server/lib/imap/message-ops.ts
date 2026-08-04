@@ -76,7 +76,8 @@ export async function fetchMessagesTyped(
   );
   const requestedCount = countSequenceSetMessages(
     seqState.seqToUid,
-    fetchRequest.sequenceSet
+    fetchRequest.sequenceSet,
+    isUidCommand
   );
   const limit = isFlagsOnly ? Infinity : isHeaderOnly ? 500 : 50;
   if (requestedCount > limit) {
