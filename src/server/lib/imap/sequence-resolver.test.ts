@@ -422,6 +422,25 @@ describe("clampSequenceSetToFirst — SEQ axis (isUidCommand=false)", () => {
       clampSequenceSetToFirst(uids, set([{ start: 1, end: 10 }]), 0, false).ranges
     ).toEqual([]);
   });
+
+  it("R6 MED: `SEQ *:1` (reversed) — normalizes, does not silent-zero-fetch", () => {
+    // Made reachable by R5's SEQ-counter fix: pre-R5 the counter returned
+    // 0 for `*:1` so the cap gate skipped and downstream normalized to
+    // 1:* (spec-legal cap-bypass DoS). Post-R5 the counter correctly
+    // returns 10 → cap fires → clamp runs → without normalization here
+    // `effectiveStart=10 > effectiveEnd=1` → rangeCount=0 → empty ranges
+    // → silent zero-fetch. Fix mirrors the counter: `min`/`max` after
+    // seq-clamp. `*:1` should clamp to the first N seq positions.
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: Number.MAX_SAFE_INTEGER, end: 1 }]), 3, false).ranges
+    ).toEqual([{ start: 1, end: 3 }]);
+  });
+
+  it("R6 MED: `SEQ 10:3` (reversed) — normalizes to `3:10`, clamps to first N", () => {
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: 10, end: 3 }]), 4, false).ranges
+    ).toEqual([{ start: 3, end: 6 }]);
+  });
 });
 
 describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {

@@ -292,15 +292,25 @@ export function clampSequenceSetToFirst(
       remaining -= 1;
       continue;
     }
-    const effectiveStart = Math.min(range.start, maxSeq);
-    const effectiveEnd = Math.min(range.end, maxSeq);
-    const rangeCount = Math.max(0, effectiveEnd - effectiveStart + 1);
+    // Normalize reversed ranges (RFC 3501 §9: `*:1` ≡ `1:*`, `10:3` ≡
+    // `3:10`) via `min`/`max` after the seq-clamp — symmetric with the
+    // SEQ-axis counter and with `convertSequenceSet` in fetch-helpers.
+    // R5 fixed the counter's SEQ branch; without this the clamp still
+    // sees `effectiveStart > effectiveEnd`, computes rangeCount=0, skips
+    // the whole range, and emits an empty set — a silent zero-fetch that
+    // R5 made newly reachable (counter now correctly fires the cap gate
+    // for `*:1` where it used to skip).
+    const clampedStart = Math.min(range.start, maxSeq);
+    const clampedEnd = Math.min(range.end, maxSeq);
+    const lo = Math.min(clampedStart, clampedEnd);
+    const hi = Math.max(clampedStart, clampedEnd);
+    const rangeCount = Math.max(0, hi - lo + 1);
     if (rangeCount === 0) continue;
     if (rangeCount <= remaining) {
-      clamped.push(range);
+      clamped.push({ start: lo, end: hi });
       remaining -= rangeCount;
     } else {
-      clamped.push({ start: range.start, end: effectiveStart + remaining - 1 });
+      clamped.push({ start: lo, end: lo + remaining - 1 });
       remaining = 0;
     }
   }
