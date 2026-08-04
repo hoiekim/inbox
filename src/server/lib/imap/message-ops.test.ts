@@ -330,10 +330,15 @@ const emptySeqState = (): SequenceState => ({
   uidToSeq: new Map(),
 });
 
+// A store whose setFlags resolves `result` as the updated set (with no
+// UNCHANGEDSINCE conflicts) and records its calls.
+// getUser is included so the #725 pivot-sync path in storeFlagsTyped
+// (which reads `store.getUser().id`) doesn't throw when the STORE touches
+// `\Flagged` / `\Deleted`.
 const makeFlagStore = (
   result: { uid: number; mail_id?: string; read?: boolean; saved?: boolean; deleted?: boolean }[]
 ) => {
-  const setFlags = mock(() => Promise.resolve(result));
+  const setFlags = mock(() => Promise.resolve({ updated: result, failed: [] }));
   return {
     store: {
       setFlags,

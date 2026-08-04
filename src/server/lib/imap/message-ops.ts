@@ -420,8 +420,12 @@ export async function storeFlagsTyped(
     storeRequest.sequenceSet.type === "uid" || isUidCommand;
 
   try {
-    const { sequenceSet, operation, flags, silent } = storeRequest;
+    const { sequenceSet, operation, flags, silent, unchangedSince } = storeRequest;
     const ranges = convertSequenceSet(sequenceSet);
+    // RFC 7162 §3.1.3: UIDs (UID STORE) or sequence numbers (STORE) that lost
+    // the UNCHANGEDSINCE race, accumulated across every range in the set so the
+    // tagged response names them all at once.
+    const conflicted: number[] = [];
 
     const baseOp = operation.replace(".SILENT", "");
     const touchesSaved = baseOp === "FLAGS" || flags.includes("\\Flagged");
@@ -454,14 +458,29 @@ export async function storeFlagsTyped(
         ""
       ) as StoreOperationType;
 
-      const updatedMails = await store.setFlags(
+      const { updated: updatedMails, failed } = await store.setFlags(
         selectedMailbox,
         uidStart,
         uidEnd,
         flags,
         true,
-        baseOperation
+        baseOperation,
+        unchangedSince
       );
+
+      // MODIFIED carries the same addressing the command used: UIDs for
+      // UID STORE, sequence numbers for STORE (RFC 7162 §3.1.3). A UID with no
+      // sequence number in the current view has been expunged out from under
+      // the client — there is nothing to name it by, so it is dropped rather
+      // than reported under a wrong number.
+      failed.forEach((uid) => {
+        if (isUidStore) {
+          conflicted.push(uid);
+          return;
+        }
+        const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
+        if (seq !== undefined) conflicted.push(seq);
+      });
 
       // RFC 3501 §6.4.6: STORE on a UID/sequence range that matches no
       // messages is NOT an error — the server simply emits zero untagged
@@ -500,7 +519,13 @@ export async function storeFlagsTyped(
       // stays in sync. So emit whenever FLAGS is due OR CONDSTORE is on.
       const isSilent = silent || operation.includes("SILENT");
       const emitFlags = !isSilent;
-      if (emitFlags || condstoreEnabled) {
+      // RFC 7162 §3.1.3: on a conditional STORE the server MUST send an
+      // untagged FETCH for each message it did change, "even if the .SILENT
+      // suffix is specified", and it must carry MODSEQ — otherwise a .SILENT
+      // client that got a MODIFIED code has no way to learn the new
+      // mod-sequence of the messages that did succeed.
+      const emitModseq = condstoreEnabled || unchangedSince !== undefined;
+      if (emitFlags || emitModseq) {
         for (const mail of updatedMails) {
           const seq = uidToSeqNumber(
             seqState.seqToUid,
@@ -519,7 +544,7 @@ export async function storeFlagsTyped(
             if (mail.answered) currentFlags.push("\\Answered");
             items.push(`FLAGS (${currentFlags.join(" ")})`);
           }
-          if (condstoreEnabled && mail.modseq !== undefined) {
+          if (emitModseq && mail.modseq !== undefined) {
             items.push(`MODSEQ (${mail.modseq})`);
           }
           // Nothing to say (silent store, CONDSTORE off) — stay quiet.
@@ -531,6 +556,13 @@ export async function storeFlagsTyped(
       }
     }
 
+    // RFC 7162 §3.1.3: the conflict list rides on the TAGGED response, and the
+    // command still completes OK — a conditional STORE that changed nothing is
+    // not an error, it is a lost race the client must resolve.
+    if (conflicted.length > 0) {
+      write(`${tag} OK [MODIFIED ${formatUidSet(conflicted)}] Conditional STORE failed\r\n`);
+      return;
+    }
     write(`${tag} OK STORE completed\r\n`);
   } catch (error) {
     logger.error("Error storing flags", { component: "imap" }, error);
@@ -684,8 +716,10 @@ export const cloneMailToDestination = async (
 // ---------------------------------------------------------------------------
 
 /**
- * Compact a sorted UID list to the RFC 3501 sequence-set form ("1,3:5,7").
- * Per RFC 4315, the COPYUID response uses the same sequence-set syntax.
+ * Compact a list of message numbers to the RFC 3501 sequence-set form
+ * ("1,3:5,7"). Used by the RFC 4315 COPYUID/APPENDUID response codes and by
+ * RFC 7162's MODIFIED — all three carry a sequence set, and MODIFIED carries
+ * sequence numbers rather than UIDs when the command was a plain STORE.
  */
 const formatUidSet = (uids: number[]): string => {
   if (uids.length === 0) return "";

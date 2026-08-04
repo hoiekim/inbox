@@ -447,6 +447,13 @@ export class ImapSession {
     if (!this.selectedMailbox) {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
     }
+    // RFC 7162 §3.1.3: like CHANGEDSINCE on FETCH, an UNCHANGEDSINCE modifier
+    // implicitly enables CONDSTORE — "the server starts including the MODSEQ
+    // FETCH response data items in all subsequent unsolicited FETCH responses"
+    // — so a client that never sent ENABLE CONDSTORE still gets them.
+    if (storeRequest.unchangedSince !== undefined) {
+      this.condstoreEnabled = true;
+    }
     return storeFlagsOp(
       tag,
       storeRequest,

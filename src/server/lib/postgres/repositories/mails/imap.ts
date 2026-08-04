@@ -473,6 +473,17 @@ export interface UpdatedMailFlags {
   modseq: number;
 }
 
+export interface SetMailFlagsResult {
+  updated: UpdatedMailFlags[];
+  /**
+   * UIDs the range matched whose mod-sequence exceeded the caller's
+   * UNCHANGEDSINCE — their flags are untouched and they belong in the tagged
+   * MODIFIED response code (RFC 7162 §3.1.3). Always empty for an
+   * unconditional STORE.
+   */
+  failed: number[];
+}
+
 /**
  * Operation type for STORE command per RFC 3501
  * - "FLAGS" or "FLAGS.SILENT": Replace all flags with the provided flags
@@ -542,10 +553,17 @@ export const setMailFlags = async (
   end: number,
   flags: string[],
   useUid: boolean,
-  operation: StoreOperationType = "FLAGS"
-): Promise<UpdatedMailFlags[]> => {
+  operation: StoreOperationType = "FLAGS",
+  unchangedSince?: number
+): Promise<SetMailFlagsResult> => {
   try {
     const setClause = buildFlagSetClause(operation, flags);
+    // RFC 7162 §3.1.3: with UNCHANGEDSINCE the UPDATE additionally requires the
+    // row's current mod-sequence to be ≤ the client's value. Rows that fail it
+    // keep their flags and come back in MODIFIED. `modseq` is stamped at 1 on
+    // every row when the column is added, so `<= 0` matches nothing — which is
+    // exactly the RFC's "UNCHANGEDSINCE 0 always fails" rule, for free.
+    const conditional = unchangedSince !== undefined;
 
     // Two flavors of query — domain-scoped stays on `mails.uid_domain`,
     // per-mailbox joins `mail_mailbox_uid`. RETURNING clauses select
@@ -567,7 +585,7 @@ export const setMailFlags = async (
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
-          WHERE ${whereClause}
+          WHERE ${whereClause}${conditional ? ` AND ${MODSEQ} <= $6` : ""}
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, start, end];
       } else {
@@ -580,7 +598,7 @@ export const setMailFlags = async (
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
-          WHERE ${whereClause}
+          WHERE ${whereClause}${conditional ? ` AND ${MODSEQ} <= $5` : ""}
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, start];
       }
@@ -597,7 +615,7 @@ export const setMailFlags = async (
         updateSql = `UPDATE mails m
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
           FROM ${MAIL_MAILBOX_UID} x
-          WHERE ${whereClause}
+          WHERE ${whereClause}${conditional ? ` AND m.${MODSEQ} <= $7` : ""}
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, mailbox, start, end];
       } else {
@@ -629,7 +647,7 @@ export const setMailFlags = async (
         updateSql = `UPDATE mails m
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
           FROM ${MAIL_MAILBOX_UID} x
-          WHERE ${whereClause}
+          WHERE ${whereClause}${conditional ? ` AND m.${MODSEQ} <= $6` : ""}
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, mailbox, start];
       }
@@ -642,7 +660,15 @@ export const setMailFlags = async (
     // advances when flags actually change).
     if (!setClause) {
       const result = await pool.query(selectSql, baseValues);
-      return result.rows.map(toUpdatedMailFlags);
+      const rows = result.rows.map(toUpdatedMailFlags);
+      if (!conditional) return { updated: rows, failed: [] };
+      // A no-op still has to answer the UNCHANGEDSINCE question: a row the
+      // client believes is older than it is must be reported in MODIFIED, not
+      // silently counted as applied.
+      return {
+        updated: rows.filter((row) => row.modseq <= unchangedSince!),
+        failed: rows.filter((row) => row.modseq > unchangedSince!).map((row) => row.uid),
+      };
     }
 
     // One fresh mod-sequence for this STORE, stamped on every matched row so a
@@ -650,11 +676,28 @@ export const setMailFlags = async (
     // — a batch mutation may share a single mod-sequence). Reserved atomically so
     // concurrent STOREs get strictly-distinct, monotonic values.
     const modseq = await getNextModseq(user_id);
-    const result = await pool.query(updateSql, [...baseValues, modseq]);
-    return result.rows.map(toUpdatedMailFlags);
+
+    if (!conditional) {
+      const result = await pool.query(updateSql, [...baseValues, modseq]);
+      return { updated: result.rows.map(toUpdatedMailFlags), failed: [] };
+    }
+
+    // The conditional path needs the set the range MATCHED, not just the set it
+    // UPDATED, to name the losers in MODIFIED. Read the matched UIDs first, then
+    // apply the guarded UPDATE; the difference is the failed set. Two round
+    // trips only when the client asked for UNCHANGEDSINCE — the unconditional
+    // STORE above still costs one.
+    const matched = await pool.query(selectSql, baseValues);
+    const result = await pool.query(updateSql, [...baseValues, modseq, unchangedSince]);
+    const updated = result.rows.map(toUpdatedMailFlags);
+    const updatedUids = new Set(updated.map((row) => row.uid));
+    const failed = matched.rows
+      .map((row) => Number(row.uid))
+      .filter((uid) => !updatedUids.has(uid));
+    return { updated, failed };
   } catch (error) {
     logger.error("Failed to set mail flags", {}, error);
-    return [];
+    return { updated: [], failed: [] };
   }
 };
 
