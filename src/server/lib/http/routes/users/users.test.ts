@@ -2,7 +2,8 @@
  * Tests for user route handlers: post-login, delete-login, get-login,
  * post-set-info, post-token
  */
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
+import * as rateLimit from "../../rate-limit";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,14 @@ describe("postLoginRoute", () => {
     const roUser = makeUser(READONLY_USERNAME, "readonly-id");
     mockGetUser.mockResolvedValueOnce(roUser);
     mockBcryptCompare.mockResolvedValueOnce(true);
+    // Spy on the live limiter to prove the readonly branch burns a
+    // rate-limit slot — otherwise the readonly identity would be a
+    // rate-limit bypass (unlimited login attempts land at the gate
+    // with no throttle).
+    const recordFailureSpy = spyOn(
+      rateLimit.loginLimiter,
+      "recordFailure"
+    );
 
     const req = makeReq({
       body: { username: READONLY_USERNAME, password: "correct" },
@@ -149,6 +158,8 @@ describe("postLoginRoute", () => {
         };
       }).session.user
     ).toBeNull();
+    expect(recordFailureSpy).toHaveBeenCalledWith("127.0.0.1");
+    recordFailureSpy.mockRestore();
   });
 
   it("returns failed when user doesn't exist (runs dummy hash to prevent timing attacks)", async () => {
@@ -425,6 +436,9 @@ describe("postTokenRoute", () => {
   it("sends auth email and returns success for valid email", async () => {
     const { postTokenRoute } = await import("./post-token");
     const adminUser = { id: "admin1", username: "admin" };
+    // First getUser call (readonly pre-gate) — new signup, no existing row.
+    mockGetUser.mockResolvedValueOnce(null);
+    // Second getUser call (admin lookup for sendMail's `from`).
     mockGetUser.mockResolvedValueOnce(adminUser);
     mockGetSignedUser.mockReturnValueOnce({ id: "admin1", username: "admin" });
     const req = makeReq({ body: { email: "user@example.com" } });
@@ -452,6 +466,13 @@ describe("postTokenRoute", () => {
       email: `${READONLY_USERNAME}@localhost`,
     };
     mockGetUser.mockResolvedValueOnce(roExisting);
+    // Spy on the live limiter to prove the readonly branch burns a
+    // rate-limit slot — otherwise the readonly identity would be a
+    // rate-limit bypass for /token as well.
+    const recordFailureSpy = spyOn(
+      rateLimit.tokenLimiter,
+      "recordFailure"
+    );
     const req = makeReq({ body: { email: `${READONLY_USERNAME}@localhost` } });
     const result = await postTokenRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
@@ -459,6 +480,8 @@ describe("postTokenRoute", () => {
     expect(mockCreateToken).not.toHaveBeenCalled();
     expect(mockStartTimer).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
+    expect(recordFailureSpy).toHaveBeenCalledWith("127.0.0.1");
+    recordFailureSpy.mockRestore();
   });
 });
 

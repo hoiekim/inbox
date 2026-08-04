@@ -195,6 +195,10 @@ describe("onAuth handler", () => {
     expect(result.user).toBeUndefined();
     // Short-circuited ahead of the lookup: the account never costs a round trip.
     expect(mockGetUser).not.toHaveBeenCalled();
+    // Must burn a rate-limit slot — otherwise the readonly identity is a
+    // rate-limit bypass, letting an unauthenticated caller repeat AUTH
+    // PLAIN as `readonly` unbounded.
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith("9.9.9.9");
   });
 
   it("rejects auth when IP is rate-limited", async () => {
