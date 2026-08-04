@@ -8,6 +8,7 @@ import {
   sendMail,
   startTimer
 } from "server";
+import { READONLY_USERNAME } from "../../../postgres/initialize";
 import { Route } from "../route";
 import { getClientIp, tokenLimiter } from "../../rate-limit";
 
@@ -26,6 +27,21 @@ export const postTokenRoute = new Route<TokenPostResponse>(
         status: "failed",
         message: "Signup failed because email is invalid."
       };
+    }
+
+    // Refuse the reserved read-only identity before createToken runs.
+    // createToken hits the "existing user" branch (users.ts:88-91) →
+    // usersTable.update(readonly.id, {token, expiry}) AND startTimer
+    // (users.ts:105-121) schedules setTimeout(deleteUser, 1h) which
+    // hard-DELETEs the readonly row when the expiry passes. Same-shape
+    // response as the "invalid email" branch (single-slot rate-limit
+    // burn, same success message on the outgoing wire) so an
+    // unauthenticated caller can't distinguish the readonly refusal
+    // from a normal send.
+    const existing = await getUser({ email });
+    if (existing?.username === READONLY_USERNAME) {
+      tokenLimiter.recordFailure(ip);
+      return { status: "success" };
     }
 
     const [adminUser, createdUser] = await Promise.all([

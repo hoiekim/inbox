@@ -24,15 +24,22 @@ const mockLogger = {
 // Do NOT add getDomain/getUserDomain/etc here — Bun's mock.module is global and persists across
 // test files in the same run. Unused mocks leak into subsequent files (e.g. mails/util.test.ts),
 // replacing the real implementations with mock stubs.
+// Import the real constant so the barrel-mock value stays in lock-step if
+// the source of truth is ever renamed. Duplicating the literal would let
+// prod's smtp.ts compare against the new value while this mock still
+// yielded the old one → prod's guard silently inert while tests stay
+// green (R6 LOW-2 anti-pattern).
+import { READONLY_USERNAME } from "./postgres/initialize";
+
 mock.module("server", () => ({
   getUser: mockGetUser,
   saveMailHandler: mockSaveMailHandler,
   sendMail: mockSendMail,
   logger: mockLogger,
-  // Required, not optional: onAuth refuses this username outright, and omitting
-  // it here would leave the comparison against `undefined` and the guard inert
-  // in this file while still passing.
-  READONLY_USERNAME: "readonly",
+  // Required, not optional: onAuth refuses this username outright, and
+  // omitting it here would leave the comparison against `undefined` and
+  // the guard inert in this file while still passing.
+  READONLY_USERNAME,
 }));
 
 const mockSimpleParser = mock(() =>
@@ -175,10 +182,10 @@ describe("onAuth handler", () => {
     // IMAP-layer read-only guard does not cover it, so it is refused here.
     const hashedPw = await bcrypt.hash("correctpassword", 10);
     const session = { remoteAddress: "9.9.9.9" } as SMTPServerSession;
-    const auth = { username: "readonly", password: "correctpassword" } as SMTPServerAuthentication;
+    const auth = { username: READONLY_USERNAME, password: "correctpassword" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
-      getSigned: () => ({ username: "readonly" })
+      getSigned: () => ({ username: READONLY_USERNAME })
     });
 
     const result = await new Promise<{ user?: string }>((resolve) => {

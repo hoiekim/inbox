@@ -261,6 +261,18 @@ describe("read-only IMAP user — guard rejects mutating commands", () => {
 // `bcrypt.compare` into an always-false stub inside the full-suite run.
 // Sandbox E2E signal recorded in the PR test-plan.
 
+// R6 LOW-1: FETCH BODY[] auto-\Seen suppression for readonly (via
+// `fetchMessagesTyped`'s `suppressReadMark` param wired from
+// `ImapSession.isReadOnlyUser`). Not unit-tested here — the code
+// path runs `store.getMessages` → per-mail iteration → `markRead`,
+// which needs an end-to-end IMAP session against a populated
+// mailbox to observe. Verified in sandbox E2E: an admin FETCH
+// BODY[] on a real message shows `read=true` in the row afterward;
+// the same fetch as readonly leaves `read` untouched (also
+// dormant today because addressToUsername routes every
+// $EMAIL_DOMAIN message to admin, so readonly's inbox stays
+// empty by construction).
+
 describe("read-only IMAP user — admin unaffected", () => {
   it("allowMutation passes STORE for admin (no NO written before op)", async () => {
     const { session, writes } = await authAs("admin");

@@ -433,6 +433,33 @@ describe("postTokenRoute", () => {
     expect(mockSendMail).toHaveBeenCalledTimes(1);
     expect(mockStartTimer).toHaveBeenCalledWith("u1");
   });
+
+  it("refuses the readonly identity BEFORE createToken (no DB mutation, no timer)", async () => {
+    // R6 HIGH: /token is unauthenticated. Without this gate, an
+    // outside caller with just the readonly@$EMAIL_DOMAIN address
+    // triggers createToken (mutates readonly's token+expiry) AND
+    // startTimer (schedules hard-DELETE after TOKEN_DURATION). Same
+    // reason as post-set-info's pre-gate: refuse before the DB
+    // mutation, not after. Same-shape as a normal signup send so an
+    // unauthenticated caller can't distinguish.
+    const { postTokenRoute } = await import("./post-token");
+    const { READONLY_USERNAME } = await import(
+      "../../../postgres/initialize"
+    );
+    const roExisting = {
+      id: "readonly-id",
+      username: READONLY_USERNAME,
+      email: `${READONLY_USERNAME}@localhost`,
+    };
+    mockGetUser.mockResolvedValueOnce(roExisting);
+    const req = makeReq({ body: { email: `${READONLY_USERNAME}@localhost` } });
+    const result = await postTokenRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    // Load-bearing — proves the gate fires before every mutation path.
+    expect(mockCreateToken).not.toHaveBeenCalled();
+    expect(mockStartTimer).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
 });
 
 // ── rate-limit integration with login/token routes (#504) ─────────────────────
