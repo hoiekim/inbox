@@ -166,8 +166,14 @@ export function countSequenceSetMessages(seqToUid: number[], sequenceSet: Sequen
  *    would resolve to zero rows downstream (silent data loss). Instead,
  *    walk `seqToUid` in order (UIDs are monotonic per RFC 3501 §2.3.1.1),
  *    keep the first `limit` that intersect the requested ranges, and
- *    emit a single range enclosing them. Non-contiguous UIDs inside
- *    that range simply match nothing downstream — correct.
+ *    emit coalesced sub-ranges of exactly those matched UIDs. A single
+ *    enclosing range [matched[0]..matched[last]] would over-fetch: on a
+ *    dense mailbox {10001..10010}, request `10001:10002,10005:10008`
+ *    limit=4 matches [10001,10002,10005,10006] but the enclosure
+ *    [10001..10006] would pull 10003/10004 too (breaching the cap by
+ *    50%) and drop the caller-requested 10007/10008. Coalescing yields
+ *    [{10001,10002},{10005,10006}] — downstream fetches exactly what
+ *    survived the clamp.
  */
 export function clampSequenceSetToFirst(
   seqToUid: number[],
@@ -190,10 +196,20 @@ export function clampSequenceSetToFirst(
       }
     }
     if (matched.length === 0) return { ...sequenceSet, ranges: [] };
-    return {
-      ...sequenceSet,
-      ranges: [{ start: matched[0], end: matched[matched.length - 1] }],
-    };
+    const coalesced: SequenceRange[] = [];
+    let start = matched[0];
+    let end = matched[0];
+    for (let i = 1; i < matched.length; i++) {
+      if (matched[i] === end + 1) {
+        end = matched[i];
+      } else {
+        coalesced.push({ start, end });
+        start = matched[i];
+        end = matched[i];
+      }
+    }
+    coalesced.push({ start, end });
+    return { ...sequenceSet, ranges: coalesced };
   }
 
   const maxSeq = seqToUid.length;

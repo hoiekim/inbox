@@ -346,7 +346,8 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   it("`UID 1:*` on a pruned mailbox emits a range of REAL UIDs, not seq positions", () => {
     // The R1 HIGH scenario: previously returned `{start:1, end:50}` and
     // silently matched zero rows. Now returns `{start:10001, end:10003}`
-    // for limit=3 — the actual first-3 UIDs.
+    // for limit=3 — the actual first-3 UIDs, and since they're contiguous
+    // the coalescer collapses them into a single range.
     const result = clampSequenceSetToFirst(
       uids,
       set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
@@ -379,7 +380,12 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
     expect(result.ranges).toEqual([]);
   });
 
-  it("walks multiple ranges in order, stopping at limit", () => {
+  it("walks multiple ranges in order, stopping at limit, and emits coalesced sub-ranges", () => {
+    // The R2 MED scenario: matched UIDs are non-contiguous, so a single
+    // enclosing range [10001..10006] would over-fetch (dense mailbox has
+    // real 10003/10004 in it, so `getMessages(10001, 10006)` would return
+    // 6 rows — 2 unrequested — breaching the cap by 50%). Coalescing
+    // preserves the request's shape post-clamp.
     const result = clampSequenceSetToFirst(
       uids,
       set([
@@ -389,10 +395,48 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
       4,
       true
     );
-    // First 4 matched UIDs: 10001, 10002, 10005, 10006. Emitted as one
-    // enclosing range [10001, 10006]; 10003/10004 don't exist in the
-    // requested set, so downstream returns 4 rows.
-    expect(result.ranges).toEqual([{ start: 10001, end: 10006 }]);
+    expect(result.ranges).toEqual([
+      { start: 10001, end: 10002 },
+      { start: 10005, end: 10006 },
+    ]);
+  });
+
+  it("R2 adversarial: 100 discrete odd UIDs, cap=50 — coalesces to 50 single-UID ranges, no cap breach", () => {
+    // `UID FETCH 1,3,5,...,199 (BODY[])` — 100 discrete UIDs, all real.
+    // A single-enclosing-range clamp would emit [1..99] and downstream
+    // would fetch every UID in [1..99] that exists (up to 99 rows on a
+    // dense mailbox), breaching the body cap of 50 by ~2x. Coalescing
+    // emits exactly 50 single-UID ranges → downstream returns exactly 50.
+    const denseUids = Array.from({ length: 200 }, (_, i) => i + 1);
+    const requestedRanges = Array.from({ length: 100 }, (_, i) => ({
+      start: i * 2 + 1,
+      end: i * 2 + 1,
+    }));
+    const result = clampSequenceSetToFirst(denseUids, set(requestedRanges), 50, true);
+    expect(result.ranges).toHaveLength(50);
+    for (let i = 0; i < 50; i++) {
+      expect(result.ranges[i]).toEqual({ start: i * 2 + 1, end: i * 2 + 1 });
+    }
+  });
+
+  it("collapses contiguous matched UIDs into one range but keeps holes as separate ranges", () => {
+    // Mix: request touches 3 disjoint clusters, each contiguous internally.
+    const denseUids = Array.from({ length: 20 }, (_, i) => i + 1);
+    const result = clampSequenceSetToFirst(
+      denseUids,
+      set([
+        { start: 1, end: 3 },   // 3 UIDs → cluster 1
+        { start: 7, end: 9 },   // 3 UIDs → cluster 2
+        { start: 15, end: 17 }, // 3 UIDs → cluster 3
+      ]),
+      9,
+      true
+    );
+    expect(result.ranges).toEqual([
+      { start: 1, end: 3 },
+      { start: 7, end: 9 },
+      { start: 15, end: 17 },
+    ]);
   });
 
   it("single-UID range (end=undefined) treats end as start", () => {
