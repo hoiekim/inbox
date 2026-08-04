@@ -263,75 +263,165 @@ describe("countSequenceSetMessages", () => {
   });
 });
 
-describe("clampSequenceSetToFirst", () => {
-  // 10-message mailbox for the shared cases below.
+describe("clampSequenceSetToFirst — SEQ axis (isUidCommand=false)", () => {
+  // 10-message mailbox; UIDs happen to be 101..110 (values don't matter
+  // for SEQ-axis — clamp counts by position, not by UID value).
   const uids = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110];
+  const set = (ranges: SequenceSet["ranges"]): SequenceSet => ({
+    type: "sequence",
+    ranges,
+  });
 
   it("returns the original set unchanged when count is already at the limit", () => {
-    const set: SequenceSet = { ranges: [{ start: 1, end: 5 }] };
-    const result = clampSequenceSetToFirst(uids, set, 5);
-    expect(result.ranges).toEqual([{ start: 1, end: 5 }]);
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: 1, end: 5 }]), 5, false).ranges
+    ).toEqual([{ start: 1, end: 5 }]);
   });
 
   it("returns the original set unchanged when count is below the limit", () => {
-    const set: SequenceSet = { ranges: [{ start: 1, end: 3 }] };
-    const result = clampSequenceSetToFirst(uids, set, 50);
-    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: 1, end: 3 }]), 50, false).ranges
+    ).toEqual([{ start: 1, end: 3 }]);
   });
 
   it("truncates a single range that exceeds the limit", () => {
-    const set: SequenceSet = { ranges: [{ start: 1, end: 10 }] };
-    const result = clampSequenceSetToFirst(uids, set, 3);
-    // First 3 messages: seq 1..3.
-    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: 1, end: 10 }]), 3, false).ranges
+    ).toEqual([{ start: 1, end: 3 }]);
   });
 
   it("truncates `1:*` (Number.MAX_SAFE_INTEGER sentinel) to the first N", () => {
-    const set: SequenceSet = {
-      ranges: [{ start: 1, end: Number.MAX_SAFE_INTEGER }],
-    };
-    const result = clampSequenceSetToFirst(uids, set, 4);
-    expect(result.ranges).toEqual([{ start: 1, end: 4 }]);
+    expect(
+      clampSequenceSetToFirst(
+        uids,
+        set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
+        4,
+        false
+      ).ranges
+    ).toEqual([{ start: 1, end: 4 }]);
   });
 
   it("keeps whole ranges first, then partially takes the next", () => {
-    const set: SequenceSet = {
-      ranges: [
-        { start: 1, end: 2 },  // 2 msgs
-        { start: 5, end: 8 },  // 4 msgs
-        { start: 10 },         // 1 msg
-      ],
-    };
     // limit=5: take {1,2}, then partial {5..7} (3 of 4), drop {10}.
-    const result = clampSequenceSetToFirst(uids, set, 5);
-    expect(result.ranges).toEqual([
-      { start: 1, end: 2 },
-      { start: 5, end: 7 },
-    ]);
+    expect(
+      clampSequenceSetToFirst(
+        uids,
+        set([{ start: 1, end: 2 }, { start: 5, end: 8 }, { start: 10 }]),
+        5,
+        false
+      ).ranges
+    ).toEqual([{ start: 1, end: 2 }, { start: 5, end: 7 }]);
   });
 
   it("keeps single-message ranges (end===undefined) as-is until the limit", () => {
-    const set: SequenceSet = {
-      ranges: [{ start: 3 }, { start: 5 }, { start: 7 }],
-    };
-    const result = clampSequenceSetToFirst(uids, set, 2);
-    expect(result.ranges).toEqual([{ start: 3 }, { start: 5 }]);
+    expect(
+      clampSequenceSetToFirst(
+        uids,
+        set([{ start: 3 }, { start: 5 }, { start: 7 }]),
+        2,
+        false
+      ).ranges
+    ).toEqual([{ start: 3 }, { start: 5 }]);
   });
 
   it("returns an empty ranges array when limit is 0", () => {
-    const set: SequenceSet = { ranges: [{ start: 1, end: 10 }] };
-    const result = clampSequenceSetToFirst(uids, set, 0);
+    expect(
+      clampSequenceSetToFirst(uids, set([{ start: 1, end: 10 }]), 0, false).ranges
+    ).toEqual([]);
+  });
+});
+
+describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
+  // The load-bearing case: mailbox UIDs don't start at 1 (retention prune
+  // or UIDVALIDITY bump). SEQ-axis clamp would emit `{start:1, end:N}`
+  // which downstream `store.getMessages(uidStart=1, uidEnd=N)` resolves
+  // to zero rows — silent data loss. UID-axis clamp walks the actual UID
+  // list and emits a range enclosing the first N intersecting UIDs.
+  const uids = [10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10009, 10010];
+  const set = (ranges: SequenceSet["ranges"]): SequenceSet => ({
+    type: "sequence", // parser default even for UID commands
+    ranges,
+  });
+
+  it("`UID 1:*` on a pruned mailbox emits a range of REAL UIDs, not seq positions", () => {
+    // The R1 HIGH scenario: previously returned `{start:1, end:50}` and
+    // silently matched zero rows. Now returns `{start:10001, end:10003}`
+    // for limit=3 — the actual first-3 UIDs.
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
+      3,
+      true
+    );
+    expect(result.ranges).toEqual([{ start: 10001, end: 10003 }]);
+  });
+
+  it("takes only UIDs that intersect the requested range", () => {
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([{ start: 10005, end: 10008 }]),
+      2,
+      true
+    );
+    expect(result.ranges).toEqual([{ start: 10005, end: 10006 }]);
+  });
+
+  it("returns empty ranges when NO UIDs intersect the requested range", () => {
+    // Range 1..50 on a mailbox with UIDs 10001..10010 — nothing matches.
+    // Downstream `_fetchMessages` sees an empty ranges list and correctly
+    // returns 0 messages, not the whole mailbox.
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([{ start: 1, end: 50 }]),
+      3,
+      true
+    );
     expect(result.ranges).toEqual([]);
   });
 
-  it("preserves the `type` discriminator (uid vs sequence)", () => {
-    const set: SequenceSet = {
-      type: "uid",
-      ranges: [{ start: 1, end: 10 }],
-    } as SequenceSet;
-    const result = clampSequenceSetToFirst(uids, set, 3);
-    expect((result as SequenceSet & { type?: string }).type).toBe("uid");
-    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+  it("walks multiple ranges in order, stopping at limit", () => {
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([
+        { start: 10001, end: 10002 }, // 2 UIDs
+        { start: 10005, end: 10008 }, // 4 UIDs
+      ]),
+      4,
+      true
+    );
+    // First 4 matched UIDs: 10001, 10002, 10005, 10006. Emitted as one
+    // enclosing range [10001, 10006]; 10003/10004 don't exist in the
+    // requested set, so downstream returns 4 rows.
+    expect(result.ranges).toEqual([{ start: 10001, end: 10006 }]);
   });
 
+  it("single-UID range (end=undefined) treats end as start", () => {
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([{ start: 10005 }]),
+      3,
+      true
+    );
+    expect(result.ranges).toEqual([{ start: 10005, end: 10005 }]);
+  });
+
+  it("empty mailbox returns empty ranges", () => {
+    const result = clampSequenceSetToFirst(
+      [],
+      set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
+      50,
+      true
+    );
+    expect(result.ranges).toEqual([]);
+  });
+
+  it("limit=0 returns empty ranges", () => {
+    const result = clampSequenceSetToFirst(
+      uids,
+      set([{ start: 10001, end: 10010 }]),
+      0,
+      true
+    );
+    expect(result.ranges).toEqual([]);
+  });
 });

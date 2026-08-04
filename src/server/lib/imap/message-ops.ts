@@ -89,9 +89,11 @@ export async function fetchMessagesTyped(
     const clampedSet = clampSequenceSetToFirst(
       seqState.seqToUid,
       fetchRequest.sequenceSet,
-      limit
+      limit,
+      isUidCommand
     );
-    logger.info("FETCH clamped to server per-command cap", {
+    // debug, not info — iOS full-sync fires ceil(N/limit) clamp events per session.
+    logger.debug("FETCH clamped to server per-command cap", {
       component: "imap",
       tag,
       requestedCount,

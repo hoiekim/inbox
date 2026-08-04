@@ -142,26 +142,60 @@ export function countSequenceSetMessages(seqToUid: number[], sequenceSet: Sequen
 
 /**
  * Take the first `limit` messages from a sequence set, dropping the rest.
- * Used when a FETCH request would exceed the server's per-command message cap
- * — instead of refusing the whole request with `NO [LIMIT]`, `fetchMessagesTyped`
- * shrinks the set to what it will actually process. RFC 3501 §6.4.5 lets the
- * server return a subset of the requested messages; clients then observe the
- * uncovered range and issue a follow-up FETCH for it, walking the mailbox in
- * cap-sized chunks. iOS Mail specifically treats `NO` as fatal ("Cannot Get
- * Mail" modal); returning a shortened `OK` avoids the modal entirely.
+ * Used when a FETCH request would exceed the server's per-command message
+ * cap — instead of refusing the whole request with `NO [LIMIT]`,
+ * `fetchMessagesTyped` shrinks the set to what it will actually process.
+ * RFC 3501 §6.4.5 lets the server return a subset of the requested
+ * messages; clients then observe the uncovered range and issue a
+ * follow-up FETCH for it, walking the mailbox in cap-sized chunks. iOS
+ * Mail specifically treats `NO` as fatal ("Cannot Get Mail" modal);
+ * returning a shortened `OK` avoids the modal entirely.
  *
- * Preserves range order and uses the same effective-max semantics as
- * `countSequenceSetMessages` above (so `1:*` and other max-sentinel ranges
- * clamp identically). For a UID-typed set the clamp still counts by seq
- * position — same known imprecision as the sibling counter, safe because
- * the goal is a bounded number of returned messages, not an exact one.
+ * `isUidCommand` distinguishes the two axes at the call site because the
+ * parser sets `sequenceSet.type = "sequence"` unconditionally — the
+ * actual UID vs seq discriminator is carried by `isUidCommand` from
+ * `fetchMessagesTyped` (see message-ops.ts). The two branches emit
+ * different shapes:
+ *
+ *  - SEQ-axis: ranges are seq positions. Walk them in order, keep whole
+ *    ones up to the limit, partially take the next, drop the rest.
+ *
+ *  - UID-axis: ranges are UID values, but UIDs are not necessarily 1..N —
+ *    a mailbox after retention pruning or a UIDVALIDITY bump may hold
+ *    e.g. UIDs 10001..11000. Clamping `1:*` to `{start:1, end:50}`
+ *    would resolve to zero rows downstream (silent data loss). Instead,
+ *    walk `seqToUid` in order (UIDs are monotonic per RFC 3501 §2.3.1.1),
+ *    keep the first `limit` that intersect the requested ranges, and
+ *    emit a single range enclosing them. Non-contiguous UIDs inside
+ *    that range simply match nothing downstream — correct.
  */
 export function clampSequenceSetToFirst(
   seqToUid: number[],
   sequenceSet: SequenceSet,
-  limit: number
+  limit: number,
+  isUidCommand: boolean
 ): SequenceSet {
   if (limit <= 0) return { ...sequenceSet, ranges: [] };
+
+  if (isUidCommand) {
+    const matched: number[] = [];
+    outer: for (const range of sequenceSet.ranges) {
+      const startUid = range.start;
+      const endUid = range.end ?? range.start;
+      for (const uid of seqToUid) {
+        if (uid >= startUid && uid <= endUid) {
+          matched.push(uid);
+          if (matched.length >= limit) break outer;
+        }
+      }
+    }
+    if (matched.length === 0) return { ...sequenceSet, ranges: [] };
+    return {
+      ...sequenceSet,
+      ranges: [{ start: matched[0], end: matched[matched.length - 1] }],
+    };
+  }
+
   const maxSeq = seqToUid.length;
   const clamped: SequenceRange[] = [];
   let remaining = limit;
