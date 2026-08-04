@@ -29,6 +29,10 @@ mock.module("server", () => ({
   saveMailHandler: mockSaveMailHandler,
   sendMail: mockSendMail,
   logger: mockLogger,
+  // Required, not optional: onAuth refuses this username outright, and omitting
+  // it here would leave the comparison against `undefined` and the guard inert
+  // in this file while still passing.
+  READONLY_USERNAME: "readonly",
 }));
 
 const mockSimpleParser = mock(() =>
@@ -163,6 +167,27 @@ describe("onAuth handler", () => {
 
     expect(result.user).toBe("testuser");
     expect(mockResetAuthFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the read-only account even with correct credentials", async () => {
+    // SMTP is a mutating surface — a successful AUTH reaches sendMail, which
+    // writes a sent mail row and hands a non-local recipient to Mailgun. The
+    // IMAP-layer read-only guard does not cover it, so it is refused here.
+    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const session = { remoteAddress: "9.9.9.9" } as SMTPServerSession;
+    const auth = { username: "readonly", password: "correctpassword" } as SMTPServerAuthentication;
+    mockGetUser.mockResolvedValue({
+      password: hashedPw,
+      getSigned: () => ({ username: "readonly" })
+    });
+
+    const result = await new Promise<{ user?: string }>((resolve) => {
+      onAuth!(auth, session, (_err, data) => resolve(data || {}));
+    });
+
+    expect(result.user).toBeUndefined();
+    // Short-circuited ahead of the lookup: the account never costs a round trip.
+    expect(mockGetUser).not.toHaveBeenCalled();
   });
 
   it("rejects auth when IP is rate-limited", async () => {

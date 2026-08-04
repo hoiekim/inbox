@@ -7,7 +7,7 @@ import {
   SMTPServerDataStream
 } from "smtp-server";
 import { simpleParser } from "mailparser";
-import { saveMailHandler, sendMail, getUser } from "server";
+import { saveMailHandler, sendMail, getUser, READONLY_USERNAME } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 import { sendAlarm } from "./alarm";
@@ -73,6 +73,16 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   }
 
   const { username, password } = auth;
+
+  // SMTP is a mutating surface: a successful AUTH here reaches sendMail, which
+  // writes a sent mail row and — for a non-local recipient — hands the message
+  // to Mailgun. The read-only account must never reach it, so it is refused at
+  // authentication rather than at any individual command.
+  if (username === READONLY_USERNAME) {
+    await recordAuthFailure(ip);
+    return cb(null, { user: undefined });
+  }
+
   const user = await getUser({ username });
   const signedUser = user?.getSigned();
 
