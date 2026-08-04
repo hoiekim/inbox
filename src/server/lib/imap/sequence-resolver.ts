@@ -181,9 +181,18 @@ export function countSequenceSetMessages(
     if (range.end === undefined) {
       count += 1;
     } else {
-      const effectiveEnd = Math.min(range.end, maxSeq);
-      const effectiveStart = Math.min(range.start, maxSeq);
-      count += Math.max(0, effectiveEnd - effectiveStart + 1);
+      // RFC 3501 §9: `10:3` ≡ `3:10`. Normalize AFTER the seq-clamp so
+      // `*:1` (parser: `{start: MAX_SAFE_INTEGER, end: 1}`) clamps to
+      // `{maxSeq, 1}` then swaps to `{1, maxSeq}` and counts the whole
+      // mailbox — matching what `convertSequenceSet` sends downstream.
+      // Pre-fix returned 0 (Math.max(0, 1 - maxSeq + 1) clamps to 0)
+      // so the cap gate skipped, and downstream fetched every row
+      // (cap-bypass DoS via a spec-legal `SEQ FETCH *:1`).
+      const clampedEnd = Math.min(range.end, maxSeq);
+      const clampedStart = Math.min(range.start, maxSeq);
+      const lo = Math.min(clampedStart, clampedEnd);
+      const hi = Math.max(clampedStart, clampedEnd);
+      count += Math.max(0, hi - lo + 1);
     }
   }
   return count;
@@ -233,12 +242,24 @@ export function clampSequenceSetToFirst(
   if (limit <= 0) return { ...sequenceSet, ranges: [] };
 
   if (isUidCommand) {
+    if (seqToUid.length === 0) return { ...sequenceSet, ranges: [] };
+    const maxUid = seqToUid[seqToUid.length - 1];
     const matched: number[] = [];
     outer: for (const range of sequenceSet.ranges) {
-      const startUid = range.start;
-      const endUid = range.end ?? range.start;
+      // Symmetric with `countSequenceSetMessages` and `resolveUidRangeSentinel`:
+      // resolve the `*` sentinel to the highest UID, then normalize
+      // reversed ranges (RFC 3501 §9: `10:3` ≡ `3:10`). Without this
+      // pair `UID FETCH *:10051` and `UID FETCH 19950:10051` never
+      // matched a UID and silently zero-fetched, even though the
+      // counter now correctly reports both as 9900-UID requests.
+      const rawStart = range.start;
+      const rawEnd = range.end ?? range.start;
+      const startUidResolved = rawStart === Number.MAX_SAFE_INTEGER ? maxUid : rawStart;
+      const endUidResolved = rawEnd === Number.MAX_SAFE_INTEGER ? maxUid : rawEnd;
+      const lo = Math.min(startUidResolved, endUidResolved);
+      const hi = Math.max(startUidResolved, endUidResolved);
       for (const uid of seqToUid) {
-        if (uid >= startUid && uid <= endUid) {
+        if (uid >= lo && uid <= hi) {
           matched.push(uid);
           if (matched.length >= limit) break outer;
         }

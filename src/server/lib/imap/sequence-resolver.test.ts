@@ -261,6 +261,18 @@ describe("countSequenceSetMessages — SEQ axis (isUidCommand=false)", () => {
     const set: SequenceSet = { ranges: [] };
     expect(countSequenceSetMessages(uids, set, false)).toBe(0);
   });
+
+  it("handles reversed ranges (`*:1` ≡ `1:*`) — counts whole mailbox, not 0", () => {
+    // Pre-fix returned 0 → cap gate skipped → downstream
+    // `convertSequenceSet` normalized to `1:*` and fetched every row,
+    // breaching the 50-body cap. Real cap-bypass DoS via a spec-legal
+    // `SEQ FETCH *:1`.
+    const set: SequenceSet = {
+      type: "sequence",
+      ranges: [{ start: Number.MAX_SAFE_INTEGER, end: 1 }],
+    };
+    expect(countSequenceSetMessages(uids, set, false)).toBe(uids.length);
+  });
 });
 
 describe("countSequenceSetMessages — UID axis (isUidCommand=true)", () => {
@@ -498,6 +510,34 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
     for (let i = 0; i < 50; i++) {
       expect(result.ranges[i]).toEqual({ start: i * 2 + 1, end: i * 2 + 1 });
     }
+  });
+
+  it("R5 HIGH: `UID FETCH *:10051` on pruned mailbox — resolves `*`, normalizes reversed range, clamps to first N", () => {
+    // Pre-fix: `startUid = MAX_SAFE_INTEGER`, `endUid = 10051`.
+    // Predicate `uid >= MAX_SAFE_INTEGER` is never true → matched=[] →
+    // returns empty ranges → silent zero-fetch even though the counter
+    // now correctly reports 9900 requested UIDs. Post-fix resolves the
+    // `*` sentinel to maxUid, normalizes to `[10051..maxUid]`, and
+    // clamps to the first N.
+    const pruned = Array.from({ length: 9950 }, (_, i) => 10001 + i);
+    const result = clampSequenceSetToFirst(
+      pruned,
+      set([{ start: Number.MAX_SAFE_INTEGER, end: 10051 }]),
+      50,
+      true
+    );
+    expect(result.ranges).toEqual([{ start: 10051, end: 10100 }]);
+  });
+
+  it("R5 HIGH: `UID FETCH 19950:10051` (reversed) — normalized to `10051:19950`, clamps to first N", () => {
+    const pruned = Array.from({ length: 9950 }, (_, i) => 10001 + i);
+    const result = clampSequenceSetToFirst(
+      pruned,
+      set([{ start: 19950, end: 10051 }]),
+      50,
+      true
+    );
+    expect(result.ranges).toEqual([{ start: 10051, end: 10100 }]);
   });
 
   it("collapses contiguous matched UIDs into one range but keeps holes as separate ranges", () => {
