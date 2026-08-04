@@ -356,11 +356,13 @@ describe("postSetInfoRoute", () => {
     expect((req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.user).toEqual(maskedUser);
   });
 
-  it("refuses the readonly identity — second HTTP session-issuance door", async () => {
-    // Even if the caller reaches setUserInfo (e.g. via a valid signup
-    // token) and the persisted user turns out to be readonly, session
-    // issuance must refuse. Mirrors the /login gate so both HTTP
-    // session-issuance surfaces close on the same identity check.
+  it("refuses the readonly identity BEFORE setUserInfo (no DB mutation)", async () => {
+    // setUserInfo's else-branch (users.ts:176) unconditionally issues
+    // `usersTable.update(id, {password: bcrypt(new_pw), token: null,
+    // expiry: null})` for pre-existing users. A post-call check would
+    // leave the row already mutated. This asserts the pre-lookup gate:
+    // getUser(email) fires, sees username=readonly, refuses — and
+    // setUserInfo is NEVER called (so no DB mutation).
     const { postSetInfoRoute } = await import("./post-set-info");
     const { READONLY_USERNAME } = await import(
       "../../../postgres/initialize"
@@ -370,9 +372,7 @@ describe("postSetInfoRoute", () => {
       username: READONLY_USERNAME,
       email: `${READONLY_USERNAME}@localhost`,
     };
-    mockSetUserInfo.mockResolvedValueOnce(
-      roMasked as Awaited<ReturnType<typeof mockSetUserInfo>>
-    );
+    mockGetUser.mockResolvedValueOnce(roMasked);
     const req = makeReq({
       body: {
         email: `${READONLY_USERNAME}@localhost`,
@@ -389,6 +389,8 @@ describe("postSetInfoRoute", () => {
     expect((result as ApiResponse<unknown>).message).toContain(
       "Invalid credentials"
     );
+    // Load-bearing: proves the gate fires BEFORE the DB-mutating call.
+    expect(mockSetUserInfo).not.toHaveBeenCalled();
     expect(
       (req as unknown as {
         session: import("express-session").Session & {

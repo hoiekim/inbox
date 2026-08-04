@@ -445,7 +445,8 @@ export class ImapSession {
       this.write,
       this.writeChunked,
       this.writeStream,
-      this.condstoreEnabled
+      this.condstoreEnabled,
+      this.isReadOnlyUser
     );
   };
 

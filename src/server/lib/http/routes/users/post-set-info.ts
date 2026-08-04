@@ -1,5 +1,5 @@
 import { MaskedUser } from "common";
-import { setUserInfo } from "server";
+import { getUser, setUserInfo } from "server";
 import { READONLY_USERNAME } from "../../../postgres/initialize";
 import { Route } from "../route";
 
@@ -30,18 +30,19 @@ export const postSetInfoRoute = new Route<SetInfoPostResponse>(
       return { status: "failed", message: "token must be a string." };
     }
 
-    const user = await setUserInfo({ email, username, password, token: token as string | undefined });
-
-    // Same identity-boundary guard as post-login.ts. `setUserInfo` falls
-    // into the else-branch of lib/users.ts when a user already exists, so
-    // the input `username` is ignored and the persisted `readonly` name
-    // reaches this response. Refusing session issuance here — the only
-    // other `req.session.user = …` site in the codebase — closes the
-    // second door on the read-only identity's HTTP surface.
-    if (user?.username === READONLY_USERNAME) {
+    // Refuse the reserved read-only identity BEFORE calling setUserInfo.
+    // setUserInfo's else-branch (users.ts:176) unconditionally issues
+    // `usersTable.update(id, {password, …})` for pre-existing users, so
+    // a post-call check would leave the row already mutated (bcrypt hash
+    // of an attacker-chosen password) even when session issuance gets
+    // refused. Pre-lookup by email, refuse same-shape (`Invalid
+    // credentials.`) if the row is the readonly account.
+    const existing = await getUser({ email });
+    if (existing?.username === READONLY_USERNAME) {
       return { status: "failed", message: "Invalid credentials." };
     }
 
+    const user = await setUserInfo({ email, username, password, token: token as string | undefined });
     req.session.user = user;
     return { status: "success", body: user };
   }

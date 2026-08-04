@@ -55,7 +55,14 @@ export async function fetchMessagesTyped(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
   writeStream: WriteStream,
-  condstoreEnabled: boolean = false
+  condstoreEnabled: boolean = false,
+  // Read-only IMAP user (`READONLY_USERNAME`) — suppress the auto-\Seen
+  // side-effect on FETCH BODY[] / RFC822 / RFC822.TEXT. The mutation is
+  // dormant today because addressToUsername routes every message at
+  // $EMAIL_DOMAIN to admin (readonly's inbox stays empty by
+  // construction), but any future path that populates it would silently
+  // break the read-only identity invariant.
+  suppressReadMark: boolean = false
 ): Promise<void> {
   const isFlagsOnly = fetchRequest.dataItems.every(
     (item) =>
@@ -110,7 +117,8 @@ export async function fetchMessagesTyped(
       write,
       writeChunked,
       writeStream,
-      emitCondstore
+      emitCondstore,
+      suppressReadMark
     );
     write(`${tag} OK FETCH completed\r\n`);
   } catch (error) {
@@ -193,7 +201,8 @@ async function _processFetchMessages(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
   writeStream: WriteStream,
-  condstoreEnabled: boolean
+  condstoreEnabled: boolean,
+  suppressReadMark: boolean
 ): Promise<void> {
   const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
   const isUidFetch =
@@ -224,7 +233,7 @@ async function _processFetchMessages(
       );
       await writeFetchResponse(write, writeChunked, writeStream, seqNum, response);
 
-      if (shouldMarkAsRead(fetchRequest.dataItems)) {
+      if (!suppressReadMark && shouldMarkAsRead(fetchRequest.dataItems)) {
         await markRead(store.getUser().id, id);
       }
     } catch (error) {
