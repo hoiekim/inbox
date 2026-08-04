@@ -117,6 +117,40 @@ describe("postLoginRoute", () => {
     expect((result as ApiResponse<unknown>).message).toContain("Invalid credentials");
   });
 
+  it("refuses the readonly identity even with a valid password (identity-boundary gate)", async () => {
+    // Read-only user is IMAP-only. HTTP session issuance must refuse it so
+    // mutating HTTP routes (/api/mails/send, etc.) can't be reached even
+    // with the correct DB credential. Same-shape response as a bad password
+    // — no probe signal to distinguish "wrong pw" from "wrong surface."
+    const { postLoginRoute } = await import("./post-login");
+    const { READONLY_USERNAME } = await import(
+      "../../../postgres/initialize"
+    );
+
+    const roUser = makeUser(READONLY_USERNAME, "readonly-id");
+    mockGetUser.mockResolvedValueOnce(roUser);
+    mockBcryptCompare.mockResolvedValueOnce(true);
+
+    const req = makeReq({
+      body: { username: READONLY_USERNAME, password: "correct" },
+    });
+    const res = makeRes();
+    const result = await postLoginRoute.callback(req, res, noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toContain(
+      "Invalid credentials"
+    );
+    expect(
+      (req as unknown as {
+        session: import("express-session").Session & {
+          user: unknown;
+          destroy: ReturnType<typeof mock>;
+        };
+      }).session.user
+    ).toBeNull();
+  });
+
   it("returns failed when user doesn't exist (runs dummy hash to prevent timing attacks)", async () => {
     const { postLoginRoute } = await import("./post-login");
 
@@ -320,6 +354,49 @@ describe("postSetInfoRoute", () => {
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect((result as ApiResponse<unknown>).body).toEqual(maskedUser);
     expect((req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.user).toEqual(maskedUser);
+  });
+
+  it("refuses the readonly identity — second HTTP session-issuance door", async () => {
+    // Even if the caller reaches setUserInfo (e.g. via a valid signup
+    // token) and the persisted user turns out to be readonly, session
+    // issuance must refuse. Mirrors the /login gate so both HTTP
+    // session-issuance surfaces close on the same identity check.
+    const { postSetInfoRoute } = await import("./post-set-info");
+    const { READONLY_USERNAME } = await import(
+      "../../../postgres/initialize"
+    );
+    const roMasked = {
+      id: "readonly-id",
+      username: READONLY_USERNAME,
+      email: `${READONLY_USERNAME}@localhost`,
+    };
+    mockSetUserInfo.mockResolvedValueOnce(
+      roMasked as Awaited<ReturnType<typeof mockSetUserInfo>>
+    );
+    const req = makeReq({
+      body: {
+        email: `${READONLY_USERNAME}@localhost`,
+        username: READONLY_USERNAME,
+        password: "any",
+      },
+    });
+    const result = await postSetInfoRoute.callback(
+      req,
+      makeRes(),
+      noopStream
+    );
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toContain(
+      "Invalid credentials"
+    );
+    expect(
+      (req as unknown as {
+        session: import("express-session").Session & {
+          user: unknown;
+          destroy: ReturnType<typeof mock>;
+        };
+      }).session.user
+    ).toBeNull();
   });
 });
 
