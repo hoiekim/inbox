@@ -422,10 +422,16 @@ export async function storeFlagsTyped(
   try {
     const { sequenceSet, operation, flags, silent, unchangedSince } = storeRequest;
     const ranges = convertSequenceSet(sequenceSet);
-    // RFC 7162 §3.1.3: UIDs (UID STORE) or sequence numbers (STORE) that lost
-    // the UNCHANGEDSINCE race, accumulated across every range in the set so the
-    // tagged response names them all at once.
-    const conflicted: number[] = [];
+    // Accumulated across every range in the set so the tagged response can
+    // name the conflicts all at once — and so a message the set mentions more
+    // than once is judged on its best outcome, not its last one. `7,3:9` is a
+    // legal sequence set (RFC 7162 §3.1.3 Example 11): the first pass applies
+    // the change to UID 7 and stamps it with this STORE's own mod-sequence,
+    // which is by construction above the client's ceiling, so the second pass
+    // re-matches it and the guarded UPDATE skips it. Reporting that in
+    // MODIFIED would tell the client a write was refused when it landed.
+    const succeededUids = new Set<number>();
+    const failedUids = new Set<number>();
 
     for (const { start, end } of ranges) {
       let uidStart = start;
@@ -464,19 +470,8 @@ export async function storeFlagsTyped(
         unchangedSince
       );
 
-      // MODIFIED carries the same addressing the command used: UIDs for
-      // UID STORE, sequence numbers for STORE (RFC 7162 §3.1.3). A UID with no
-      // sequence number in the current view has been expunged out from under
-      // the client — there is nothing to name it by, so it is dropped rather
-      // than reported under a wrong number.
-      failed.forEach((uid) => {
-        if (isUidStore) {
-          conflicted.push(uid);
-          return;
-        }
-        const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
-        if (seq !== undefined) conflicted.push(seq);
-      });
+      updatedMails.forEach((mail) => succeededUids.add(mail.uid));
+      failed.forEach((uid) => failedUids.add(uid));
 
       // RFC 3501 §6.4.6: STORE on a UID/sequence range that matches no
       // messages is NOT an error — the server simply emits zero untagged
@@ -532,11 +527,21 @@ export async function storeFlagsTyped(
       }
     }
 
+    // MODIFIED carries the same addressing the command used: UIDs for
+    // UID STORE, sequence numbers for STORE (RFC 7162 §3.1.3). A UID with no
+    // sequence number in the current view has been expunged out from under the
+    // client — there is nothing to name it by, so it is dropped rather than
+    // reported under a wrong number.
+    const conflicted = [...failedUids]
+      .filter((uid) => !succeededUids.has(uid))
+      .map((uid) => (isUidStore ? uid : uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid)))
+      .filter((id): id is number => id !== undefined);
+
     // RFC 7162 §3.1.3: the conflict list rides on the TAGGED response, and the
     // command still completes OK — a conditional STORE that changed nothing is
     // not an error, it is a lost race the client must resolve.
     if (conflicted.length > 0) {
-      write(`${tag} OK [MODIFIED ${formatUidSet(conflicted)}] Conditional STORE failed\r\n`);
+      write(`${tag} OK [MODIFIED ${formatMessageSet(conflicted)}] Conditional STORE failed\r\n`);
       return;
     }
     write(`${tag} OK STORE completed\r\n`);
@@ -553,12 +558,13 @@ export async function storeFlagsTyped(
 /**
  * Compact a list of message numbers to the RFC 3501 sequence-set form
  * ("1,3:5,7"). Used by the RFC 4315 COPYUID/APPENDUID response codes and by
- * RFC 7162's MODIFIED — all three carry a sequence set, and MODIFIED carries
- * sequence numbers rather than UIDs when the command was a plain STORE.
+ * RFC 7162's MODIFIED — all three carry a sequence set. Deliberately not named
+ * for UIDs: MODIFIED carries sequence numbers, not UIDs, when the command was
+ * a plain STORE.
  */
-const formatUidSet = (uids: number[]): string => {
-  if (uids.length === 0) return "";
-  const sorted = [...new Set(uids)].sort((a, b) => a - b);
+const formatMessageSet = (numbers: number[]): string => {
+  if (numbers.length === 0) return "";
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b);
   const parts: string[] = [];
   let rangeStart = sorted[0];
   let rangeEnd = sorted[0];
@@ -688,19 +694,19 @@ export async function copyMessageTyped(
 
     // RFC 4315 §3: the COPYUID source-set and dest-set must correspond
     // positionally (n-th source UID ↔ n-th dest UID). The two sets are
-    // built by `formatUidSet`, which sorts each independently. To keep
+    // built by `formatMessageSet`, which sorts each independently. To keep
     // that sort from desynchronizing the pairing for an out-of-order
     // sequence-set (e.g. `UID COPY 5,3`), assign dest UIDs in ascending
     // source-UID order: sort the materialized source mails ascending here
     // so the copy loop pushes both `sourceUids` and `destUids` already
-    // ascending, and `formatUidSet`'s independent sorts stay aligned.
+    // ascending, and `formatMessageSet`'s independent sorts stay aligned.
     sourceMails.sort((a, b) => srcUidOf(a) - srcUidOf(b));
 
     // De-duplicate by source UID. A client may send overlapping ranges
     // (`UID COPY 3:5,4:6`); `getMessages` runs once per range, so a UID
     // that falls in two ranges is materialized twice. Cloning it twice
     // would both store a duplicate message and desync the COPYUID sets:
-    // `formatUidSet` collapses the source set via `new Set` while the dest
+    // `formatMessageSet` collapses the source set via `new Set` while the dest
     // set keeps every clone, so `sourceSet.length !== destSet.length` and
     // the positional n-th-source ↔ n-th-dest correspondence the response
     // promises is broken. Keep the first occurrence of each source UID so
@@ -829,8 +835,8 @@ export async function copyMessageTyped(
     // source-set dest-set] response code. Most servers attach it to the
     // tagged OK; doing the same here.
     const uidValidity = await getImapUidValidity(user.id);
-    const sourceSet = formatUidSet(sourceUids);
-    const destSet = formatUidSet(destUids);
+    const sourceSet = formatMessageSet(sourceUids);
+    const destSet = formatMessageSet(destUids);
     write(
       `${tag} OK [COPYUID ${uidValidity} ${sourceSet} ${destSet}] COPY completed\r\n`
     );
@@ -1125,8 +1131,8 @@ export async function moveMessageTyped(
     await buildSequenceMapping(store, selectedMailbox, seqState);
 
     const uidValidity = await getImapUidValidity(user.id);
-    const sourceSet = formatUidSet(sourceUids);
-    const destSet = formatUidSet(destUids);
+    const sourceSet = formatMessageSet(sourceUids);
+    const destSet = formatMessageSet(destUids);
     write(
       `${tag} OK [COPYUID ${uidValidity} ${sourceSet} ${destSet}] MOVE completed\r\n`
     );

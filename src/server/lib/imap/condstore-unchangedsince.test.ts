@@ -18,56 +18,24 @@
  *
  * Isolation mirrors condstore.test.ts: mock `pg` so the lazy pool in
  * postgres/client.ts is a FakePool, then run the REAL code. No mock of the
- * `server` barrel (which would bleed across files via Bun's process-global
- * mock.module).
+ * `server` barrel — that one bleeds across files via Bun's process-global
+ * mock.module.
  */
 
-import { describe, it, expect, mock, beforeAll, beforeEach, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 import type { Store } from "./store";
 import type { SequenceState } from "./sequence-resolver";
 import type { StoreRequest } from "./types";
 
-const RESERVED_MODSEQ = 900;
-
-// Rows the range matches, with the mod-sequence each currently carries.
-let matchedRows: { uid: number; modseq: number }[] = [];
-const queries: { sql: string; values: unknown[] }[] = [];
-
-const mockQuery = mock(async (sql: string, values: unknown[] = []) => {
-  queries.push({ sql, values });
-  if (typeof sql === "string" && sql.includes("next_uid")) {
-    return { rows: [{ next_uid: String(RESERVED_MODSEQ) }], rowCount: 1 };
-  }
-  const row = (r: { uid: number; modseq: number }) => ({
-    uid: r.uid,
-    read: true,
-    saved: false,
-    deleted: false,
-    draft: false,
-    answered: false,
-    modseq: r.modseq,
-  });
-  if (typeof sql === "string" && sql.trimStart().startsWith("SELECT")) {
-    return { rows: matchedRows.map(row), rowCount: matchedRows.length };
-  }
-  // UPDATE: honour the guard the query builder appended, so the failed set is
-  // derived the same way Postgres would derive it rather than being asserted
-  // into existence.
-  const guard = /modseq <= \$(\d+)/.exec(sql);
-  const survivors = guard
-    ? matchedRows.filter((r) => r.modseq <= Number(values[Number(guard[1]) - 1]))
-    : matchedRows;
-  return {
-    rows: survivors.map((r) => ({ ...row(r), modseq: RESERVED_MODSEQ })),
-    rowCount: survivors.length,
-  };
-});
-
+// `parseCommand` and `ImapSession` reach postgres/client.ts's lazy pool via the
+// module graph, so `pg` is faked to keep it from opening a socket. Nothing here
+// asserts on SQL — the repository's behaviour is covered next to the repository
+// (see the note below) — so the fake only needs to not blow up.
 class FakePool {
-  query = mockQuery;
+  query = mock(async () => ({ rows: [], rowCount: 0 }));
   end = async () => {};
-  connect = async () => ({ query: mockQuery, release: () => {} });
+  connect = async () => ({ query: this.query, release: () => {} });
   on() {}
 }
 
@@ -87,11 +55,6 @@ const { resetPool } = await import("../postgres/client");
 beforeAll(() => {
   mock.module("pg", pgMock);
   resetPool();
-});
-
-beforeEach(() => {
-  queries.length = 0;
-  matchedRows = [];
 });
 
 afterAll(() => {
@@ -228,8 +191,32 @@ describe("CONDSTORE phase 4 — MODIFIED rides on the tagged response", () => {
   });
 
   it("compacts the failed set into ranges", async () => {
-    const lines = await runStore({ failed: [4, 5, 6, 9] });
+    const lines = await runStore({
+      updated: [{ uid: 1, read: true, modseq: 320162350 }],
+      failed: [4, 5, 6, 9],
+    });
     expect(lines.at(-1)).toBe("d105 OK [MODIFIED 4:6,9] Conditional STORE failed\r\n");
+  });
+
+  // RFC 7162 §3.1.3 Example 11 uses `7,3:9` — a sequence set may legally name
+  // the same message twice. The first pass applies the change to UID 7 and
+  // stamps it with this STORE's own mod-sequence, which is above the client's
+  // ceiling by construction, so the second pass re-matches it and the guarded
+  // UPDATE skips it. It must NOT be reported as MODIFIED: the write landed.
+  it("does not report a message that succeeded in an earlier pass over the set", async () => {
+    const lines = await runStore({
+      updated: [{ uid: 7, read: true, modseq: 320162350 }],
+      failed: [7],
+    });
+    expect(lines.at(-1)).toBe("d105 OK STORE completed\r\n");
+  });
+
+  it("still reports the genuinely-conflicted siblings of a repeated message", async () => {
+    const lines = await runStore({
+      updated: [{ uid: 7, read: true, modseq: 320162350 }],
+      failed: [7, 9],
+    });
+    expect(lines.at(-1)).toBe("d105 OK [MODIFIED 9] Conditional STORE failed\r\n");
   });
 
   it("omits MODIFIED entirely when nothing lost the race", async () => {
