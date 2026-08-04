@@ -114,7 +114,7 @@ describe("Store.storeMail — what the destination box decides (#725)", () => {
     // "this is a draft". Without the flag the row is written and shows up in no
     // mailbox the client asked for.
     await new Store(makeUser()).storeMail(makeMail(), "Drafts");
-    expect(savedInput().draft).toBe(true);
+    expect(savedInput().placement).toEqual({ draft: true });
   });
 
   it("records no mapping row for a utility destination", async () => {
@@ -122,14 +122,13 @@ describe("Store.storeMail — what the destination box decides (#725)", () => {
     // per-box UID nothing reads and burn a counter value.
     await new Store(makeUser()).storeMail(makeMail(), "Junk");
     expect(savedInput().mailbox).toBeUndefined();
-    expect(savedInput().is_spam).toBe(true);
+    expect(savedInput().placement).toEqual({ is_spam: true });
   });
 
   it("records the mapping row for a mapped destination and touches no flag", async () => {
     await new Store(makeUser()).storeMail(makeMail(), "INBOX/accounts/alice");
     expect(savedInput().mailbox).toBe("INBOX/accounts/alice");
-    expect(savedInput().draft).toBe(false);
-    expect(savedInput().is_spam).toBeUndefined();
+    expect(savedInput().placement).toBeUndefined();
   });
 
   it("records no mapping row for INBOX or the unified Sent view", async () => {

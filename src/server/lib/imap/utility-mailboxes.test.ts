@@ -50,13 +50,22 @@ describe("isUtilityFolder", () => {
     expect(isUtilityFolder("Junk")).toBe(true);
   });
 
-  it("is case-sensitive and not a prefix match", () => {
-    // RFC 3501 §5.1 makes INBOX the only case-insensitive name; every other
-    // mailbox name is compared literally, so `drafts` stays a name the user
-    // could legitimately create.
-    expect(isUtilityFolder("drafts")).toBe(false);
+  it("is case-insensitive, matching the LIST de-dup", () => {
+    // `Store.listMailboxesOrThrow` de-dups user boxes against these names
+    // case-insensitively, so `drafts` names no listable box. An exact-case
+    // guard would let `CREATE "drafts"` write a row that LIST then hides and
+    // SELECT then rejects — the phantom the CREATE guard exists to prevent.
+    expect(isUtilityFolder("drafts")).toBe(true);
+    expect(isUtilityFolder("JUNK")).toBe(true);
+  });
+
+  it("matches the whole name — not a prefix, suffix, or substring", () => {
+    // `INBOX/accounts/junk` is a real per-account box in prod (a user whose
+    // local-part is `junk`). A substring match would swallow it.
+    expect(isUtilityFolder("INBOX/accounts/junk")).toBe(false);
     expect(isUtilityFolder("Drafts2")).toBe(false);
     expect(isUtilityFolder("INBOX/Drafts")).toBe(false);
+    expect(isUtilityFolder("Drafts/sub")).toBe(false);
     expect(isUtilityFolder("")).toBe(false);
   });
 

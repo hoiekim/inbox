@@ -42,14 +42,21 @@ export type MembershipFilter = Record<string, boolean>;
 // A Map, not an object literal: mailbox names are user input, and `"toString"
 // in {}` is true — an object lookup would hand a user-created box called
 // `constructor` the domain UID space and show it the whole account.
+//
+// Keyed lowercase and looked up lowercase, because the LIST de-dup in
+// `Store.listMailboxesOrThrow` is case-insensitive: `drafts` resolves to no
+// listable box, so it must not resolve to a different UID space either.
 const UTILITY_VIEW_MEMBERSHIP = new Map<string, MembershipFilter>([
-  [DRAFTS_VIEW, { [DRAFT]: true }],
-  [JUNK_VIEW, { [IS_SPAM]: true }],
+  [DRAFTS_VIEW.toLowerCase(), { [DRAFT]: true }],
+  [JUNK_VIEW.toLowerCase(), { [IS_SPAM]: true }],
 ]);
+
+const utilityMembership = (mailbox: string | null): MembershipFilter | undefined =>
+  mailbox === null ? undefined : UTILITY_VIEW_MEMBERSHIP.get(mailbox.toLowerCase());
 
 /** Whether `mailbox` names one of the flag-derived utility views. */
 export const isUtilityView = (mailbox: string | null): boolean =>
-  mailbox !== null && UTILITY_VIEW_MEMBERSHIP.has(mailbox);
+  utilityMembership(mailbox) !== undefined;
 
 /**
  * Whether a mailbox enumerates `mails.uid_domain` rather than joining
@@ -61,8 +68,9 @@ export const usesDomainUidSpace = (mailbox: string | null): boolean =>
   mailbox === null || isUtilityView(mailbox);
 
 /**
- * Whether a mailbox hides spam-classified and draft mail — true for the INBOX
- * tree only.
+ * Whether a mailbox is in the INBOX tree — INBOX itself or one of its
+ * per-account sub-views. Those are the boxes that hide spam-classified and
+ * half-written mail.
  *
  * INBOX (`mailbox === null`, `sent = false`) has no address condition at all,
  * and its per-account sub-views match purely on delivery address, so a
@@ -82,7 +90,7 @@ export const usesDomainUidSpace = (mailbox: string | null): boolean =>
  * the mailbox until EXPUNGE removes them. Soft-deleted mail leaving INBOX is a
  * `Trash` mailbox question (#725), not an INBOX predicate.
  */
-export const quarantinesSpam = (mailbox: string | null, sent: boolean): boolean =>
+export const isInboxTree = (mailbox: string | null, sent: boolean): boolean =>
   !sent && (mailbox === null || mailbox.startsWith(INBOX_ACCOUNTS_PREFIX));
 
 /**
@@ -99,9 +107,11 @@ export const membershipFilter = (
   mailbox: string | null,
   sent: boolean
 ): MembershipFilter => {
-  const utility = mailbox !== null ? UTILITY_VIEW_MEMBERSHIP.get(mailbox) : undefined;
-  if (utility) return utility;
-  if (quarantinesSpam(mailbox, sent)) return { [IS_SPAM]: false, [DRAFT]: false };
+  const utility = utilityMembership(mailbox);
+  // Copied, not returned by reference: this module is public through the
+  // `server` barrel, and the entries are the view definitions themselves.
+  if (utility) return { ...utility };
+  if (isInboxTree(mailbox, sent)) return { [IS_SPAM]: false, [DRAFT]: false };
   return {};
 };
 

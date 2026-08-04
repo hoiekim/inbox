@@ -685,7 +685,7 @@ export class Store {
         uid_domain: mail.uid?.domain,
         uid_mailbox: mail.uid?.account,
         mailbox,
-        ...placement,
+        placement,
       };
 
       const result = await pgSaveMail(input);

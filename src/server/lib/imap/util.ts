@@ -387,15 +387,24 @@ export const UTILITY_FOLDERS: {
   { name: "Junk", specialUse: "\\Junk", placement: { is_spam: true } },
 ];
 
+/**
+ * The utility folder `box` names, or `undefined` for any other box.
+ *
+ * Case-insensitive, like `isInbox` and unlike an exact-match lookup: LIST
+ * de-dups user boxes against these names case-insensitively, so an exact-match
+ * guard would let `CREATE "drafts"` through into a row that LIST then hides and
+ * SELECT then rejects — the phantom `createMailbox`'s guard exists to prevent.
+ */
+export const utilityFolder = (box: string) =>
+  UTILITY_FOLDERS.find((folder) => folder.name.toLowerCase() === box.toLowerCase());
+
 /** Returns true for a server-defined utility mailbox (`Drafts`, `Junk`). */
-export const isUtilityFolder = (box: string): boolean =>
-  UTILITY_FOLDERS.some((folder) => folder.name === box);
+export const isUtilityFolder = (box: string): boolean => !!utilityFolder(box);
 
 /** The flags a mail must carry to land in `box`, or `undefined` for any other box. */
 export const utilityPlacement = (
   box: string
-): { draft?: boolean; is_spam?: boolean } | undefined =>
-  UTILITY_FOLDERS.find((folder) => folder.name === box)?.placement;
+): { draft?: boolean; is_spam?: boolean } | undefined => utilityFolder(box)?.placement;
 
 /** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {

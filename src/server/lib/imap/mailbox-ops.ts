@@ -19,9 +19,9 @@ import {
   isInbox,
   isSentMessagesAccountsFolder,
   isUtilityFolder,
+  utilityFolder,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
-  UTILITY_FOLDERS,
 } from "./util";
 import { Store } from "./store";
 import { StatusItem } from "./types";
@@ -298,9 +298,13 @@ export function getMailboxAttributes(box: string, allBoxes: string[]): string {
   // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
   // in a plain LIST response, which is how a client maps a role to a box name
   // without guessing at the name.
-  const utility = UTILITY_FOLDERS.find((folder) => folder.name === box);
+  const utility = utilityFolder(box);
   if (utility) {
-    return `${utility.specialUse} \\HasNoChildren`;
+    // The CREATE guard only refuses the utility name itself, so `Drafts/sub`
+    // is a legal user box — scan for children like every other branch rather
+    // than asserting \HasNoChildren and contradicting the same LIST response.
+    const hasChildren = allBoxes.some((b) => b.startsWith(`${box}/`));
+    return `${utility.specialUse} ${hasChildren ? "\\HasChildren" : "\\HasNoChildren"}`;
   }
   if (isAccountsFolder(box)) {
     return "\\HasChildren \\Noselect";
