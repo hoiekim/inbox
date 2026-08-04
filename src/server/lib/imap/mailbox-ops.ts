@@ -465,10 +465,13 @@ export async function selectMailbox(
     if (firstUnseenSeq) {
       write(`* OK [UNSEEN ${firstUnseenSeq}] Message ${firstUnseenSeq} is first unseen\r\n`);
     }
-    const uidNext =
-      seqState.seqToUid.length > 0
-        ? seqState.seqToUid[seqState.seqToUid.length - 1] + 1
-        : countResult.maxUid + 1 || 1;
+    // UIDNEXT comes from the mailbox's highest assigned UID, never from the
+    // last entry of `seqToUid`. The two diverge whenever the mailbox hides a
+    // message it still holds a UID for — INBOX's spam quarantine is one such
+    // case — and taking the visible tail would let UIDNEXT decrease (RFC 3501
+    // §2.3.1.1 forbids it) and disagree with the value STATUS reports off the
+    // same unfiltered `maxUid`.
+    const uidNext = countResult.maxUid + 1 || 1;
     write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
     write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
     // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
