@@ -3,7 +3,7 @@ import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
 
-import { getDomain, PostgresSessionStore } from "server";
+import { getDomain, isProduction, PostgresSessionStore } from "server";
 import apiRouter from "./routes";
 import { startCleanupScheduler } from "./rate-limit";
 import { logger } from "../logger";
@@ -13,7 +13,7 @@ export const initializeHttp = async () => {
 
   // Trust first proxy for secure cookie detection behind reverse proxy.
   // (Rate limiting reads X-Real-IP directly and does not rely on req.ip.)
-  if (process.env.NODE_ENV === "production") {
+  if (isProduction()) {
     app.set("trust proxy", 1);
   }
 
@@ -22,7 +22,7 @@ export const initializeHttp = async () => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    if (process.env.NODE_ENV === "production") {
+    if (isProduction()) {
       res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
     next();
@@ -44,7 +44,7 @@ export const initializeHttp = async () => {
       saveUninitialized: false,
       rolling: true,
       cookie: {
-        secure: process.env.NODE_ENV === "production",
+        secure: isProduction(),
         sameSite: "strict",
         maxAge: 1000 * 60 * 60 * 24 * 7
       },
