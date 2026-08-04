@@ -6,6 +6,7 @@ import {
   resolveSeqRangeToUids,
   resolveUidRangeSentinel,
   countSequenceSetMessages,
+  clampSequenceSetToFirst,
   type SequenceState,
 } from "./sequence-resolver";
 import type { SequenceSet } from "./types";
@@ -260,4 +261,77 @@ describe("countSequenceSetMessages", () => {
     const set: SequenceSet = { ranges: [] };
     expect(countSequenceSetMessages(uids, set)).toBe(0);
   });
+});
+
+describe("clampSequenceSetToFirst", () => {
+  // 10-message mailbox for the shared cases below.
+  const uids = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110];
+
+  it("returns the original set unchanged when count is already at the limit", () => {
+    const set: SequenceSet = { ranges: [{ start: 1, end: 5 }] };
+    const result = clampSequenceSetToFirst(uids, set, 5);
+    expect(result.ranges).toEqual([{ start: 1, end: 5 }]);
+  });
+
+  it("returns the original set unchanged when count is below the limit", () => {
+    const set: SequenceSet = { ranges: [{ start: 1, end: 3 }] };
+    const result = clampSequenceSetToFirst(uids, set, 50);
+    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+  });
+
+  it("truncates a single range that exceeds the limit", () => {
+    const set: SequenceSet = { ranges: [{ start: 1, end: 10 }] };
+    const result = clampSequenceSetToFirst(uids, set, 3);
+    // First 3 messages: seq 1..3.
+    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+  });
+
+  it("truncates `1:*` (Number.MAX_SAFE_INTEGER sentinel) to the first N", () => {
+    const set: SequenceSet = {
+      ranges: [{ start: 1, end: Number.MAX_SAFE_INTEGER }],
+    };
+    const result = clampSequenceSetToFirst(uids, set, 4);
+    expect(result.ranges).toEqual([{ start: 1, end: 4 }]);
+  });
+
+  it("keeps whole ranges first, then partially takes the next", () => {
+    const set: SequenceSet = {
+      ranges: [
+        { start: 1, end: 2 },  // 2 msgs
+        { start: 5, end: 8 },  // 4 msgs
+        { start: 10 },         // 1 msg
+      ],
+    };
+    // limit=5: take {1,2}, then partial {5..7} (3 of 4), drop {10}.
+    const result = clampSequenceSetToFirst(uids, set, 5);
+    expect(result.ranges).toEqual([
+      { start: 1, end: 2 },
+      { start: 5, end: 7 },
+    ]);
+  });
+
+  it("keeps single-message ranges (end===undefined) as-is until the limit", () => {
+    const set: SequenceSet = {
+      ranges: [{ start: 3 }, { start: 5 }, { start: 7 }],
+    };
+    const result = clampSequenceSetToFirst(uids, set, 2);
+    expect(result.ranges).toEqual([{ start: 3 }, { start: 5 }]);
+  });
+
+  it("returns an empty ranges array when limit is 0", () => {
+    const set: SequenceSet = { ranges: [{ start: 1, end: 10 }] };
+    const result = clampSequenceSetToFirst(uids, set, 0);
+    expect(result.ranges).toEqual([]);
+  });
+
+  it("preserves the `type` discriminator (uid vs sequence)", () => {
+    const set: SequenceSet = {
+      type: "uid",
+      ranges: [{ start: 1, end: 10 }],
+    } as SequenceSet;
+    const result = clampSequenceSetToFirst(uids, set, 3);
+    expect((result as SequenceSet & { type?: string }).type).toBe("uid");
+    expect(result.ranges).toEqual([{ start: 1, end: 3 }]);
+  });
+
 });

@@ -6,7 +6,7 @@
  */
 
 import { Store } from "./store";
-import { SequenceSet } from "./types";
+import { SequenceSet, SequenceRange } from "./types";
 
 /**
  * Mutable sequence state held on ImapSession.
@@ -138,4 +138,51 @@ export function countSequenceSetMessages(seqToUid: number[], sequenceSet: Sequen
     }
   }
   return count;
+}
+
+/**
+ * Take the first `limit` messages from a sequence set, dropping the rest.
+ * Used when a FETCH request would exceed the server's per-command message cap
+ * — instead of refusing the whole request with `NO [LIMIT]`, `fetchMessagesTyped`
+ * shrinks the set to what it will actually process. RFC 3501 §6.4.5 lets the
+ * server return a subset of the requested messages; clients then observe the
+ * uncovered range and issue a follow-up FETCH for it, walking the mailbox in
+ * cap-sized chunks. iOS Mail specifically treats `NO` as fatal ("Cannot Get
+ * Mail" modal); returning a shortened `OK` avoids the modal entirely.
+ *
+ * Preserves range order and uses the same effective-max semantics as
+ * `countSequenceSetMessages` above (so `1:*` and other max-sentinel ranges
+ * clamp identically). For a UID-typed set the clamp still counts by seq
+ * position — same known imprecision as the sibling counter, safe because
+ * the goal is a bounded number of returned messages, not an exact one.
+ */
+export function clampSequenceSetToFirst(
+  seqToUid: number[],
+  sequenceSet: SequenceSet,
+  limit: number
+): SequenceSet {
+  if (limit <= 0) return { ...sequenceSet, ranges: [] };
+  const maxSeq = seqToUid.length;
+  const clamped: SequenceRange[] = [];
+  let remaining = limit;
+  for (const range of sequenceSet.ranges) {
+    if (remaining <= 0) break;
+    if (range.end === undefined) {
+      clamped.push(range);
+      remaining -= 1;
+      continue;
+    }
+    const effectiveStart = Math.min(range.start, maxSeq);
+    const effectiveEnd = Math.min(range.end, maxSeq);
+    const rangeCount = Math.max(0, effectiveEnd - effectiveStart + 1);
+    if (rangeCount === 0) continue;
+    if (rangeCount <= remaining) {
+      clamped.push(range);
+      remaining -= rangeCount;
+    } else {
+      clamped.push({ start: range.start, end: effectiveStart + remaining - 1 });
+      remaining = 0;
+    }
+  }
+  return { ...sequenceSet, ranges: clamped };
 }

@@ -37,6 +37,7 @@ import {
   resolveUidRangeSentinel,
   uidToSeqNumber,
   countSequenceSetMessages,
+  clampSequenceSetToFirst,
   buildSequenceMapping,
   SequenceState,
 } from "./sequence-resolver";
@@ -79,8 +80,25 @@ export async function fetchMessagesTyped(
   );
   const limit = isFlagsOnly ? Infinity : isHeaderOnly ? 500 : 50;
   if (requestedCount > limit) {
-    write(`${tag} NO [LIMIT] FETCH too much data requested\r\n`);
-    return;
+    // Return a subset instead of `NO [LIMIT]`. RFC 3501 §6.4.5 lets the
+    // server return fewer messages than requested; the client observes
+    // the uncovered range and issues a follow-up FETCH for it, walking
+    // the mailbox in cap-sized chunks. iOS Mail specifically treats any
+    // tagged `NO` as fatal (shows "Cannot Get Mail" modal); a
+    // shortened `OK` completes cleanly and iOS keeps syncing.
+    const clampedSet = clampSequenceSetToFirst(
+      seqState.seqToUid,
+      fetchRequest.sequenceSet,
+      limit
+    );
+    logger.info("FETCH clamped to server per-command cap", {
+      component: "imap",
+      tag,
+      requestedCount,
+      limit,
+      clampedRanges: clampedSet.ranges,
+    });
+    fetchRequest = { ...fetchRequest, sequenceSet: clampedSet };
   }
 
   // RFC 4551 §3.3.1: a CHANGEDSINCE fetch implies the MODSEQ data item, so the
