@@ -49,6 +49,30 @@ describe("isProduction", () => {
   });
 });
 
+describe("server source", () => {
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return walk(full);
+      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
+    });
+
+  // The bundling guard below only covers env.ts. A dot-access read written
+  // anywhere else folds to a literal in the artifact while every test that
+  // exercises the source still passes, which is how these branches went
+  // unnoticed. config.ts destructures, so it does not match.
+  it("reads NODE_ENV only through env.ts", () => {
+    const serverDir = path.resolve(import.meta.dir, "..");
+    const envModule = path.resolve(import.meta.dir, "env.ts");
+    const offenders = walk(serverDir)
+      .filter((file) => file !== envModule)
+      .filter((file) => /process\.env\.NODE_ENV/.test(fs.readFileSync(file, "utf8")))
+      .map((file) => path.relative(serverDir, file));
+
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("bundled env module", () => {
   const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-env-bundle-"));
 
