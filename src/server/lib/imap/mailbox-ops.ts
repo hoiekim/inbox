@@ -398,12 +398,17 @@ export async function listSubscribedMailboxes(
       write(`${tag} OK LSUB completed\r\n`);
       return;
     }
-    const boxes = await store.listMailboxes();
-    boxes
-      .filter((box) => matchesListPattern(reference, pattern, box))
-      .forEach((box) => {
-        const attrs = getMailboxAttributes(box, boxes);
-        write(`* LSUB (${attrs}) "/" "${box}"\r\n`);
+    const entries = await store.listMailboxEntries();
+    // Attributes are computed against the full listable set, not the
+    // subscribed subset, so \HasChildren stays correct when a parent is
+    // subscribed and its children are not.
+    const allBoxes = entries.map((entry) => entry.name);
+    entries
+      .filter((entry) => entry.subscribed)
+      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
+      .forEach((entry) => {
+        const attrs = getMailboxAttributes(entry.name, allBoxes);
+        write(`* LSUB (${attrs}) "/" "${entry.name}"\r\n`);
       });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {
