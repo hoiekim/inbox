@@ -61,6 +61,19 @@ export type StoreFetchedMail = Partial<Mail> & {
 };
 
 /**
+ * One name from the listable mailbox set, with the subscription state LSUB
+ * filters on. Only user-created mailboxes have a `mailboxes` row to
+ * unsubscribe from; the derived ones (INBOX, the unified Sent folder, the
+ * `accounts/` parents and the per-account boxes) are implicitly subscribed and
+ * must stay in LSUB regardless — a client that loses INBOX from LSUB has no
+ * folder set left to render (#688).
+ */
+export interface MailboxEntry {
+  name: string;
+  subscribed: boolean;
+}
+
+/**
  * Normalises a parsed SearchCriterion into the flat `{ type, value }` shape that
  * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
  * otherwise the SQL builder would read the wrong field off the raw parser shape
@@ -236,7 +249,7 @@ export class Store {
    * conflating the two turns a transient DB hiccup into a permanent-sounding
    * `NO Mailbox does not exist` for the SELECT/STATUS/EXAMINE caller (#601).
    */
-  private listMailboxesOrThrow = async (): Promise<string[]> => {
+  private listMailboxEntriesOrThrow = async (): Promise<MailboxEntry[]> => {
     // Match HTTP /api/mails/accounts: filter by user's domain so we only
     // expose addresses that belong to this server, not every external
     // CC/BCC/recipient address found on stored mails.
@@ -252,11 +265,11 @@ export class Store {
       const trimmed = name.trim();
       if (!seen.has(trimmed)) {
         seen.add(trimmed);
-        mailboxes.push(trimmed);
+        mailboxes.push({ name: trimmed, subscribed: true });
       }
     };
 
-    const mailboxes: string[] = [];
+    const mailboxes: MailboxEntry[] = [];
     addMailbox("INBOX");
 
     // Add Sent Messages (unified across all accounts) if any sent mail exists
@@ -289,16 +302,21 @@ export class Store {
     });
 
     // Add user-created mailboxes (those without a special_use and no address tie-in)
-    const systemNames = new Set(mailboxes.map((m) => m.toLowerCase()));
+    const systemNames = new Set(mailboxes.map((m) => m.name.toLowerCase()));
     userMailboxes
       .filter((mb) => mb.special_use === null && mb.address === null)
       .forEach((mb) => {
         if (!systemNames.has(mb.name.toLowerCase())) {
-          mailboxes.push(mb.name);
+          mailboxes.push({ name: mb.name, subscribed: mb.subscribed });
         }
       });
 
     return mailboxes;
+  };
+
+  private listMailboxesOrThrow = async (): Promise<string[]> => {
+    const entries = await this.listMailboxEntriesOrThrow();
+    return entries.map((entry) => entry.name);
   };
 
   /**
@@ -313,6 +331,21 @@ export class Store {
     } catch (error) {
       logger.error("Error listing mailboxes", { component: "imap.store" }, error);
       return ["INBOX"];
+    }
+  };
+
+  /**
+   * LSUB-facing version: the same listable set as `listMailboxes`, carrying
+   * each name's subscription state so the LSUB handler can drop the
+   * unsubscribed ones while still computing hierarchy attributes against the
+   * full set (#688). Same `["INBOX"]` fallback rationale as `listMailboxes`.
+   */
+  listMailboxEntries = async (): Promise<MailboxEntry[]> => {
+    try {
+      return await this.listMailboxEntriesOrThrow();
+    } catch (error) {
+      logger.error("Error listing mailboxes", { component: "imap.store" }, error);
+      return [{ name: "INBOX", subscribed: true }];
     }
   };
 
