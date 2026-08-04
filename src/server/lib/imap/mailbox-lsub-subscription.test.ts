@@ -88,15 +88,73 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     expect(names).toEqual([]);
   });
 
-  it("computes \\HasChildren against the full set, not the subscribed subset", async () => {
-    // The per-account child is unsubscribed; "Sent Messages" must still report
-    // \HasChildren, otherwise a client prunes a branch it can still SELECT.
+  it("takes 'Sent Messages' attributes from the full set even when its children are filtered out", async () => {
+    // getMailboxAttributes derives \HasChildren for "Sent Messages" by looking
+    // for a "Sent Messages/accounts/" entry. That lookup must see the full
+    // listable set, not the subscribed subset — otherwise dropping the
+    // unsubscribed children would flip the parent to \HasNoChildren and a
+    // client would prune a branch it can still SELECT.
     const lines = await emit(listSubscribedMailboxes, "", "Sent Messages", [
       { name: "Sent Messages", subscribed: true },
       { name: "Sent Messages/accounts", subscribed: false },
       { name: "Sent Messages/accounts/work", subscribed: false },
     ]);
     expect(lines.some((line) => line.includes("(\\HasChildren)"))).toBe(true);
+  });
+
+  // RFC 3501 §6.3.9. CREATE accepts a "/" in the name (verified against a live
+  // server), so a hierarchical user mailbox is reachable — and without this
+  // rule, unsubscribing the parent hides the subscribed child from any client
+  // that walks the tree with "%".
+  describe("an unsubscribed parent of a subscribed child stays visible as \\Noselect", () => {
+    const HIER: MailboxEntry[] = [
+      { name: "INBOX", subscribed: true },
+      { name: "Projects", subscribed: false },
+      { name: "Projects/Work", subscribed: true },
+    ];
+
+    it('LSUB "" "%" still returns the parent so the subtree is reachable', async () => {
+      const names = namesOf(await emit(listSubscribedMailboxes, "", "%", HIER));
+      expect(names).toContain("Projects");
+    });
+
+    it("marks that parent \\Noselect \\HasChildren, not selectable", async () => {
+      const lines = await emit(listSubscribedMailboxes, "", "Projects", HIER);
+      expect(lines).toContainEqual('* LSUB (\\Noselect \\HasChildren) "/" "Projects"\r\n');
+    });
+
+    it("drops the parent once no descendant is subscribed", async () => {
+      const names = namesOf(
+        await emit(listSubscribedMailboxes, "", "Projects*", [
+          { name: "Projects", subscribed: false },
+          { name: "Projects/Work", subscribed: false },
+        ])
+      );
+      expect(names).toEqual([]);
+    });
+
+    it("promotes a grandparent too — every ancestor of a subscribed leaf", async () => {
+      const names = namesOf(
+        await emit(listSubscribedMailboxes, "", "*", [
+          { name: "Projects", subscribed: false },
+          { name: "Projects/Work", subscribed: false },
+          { name: "Projects/Work/Q3", subscribed: true },
+        ])
+      );
+      expect(names.sort()).toEqual(["Projects", "Projects/Work", "Projects/Work/Q3"]);
+    });
+
+    it("does not promote a name that is only a string prefix, not a path ancestor", async () => {
+      // "Project" is a prefix of "Projects/Work" as a string but not an
+      // ancestor path, so it must stay hidden.
+      const names = namesOf(
+        await emit(listSubscribedMailboxes, "", "*", [
+          { name: "Project", subscribed: false },
+          { name: "Projects/Work", subscribed: true },
+        ])
+      );
+      expect(names).toEqual(["Projects/Work"]);
+    });
   });
 
   it("an empty pattern still returns the hierarchy delimiter, no mailboxes", async () => {

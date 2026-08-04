@@ -355,7 +355,11 @@ export class Store {
     try {
       return await this.listMailboxEntriesOrThrow();
     } catch (error) {
-      logger.error("Error listing mailboxes", { component: "imap.store" }, error);
+      logger.error(
+        "Error listing mailboxes with subscription state",
+        { component: "imap.store" },
+        error
+      );
       return [{ name: "INBOX", subscribed: true }];
     }
   };

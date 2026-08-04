@@ -24,7 +24,7 @@ import {
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
 } from "./util";
-import { Store } from "./store";
+import { MailboxEntry, Store } from "./store";
 import { StatusItem } from "./types";
 import {
   buildSequenceMapping,
@@ -385,6 +385,25 @@ export async function listMailboxes(
   }
 }
 
+/**
+ * Every proper ancestor path of a subscribed mailbox — `Projects/Work/Q3`
+ * contributes `Projects` and `Projects/Work`. Built in one pass over the
+ * entries (O(names × depth)) rather than re-scanning the set per candidate,
+ * which would be quadratic on an account with thousands of per-address boxes.
+ */
+const collectAncestors = (entries: MailboxEntry[]): Set<string> => {
+  const ancestors = new Set<string>();
+  entries
+    .filter((entry) => entry.subscribed)
+    .forEach((entry) => {
+      const parts = entry.name.split("/");
+      for (let i = 1; i < parts.length; i++) {
+        ancestors.add(parts.slice(0, i).join("/"));
+      }
+    });
+  return ancestors;
+};
+
 export async function listSubscribedMailboxes(
   tag: string,
   reference: string,
@@ -399,20 +418,27 @@ export async function listSubscribedMailboxes(
       return;
     }
     const entries = await store.listMailboxEntries();
-    // Attributes are computed against the full listable set, not the
-    // subscribed subset, so \HasChildren stays correct when a parent is
-    // subscribed and its children are not.
+    // Attributes come from the full listable set, not the subscribed subset,
+    // so filtering a child out of the response cannot change what its parent
+    // reports.
     const allBoxes = entries.map((entry) => entry.name);
+    const ancestorsOfSubscribed = collectAncestors(entries);
     entries
-      .filter((entry) => entry.subscribed)
+      .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
       .filter((entry) => matchesListPattern(reference, pattern, entry.name))
       .forEach((entry) => {
-        const attrs = getMailboxAttributes(entry.name, allBoxes);
+        // RFC 3501 §6.3.9: an unsubscribed name that has subscribed
+        // descendants is still returned, marked \Noselect, so a client
+        // walking the hierarchy with "%" can still reach the child. It is in
+        // this list only because it has one, hence \HasChildren.
+        const attrs = entry.subscribed
+          ? getMailboxAttributes(entry.name, allBoxes)
+          : "\\Noselect \\HasChildren";
         write(`* LSUB (${attrs}) "/" "${entry.name}"\r\n`);
       });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {
-    logger.error("Error listing subscribed mailboxes", { component: "imap" }, error);
+    logger.error("Error listing subscribed mailboxes", { component: "imap.lsub" }, error);
     write(`${tag} NO LSUB failed\r\n`);
   }
 }
