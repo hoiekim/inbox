@@ -32,8 +32,11 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const column = substringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
     const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
+    // Code points, not code units — Postgres offsets a text column by
+    // characters. See the same note in session-utils-lazy-text.test.ts (#765).
+    const codePoints = [...stored];
     const start = Math.max(0, offset - 1);
-    const chunk = stored.slice(start, start + take);
+    const chunk = codePoints.slice(start, start + take).join("");
     substringCalls.push({ column, take, returnedChars: chunk.length });
     return { rows: [{ chunk }], rowCount: 1 };
   }

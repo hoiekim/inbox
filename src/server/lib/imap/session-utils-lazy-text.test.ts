@@ -30,9 +30,17 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const [mail_id, , offset, take] = values as [string, string, number, number];
     substringCalls.push({ column, offset, take });
     const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
-    // Pg SUBSTRING FROM is 1-indexed. Clamp for offsets past end.
+    // Pg SUBSTRING FROM is 1-indexed and counts CHARACTERS (code points),
+    // NOT UTF-16 code units. `String.slice` counts code units, so a mock
+    // built on it disagrees with Postgres for any body containing an
+    // astral character — and, because the reader used to advance its
+    // offset in code units too, the two errors cancelled and the emoji
+    // round-trip test below passed against a stream that silently dropped
+    // characters in prod (#765). Spreading to an array gives code points,
+    // which is the unit Postgres actually uses.
+    const codePoints = [...stored];
     const start = Math.max(0, offset - 1);
-    const chunk = stored.slice(start, start + take);
+    const chunk = codePoints.slice(start, start + take).join("");
     return { rows: [{ chunk }], rowCount: 1 };
   }
   // Fail loud if a SUBSTRING call arrives in a shape the mock doesn't
