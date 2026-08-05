@@ -576,9 +576,9 @@ export class ImapRequestHandler {
             if (item.partial) bodyFullPartial += 1;
             else bodyFullStream += 1;
           } else if (item.type === "RFC822") {
-            // RFC822 aliases BODY[] — same code path split.
-            if ("partial" in item && (item as { partial?: unknown }).partial) bodyFullPartial += 1;
-            else bodyFullStream += 1;
+            // RFC822 aliases BODY[] but has no partial-range form (RFC 3501
+            // §6.4.5), so it is always the streaming path.
+            bodyFullStream += 1;
           }
         }
       };
