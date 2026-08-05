@@ -14,8 +14,11 @@ const mockGetMailHeadersDelta = mock(async () => ({ as_of: "", headers: [], expu
 const mockGetAccounts = mock(async () => ({ received: [], sent: [] }));
 const mockGetMailBody = mock(async () => null as unknown);
 const mockDeleteMail = mock(async () => {});
-const mockMarkRead = mock(async () => {});
-const mockMarkSaved = mock(async () => {});
+// `markRead` / `markSaved` report the outcome as a boolean — the repositories
+// catch their own errors and return false. Mock the real signature so a route
+// that ignores the result cannot pass.
+const mockMarkRead = mock(async () => true);
+const mockMarkSaved = mock(async () => true);
 const mockDecrementBadgeCount = mock(async () => {});
 const mockAddressToUsername = mock((addr: string) => addr.split("@")[0]);
 const mockGetUser = mock(async () => null as unknown);
@@ -526,6 +529,45 @@ describe("postMarkMailRoute", () => {
       expect((result as ApiResponse<unknown>).status).toBe("failed");
       expect(mockGetMailBody).not.toHaveBeenCalled();
     }
+  });
+
+  it("reports failed when markRead could not write, and leaves the badge alone", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    mockMarkRead.mockResolvedValueOnce(false);
+
+    const req = makeReq({ method: "POST", body: { mail_id: "m1", read: true } });
+    const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    // Decrementing for a mail that stayed unread would desync the badge.
+    expect(mockDecrementBadgeCount).not.toHaveBeenCalled();
+  });
+
+  it("reports failed when markSaved could not write", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    mockMarkSaved.mockResolvedValueOnce(false);
+
+    const req = makeReq({ method: "POST", body: { mail_id: "m1", save: true } });
+    const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+  });
+
+  it("returns success for a body with a valid mail_id and neither read nor save", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+
+    const req = makeReq({ method: "POST", body: { mail_id: "m1" } });
+    const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).not.toHaveBeenCalled();
+    expect(mockMarkSaved).not.toHaveBeenCalled();
   });
 
   it("does not call markRead when read is not explicitly true", async () => {

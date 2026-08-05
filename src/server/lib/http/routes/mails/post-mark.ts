@@ -41,12 +41,26 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
       };
     }
 
+    // The repositories catch their own errors and report the outcome as a
+    // boolean, so an unreported failure here would answer success for a write
+    // that never landed — and, for `read`, would have already decremented the
+    // badge for a mail that stayed unread.
     if (read === true) {
-      push.decrementBadgeCount([user]).catch((error) => logger.error("Failed to decrement badge count", {}, error));
-      await markRead(user.id, mail_id);
+      if (!(await markRead(user.id, mail_id))) {
+        return { status: "failed", message: "Failed to mark the mail read" };
+      }
+      push
+        .decrementBadgeCount([user])
+        .catch((error) =>
+          logger.error("Failed to decrement badge count", {}, error)
+        );
     }
 
-    if (typeof save === "boolean") await markSaved(user.id, mail_id, save);
+    if (typeof save === "boolean") {
+      if (!(await markSaved(user.id, mail_id, save))) {
+        return { status: "failed", message: "Failed to update the saved flag" };
+      }
+    }
 
     return { status: "success" };
   }

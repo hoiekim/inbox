@@ -156,7 +156,16 @@ export function resolveMutationFilters(
   filters: Record<string, unknown>
 ): [string, unknown][] {
   const undefinedColumns = Object.entries(filters)
-    .filter(([, value]) => value === undefined)
+    .filter(([, value]) => {
+      if (value === undefined) return true;
+      // `{ op, value: undefined }` would bind NULL and match nothing rather
+      // than widen, but it is still a caller that named a predicate it had no
+      // value for — reject it on the same terms as a bare undefined.
+      if (value !== null && typeof value === "object" && "op" in value) {
+        return (value as FilterCondition).value === undefined;
+      }
+      return false;
+    })
     .map(([column]) => column);
   if (undefinedColumns.length > 0) {
     throw new Error(
