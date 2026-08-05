@@ -133,6 +133,80 @@ describe("useLocalStorage", () => {
     }
   });
 
+  it("heals storage when `sanitize` rewrote the value on read, so state and storage diverge", async () => {
+    // `sanitize` normalizes at read time only — storage keeps the raw value.
+    // Comparing the incoming value against React state would treat the very
+    // first set as a no-op and strand the un-sanitized value in storage.
+    storage.store.set("category", '"Search"');
+    const { useLocalStorage } = await import("./hooks");
+
+    let setValue!: (value: string) => void;
+    let seen!: string;
+    const { act, teardown } = await render(() => {
+      const [value, setter] = useLocalStorage("category", "AllMails", (v) =>
+        v === "Search" ? "AllMails" : v
+      );
+      setValue = setter;
+      seen = value;
+      return null;
+    });
+
+    try {
+      expect(seen).toBe("AllMails");
+      await act(async () => setValue("AllMails"));
+      expect(storage.writes).toEqual([["category", '"AllMails"']]);
+      expect(storage.store.get("category")).toBe('"AllMails"');
+    } finally {
+      await teardown();
+    }
+  });
+
+  it("heals storage after it is cleared underneath a mounted component", async () => {
+    const { useLocalStorage } = await import("./hooks");
+
+    let setValue!: (value: string) => void;
+    const { act, teardown } = await render(() => {
+      const [, setter] = useLocalStorage("draft", "");
+      setValue = setter;
+      return null;
+    });
+
+    try {
+      await act(async () => setValue("a"));
+      expect(storage.store.get("draft")).toBe('"a"');
+
+      // Another tab, or the app-version `localStorage.clear()`, wipes the key
+      // while this component stays mounted holding "a" in state.
+      storage.store.delete("draft");
+      await act(async () => setValue("a"));
+      expect(storage.store.get("draft")).toBe('"a"');
+    } finally {
+      await teardown();
+    }
+  });
+
+  it("heals storage holding unparseable JSON that fell back to the initial value", async () => {
+    storage.store.set("draft", "{not json");
+    const { useLocalStorage } = await import("./hooks");
+
+    let setValue!: (value: string) => void;
+    let seen!: string;
+    const { act, teardown } = await render(() => {
+      const [value, setter] = useLocalStorage("draft", "fallback");
+      setValue = setter;
+      seen = value;
+      return null;
+    });
+
+    try {
+      expect(seen).toBe("fallback");
+      await act(async () => setValue("fallback"));
+      expect(storage.store.get("draft")).toBe('"fallback"');
+    } finally {
+      await teardown();
+    }
+  });
+
   it("supports the updater form and seeds state from an existing stored value", async () => {
     storage.store.set("count", "7");
     const { useLocalStorage } = await import("./hooks");
