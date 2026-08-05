@@ -23,11 +23,16 @@ export const useLocalStorage = <T>(
           const valueToStore =
             value instanceof Function ? value(oldValue) : value;
           const serialized = JSON.stringify(valueToStore);
-          // `setItem` is synchronous and blocks the main thread, so a setter
-          // called with the value already stored is pure cost. Returning
-          // `oldValue` also lets React bail out of the re-render.
-          if (serialized === JSON.stringify(oldValue)) return oldValue;
-          window.localStorage.setItem(key, serialized);
+          // `setItem` is synchronous and blocks the main thread, so writing a
+          // value the key already holds is pure cost. Compare against storage
+          // rather than against `oldValue` — React state and storage do drift
+          // (another tab, a `clear()`, the `sanitize` above rewriting the value
+          // on read), and skipping on state equality would strand the stale
+          // stored value permanently. This still guarantees storage holds
+          // `valueToStore` once the setter returns.
+          if (serialized !== window.localStorage.getItem(key)) {
+            window.localStorage.setItem(key, serialized);
+          }
           return valueToStore;
         });
       } catch (error) {

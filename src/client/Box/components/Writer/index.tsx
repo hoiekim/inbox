@@ -141,9 +141,6 @@ const Writer = () => {
     content: initialContent
   });
 
-  const editorRef = useRef(editor);
-  editorRef.current = editor;
-
   // tiptap's `EventEmitter.on` appends without deduping and `emit` walks the
   // whole array, so registering from the render body grows the callback list
   // by one per render and never prunes it. Bind once per editor instance and
@@ -159,10 +156,10 @@ const Writer = () => {
 
   const setEditorContent = useCallback(
     (content: string) => {
-      editorRef.current?.commands.setContent(content);
+      editor?.commands.setContent(content);
       setInitialContent(content);
     },
-    [setInitialContent]
+    [editor, setInitialContent]
   );
 
   useEffect(() => {
