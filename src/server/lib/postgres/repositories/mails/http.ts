@@ -128,6 +128,13 @@ export const getMailHeaders = async (
       // Spam mail is always received, never sent — matches the (sent = FALSE)
       // guard the standalone spam query carried before spam became per-account.
       sql += ` AND is_spam = TRUE AND sent = FALSE`;
+    } else {
+      // Every non-spam view (New / All / Saved / Sent) is the complement of the
+      // spam folder: a mail flagged spam — whether auto-classified on receipt or
+      // marked by the user via /spam/mark — belongs only in the spam folder, not
+      // here. Without this the "Mark as spam" action is cosmetic: the row would
+      // reappear on the next refetch because the inbox query still returned it.
+      sql += ` AND is_spam = FALSE`;
     }
 
     if (options.since !== undefined) {
@@ -214,10 +221,12 @@ export const getMailHeadersDelta = async (
     const addressCondition = buildHeaderAddressCondition(options);
     // A row leaves the spam folder either by expunge OR by being un-marked
     // (is_spam flips to FALSE); both must tombstone so a cached client evicts
-    // it. Non-spam views only evict on expunge.
+    // it. A non-spam view is the mirror: a row leaves it on expunge OR by being
+    // marked spam (is_spam flips to TRUE), so a delta-sync client evicts a mail
+    // the user just moved to the spam folder instead of leaving it cached.
     const evictionCondition = options.spam
       ? `(expunged = TRUE OR is_spam = FALSE)`
-      : `expunged = TRUE`;
+      : `(expunged = TRUE OR is_spam = TRUE)`;
     const expungedSql = `
       SELECT ${MAIL_ID} FROM mails
       WHERE user_id = $1
@@ -366,7 +375,13 @@ export const getAccountStats = async (
       : RECEIVED_ADDRESS_NOT_NULL;
 
     // Match the per-account spam-folder query (is_spam received mail only).
-    const spamCondition = spamOnly ? `AND is_spam = TRUE AND sent = FALSE` : "";
+    // Spam is a separate per-account folder: the spam view counts only is_spam
+    // received mail; every other view (received/sent counts + New badge) is its
+    // complement and must exclude is_spam, so the sidebar count matches the
+    // spam-excluding headers list rather than over-counting by the spam total.
+    const spamCondition = spamOnly
+      ? `AND is_spam = TRUE AND sent = FALSE`
+      : `AND is_spam = FALSE`;
 
     // Use address matching (from_address for sent, to/cc/bcc for received) rather
     // than the `sent` boolean flag, so self-emails appear in both views correctly.
@@ -500,7 +515,9 @@ export const getUnreadNotifications = async (
       -- draft = FALSE: a user's own unsent draft must not ring the new-mail
       -- push badge. Mirrors getMailHeaders / getAccountStats so the badge count
       -- matches the headers list view (drafts live in the Drafts folder).
-      WHERE user_id IN (${placeholders}) AND sent = FALSE AND expunged = FALSE AND draft = FALSE
+      -- is_spam = FALSE: spam is quarantined to the spam folder, so it must not
+      -- ring the new-mail badge either (same mirror — the New view excludes it).
+      WHERE user_id IN (${placeholders}) AND sent = FALSE AND is_spam = FALSE AND expunged = FALSE AND draft = FALSE
       GROUP BY user_id
     `;
 
