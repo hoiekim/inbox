@@ -406,6 +406,18 @@ export const utilityPlacement = (
   box: string
 ): { draft?: boolean; is_spam?: boolean } | undefined => utilityFolder(box)?.placement;
 
+/**
+ * The canonical spelling of a server-defined mailbox name, unchanged for any
+ * other box. Every entry point that takes a mailbox name off the wire (SELECT,
+ * STATUS, COPY, MOVE, APPEND) has to run it through here: `isInbox` and
+ * `utilityFolder` both match case-insensitively, but `mailboxExists` compares
+ * against the LIST names exactly, so an un-canonicalized `drafts` is refused by
+ * CREATE as already existing and by SELECT as not existing — leaving the client
+ * with no legal next command.
+ */
+export const canonicalMailbox = (box: string): string =>
+  isInbox(box) ? "INBOX" : (utilityFolder(box)?.name ?? box);
+
 /** Maps an email address to its received-mail virtual mailbox name. */
 export const accountToBox = (accountName: string): string => {
   const localPart = accountName.split("@")[0];

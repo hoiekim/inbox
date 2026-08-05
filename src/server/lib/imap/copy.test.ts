@@ -518,8 +518,10 @@ describe("COPY address routing into a utility folder (#725)", () => {
   });
 
   it("keeps the source recipient for Drafts too, case-insensitively", async () => {
+    // The client names the box in lowercase; `canonicalMailbox` resolves it to
+    // the listed spelling before the existence gate, so the copy still lands.
     const mails = [sourceMail({ domain: 5, account: 50 })];
-    const { store, stored } = makeCopyStore(["drafts"], mails);
+    const { store, stored } = makeCopyStore(["Drafts"], mails);
     await runCopy(
       copyReq("drafts", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
       true,

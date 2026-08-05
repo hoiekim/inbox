@@ -55,11 +55,25 @@ describe("utility views", () => {
   });
 
   it("do not inherit a prototype key as a view name", () => {
-    // The lookup is a plain object index, so a name like `constructor` must not
-    // resolve to a predicate and silently take the domain branch.
+    // Mailbox names are user input and `"toString" in {}` is true, so the
+    // lookup is a Map — a box called `constructor` must not resolve to a
+    // predicate and silently take the domain branch.
     expect(isUtilityView("constructor")).toBe(false);
     expect(isUtilityView("toString")).toBe(false);
     expect(membershipExpression("constructor", false)).toBe("TRUE");
+  });
+
+  it("match case-insensitively, like the IMAP-side folder lookup", () => {
+    // `Store.listMailboxesOrThrow` de-dups user boxes against these names
+    // case-insensitively and `utilityFolder` matches the same way. If the
+    // read side ever stops lowercasing, `APPEND drafts` still stamps
+    // draft = TRUE while `SELECT drafts` routes to the mapping join instead
+    // of the flag view — the message lands somewhere the client can't read.
+    expect(isUtilityView("drafts")).toBe(true);
+    expect(isUtilityView("JUNK")).toBe(true);
+    expect(usesDomainUidSpace("drafts")).toBe(true);
+    expect(membershipExpression("drafts", false)).toBe("draft = TRUE");
+    expect(membershipExpression("JUNK", false)).toBe("is_spam = TRUE");
   });
 });
 
@@ -71,6 +85,15 @@ describe("INBOX", () => {
     expect(membershipExpression("INBOX/accounts/alice", false, "m.")).toBe(
       "m.is_spam = FALSE AND m.draft = FALSE"
     );
+  });
+
+  it("stops at the accounts prefix boundary", () => {
+    // The rule keys on `INBOX/accounts/` with the trailing slash. Dropping it
+    // would pull the non-selectable parent and any similarly-named user box
+    // into the INBOX tree, so they would start hiding spam with nothing else
+    // in the suite noticing.
+    expect(membershipExpression("INBOX/accounts", false)).toBe("TRUE");
+    expect(membershipExpression("INBOX/accountsish", false)).toBe("TRUE");
   });
 
   it("does not exclude \\Deleted mail", () => {

@@ -14,6 +14,13 @@ describe("IMAP capabilities", () => {
   it("defaults to plain (advertises STARTTLS) when called with no args", () => {
     expect(getCapabilities().split(" ")).toContain("STARTTLS");
   });
+
+  it("advertises SPECIAL-USE on both ports", () => {
+    // The utility folders carry RFC 6154 attributes in LIST; a client only
+    // reads them for role discovery once the extension is advertised.
+    expect(getCapabilities(false).split(" ")).toContain("SPECIAL-USE");
+    expect(getCapabilities(true).split(" ")).toContain("SPECIAL-USE");
+  });
 });
 
 describe("getImapPort", () => {

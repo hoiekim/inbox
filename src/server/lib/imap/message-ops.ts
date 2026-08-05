@@ -19,6 +19,7 @@ import {
   isInbox,
   isSentBox,
   isUtilityFolder,
+  canonicalMailbox,
 } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
@@ -559,7 +560,7 @@ export async function copyMessageTyped(
 ): Promise<void> {
   try {
     // Canonicalize destination per RFC 3501 §5.1 (INBOX case-insensitive).
-    const destMailbox = isInbox(copyRequest.mailbox) ? "INBOX" : copyRequest.mailbox;
+    const destMailbox = canonicalMailbox(copyRequest.mailbox);
 
     // RFC 4315 §2.1: destination must exist; otherwise NO [TRYCREATE].
     if (!(await store.mailboxExists(destMailbox))) {
@@ -869,7 +870,7 @@ export async function moveMessageTyped(
   }
 
   try {
-    const destMailbox = isInbox(moveRequest.mailbox) ? "INBOX" : moveRequest.mailbox;
+    const destMailbox = canonicalMailbox(moveRequest.mailbox);
 
     // RFC 6851 §3.4-§3.5: MOVE to the currently-selected mailbox is a
     // no-op (the messages are already where they'd land). Skip the
@@ -1175,9 +1176,7 @@ export async function appendMessage(
     // (false), skipping onAppended (the sequence-mapping rebuild) and
     // leaving the next seq-numbered FETCH for the appended message
     // returning wrong/missing data.
-    const targetMailbox = isInbox(appendRequest.mailbox)
-      ? "INBOX"
-      : appendRequest.mailbox;
+    const targetMailbox = canonicalMailbox(appendRequest.mailbox);
     const account = boxToAccount(user.username, targetMailbox);
     const domainUid = await getDomainUidNext(user.id);
     const accountUid = await getAccountUidNext(user.id, account);

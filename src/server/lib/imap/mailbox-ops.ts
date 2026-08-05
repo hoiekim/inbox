@@ -20,6 +20,7 @@ import {
   isSentMessagesAccountsFolder,
   isUtilityFolder,
   utilityFolder,
+  canonicalMailbox,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
 } from "./util";
@@ -230,7 +231,7 @@ export async function statusMailbox(
   // RFC 3501 §5.1: INBOX is case-insensitive. Canonicalize so downstream
   // responses (* STATUS "INBOX" ...) echo the canonical name regardless of
   // the casing the client used.
-  const mailbox = isInbox(mailboxArg) ? "INBOX" : mailboxArg;
+  const mailbox = canonicalMailbox(mailboxArg);
   try {
     if (!(await store.mailboxExists(mailbox))) {
       write(`${tag} NO Mailbox does not exist\r\n`);
@@ -441,7 +442,7 @@ export async function selectMailbox(
   // mailbox stored on the session and every downstream response (`* OK
   // [READ-WRITE]`, EXISTS/RECENT, FETCH responses) reflect "INBOX" rather
   // than whatever casing the client sent.
-  const cleanName = isInbox(unquoted) ? "INBOX" : unquoted;
+  const cleanName = canonicalMailbox(unquoted);
 
   if (isAccountsFolder(cleanName)) {
     write(`${tag} NO [CANNOT] ${ACCOUNTS_FOLDER} is not selectable\r\n`);

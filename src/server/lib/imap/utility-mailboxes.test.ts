@@ -14,6 +14,7 @@
 
 import { describe, it, expect } from "bun:test";
 import {
+  canonicalMailbox,
   isDomainScoped,
   isUtilityFolder,
   utilityPlacement,
@@ -71,6 +72,23 @@ describe("isUtilityFolder", () => {
 
   it("puts every utility folder in the domain UID space", () => {
     for (const name of NAMES) expect(isDomainScoped(name)).toBe(true);
+  });
+});
+
+describe("canonicalMailbox", () => {
+  it("resolves a utility name to its listed spelling", () => {
+    // The guards match case-insensitively but `mailboxExists` compares against
+    // the LIST names exactly, so without this every entry point would refuse
+    // `drafts` as both already-existing (CREATE) and non-existent (SELECT).
+    expect(canonicalMailbox("drafts")).toBe("Drafts");
+    expect(canonicalMailbox("JUNK")).toBe("Junk");
+  });
+
+  it("still canonicalizes INBOX and leaves every other name alone", () => {
+    expect(canonicalMailbox("inbox")).toBe("INBOX");
+    expect(canonicalMailbox("Archive")).toBe("Archive");
+    expect(canonicalMailbox("Drafts/sub")).toBe("Drafts/sub");
+    expect(canonicalMailbox("INBOX/accounts/junk")).toBe("INBOX/accounts/junk");
   });
 });
 

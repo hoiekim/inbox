@@ -9,6 +9,10 @@ export const getCapabilities = (isTls = false) => {
     "IDLE",
     "MOVE",
     "CONDSTORE",
+    // RFC 6154 §2: LIST reports \Drafts / \Junk on the utility folders, but a
+    // client only reads those attributes for role discovery once the server
+    // advertises the extension — otherwise it keeps guessing at folder names.
+    "SPECIAL-USE",
     "AUTH=PLAIN"
   ];
 
