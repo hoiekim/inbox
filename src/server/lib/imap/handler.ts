@@ -558,14 +558,14 @@ export class ImapRequestHandler {
       const arrayBuffersDeltaKB = Math.round(
         (memAfter.arrayBuffers - memBefore.arrayBuffers) / 1024
       );
-      // Attribution of which BODY[] variant a FETCH command uses. `partial`
-      // = the client sent `BODY[]<start.length>` (partial fetch) → routes
-      // to the materialized `buildFullMessage` path (loads text+html
-      // strings into V8 heap). Absence of `.partial` on a FULL BODY[]
-      // request → routes to the lazy-body streaming path (`pgTextChunks`
-      // + `emitBase64`, sub-MB peak). Under an iOS retry storm, this
-      // integer tells us which path is actually driving the RSS climb
-      // #757 is chasing. Non-FETCH commands set both to 0.
+      // Attribution of which BODY[] variant a FETCH command uses.
+      // `bodyFullPartial` = the client sent `BODY[]<start.length>`, which
+      // routes to `streamPartialFromSegments`; `bodyFullStream` = a full
+      // `BODY[]` or `RFC822`, which routes to `streamFromSegments`. Both
+      // walk the segment list rather than materializing text+html into the
+      // V8 heap, so under an iOS retry storm this pair attributes RSS by
+      // request shape, not by materialized-vs-streamed. Non-FETCH commands
+      // set both to 0.
       let bodyFullPartial = 0;
       let bodyFullStream = 0;
       const collectBodyShapes = (r: ImapRequest): void => {
@@ -576,8 +576,8 @@ export class ImapRequestHandler {
             if (item.partial) bodyFullPartial += 1;
             else bodyFullStream += 1;
           } else if (item.type === "RFC822") {
-            // RFC822 aliases BODY[] but has no partial-range form (RFC 3501
-            // §6.4.5), so it is always the streaming path.
+            // RFC822 aliases BODY[] and has no partial-range form (RFC 3501
+            // §6.4.5), so it always counts as a full fetch.
             bodyFullStream += 1;
           }
         }
