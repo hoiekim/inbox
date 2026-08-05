@@ -135,6 +135,32 @@ export type DeleteWhereFilter = WhereFilter;
 export type DeleteWhereFilters<TSchema extends Schema> = WhereFilters<TSchema>;
 
 /**
+ * Mutation filters must name every predicate they intend to apply. A key that
+ * is present with an `undefined` value means the caller meant to scope the
+ * statement by that column and had nothing to scope it with. Dropping it —
+ * the right default for optional *search* filters — silently widens an UPDATE
+ * or DELETE to every row the surviving predicates match, which is how a single
+ * missing request field turns into a whole-table mutation.
+ *
+ * A key that was never passed does not appear in `Object.entries`, so the
+ * `...(condition ? { column: value } : {})` spread idiom is unaffected.
+ */
+function assertNoUndefinedFilters(
+  method: string,
+  filters: Record<string, unknown>
+): void {
+  const undefinedColumns = Object.entries(filters)
+    .filter(([, value]) => value === undefined)
+    .map(([column]) => column);
+  if (undefinedColumns.length > 0) {
+    throw new Error(
+      `${method} received undefined for ${undefinedColumns.join(", ")} — ` +
+        `refusing to run a mutation without the intended predicate`
+    );
+  }
+}
+
+/**
  * Builds a WHERE clause from filter entries, handling both plain-equality and
  * FilterCondition entries (including IN-list). Returns the clause string plus
  * the parameter values, with placeholders numbered starting at startParamIdx.
@@ -279,7 +305,8 @@ export abstract class Table<
   async deleteWhere(
     filters: WhereFilters<TSchema>
   ): Promise<number> {
-    const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    assertNoUndefinedFilters("deleteWhere", filters);
+    const entries = Object.entries(filters);
     if (entries.length === 0) {
       throw new Error("deleteWhere requires at least one filter");
     }
@@ -294,7 +321,8 @@ export abstract class Table<
     data: QueryData,
     returning?: string[]
   ): Promise<Record<string, unknown>[]> {
-    const filterEntries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    assertNoUndefinedFilters("updateWhere", filters);
+    const filterEntries = Object.entries(filters);
     const dataEntries = Object.entries(data).filter(([, v]) => v !== undefined);
     if (filterEntries.length === 0) {
       throw new Error("updateWhere requires at least one filter");

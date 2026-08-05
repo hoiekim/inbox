@@ -469,6 +469,65 @@ describe("postMarkMailRoute", () => {
     expect(mockMarkRead).not.toHaveBeenCalled();
   });
 
+  it("rejects a body with no mail_id before touching the repository (#790)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    const req = makeReq({ method: "POST", body: { read: true } });
+
+    const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    // An undefined mail_id is dropped from the SQL predicate at every layer
+    // below, so the ownership lookup must not run at all — it would return an
+    // arbitrary mail of the caller's and wave the request through.
+    expect(mockGetMailBody).not.toHaveBeenCalled();
+    expect(mockMarkRead).not.toHaveBeenCalled();
+    expect(mockMarkSaved).not.toHaveBeenCalled();
+  });
+
+  it("rejects save=true / save=false with no mail_id (#790)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    for (const save of [true, false]) {
+      mockGetMailBody.mockClear();
+      mockMarkSaved.mockClear();
+
+      const req = makeReq({ method: "POST", body: { save } });
+      const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+      expect(mockGetMailBody).not.toHaveBeenCalled();
+      expect(mockMarkSaved).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects a non-string or empty mail_id (#790)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    for (const mail_id of [12345, { id: "m1" }, ["m1"], null, ""]) {
+      mockGetMailBody.mockClear();
+
+      const req = makeReq({ method: "POST", body: { mail_id, read: true } });
+      const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+      expect(mockGetMailBody).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects a non-object body (#790)", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    for (const body of [undefined, null, "mail_id=m1", 42, ["m1"]]) {
+      mockGetMailBody.mockClear();
+
+      const req = makeReq({ method: "POST", body });
+      const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
+
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+      expect(mockGetMailBody).not.toHaveBeenCalled();
+    }
+  });
+
   it("does not call markRead when read is not explicitly true", async () => {
     const { postMarkMailRoute } = await import("./post-mark");
 

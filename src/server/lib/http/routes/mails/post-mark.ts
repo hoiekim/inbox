@@ -21,8 +21,16 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
   async (req) => {
     const user = req.session.user!;
 
-    const body: MarkMailPostBody = req.body;
-    const { mail_id, read, save } = body;
+    const body = req.body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return { status: "failed", message: "Invalid request body." };
+    }
+
+    const { mail_id, read, save } = body as Record<string, unknown>;
+
+    if (typeof mail_id !== "string" || !mail_id) {
+      return { status: "failed", message: "mail_id must be a non-empty string" };
+    }
 
     const mail = await getMailBody(user.id, mail_id);
 
