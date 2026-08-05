@@ -13,146 +13,150 @@
  * working, so the `...(condition ? { column: value } : {})` spread idiom used
  * across the IMAP expunge paths is exercised here too.
  *
- * Uses the native `mock.module("pg")` FakePool seam (mirrors `users.test.ts`)
- * so the real `Table` methods run against an intercepted `pool.query`.
+ * Tests the pure `resolveMutationFilters` rather than intercepting `pool.query`
+ * — `mock.module` on the shared `../client` is process-global and bleeds across
+ * the suite (same rationale as the `build*` helper tests in
+ * `repositories/mail-modseq.test.ts`).
  */
 
-import {
-  describe,
-  it,
-  expect,
-  mock,
-  beforeAll,
-  afterAll,
-  beforeEach,
-} from "bun:test";
-import { restoreLeaves } from "test-helpers";
-
-const mockQuery = mock(
-  async (_sql: string, _values?: unknown[]) => ({
-    rows: [] as unknown[],
-    rowCount: 0 as number | null,
-  })
-);
-
-class FakePool {
-  query = mockQuery;
-  end = async () => {};
-  connect = async () => ({ query: mockQuery, release: () => {} });
-  on() {}
-}
-
-const pgMock = () => ({
-  Pool: FakePool,
-  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
-  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
-});
-
-mock.module("pg", pgMock);
-
-const { mailsTable } = await import("../models");
-const { resetPool } = await import("../client");
+import { describe, it, expect } from "bun:test";
+import { resolveMutationFilters } from "./base";
 
 const USER_ID = "11111111-1111-1111-1111-111111111111";
 const MAIL_ID = "22222222-2222-2222-2222-222222222222";
 
-beforeAll(() => {
-  // `mock.module` is process-global — re-assert right before this file's tests
-  // in case a sibling restored `pg` and instantiated the lazy pool for real.
-  mock.module("pg", pgMock);
-  resetPool();
-});
+const columnsOf = (entries: [string, unknown][]) => entries.map(([c]) => c);
 
-afterAll(() => {
-  restoreLeaves();
-  resetPool();
-});
-
-beforeEach(() => mockQuery.mockClear());
-
-const lastSql = () => String(mockQuery.mock.calls.at(-1)?.[0] ?? "");
-
-describe("updateWhere rejects an undefined filter value", () => {
-  it("throws instead of widening the UPDATE to every row of the surviving predicate", async () => {
-    await expect(
-      mailsTable.updateWhere(
-        { mail_id: undefined, user_id: USER_ID },
-        { read: true }
-      )
-    ).rejects.toThrow(/updateWhere received undefined for mail_id/);
-  });
-
-  it("issues no statement at all when it refuses", async () => {
-    await mailsTable
-      .updateWhere({ mail_id: undefined, user_id: USER_ID }, { read: true })
-      .catch(() => {});
-    expect(mockQuery).not.toHaveBeenCalled();
-  });
-
-  it("names every undefined column, not just the first", async () => {
-    await expect(
-      mailsTable.updateWhere(
-        { mail_id: undefined, message_id: undefined, user_id: USER_ID },
-        { read: true }
-      )
-    ).rejects.toThrow(/mail_id, message_id/);
-  });
-
-  it("still emits the scoped UPDATE when mail_id is present", async () => {
-    await mailsTable.updateWhere(
-      { mail_id: MAIL_ID, user_id: USER_ID },
-      { read: true }
-    );
-    expect(lastSql()).toContain("mail_id = $");
-    expect(lastSql()).toContain("user_id = $");
-  });
-
-  it("keeps the spread idiom working — an absent key is not an undefined key", async () => {
-    const quarantined = false;
-    await mailsTable.updateWhere(
-      {
+describe("resolveMutationFilters rejects an undefined filter value", () => {
+  it("throws rather than dropping the predicate and widening the statement", () => {
+    expect(() =>
+      resolveMutationFilters("updateWhere", {
+        mail_id: undefined,
         user_id: USER_ID,
-        expunged: false,
-        ...(quarantined ? { is_spam: false } : {}),
-      },
-      { expunged: true }
-    );
-    expect(lastSql()).toContain("user_id = $");
-    expect(lastSql()).toContain("expunged = $");
-    expect(lastSql()).not.toContain("is_spam");
+      })
+    ).toThrow(/updateWhere received undefined for mail_id/);
   });
 
-  it("still refuses an entirely empty filter bag", async () => {
-    await expect(
-      mailsTable.updateWhere({}, { read: true })
-    ).rejects.toThrow(/requires at least one filter/);
+  it("names the calling method so the error points at the right builder", () => {
+    expect(() =>
+      resolveMutationFilters("deleteWhere", {
+        mail_id: undefined,
+        user_id: USER_ID,
+      })
+    ).toThrow(/deleteWhere received undefined for mail_id/);
+  });
+
+  it("names every undefined column, not just the first", () => {
+    expect(() =>
+      resolveMutationFilters("updateWhere", {
+        mail_id: undefined,
+        message_id: undefined,
+        user_id: USER_ID,
+      })
+    ).toThrow(/mail_id, message_id/);
+  });
+
+  it("refuses even when a scoping column survives — the mailbox-wide case", () => {
+    // This is the exact shape `markRead(user.id, undefined)` produced.
+    expect(() =>
+      resolveMutationFilters("updateWhere", {
+        mail_id: undefined,
+        user_id: USER_ID,
+      })
+    ).toThrow();
+  });
+
+  it("still refuses an entirely empty filter bag", () => {
+    expect(() => resolveMutationFilters("updateWhere", {})).toThrow(
+      /updateWhere requires at least one filter/
+    );
+    expect(() => resolveMutationFilters("deleteWhere", {})).toThrow(
+      /deleteWhere requires at least one filter/
+    );
   });
 });
 
-describe("deleteWhere rejects an undefined filter value", () => {
-  it("throws instead of deleting every row of the surviving predicate", async () => {
-    await expect(
-      mailsTable.deleteWhere({ mail_id: undefined, user_id: USER_ID })
-    ).rejects.toThrow(/deleteWhere received undefined for mail_id/);
+describe("resolveMutationFilters keeps every legitimate filter shape", () => {
+  it("returns both predicates for the scoped id + owner case", () => {
+    const entries = resolveMutationFilters("updateWhere", {
+      mail_id: MAIL_ID,
+      user_id: USER_ID,
+    });
+    expect(columnsOf(entries)).toEqual(["mail_id", "user_id"]);
+    expect(entries).toEqual([
+      ["mail_id", MAIL_ID],
+      ["user_id", USER_ID],
+    ]);
   });
 
-  it("issues no statement at all when it refuses", async () => {
-    await mailsTable
-      .deleteWhere({ mail_id: undefined, user_id: USER_ID })
-      .catch(() => {});
-    expect(mockQuery).not.toHaveBeenCalled();
+  it("keeps the spread idiom working — an absent key is not an undefined key", () => {
+    const quarantined = false;
+    const entries = resolveMutationFilters("updateWhere", {
+      user_id: USER_ID,
+      sent: false,
+      expunged: false,
+      ...(quarantined ? { is_spam: false } : {}),
+    });
+    expect(columnsOf(entries)).toEqual(["user_id", "sent", "expunged"]);
   });
 
-  it("still emits the scoped DELETE when mail_id is present", async () => {
-    await mailsTable.deleteWhere({ mail_id: MAIL_ID, user_id: USER_ID });
-    expect(lastSql()).toContain("DELETE FROM mails");
-    expect(lastSql()).toContain("mail_id = $");
-    expect(lastSql()).toContain("user_id = $");
+  it("includes the conditional key when the spread does fire", () => {
+    const quarantined = true;
+    const entries = resolveMutationFilters("updateWhere", {
+      user_id: USER_ID,
+      expunged: false,
+      ...(quarantined ? { is_spam: false } : {}),
+    });
+    expect(columnsOf(entries)).toEqual(["user_id", "expunged", "is_spam"]);
   });
 
-  it("still refuses an entirely empty filter bag", async () => {
-    await expect(mailsTable.deleteWhere({})).rejects.toThrow(
-      /requires at least one filter/
-    );
+  it("passes FilterCondition objects through untouched (IN-list expunge path)", () => {
+    const condition = { op: "IN" as const, value: [MAIL_ID] };
+    const entries = resolveMutationFilters("updateWhere", {
+      mail_id: condition,
+    });
+    expect(entries).toEqual([["mail_id", condition]]);
+  });
+
+  it("treats false, 0, empty string and null as real predicates, not as missing", () => {
+    const entries = resolveMutationFilters("deleteWhere", {
+      expunged: false,
+      uid_domain: 0,
+      subject: "",
+      insight: null,
+    });
+    expect(columnsOf(entries)).toEqual([
+      "expunged",
+      "uid_domain",
+      "subject",
+      "insight",
+    ]);
+  });
+});
+
+describe("Table wires both mutation builders through the guard", () => {
+  it("updateWhere and deleteWhere both call resolveMutationFilters", async () => {
+    // Source-level assertion in the style of `repositories/mails/imap.test.ts`:
+    // the guard is only worth anything if neither builder can drift back to a
+    // raw `Object.entries(filters).filter(...)`.
+    const source = await Bun.file(
+      new URL("./base.ts", import.meta.url).pathname
+    ).text();
+    const updateWhere = source.slice(source.indexOf("async updateWhere("));
+    const deleteWhere = source.slice(source.indexOf("async deleteWhere("));
+
+    // Asserted as booleans so a failure prints a one-line diff, not the file.
+    expect(
+      updateWhere.includes('resolveMutationFilters("updateWhere", filters)')
+    ).toBe(true);
+    expect(
+      deleteWhere.includes('resolveMutationFilters("deleteWhere", filters)')
+    ).toBe(true);
+    // The data bag legitimately still drops undefined — only filters are strict.
+    expect(
+      source.includes(
+        "Object.entries(filters).filter(([, v]) => v !== undefined)"
+      )
+    ).toBe(false);
   });
 });

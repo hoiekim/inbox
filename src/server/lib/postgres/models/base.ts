@@ -135,6 +135,9 @@ export type DeleteWhereFilter = WhereFilter;
 export type DeleteWhereFilters<TSchema extends Schema> = WhereFilters<TSchema>;
 
 /**
+ * Resolves the filter entries a mutation will bind, rejecting any bag that
+ * would produce a wider statement than the caller asked for.
+ *
  * Mutation filters must name every predicate they intend to apply. A key that
  * is present with an `undefined` value means the caller meant to scope the
  * statement by that column and had nothing to scope it with. Dropping it —
@@ -144,11 +147,14 @@ export type DeleteWhereFilters<TSchema extends Schema> = WhereFilters<TSchema>;
  *
  * A key that was never passed does not appear in `Object.entries`, so the
  * `...(condition ? { column: value } : {})` spread idiom is unaffected.
+ *
+ * Exported so the predicate rules can be pinned without intercepting the pool
+ * — `mock.module` on the shared `../client` bleeds across the whole suite.
  */
-function assertNoUndefinedFilters(
+export function resolveMutationFilters(
   method: string,
   filters: Record<string, unknown>
-): void {
+): [string, unknown][] {
   const undefinedColumns = Object.entries(filters)
     .filter(([, value]) => value === undefined)
     .map(([column]) => column);
@@ -158,6 +164,11 @@ function assertNoUndefinedFilters(
         `refusing to run a mutation without the intended predicate`
     );
   }
+  const entries = Object.entries(filters);
+  if (entries.length === 0) {
+    throw new Error(`${method} requires at least one filter`);
+  }
+  return entries;
 }
 
 /**
@@ -305,11 +316,7 @@ export abstract class Table<
   async deleteWhere(
     filters: WhereFilters<TSchema>
   ): Promise<number> {
-    assertNoUndefinedFilters("deleteWhere", filters);
-    const entries = Object.entries(filters);
-    if (entries.length === 0) {
-      throw new Error("deleteWhere requires at least one filter");
-    }
+    const entries = resolveMutationFilters("deleteWhere", filters);
     const { whereSql, values } = buildFilterClauses(entries, 1);
     const sql = `DELETE FROM ${this.name} WHERE ${whereSql} RETURNING ${this.primaryKey}`;
     const result = await pool.query(sql, values);
@@ -321,12 +328,8 @@ export abstract class Table<
     data: QueryData,
     returning?: string[]
   ): Promise<Record<string, unknown>[]> {
-    assertNoUndefinedFilters("updateWhere", filters);
-    const filterEntries = Object.entries(filters);
+    const filterEntries = resolveMutationFilters("updateWhere", filters);
     const dataEntries = Object.entries(data).filter(([, v]) => v !== undefined);
-    if (filterEntries.length === 0) {
-      throw new Error("updateWhere requires at least one filter");
-    }
     if (dataEntries.length === 0) {
       return [];
     }
