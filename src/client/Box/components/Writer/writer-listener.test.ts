@@ -164,13 +164,16 @@ describe("Writer tiptap update listener", () => {
   it("persists the document to localStorage on edit and unbinds on unmount", async () => {
     const { act, teardown } = await mountWriter();
 
-    const editor = findEditor();
-    expect(editor).not.toBeNull();
-    const whileMounted = editor!.callbacks.update.length;
+    let editor!: TiptapEditor;
+    let whileMounted!: number;
 
     try {
+      editor = findEditor()!;
+      expect(editor).not.toBeNull();
+      whileMounted = editor.callbacks.update.length;
+
       await act(async () => {
-        editor!.commands.insertContent("hello");
+        editor.commands.insertContent("hello");
       });
       expect(window.localStorage.getItem("initialContent")).toContain("hello");
     } finally {
@@ -179,8 +182,11 @@ describe("Writer tiptap update listener", () => {
 
     // tiptap registers its own internal `update` callbacks, so the absolute
     // count is not zero after teardown — what matters is that the component's
-    // handler is gone. Unmount also races tiptap's own `scheduleDestroy`, which
-    // replaces `callbacks` wholesale, so read the count defensively.
-    expect(editor!.callbacks.update?.length ?? 0).toBeLessThan(whileMounted);
+    // handler is gone. Assert `callbacks.update` still exists rather than
+    // defaulting a missing one to 0: unmount races tiptap's `scheduleDestroy`,
+    // which replaces `callbacks` wholesale, and a default would make this pass
+    // whether or not the effect cleanup ever ran.
+    expect(editor.callbacks.update).toBeDefined();
+    expect(editor.callbacks.update.length).toBe(whileMounted - 1);
   });
 });
