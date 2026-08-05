@@ -207,6 +207,34 @@ describe("useLocalStorage", () => {
     }
   });
 
+  it("contains a failing setItem — state still advances and nothing escapes to React", async () => {
+    // React re-throws an updater's error during the render phase, past the
+    // hook's outer try/catch, where the app-level ErrorBoundary would swap out
+    // the whole mail UI. A full-quota write must not cost the user their
+    // session, so the throw has to be caught inside the updater.
+    (window.localStorage as { setItem: (k: string, v: string) => void }).setItem =
+      () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      };
+    const { useLocalStorage } = await import("./hooks");
+
+    let setValue!: (value: string) => void;
+    let seen!: string;
+    const { act, teardown } = await render(() => {
+      const [value, setter] = useLocalStorage("draft", "");
+      setValue = setter;
+      seen = value;
+      return null;
+    });
+
+    try {
+      await act(async () => setValue("too big"));
+      expect(seen).toBe("too big");
+    } finally {
+      await teardown();
+    }
+  });
+
   it("supports the updater form and seeds state from an existing stored value", async () => {
     storage.store.set("count", "7");
     const { useLocalStorage } = await import("./hooks");
