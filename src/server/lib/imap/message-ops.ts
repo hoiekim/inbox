@@ -12,7 +12,14 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount, deriveCopyMessageId, isDomainScoped, isInbox, isSentBox } from "./util";
+import {
+  boxToAccount,
+  deriveCopyMessageId,
+  isDomainScoped,
+  isInbox,
+  isSentBox,
+  isUtilityFolder,
+} from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -643,6 +650,7 @@ export async function copyMessageTyped(
     // filter); `destIsDomainScoped` drives the destination UID space for the
     // COPYUID response (INBOX and the unified Sent folder both use uid.domain).
     const destIsInbox = isInbox(destMailbox);
+    const destIsUtility = isUtilityFolder(destMailbox);
     const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
 
@@ -729,7 +737,13 @@ export async function copyMessageTyped(
       // every received mail in the user's domain). `to_text` is
       // preserved so the client's FETCH BODY[HEADER] still shows the
       // original recipient header — the override only affects routing.
-      if (destIsInbox) {
+      //
+      // A utility folder has no address filter either — it selects on the
+      // placement flag alone — so it takes the same branch. Addressing the
+      // copy to `boxToAccount` there would name the folder itself
+      // (`Junk@<domain>`), which overwrites the real recipient and makes
+      // `getAccountStats` report a per-account mailbox by that name.
+      if (destIsInbox || destIsUtility) {
         newMail.to = sourceMail.to;
         newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
@@ -932,6 +946,7 @@ export async function moveMessageTyped(
     // `*IsDomainScoped` drives the UID space (INBOX and the unified Sent folder
     // both use uid.domain).
     const destIsInbox = isInbox(destMailbox);
+    const destIsUtility = isUtilityFolder(destMailbox);
     const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
     const sourceIsInbox = isInbox(selectedMailbox);
@@ -988,9 +1003,11 @@ export async function moveMessageTyped(
         answered: sourceMail.answered,
       });
 
-      if (destIsInbox) {
-        // INBOX has no address filter; the new copy surfaces in INBOX
-        // regardless of `to_address` / `envelope_to` content. But if the
+      if (destIsInbox || destIsUtility) {
+        // Neither INBOX nor a utility folder has an address filter; the new
+        // copy surfaces there regardless of `to_address` / `envelope_to`
+        // content, so addressing it to `boxToAccount` would name the folder
+        // itself (`Junk@<domain>`) and overwrite the real recipient. But if the
         // source view IS address-filtered (accounts/foo, Sent Messages/
         // accounts/foo), preserving the source's address fields would
         // re-anchor the new copy in the source mailbox even AFTER we

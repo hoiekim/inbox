@@ -36,6 +36,7 @@ import {
 import { restoreLeaves } from "test-helpers";
 import type { MailType, SignedUser } from "common";
 import { Store } from "./store";
+import { boxToAccount } from "./util";
 import type { CopyRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
@@ -500,5 +501,44 @@ describe("COPY dispatch — sequence vs UID semantics (#520)", () => {
       emptySeqState()
     );
     expect(getMessagesCalled).toBe(false);
+  });
+});
+
+describe("COPY address routing into a utility folder (#725)", () => {
+  it("keeps the source recipient — a utility folder selects on the flag, not the address", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeCopyStore(["Junk"], mails);
+    await runCopy(
+      copyReq("Junk", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+  });
+
+  it("keeps the source recipient for Drafts too, case-insensitively", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeCopyStore(["drafts"], mails);
+    await runCopy(
+      copyReq("drafts", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+  });
+
+  it("still re-anchors to the destination account for an address-filtered box", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeCopyStore(["Archive"], mails);
+    await runCopy(
+      copyReq("Archive", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      { store, storeMailCalls: stored }
+    );
+    const destAddress = boxToAccount(VALID_USER.username, "Archive");
+    expect(stored[0].to?.value).toEqual([{ address: destAddress, name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: destAddress, name: "" }]);
   });
 });

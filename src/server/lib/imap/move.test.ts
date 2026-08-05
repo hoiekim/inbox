@@ -41,6 +41,7 @@ import {
 import { restoreLeaves } from "test-helpers";
 import type { MailType, SignedUser } from "common";
 import { Store } from "./store";
+import { boxToAccount } from "./util";
 import type { MoveRequest } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
@@ -527,5 +528,46 @@ describe("MOVE COPYUID positional pairing — out-of-order set (#624, RFC 4315 �
     // And the smaller source UID must own the smaller dest UID (ascending
     // assignment) — the assertion that fails on the pre-#624 code.
     expect(actualDestOf(3)).toBeLessThan(actualDestOf(5));
+  });
+});
+
+describe("MOVE address routing into a utility folder (#725)", () => {
+  it("keeps the source recipient from INBOX — the flag places it, not the address", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeMoveStore(["Junk"], mails);
+    await runMove(
+      moveReq("Junk", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store
+    );
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+  });
+
+  it("clears rather than re-anchors when the source view is address-filtered", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeMoveStore(["Junk", "Archive"], mails);
+    await runMove(
+      moveReq("Junk", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store,
+      false,
+      "Archive"
+    );
+    expect(stored[0].to?.value).toEqual([]);
+    expect(stored[0].envelopeTo).toEqual([]);
+    expect(stored[0].to?.text).toBe("src@hoie.kim");
+  });
+
+  it("still re-anchors to the destination account for an address-filtered dest", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeMoveStore(["Archive"], mails);
+    await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store
+    );
+    const destAddress = boxToAccount(VALID_USER.username, "Archive");
+    expect(stored[0].to?.value).toEqual([{ address: destAddress, name: "" }]);
   });
 });
