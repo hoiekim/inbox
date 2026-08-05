@@ -15,11 +15,13 @@ describe("IMAP capabilities", () => {
     expect(getCapabilities().split(" ")).toContain("STARTTLS");
   });
 
-  it("advertises SPECIAL-USE on both ports", () => {
-    // The utility folders carry RFC 6154 attributes in LIST; a client only
-    // reads them for role discovery once the extension is advertised.
-    expect(getCapabilities(false).split(" ")).toContain("SPECIAL-USE");
-    expect(getCapabilities(true).split(" ")).toContain("SPECIAL-USE");
+  it("does not advertise SPECIAL-USE", () => {
+    // RFC 6154 §2: the LIST attributes need no capability. The capability
+    // string denotes the LIST-EXTENDED selection/return options, and
+    // `parseList` rejects `LIST (SPECIAL-USE) "" "*"` outright — advertising
+    // it would turn a capability-driven client's discovery into a BAD.
+    expect(getCapabilities(false).split(" ")).not.toContain("SPECIAL-USE");
+    expect(getCapabilities(true).split(" ")).not.toContain("SPECIAL-USE");
   });
 });
 

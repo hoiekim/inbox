@@ -9,10 +9,11 @@ export const getCapabilities = (isTls = false) => {
     "IDLE",
     "MOVE",
     "CONDSTORE",
-    // RFC 6154 §2: LIST reports \Drafts / \Junk on the utility folders, but a
-    // client only reads those attributes for role discovery once the server
-    // advertises the extension — otherwise it keeps guessing at folder names.
-    "SPECIAL-USE",
+    // No SPECIAL-USE here on purpose. RFC 6154 §2 is explicit that the
+    // attributes `getMailboxAttributes` emits need no capability on a plain
+    // LIST; the capability string denotes the LIST-EXTENDED selection/return
+    // options (RFC 5258), which this server's parser rejects. Advertising it
+    // would make a client send `LIST (SPECIAL-USE) "" "*"` and get BAD.
     "AUTH=PLAIN"
   ];
 

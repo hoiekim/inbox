@@ -423,12 +423,17 @@ describe("MOVE overlapping ranges — dedupe by source UID (#626, RFC 4315 §3 v
   });
 });
 
-describe("MOVE happy path — non-INBOX source → INBOX dest (#453, address-clear invariant)", () => {
-  it("clears to/envelopeTo/cc/bcc routing so the moved copy does not re-surface in the source account view", async () => {
-    // Source is a per-account mailbox (Archive). The source row carries
-    // src@hoie.kim in to/envelope_to; if the INBOX clone preserved those,
-    // the jsonb account filter would re-match it in Archive after the
-    // original is expunged (reviewoie HIGH 3). The clone must clear them.
+describe("MOVE happy path — non-INBOX source → INBOX dest (#453)", () => {
+  it("keeps the routing addresses, and still targets the expunge and the dest UID space", async () => {
+    // Source is a mapped mailbox (Archive). The clone used to have its
+    // routing JSONB cleared here, on the theory that a jsonb address filter
+    // would otherwise re-match it in Archive after the original is expunged.
+    // That filter (`buildHeaderAddressCondition`) belongs to the WEB reads in
+    // `repositories/mails/http.ts`; every IMAP box outside the domain-scoped
+    // set reads through an INNER JOIN on `mail_mailbox_uid` instead, and the
+    // clone gets no mapping row for a domain-scoped destination — so it
+    // cannot re-surface in Archive either way. Clearing only stripped the
+    // recipient the web views group by.
     const mails = [sourceMail({ domain: 9, account: 90 })];
     const { store, stored, getExpungeArg } = makeMoveStore(["Archive"], mails);
     const seqState: SequenceState = {
@@ -446,12 +451,11 @@ describe("MOVE happy path — non-INBOX source → INBOX dest (#453, address-cle
     );
 
     expect(stored.length).toBe(1);
-    // Routing value arrays cleared; only header text survives.
-    expect(stored[0].to?.value).toEqual([]);
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
     expect(stored[0].to?.text).toBe("src@hoie.kim");
-    expect(stored[0].envelopeTo).toEqual([]);
-    expect(stored[0].cc?.value).toEqual([]);
-    expect(stored[0].bcc?.value).toEqual([]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].cc?.value).toEqual([{ address: "ccd@x.com", name: "" }]);
+    expect(stored[0].bcc?.value).toEqual([{ address: "bccd@x.com", name: "" }]);
 
     // Non-INBOX source → expunge keys on the ACCOUNT UID, not domain.
     expect(getExpungeArg()).toEqual([90]);
@@ -544,19 +548,57 @@ describe("MOVE address routing into a utility folder (#725)", () => {
     expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
   });
 
-  it("clears rather than re-anchors when the source view is address-filtered", async () => {
+  it("keeps the source recipient from a mapped box too — mark-as-junk", async () => {
+    // The canonical gesture: SELECT a per-account box, MOVE the message to
+    // Junk. Every non-domain-scoped box reads through an INNER JOIN on
+    // `mail_mailbox_uid` and the clone gets no mapping row, so it cannot
+    // re-surface in the source no matter what its address fields say —
+    // clearing them would only drop the message out of the per-account Spam
+    // tab and every web view, which read by recipient address.
     const mails = [sourceMail({ domain: 5, account: 50 })];
-    const { store, stored } = makeMoveStore(["Junk", "Archive"], mails);
+    const { store, stored } = makeMoveStore(
+      ["Junk", "INBOX/accounts/src"],
+      mails
+    );
     await runMove(
       moveReq("Junk", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
       true,
       store,
       false,
-      "Archive"
+      "INBOX/accounts/src"
     );
-    expect(stored[0].to?.value).toEqual([]);
-    expect(stored[0].envelopeTo).toEqual([]);
-    expect(stored[0].to?.text).toBe("src@hoie.kim");
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+  });
+
+  it("keeps the source recipient on the not-junk gesture, Junk -> INBOX", async () => {
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeMoveStore(["Junk"], mails);
+    await runMove(
+      moveReq("INBOX", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store,
+      false,
+      "Junk"
+    );
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
+  });
+
+  it("keeps the source recipient for the unified Sent folder", async () => {
+    // `boxToAccount(user, "Sent Messages")` matches neither accounts prefix, so
+    // it would hand back the folder name as a local part — the same shape as
+    // `Junk@<domain>`, and `getAccountStats` has no `sent` term to filter it
+    // back out, so it would surface as a phantom per-account box in LIST.
+    const mails = [sourceMail({ domain: 5, account: 50 })];
+    const { store, stored } = makeMoveStore(["Sent Messages"], mails);
+    await runMove(
+      moveReq("Sent Messages", { type: "uid", ranges: [{ start: 1, end: 100 }] }),
+      true,
+      store
+    );
+    expect(stored[0].to?.value).toEqual([{ address: "src@hoie.kim", name: "" }]);
+    expect(stored[0].envelopeTo).toEqual([{ address: "src@hoie.kim", name: "" }]);
   });
 
   it("still re-anchors to the destination account for an address-filtered dest", async () => {
