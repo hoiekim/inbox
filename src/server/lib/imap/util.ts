@@ -240,8 +240,8 @@ export const formatBodyStructure = (
    *    memory. This is the OOM-fix path — a bare
    *    `UID FETCH X BODYSTRUCTURE` doesn't materialize text/html at all.
    *  - **Materialized** — when the caller passes `mail.text` / `mail.html`
-   *    directly (legacy in-memory shape used by tests + the cache-miss
-   *    fallback in fetch-helpers), we base64-encode and measure the string.
+   *    directly (the in-memory `formatHeaders`-shaped callers and tests), we
+   *    base64-encode and measure the string.
    */
 
   const buildTextPart = (

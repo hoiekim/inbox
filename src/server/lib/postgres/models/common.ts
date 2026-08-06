@@ -72,6 +72,12 @@ export const SPAM_SCORE = "spam_score";
 export const SPAM_REASONS = "spam_reasons";
 export const IS_SPAM = "is_spam";
 export const RFC822_SIZE = "rfc822_size";
+// Decoded line counts of the mail's `text` / `html` columns, populated at
+// INSERT time from the incoming body strings (cheap: one split each).
+// Write-only: they count lines in the *decoded* column, whereas RFC 3501
+// §7.4.2's `lines` describes the body in its transfer encoding — base64, one
+// unfolded line — so BODYSTRUCTURE derives its count instead and nothing
+// projects these. #764 owns dropping the columns.
 export const TEXT_LINE_COUNT = "text_line_count";
 export const HTML_LINE_COUNT = "html_line_count";
 

@@ -106,12 +106,12 @@ export interface MailType {
    */
   rfc822_size?: number | null;
   /**
-   * Cached line counts for the mail's `text` / `html` columns, matching
-   * the RFC 3501 §7.4.2 BODYSTRUCTURE `lines` field. Populated at INSERT
-   * time from the incoming strings and lazily backfilled for pre-existing
-   * rows on the first BODYSTRUCTURE fetch. Optional because the DB
-   * columns start NULL for pre-migration rows; the HTTP client never
-   * reads either.
+   * Decoded line counts for the mail's `text` / `html` columns, populated at
+   * INSERT time from the incoming strings. Write-only — they do not match
+   * RFC 3501 §7.4.2's `lines`, which counts the body in its transfer
+   * encoding, so BODYSTRUCTURE derives its own count and nothing projects
+   * these. Optional because the columns start NULL for pre-migration rows.
+   * #764 owns dropping them.
    */
   text_line_count?: number | null;
   html_line_count?: number | null;
