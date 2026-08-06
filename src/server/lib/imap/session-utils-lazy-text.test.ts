@@ -24,9 +24,9 @@ const columnStore = new Map<string, string>();
 const mockQuery = mock(async (sql: string, values: unknown[]) => {
   // Route SUBSTRING(text FROM ... FOR ...) / SUBSTRING(html FROM ... FOR ...)
   // through the columnStore. Every non-SUBSTRING query returns empty rows.
-  const substringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/);
-  if (substringMatch) {
-    const column = substringMatch[1] as "text" | "html";
+  const cpSubstringMatch = sql.match(/SUBSTRING\((text|html)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/);
+  if (cpSubstringMatch) {
+    const column = cpSubstringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
     substringCalls.push({ column, offset, take });
     const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
@@ -43,15 +43,35 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = codePoints.slice(start, start + take).join("");
     return { rows: [{ chunk }], rowCount: 1 };
   }
+  // pgByteChunks' shape: SUBSTRING(col::bytea FROM $3::int FOR $4::int) —
+  // returns raw UTF-8 bytes (Buffer). Slice by BYTE offset, which is what
+  // Postgres does on the ::bytea cast. The columnStore holds the source
+  // text; we UTF-8 encode it, slice by bytes, and hand back a Buffer to
+  // match the pg driver's bytea shape (`rows[0].chunk` is a Buffer at
+  // runtime). Splitting a multi-byte UTF-8 sequence mid-way is fine and
+  // expected — the consumer is base64-encoding, not decoding.
+  const byteSubstringMatch = sql.match(
+    /SUBSTRING\((text|html)::bytea\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/
+  );
+  if (byteSubstringMatch) {
+    const column = byteSubstringMatch[1] as "text" | "html";
+    const [mail_id, , offset, take] = values as [string, string, number, number];
+    substringCalls.push({ column, offset, take });
+    const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
+    const bytes = Buffer.from(stored, "utf8");
+    const start = Math.max(0, offset - 1);
+    const chunk = bytes.subarray(start, start + take);
+    return { rows: [{ chunk }], rowCount: 1 };
+  }
   // Fail loud if a SUBSTRING call arrives in a shape the mock doesn't
   // recognize — silently returning empty rows would surface as "body vs
   // empty string" downstream, which reads as a data bug instead of a mock
-  // out-of-date bug. The ::int casts are load-bearing (see pgTextChunks
-  // in imap.ts), so any drift needs a matching mock update.
+  // out-of-date bug. The ::int casts are load-bearing (see pgTextChunks /
+  // pgByteChunks in imap.ts), so any drift needs a matching mock update.
   if (/SUBSTRING/i.test(sql)) {
     throw new Error(
-      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks SQL. ` +
-      `Expected /SUBSTRING\\((text|html)\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks / pgByteChunks SQL. ` +
+      `Expected /SUBSTRING\\((text|html)(::bytea)?\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
     );
   }
   return { rows: [], rowCount: 0 };
@@ -84,7 +104,7 @@ const {
   sumSegmentBytes,
 } = await import("./session-utils");
 const { resetPool } = await import("../postgres/client");
-const { pgTextChunks, PG_TEXT_CHUNK_CHARS } = await import(
+const { pgTextChunks, PG_TEXT_CHUNK_CHARS, PG_TEXT_CHUNK_BYTES } = await import(
   "../postgres/repositories/mails/imap"
 );
 const sessionUtils = await import("./session-utils");
@@ -607,12 +627,15 @@ describe("streamPartialFromSegments — byte-range slice", () => {
       if (chunk.byteLength > maxChunk) maxChunk = chunk.byteLength;
     }
     expect(emitted).toBe(length);
-    // Peak transient chunk is ~64 KiB (base64 of SLICE_RAW_BYTES). The
-    // 400 KB slice never appears as a single Buffer.
+    // Peak transient chunk is ~64 KiB (base64 of SLICE_RAW_BYTES /
+    // PG_TEXT_CHUNK_BYTES). The 400 KB slice never appears as a single
+    // Buffer.
     expect(maxChunk).toBeLessThan(80 * 1024);
-    // Each SUBSTRING pull is still bounded by PG_TEXT_CHUNK_CHARS.
+    // Each SUBSTRING pull is bounded by PG_TEXT_CHUNK_BYTES (the partial-
+    // fetch fast path uses pgByteChunks, not pgTextChunks — offset-aware
+    // byte-indexed reads instead of an O(offset) drain-from-position-1).
     for (const call of substringCalls) {
-      expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
+      expect(call.take).toBe(PG_TEXT_CHUNK_BYTES);
     }
   });
 
@@ -638,9 +661,143 @@ describe("streamPartialFromSegments — byte-range slice", () => {
     for await (const _ of streamPartialFromSegments(segments, 0, 2000)) {
       // consume
     }
-    // A drain of the full column would need ~500_000 / PG_TEXT_CHUNK_CHARS
-    // = ~42 pulls. Early-return should keep it to a small constant.
+    // A drain of the full column would need ~500_000 / PG_TEXT_CHUNK_BYTES
+    // = ~11 pulls. Early-return should keep it to a small constant.
     expect(substringCalls.length).toBeLessThan(5);
+  });
+
+  it(
+    "partial-fetch of the TAIL of a large lazy body: SUBSTRING count is O(len), not O(offset) — iOS retry-loop repro",
+    async () => {
+      substringCalls.length = 0;
+      columnStore.clear();
+      // 3 MB html body — matches the shape of the mail whose retry loop
+      // this fix targets (iOS #772 post-merge: a multi-MB body's tail
+      // windows took O(offset) SUBSTRING calls under the pre-fix
+      // sliceStream(streamOneSegment(...)) path, so per-window latency
+      // grew linearly and iOS timed out on the tail windows before
+      // download completed).
+      const html = "q".repeat(3_000_000);
+      columnStore.set("mail-partial-tail:html", html);
+
+      const segments = buildMessageSegments(
+        {
+          ...baseHeaders,
+          text_octets: 0,
+          html_octets: Buffer.byteLength(html, "utf8"),
+          mail_id: "mail-partial-tail",
+          user_id: "user-1",
+        } as never,
+        "docId-partial-tail"
+      );
+      // Simulate iOS's tail-window: request a 400 KB slice starting 3.9 MB
+      // into the base64 body (well past the message midpoint).
+      const totalMsg = sumSegmentBytes(segments) - 2;
+      const start = totalMsg - 400_000 - 50_000;
+      const length = 400_000;
+      let emitted = 0;
+      for await (const chunk of streamPartialFromSegments(segments, start, length)) {
+        emitted += chunk.byteLength;
+      }
+      expect(emitted).toBe(length);
+
+      // Pre-fix (drain-from-1 sliceStream) would issue ~250+ SUBSTRING
+      // calls to reach a tail 3.9 MB in. Post-fix (byte-indexed
+      // pgByteChunks starting at rawSkip+1) needs one call per emitted
+      // chunk of the slice — bounded by ceil(length_in_raw_bytes /
+      // PG_TEXT_CHUNK_BYTES) + tail terminator. 400 KB base64 = 300 KB
+      // raw = ~7 chunks + terminator = well under 20.
+      expect(substringCalls.length).toBeLessThan(20);
+
+      // Every SUBSTRING call must start FAR into the column — never at
+      // offset 1 (the drain-from-1 anti-pattern this PR fixes). The
+      // earliest byte we should ever touch is roughly (start - headers) *
+      // 3 / 4 raw bytes into the column; a lower bound of 1 MB suffices to
+      // prove we did NOT drain from position 1 on a 3.9 MB seek target.
+      for (const call of substringCalls) {
+        expect(call.offset).toBeGreaterThan(1_000_000);
+      }
+    }
+  );
+
+  it("partial-fetch on an astral-heavy lazy body: bytes match the corresponding full-fetch slice", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    // Mix ASCII + astral (🏈) — verifies pgByteChunks' byte-indexed reads
+    // don't drop or dupe chars at UTF-8 sequence boundaries. Base64
+    // encoding of raw bytes doesn't care about UTF-8 boundaries; we just
+    // need byte-for-byte fidelity with the whole-column encoding.
+    const html = ("Hello 🏈 World " + "x".repeat(500)).repeat(400);
+    columnStore.set("mail-astral-partial:html", html);
+    const octets = Buffer.byteLength(html, "utf8");
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: octets,
+        mail_id: "mail-astral-partial",
+        user_id: "user-1",
+      } as never,
+      "docId-astral-partial"
+    );
+
+    // Full-fetch reference bytes.
+    const fullChunks: Buffer[] = [];
+    for await (const c of sessionUtils.streamFromSegments(segments)) fullChunks.push(c);
+    const full = Buffer.concat(fullChunks as unknown as Uint8Array[]);
+
+    // Try three window shapes: head, middle, tail.
+    const totalMsg = sumSegmentBytes(segments) - 2;
+    const cases = [
+      { start: 0, length: 12_000 },
+      { start: Math.floor(totalMsg / 2), length: 8_000 },
+      { start: totalMsg - 5_000, length: 5_000 },
+    ];
+    for (const { start, length } of cases) {
+      const chunks: Buffer[] = [];
+      for await (const c of streamPartialFromSegments(segments, start, length)) chunks.push(c);
+      const partial = Buffer.concat(chunks as unknown as Uint8Array[]);
+      expect(partial.byteLength).toBe(length);
+      expect(partial.equals(full.subarray(start, start + length))).toBe(true);
+    }
+  });
+
+  it("partial-fetch alignment shim: mis-aligned skip trims up to 3 base64 chars before emit", async () => {
+    substringCalls.length = 0;
+    columnStore.clear();
+    const html = "abcdefghij".repeat(10_000); // 100_000 ASCII bytes
+    columnStore.set("mail-align:html", html);
+
+    const segments = buildMessageSegments(
+      {
+        ...baseHeaders,
+        text_octets: 0,
+        html_octets: Buffer.byteLength(html, "utf8"),
+        mail_id: "mail-align",
+        user_id: "user-1",
+      } as never,
+      "docId-align"
+    );
+
+    // Full-fetch reference.
+    const fullChunks: Buffer[] = [];
+    for await (const c of sessionUtils.streamFromSegments(segments)) fullChunks.push(c);
+    const full = Buffer.concat(fullChunks as unknown as Uint8Array[]);
+
+    // Try every alignment offset (0..3 mod 4) at a well-into-the-body
+    // start position — pgByteChunks seeks to the 3-byte-aligned raw
+    // position and sliceStream shaves the residual.
+    const totalMsg = sumSegmentBytes(segments) - 2;
+    for (let offset = 0; offset < 4; offset++) {
+      const start = Math.floor(totalMsg / 2) + offset;
+      const length = 16_000;
+      const chunks: Buffer[] = [];
+      for await (const c of streamPartialFromSegments(segments, start, length)) chunks.push(c);
+      const partial = Buffer.concat(chunks as unknown as Uint8Array[]);
+      expect(partial.byteLength).toBe(length);
+      expect(partial.equals(full.subarray(start, start + length))).toBe(true);
+    }
   });
 });
 

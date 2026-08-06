@@ -116,6 +116,67 @@ export async function* pageByCodePoints(
 }
 
 /**
+ * Byte-length chunk size for the byte-indexed reader below. Divisible by 3 so
+ * every emitted chunk base64-encodes without carrying a residual across the
+ * chunk boundary (`4 * ceil(n/3)` == `4 * n/3` exactly when `n % 3 == 0`).
+ * 48 KiB matches SLICE_RAW_BYTES in session-utils.ts's emitBase64 pipeline —
+ * one PG round-trip per socket-write-sized chunk.
+ */
+export const PG_TEXT_CHUNK_BYTES = 48 * 1024;
+
+if (PG_TEXT_CHUNK_BYTES % 3 !== 0) {
+  throw new Error(
+    `PG_TEXT_CHUNK_BYTES must be divisible by 3 so per-chunk base64 encoding needs no cross-chunk carry, got ${PG_TEXT_CHUNK_BYTES}`
+  );
+}
+
+/**
+ * Stream one mail row's `text` or `html` column as raw UTF-8 BYTES in
+ * fixed-size chunks. Reads via `SUBSTRING(col::bytea FROM $off FOR $len)` —
+ * `text::bytea` is a metadata-only cast on a UTF-8 server encoding (the
+ * internal storage already IS UTF-8 bytes), so this is not a materialization.
+ * `SUBSTRING` on `bytea` is BYTE-indexed (1-indexed), which is exactly what the
+ * base64-encoding consumer wants: no code-point ↔ byte translation, and a
+ * partial-fetch caller can seek to any 3-byte-aligned position in O(1) SQL
+ * calls instead of O(offset).
+ *
+ * `startByte` is the 1-indexed byte position to begin at (default 1 for the
+ * whole column). `chunkBytes` defaults to `PG_TEXT_CHUNK_BYTES` (48 KiB, a
+ * multiple of 3).
+ *
+ * Complements [[pgTextChunks]]: use `pgTextChunks` when the consumer needs
+ * decoded UTF-16 strings (search, tokenization, header parsing); use
+ * `pgByteChunks` when the consumer will re-encode as bytes (base64 for wire
+ * IMAP FETCH). Splitting a multi-byte UTF-8 sequence at a chunk boundary is
+ * fine here — the consumer never decodes; the bytes concatenate correctly and
+ * the client's base64 decoder receives byte-exact input.
+ *
+ * The `sourceColumn` is a hard-coded literal ("text" | "html"), narrowed at
+ * the type level so it can be interpolated into the SQL safely.
+ */
+export async function* pgByteChunks(
+  mail_id: string,
+  user_id: string,
+  sourceColumn: "text" | "html",
+  startByte: number = 1,
+  chunkBytes: number = PG_TEXT_CHUNK_BYTES
+): AsyncGenerator<Buffer, void, unknown> {
+  // The `$3::int FOR $4::int` casts are load-bearing for the SAME reason as
+  // pgTextChunks — see the note there on Postgres overload resolution.
+  let offset = startByte;
+  for (;;) {
+    const sql = `SELECT SUBSTRING(${sourceColumn}::bytea FROM $3::int FOR $4::int) AS chunk
+                 FROM mails WHERE mail_id = $1 AND user_id = $2`;
+    const result = await pool.query(sql, [mail_id, user_id, offset, chunkBytes]);
+    const chunk = (result.rows[0]?.chunk ?? Buffer.alloc(0)) as Buffer;
+    if (chunk.byteLength === 0) return;
+    yield chunk;
+    if (chunk.byteLength < chunkBytes) return;
+    offset += chunk.byteLength;
+  }
+}
+
+/**
  * Code points in a UTF-16 string — `[...s].length` without allocating an
  * array per chunk. Postgres hands back well-formed UTF-8, so every high
  * surrogate here is followed by its low half; the pair check is still
