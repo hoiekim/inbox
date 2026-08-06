@@ -70,10 +70,21 @@ const USER_ROW = {
   imap_uid_validity: STORED_UIDVALIDITY,
 };
 
-const mockQuery = mock(async (sql: string) => {
+// Every UID reservation this run made, in call order. `buildReserveUidQuery`
+// binds [user_id, kind, scope, sent, …], so the tuple is enough to tell the
+// INBOX lane from the Sent lane.
+type UidReservation = { kind: string; scope: string; sent: boolean };
+const uidReservations: UidReservation[] = [];
+
+const mockQuery = mock(async (sql: string, values?: unknown[]) => {
   const sqlStr = typeof sql === "string" ? sql : "";
   // getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails
   if (sqlStr.includes("next_uid")) {
+    uidReservations.push({
+      kind: String(values?.[1]),
+      scope: String(values?.[2]),
+      sent: values?.[3] === true,
+    });
     return { rows: [{ next_uid: String(DOMAIN_UID) }], rowCount: 1 };
   }
   // usersTable.queryOne(...) for getImapUidValidity — narrowed to queries
@@ -130,31 +141,58 @@ afterAll(() => {
 
 beforeEach(() => {
   mockQuery.mockClear();
+  uidReservations.length = 0;
 });
 
 // ---------------------------------------------------------------------------
 // appendMessage — APPENDUID (#544) + flag defaults (#548)
 // ---------------------------------------------------------------------------
 
+type AppendedMail = { sent: boolean };
+
 type FakeStore = {
   getUser: () => { id: string; username: string };
-  storeMail: (mail: unknown) => Promise<unknown>;
+  mailboxExists: (box: string) => Promise<boolean>;
+  storeMail: (mail: AppendedMail, mailbox?: string) => Promise<unknown>;
+  /** Every (mail, mailbox) pair storeMail received, in call order. */
+  appended: Array<{ mail: AppendedMail; mailbox?: string }>;
 };
 
-const makeAppendStore = (storeResult: unknown = { _id: "stored" }): FakeStore => ({
-  getUser: () => ({ id: "user-123", username: "admin" }),
-  storeMail: async () => storeResult,
-});
+// The listable set a Store would report for user "admin": INBOX, the unified
+// Sent folder, and one per-account box in each lane.
+const EXISTING_MAILBOXES = [
+  "INBOX",
+  "Sent Messages",
+  "accounts/admin",
+  "Sent Messages/accounts/admin",
+];
+
+const makeAppendStore = (
+  storeResult: unknown = { _id: "stored" },
+  mailboxes: string[] = EXISTING_MAILBOXES
+): FakeStore => {
+  const appended: FakeStore["appended"] = [];
+  return {
+    getUser: () => ({ id: "user-123", username: "admin" }),
+    mailboxExists: async (box: string) => mailboxes.includes(box),
+    storeMail: async (mail: AppendedMail, mailbox?: string) => {
+      appended.push({ mail, mailbox });
+      return storeResult;
+    },
+    appended,
+  };
+};
 
 const runAppend = async (
   tag: string,
   store: FakeStore,
-  selectedMailbox: string | null = null
+  selectedMailbox: string | null = null,
+  mailbox = "INBOX"
 ) => {
   const writes: string[] = [];
   await appendMessage(
     tag,
-    { mailbox: "INBOX", message: "Subject: test\r\n\r\nHello" },
+    { mailbox, message: "Subject: test\r\n\r\nHello" },
     store as never,
     selectedMailbox,
     (data: string) => {
@@ -189,6 +227,64 @@ describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
     const response = await runAppend("A004", makeAppendStore(null));
     expect(response).toContain("A004 NO APPEND failed to store message");
     expect(response).not.toContain("APPENDUID");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendMessage — target mailbox (#695)
+// ---------------------------------------------------------------------------
+
+describe("appendMessage — target mailbox (#695)", () => {
+  it("files an APPEND to the unified Sent folder as sent mail", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A101", store, null, "Sent Messages");
+
+    expect(response).toContain("A101 OK [APPENDUID");
+    expect(store.appended).toHaveLength(1);
+    expect(store.appended[0].mail.sent).toBe(true);
+    // Domain-scoped: storeMail takes no per-mailbox arg for INBOX / Sent.
+    expect(store.appended[0].mailbox).toBeUndefined();
+    // Both UID lanes are reserved on the sent side of the counter.
+    expect(uidReservations.every((r) => r.sent)).toBe(true);
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+  });
+
+  it("files an APPEND to INBOX as received mail", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A102", store, null, "INBOX");
+
+    expect(response).toContain("A102 OK [APPENDUID");
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(uidReservations.every((r) => r.sent)).toBe(false);
+  });
+
+  it("files an APPEND to a per-account Sent box as sent mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A103", store, null, "Sent Messages/accounts/admin");
+
+    expect(store.appended[0].mail.sent).toBe(true);
+    // Account-scoped: the box path reaches the mail_mailbox_uid dual-write.
+    expect(store.appended[0].mailbox).toBe("Sent Messages/accounts/admin");
+    expect(uidReservations.every((r) => r.sent)).toBe(true);
+  });
+
+  it("answers NO [TRYCREATE] for a mailbox that does not exist and stores nothing", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A104", store, null, "ZzNoSuchMailbox");
+
+    expect(response).toBe("A104 NO [TRYCREATE] Mailbox does not exist\r\n");
+    expect(response).not.toContain("APPENDUID");
+    expect(store.appended).toHaveLength(0);
+    // Nothing is reserved for a rejected APPEND — no UID burned.
+    expect(uidReservations).toHaveLength(0);
+  });
+
+  it("still accepts a lowercase inbox target (RFC 3501 §5.1)", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A105", store, null, "inbox");
+
+    expect(response).toContain("A105 OK [APPENDUID");
+    expect(store.appended[0].mail.sent).toBe(false);
   });
 });
 
@@ -448,6 +544,7 @@ async function appendAndCapture(flags?: string[]): Promise<MailType> {
   let captured: MailType | undefined;
   const store = {
     getUser: () => ({ id: 1, username: "admin" }),
+    mailboxExists: async () => true,
     storeMail: async (mail: MailType) => {
       captured = mail;
       return true;
