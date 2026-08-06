@@ -128,6 +128,9 @@ const {
   cloneMailToDestination,
 } = await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
+// Dynamic, like the imports above: a hoisted `import … from "server"` would
+// pull the barrel (and postgres/client) before the pg double is registered.
+const { getUserDomain } = await import("server");
 
 beforeAll(() => {
   mock.module("pg", pgMock);
@@ -167,6 +170,7 @@ const EXISTING_MAILBOXES = [
   "Sent Messages",
   "INBOX/accounts/admin",
   "Sent Messages/accounts/admin",
+  "Archive",
 ];
 
 const makeAppendStore = (
@@ -246,9 +250,11 @@ describe("appendMessage — target mailbox (#695)", () => {
     expect(store.appended[0].mail.sent).toBe(true);
     // Domain-scoped: storeMail takes no per-mailbox arg for INBOX / Sent.
     expect(store.appended[0].mailbox).toBeUndefined();
-    // Both UID lanes are reserved on the sent side of the counter.
-    expect(uidReservations.every((r) => r.sent)).toBe(true);
+    // Both UID lanes are reserved on the sent side of the counter. Pinned
+    // per-reservation: `every(r => r.sent) === false` would be satisfied by
+    // the domain half alone and would miss an inverted account lane.
     expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations.map((r) => r.sent)).toEqual([true, true]);
   });
 
   it("files an APPEND to INBOX as received mail", async () => {
@@ -257,7 +263,7 @@ describe("appendMessage — target mailbox (#695)", () => {
 
     expect(response).toContain("A102 OK [APPENDUID");
     expect(store.appended[0].mail.sent).toBe(false);
-    expect(uidReservations.every((r) => r.sent)).toBe(false);
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
   });
 
   it("files an APPEND to a per-account Sent box as sent mail scoped to that box", async () => {
@@ -267,11 +273,11 @@ describe("appendMessage — target mailbox (#695)", () => {
     expect(store.appended[0].mail.sent).toBe(true);
     // Account-scoped: the box path reaches the mail_mailbox_uid dual-write.
     expect(store.appended[0].mailbox).toBe("Sent Messages/accounts/admin");
-    expect(uidReservations.every((r) => r.sent)).toBe(true);
     // Domain reservation is unscoped; the account one is keyed on the box's
-    // address. The domain half varies with EMAIL_DOMAIN, so pin the local part.
+    // address, which `getUserDomain` derives from the username.
     expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
-    expect(uidReservations[1].scope.split("@")[0]).toBe("admin");
+    expect(uidReservations.map((r) => r.sent)).toEqual([true, true]);
+    expect(uidReservations[1].scope).toBe(`admin@${getUserDomain("admin")}`);
   });
 
   it("files an APPEND to a per-account received box as received mail scoped to that box", async () => {
@@ -283,9 +289,23 @@ describe("appendMessage — target mailbox (#695)", () => {
     // account-scoped target.
     expect(store.appended[0].mail.sent).toBe(false);
     expect(store.appended[0].mailbox).toBe("INBOX/accounts/admin");
-    expect(uidReservations.every((r) => r.sent)).toBe(false);
     expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
-    expect(uidReservations[1].scope.split("@")[0]).toBe("admin");
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
+    expect(uidReservations[1].scope).toBe(`admin@${getUserDomain("admin")}`);
+  });
+
+  it("files an APPEND to a user-created box as received mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A107", store, null, "Archive");
+
+    // A user-created box is neither sent nor domain-scoped, so it takes the
+    // received lane and the box path. Note this does NOT remove the message
+    // from INBOX: INBOX's read path filters on `sent` with no mailbox join,
+    // so a received-lane message is in both views. Same for COPY/MOVE.
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(store.appended[0].mailbox).toBe("Archive");
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
+    expect(uidReservations[1].scope).toBe(`Archive@${getUserDomain("admin")}`);
   });
 
   it("answers NO [TRYCREATE] for a mailbox that does not exist and stores nothing", async () => {
