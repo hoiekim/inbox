@@ -450,6 +450,18 @@ describe("IMAP util", () => {
       expect(result).toContain("BASE64");
     });
 
+    it("advertises zero lines for a zero-octet part, matching what BODY[n] serves", () => {
+      // A mail with no text/html falls back to an empty TEXT PLAIN part.
+      // buildMessageSegments emits no body segment for it, so BODY[1] returns
+      // 0 octets — body-fld-lines must agree rather than claim one line.
+      const empty = formatBodyStructure({}, true);
+      const nonEmpty = formatBodyStructure({ text: "hi" }, true);
+      expect([
+        empty.includes(" BASE64 0 0 "),
+        nonEmpty.includes(" BASE64 4 1 "),
+      ]).toEqual([true, true]);
+    });
+
     it("should format HTML-only body structure", () => {
       const mail: Partial<MailType> = {
         html: "<p>Hello, World!</p>"
@@ -560,9 +572,11 @@ describe("IMAP util", () => {
         expect(Number(lines)).toBe(encoded.split(/\r?\n/).length);
       });
 
-      it("reports zero octets on the empty default part", () => {
+      it("reports zero octets and zero lines on the empty default part", () => {
+        // buildMessageSegments emits no body segment for a mail with no
+        // text/html, so BODY[1] serves nothing — both counts must say so.
         expect(formatBodyStructure({}, false)).toBe(
-          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 0 1)`
+          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 0 0)`
         );
       });
     });

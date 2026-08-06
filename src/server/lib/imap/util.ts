@@ -226,8 +226,10 @@ export const formatBodyStructure = (
     // body *in its transfer encoding* — the bytes `BODY[n]` serves, not the
     // decoded text. `encodeText` emits unfolded base64 (hoiekim/inbox#751), so
     // a text part is one line on the cached path as much as the materialized
-    // one, and the count stays 1 until folding lands.
-    const lines = 1;
+    // one, and the count stays 1 until folding lands. A zero-octet part serves
+    // no bytes at all, so it must advertise zero lines to stay consistent with
+    // what `BODY[n]` returns.
+    const lines = size === 0 ? 0 : 1;
 
     const parts = [
       "TEXT",
