@@ -9,7 +9,7 @@ import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from ".
 import { formatHeaders } from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
-import { pgTextChunks } from "server";
+import { pgTextChunks, pgByteChunks } from "server";
 import { CHUNK_BYTES } from "./chunked-write";
 
 /**
@@ -607,6 +607,74 @@ const isHighSurrogate = (charCode: number): boolean =>
   charCode >= 0xd800 && charCode <= 0xdbff;
 
 /**
+ * Emit `source` (a stream of raw UTF-8 bytes) base64-encoded. Sibling of
+ * `emitBase64` for byte-typed sources — used by the offset-aware
+ * `lazy-text` partial-fetch path (`streamLazyTextPartial`), which reads
+ * via `pgByteChunks` and skips the UTF-16 surrogate juggling that
+ * `emitBase64Chunks` needs for JS-string sources.
+ *
+ * Correctness pivots on the SAME 3-byte-alignment invariant as
+ * `emitBase64Chunks`: intermediate slices are multiple-of-3 raw bytes so
+ * their base64 concatenates losslessly; residual 0-2 bytes carry to the
+ * next iteration; the final slice is emitted whole (base64 padding at
+ * the end is legal). `pgByteChunks` already ships chunks aligned to
+ * `PG_TEXT_CHUNK_BYTES % 3 === 0`, so the only chunk that can be
+ * non-aligned is the tail terminator — and that one is the final slice
+ * by construction.
+ *
+ * Uses `for await (... of source)` so a consumer that early-returns
+ * (e.g. `sliceStream` once its `take` is satisfied) propagates
+ * `.return()` down through this generator to `pgByteChunks`,
+ * short-circuiting its SUBSTRING loop. Correctness needs to know when
+ * the LAST chunk arrives so it can emit the residual whole; we track it
+ * with a one-chunk-behind `pending` buffer — every loop iteration emits
+ * the *previous* chunk as non-final and defers the current one, so the
+ * final flush after the loop knows it holds the tail.
+ */
+async function* emitBase64FromBytes(
+  source: AsyncIterable<Buffer>
+): AsyncGenerator<Buffer, void, unknown> {
+  let pending: Buffer | null = null;
+  let carry: Buffer | null = null;
+  for await (const raw of source) {
+    if (raw.byteLength === 0) continue;
+    if (pending !== null) {
+      // `pending` is known non-final (we have `raw` following it). Carry
+      // its 0-2-byte residual so base64 concatenates losslessly across
+      // the boundary.
+      let chunk: Buffer = pending;
+      if (carry !== null) {
+        chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
+        carry = null;
+      }
+      const residualLen = chunk.byteLength % 3;
+      if (residualLen > 0) {
+        const tail = chunk.subarray(chunk.byteLength - residualLen);
+        carry = Buffer.from(tail as unknown as Uint8Array);
+        chunk = chunk.subarray(0, chunk.byteLength - residualLen);
+      }
+      if (chunk.byteLength > 0) {
+        yield Buffer.from(chunk.toString("base64"), "utf8");
+      }
+    }
+    pending = raw;
+  }
+  // On loop exit `pending` is either the tail chunk (source yielded at
+  // least once) or null (source empty). `carry` is only ever assigned
+  // in the branch above that also assigns `pending`, so `pending === null`
+  // implies `carry === null` — no separate carry-only flush case exists.
+  if (pending !== null) {
+    let chunk: Buffer = pending;
+    if (carry !== null) {
+      chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
+    }
+    if (chunk.byteLength > 0) {
+      yield Buffer.from(chunk.toString("base64"), "utf8");
+    }
+  }
+}
+
+/**
  * Test-only handle on `emitBase64` — the split-input parity tests exercise
  * it directly (feeding the same source as `[whole]` vs. `[chunkA, chunkB]`
  * vs. `[char, char, ...]`) to guarantee an upstream chunk boundary can
@@ -614,6 +682,13 @@ const isHighSurrogate = (charCode: number): boolean =>
  * with `_` so it reads as internal at every call site.
  */
 export const _emitBase64ForTests = emitBase64;
+
+/**
+ * Test-only handle on `emitBase64FromBytes` — same split-input parity
+ * discipline as `_emitBase64ForTests` but for the byte-source sibling used
+ * by `streamLazyTextPartial`.
+ */
+export const _emitBase64FromBytesForTests = emitBase64FromBytes;
 
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
@@ -798,12 +873,61 @@ export async function* streamPartialFromSegments(
     const skipInSeg = Math.max(0, start - segStart);
     const takeInSeg = Math.min(segBytes, end - segStart) - skipInSeg;
     if (takeInSeg <= 0) continue;
-    // Emit this segment through its own generator, then trim via
-    // sliceStream. Peak allocation matches `streamFromSegments` for the
-    // same segment kind — chunk-bounded, no per-segment materialization
-    // beyond what the emitter itself already holds transiently.
+    // `lazy-text` gets the offset-aware fast path: read pgByteChunks
+    // starting at the byte position corresponding to `skipInSeg` in the
+    // segment's base64 output, instead of draining the column from
+    // position 1 and discarding through `sliceStream`. Cuts partial
+    // BODY[] window latency from O(offset) SUBSTRING round-trips to O(1)
+    // per window, so iOS's 30s per-command timeout on a multi-MB body
+    // full-sync stops firing after the first couple of tail windows
+    // (#793 unmasked this: iOS's own follow-up FETCHes for the same
+    // large message hit ever-later windows). Other segment kinds still
+    // funnel through `sliceStream` — their emitters (`emitLiteral`,
+    // `emitBase64`, `emitAttachment`) already yield in bounded chunks
+    // from a source that's cheap to re-open per window.
+    if (segment.kind === "lazy-text") {
+      yield* streamLazyTextPartial(segment, skipInSeg, takeInSeg);
+      continue;
+    }
     yield* sliceStream(streamOneSegment(segment), skipInSeg, takeInSeg);
   }
+}
+
+/**
+ * Emit exactly `takeInSeg` base64 bytes starting at `skipInSeg` in a
+ * `lazy-text` segment's base64 output. Reads the underlying `text` / `html`
+ * column at the byte offset corresponding to the skip position — no drain
+ * from position 1 — so each partial-fetch window costs O(len) SUBSTRING
+ * calls rather than O(offset+len). See `streamPartialFromSegments`.
+ *
+ * Alignment invariant: base64 encodes 3 raw bytes into 4 base64 chars, so
+ * every 4-base64-char boundary maps to a 3-raw-byte boundary. We start the
+ * pgByteChunks reader at the largest 3-byte-aligned raw offset `≤` the
+ * skip target and shave off up to 3 leading base64 chars for the last-mile
+ * alignment. That's the ONLY overhead vs. a hypothetical "seek to exact
+ * base64 byte" reader — and it's bounded to 3 chars regardless of segment
+ * size.
+ */
+async function* streamLazyTextPartial(
+  segment: Extract<MessageSegment, { kind: "lazy-text" }>,
+  skipInSeg: number,
+  takeInSeg: number
+): AsyncGenerator<Buffer, void, unknown> {
+  // Align skip to the 4-base64-char / 3-raw-byte grid. `alignedSkipBase64`
+  // is the base64 position we can seek to exactly; `residualBase64` is
+  // how much we still need to trim from the emitted stream to hit the
+  // caller's actual skip target.
+  const alignedSkipBase64 = Math.floor(skipInSeg / 4) * 4;
+  const residualBase64 = skipInSeg - alignedSkipBase64;
+  const startRawByte = (alignedSkipBase64 / 4) * 3 + 1; // 1-indexed for PG
+  const bytes = pgByteChunks(
+    segment.mail_id,
+    segment.user_id,
+    segment.source,
+    startRawByte
+  );
+  const base64 = emitBase64FromBytes(bytes);
+  yield* sliceStream(base64, residualBase64, takeInSeg);
 }
 
 /**
