@@ -1115,6 +1115,25 @@ export async function appendMessage(
   onAppended: () => Promise<void>
 ): Promise<void> {
   try {
+    // RFC 3501 §5.1: INBOX is case-insensitive. SELECT canonicalizes
+    // selectedMailbox to "INBOX"; APPEND must canonicalize the target to
+    // match — otherwise a SELECT inbox + APPEND inbox sequence reads
+    // `selectedMailbox === appendRequest.mailbox` as `"INBOX" === "inbox"`
+    // (false), skipping onAppended (the sequence-mapping rebuild) and
+    // leaving the next seq-numbered FETCH for the appended message
+    // returning wrong/missing data.
+    const targetMailbox = isInbox(appendRequest.mailbox)
+      ? "INBOX"
+      : appendRequest.mailbox;
+
+    // RFC 3501 §6.3.11: the target must exist. The server MUST NOT create
+    // it, and answers NO [TRYCREATE] so the client can CREATE and retry.
+    // Gated before parsing so a rejected APPEND doesn't walk the literal.
+    if (!(await store.mailboxExists(targetMailbox))) {
+      write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
+      return;
+    }
+
     const messageLines = appendRequest.message.split("\r\n");
     let headerEndIndex = messageLines.findIndex((line) => line === "");
     if (headerEndIndex === -1) headerEndIndex = messageLines.length;
@@ -1160,19 +1179,16 @@ export async function appendMessage(
     }
 
     const user = store.getUser();
-    // RFC 3501 §5.1: INBOX is case-insensitive. SELECT canonicalizes
-    // selectedMailbox to "INBOX"; APPEND must canonicalize the target to
-    // match — otherwise a SELECT inbox + APPEND inbox sequence reads
-    // `selectedMailbox === appendRequest.mailbox` as `"INBOX" === "inbox"`
-    // (false), skipping onAppended (the sequence-mapping rebuild) and
-    // leaving the next seq-numbered FETCH for the appended message
-    // returning wrong/missing data.
-    const targetMailbox = isInbox(appendRequest.mailbox)
-      ? "INBOX"
-      : appendRequest.mailbox;
     const account = boxToAccount(user.username, targetMailbox);
-    const domainUid = await getDomainUidNext(user.id);
-    const accountUid = await getAccountUidNext(user.id, account);
+    // `sent` is what separates the two domain-scoped views — INBOX and the
+    // unified Sent folder share `uid_domain` and are told apart by this
+    // column alone — so it has to reach both the stored row and the UID
+    // counters, which key their per-user sequences on (user, sent). Same
+    // shape as COPY/MOVE above.
+    const targetIsSent = isSentBox(targetMailbox);
+    mail.sent = targetIsSent;
+    const domainUid = await getDomainUidNext(user.id, targetIsSent);
+    const accountUid = await getAccountUidNext(user.id, account, targetIsSent);
     mail.uid.domain = domainUid;
     mail.uid.account = accountUid;
 
