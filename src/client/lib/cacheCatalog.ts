@@ -54,3 +54,13 @@ export const matchCacheCatalog = (
   queryKey: string
 ): CacheCatalogEntry | undefined =>
   cacheCatalog.find((entry) => entry.matches(queryKey));
+
+/**
+ * React Query's `refetchOnMount` for a query key. Cataloged keys paint from
+ * IndexedDB before the first render, so they need `"always"` — which refetches
+ * regardless of `staleTime` — or a seeded paint can outlive the new-mail count
+ * heuristic's blind spot (a net-zero count change) until the 10-min interval
+ * fires. Everything else keeps the client-wide `refetchOnMount: false`. (#622)
+ */
+export const revalidateOnMountPolicy = (queryKey: string): "always" | false =>
+  matchCacheCatalog(queryKey) ? "always" : false;

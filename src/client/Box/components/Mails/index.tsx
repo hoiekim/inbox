@@ -45,7 +45,8 @@ import {
   isSentMail,
   processHtmlForViewer,
   useIsOnline,
-  matchCacheCatalog
+  revalidateOnMountPolicy,
+  formatDataAge
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
@@ -555,6 +556,7 @@ const RenderedMails = ({ page }: { page: number }) => {
 
   const [activeMailId, setActiveMailId] = useState<ActiveMailMap>({});
   const [openedKebab, setOpenedKebab] = useState("");
+  const { isOnline } = useIsOnline();
 
   const accountsCache = new AccountsCache();
 
@@ -581,16 +583,8 @@ const RenderedMails = ({ page }: { page: number }) => {
       return body?.map((d) => new MailHeaderData(d)) || [];
     } else throw new Error(message);
   };
-  // Header lists are seeded from IndexedDB before first render (#618), so a hard
-  // reload paints last session's cache without hitting the network. Revalidate
-  // those seeded keys on mount so the paint can't stay stale inside the count-
-  // heuristic's blind spot (a net-zero count change — read-elsewhere, or a
-  // delete + new arrival) until the 10-min interval fires. A failed revalidation
-  // keeps the seeded paint (see the render guards below). Search results aren't
-  // seeded, so they keep the global refetchOnMount: false. (#622)
-  const revalidateOnMount = matchCacheCatalog(queryUrl) ? "always" : false;
   const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
-    refetchOnMount: revalidateOnMount
+    refetchOnMount: revalidateOnMountPolicy(queryUrl)
   });
 
   if (query.isLoading) {
@@ -603,11 +597,10 @@ const RenderedMails = ({ page }: { page: number }) => {
     );
   }
 
-  // A failed revalidation must not blow away the IndexedDB-seeded paint
-  // (#618/#622): with retry:false + refetchOnReconnect:false, an offline or
-  // transient-error refetch sets query.error while the seeded query.data
-  // survives, so only surface the error screen when there's no cached list to
-  // fall back on.
+  // react-query v3's `error` action keeps `data`, so a failed revalidation
+  // leaves the IndexedDB-seeded list intact — fall back to it instead of
+  // blanking the pane, and only show the error screen when there is nothing to
+  // fall back on. The retained list is labelled by staleNotice below.
   if (query.error && !query.data) {
     return (
       <div className="mails_container error">Mails List Request Failed</div>
@@ -749,6 +742,17 @@ const RenderedMails = ({ page }: { page: number }) => {
   // Paired with the error guard above: gating on isSuccess alone would blank
   // the pane the instant a revalidation failed, so render retained data too.
   if (query.isSuccess || query.data) {
+    // A revalidation that failed while the server is reachable (expired
+    // session, 5xx) has no other signal — the offline banner doesn't apply and
+    // every list action is optimistic — so retained data must not render as if
+    // it were fresh. While offline the banner already says this.
+    const staleNotice =
+      query.error && query.data && isOnline ? (
+        <div className="mails_stale_notice" role="status" aria-live="polite">
+          Couldn&apos;t refresh — showing mail as of{" "}
+          {formatDataAge(query.dataUpdatedAt)}
+        </div>
+      ) : null;
     const mails = Array.isArray(query.data) ? query.data : [];
     const pagedMails = mails.slice(0, 4 + 8 * page);
 
@@ -798,12 +802,18 @@ const RenderedMails = ({ page }: { page: number }) => {
       })();
       return (
         <div className="mails_container empty">
+          {staleNotice}
           <p className="empty_state">{emptyMessage}</p>
         </div>
       );
     }
 
-    return <div className="mails_container">{result}</div>;
+    return (
+      <div className="mails_container">
+        {staleNotice}
+        {result}
+      </div>
+    );
   }
 
   return <></>;

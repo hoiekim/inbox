@@ -52,7 +52,12 @@ export const hydrateQueryCache = async (userId?: string): Promise<void> => {
       void idbDeleteQuery(entry.key);
       continue;
     }
-    queryClient.setQueryData(entry.key, catalog.revive(entry.payload));
+    // Stamp the seed with when it was actually fetched, not now — the stale-
+    // data notice reads dataUpdatedAt, and the default (hydration time) would
+    // report week-old mail as just-fetched.
+    queryClient.setQueryData(entry.key, catalog.revive(entry.payload), {
+      updatedAt: entry.lastFetchedAt,
+    });
   }
 };
 
