@@ -1128,7 +1128,10 @@ export async function appendMessage(
 
     // RFC 3501 §6.3.11: the target must exist. The server MUST NOT create
     // it, and answers NO [TRYCREATE] so the client can CREATE and retry.
-    // Gated before parsing so a rejected APPEND doesn't walk the literal.
+    // Gated ahead of the RFC822 parse so a rejected APPEND neither walks
+    // the message nor burns a UID off the counters. (Framing is unaffected
+    // either way — `handler.ts` has already consumed the whole literal off
+    // the socket before this function is entered.)
     if (!(await store.mailboxExists(targetMailbox))) {
       write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
       return;
