@@ -615,49 +615,38 @@ const isHighSurrogate = (charCode: number): boolean =>
  *
  * Correctness pivots on the SAME 3-byte-alignment invariant as
  * `emitBase64Chunks`: intermediate slices are multiple-of-3 raw bytes so
- * their base64 concatenates losslessly; residual 0–2 bytes carry to the
+ * their base64 concatenates losslessly; residual 0-2 bytes carry to the
  * next iteration; the final slice is emitted whole (base64 padding at
  * the end is legal). `pgByteChunks` already ships chunks aligned to
  * `PG_TEXT_CHUNK_BYTES % 3 === 0`, so the only chunk that can be
  * non-aligned is the tail terminator — and that one is the final slice
  * by construction.
  *
- * The lookahead pattern: buffer ONE chunk, so when we're about to emit
- * chunk `k`, we already know whether chunk `k+1` exists. Non-final
- * chunks carry their residual; the final chunk emits it whole.
+ * Uses `for await (... of source)` so a consumer that early-returns
+ * (e.g. `sliceStream` once its `take` is satisfied) propagates
+ * `.return()` down to `pgByteChunks`, releasing the pg cursor.
+ * Correctness needs to know when the LAST chunk arrives so it can emit
+ * the residual whole; we track it with a one-chunk-behind `pending`
+ * buffer — every loop iteration emits the *previous* chunk as non-final
+ * and defers the current one, so the final flush after the loop knows
+ * it holds the tail.
  */
 async function* emitBase64FromBytes(
   source: AsyncIterable<Buffer>
 ): AsyncGenerator<Buffer, void, unknown> {
-  const it = source[Symbol.asyncIterator]();
   let pending: Buffer | null = null;
   let carry: Buffer | null = null;
-  // Prime the lookahead: skip any empty chunks so `pending` holds real
-  // data or the source is exhausted.
-  for (;;) {
-    const first = await it.next();
-    if (first.done) return;
-    if (first.value.byteLength > 0) {
-      pending = first.value;
-      break;
-    }
-  }
-  for (;;) {
-    // Look ahead one non-empty chunk to know if `pending` is the tail.
-    let next: Buffer | null = null;
-    let sourceExhausted = false;
-    while (!sourceExhausted && next === null) {
-      const step = await it.next();
-      if (step.done) sourceExhausted = true;
-      else if (step.value.byteLength > 0) next = step.value;
-    }
-    let chunk = pending!;
-    if (carry) {
-      chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
-      carry = null;
-    }
-    const isFinal = sourceExhausted;
-    if (!isFinal) {
+  for await (const raw of source) {
+    if (raw.byteLength === 0) continue;
+    if (pending !== null) {
+      // `pending` is known non-final (we have `raw` following it). Carry
+      // its 0-2-byte residual so base64 concatenates losslessly across
+      // the boundary.
+      let chunk: Buffer = pending;
+      if (carry !== null) {
+        chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
+        carry = null;
+      }
       const residualLen = chunk.byteLength % 3;
       if (residualLen > 0) {
         const tail = chunk.subarray(chunk.byteLength - residualLen);
@@ -667,13 +656,20 @@ async function* emitBase64FromBytes(
       if (chunk.byteLength > 0) {
         yield Buffer.from(chunk.toString("base64"), "utf8");
       }
-      pending = next;
-      continue;
+    }
+    pending = raw;
+  }
+  if (pending !== null) {
+    let chunk: Buffer = pending;
+    if (carry !== null) {
+      chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
+      carry = null;
     }
     if (chunk.byteLength > 0) {
       yield Buffer.from(chunk.toString("base64"), "utf8");
     }
-    return;
+  } else if (carry !== null) {
+    yield Buffer.from(carry.toString("base64"), "utf8");
   }
 }
 
