@@ -12,7 +12,14 @@ export class QueryCache<T> {
 
   public set = (callback: Updater<T | undefined, T | undefined>) => {
     if (!this.get()) return;
-    return queryClient.setQueryData<T | undefined>(this.key, callback);
+    // An optimistic local edit is not a server fetch. Carry the existing
+    // dataUpdatedAt forward — left to default it would stamp `now`, dating the
+    // data to the edit and telling every freshness consumer the server was
+    // just heard from.
+    const updatedAt = queryClient.getQueryState(this.key)?.dataUpdatedAt;
+    return queryClient.setQueryData<T | undefined>(this.key, callback, {
+      updatedAt
+    });
   };
 }
 

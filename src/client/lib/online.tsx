@@ -101,6 +101,20 @@ export const formatLastSeen = (lastSeenOnline: number | null): string => {
 };
 
 /**
+ * Is the data a query is currently rendering older than the last thing that
+ * happened to that query? True exactly when a fetch has failed and no
+ * successful one has landed since — including after an optimistic
+ * `setQueryData`, which clears `error` but leaves `errorUpdatedAt` standing
+ * (and, via `QueryCache.set`, carries `dataUpdatedAt` forward). Reading the
+ * two stamps rather than `error` is what keeps the signal alive across a local
+ * edit made while the server is unreachable.
+ */
+export const isShowingStaleData = (query: {
+  dataUpdatedAt: number;
+  errorUpdatedAt: number;
+}): boolean => query.errorUpdatedAt > query.dataUpdatedAt;
+
+/**
  * Render the "as of" clock for cached data, which — unlike the banner's
  * session-scoped `lastSeenOnline` — can be up to `maxAgeMs` old (a week for the
  * header catalog). A bare `HH:MM` on week-old data reads as today, so anything
