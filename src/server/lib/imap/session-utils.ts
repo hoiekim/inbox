@@ -624,12 +624,12 @@ const isHighSurrogate = (charCode: number): boolean =>
  *
  * Uses `for await (... of source)` so a consumer that early-returns
  * (e.g. `sliceStream` once its `take` is satisfied) propagates
- * `.return()` down to `pgByteChunks`, releasing the pg cursor.
- * Correctness needs to know when the LAST chunk arrives so it can emit
- * the residual whole; we track it with a one-chunk-behind `pending`
- * buffer — every loop iteration emits the *previous* chunk as non-final
- * and defers the current one, so the final flush after the loop knows
- * it holds the tail.
+ * `.return()` down through this generator to `pgByteChunks`,
+ * short-circuiting its SUBSTRING loop. Correctness needs to know when
+ * the LAST chunk arrives so it can emit the residual whole; we track it
+ * with a one-chunk-behind `pending` buffer — every loop iteration emits
+ * the *previous* chunk as non-final and defers the current one, so the
+ * final flush after the loop knows it holds the tail.
  */
 async function* emitBase64FromBytes(
   source: AsyncIterable<Buffer>
@@ -659,17 +659,18 @@ async function* emitBase64FromBytes(
     }
     pending = raw;
   }
+  // On loop exit `pending` is either the tail chunk (source yielded at
+  // least once) or null (source empty). `carry` is only ever assigned
+  // in the branch above that also assigns `pending`, so `pending === null`
+  // implies `carry === null` — no separate carry-only flush case exists.
   if (pending !== null) {
     let chunk: Buffer = pending;
     if (carry !== null) {
       chunk = Buffer.concat([carry, chunk] as unknown as Uint8Array[]);
-      carry = null;
     }
     if (chunk.byteLength > 0) {
       yield Buffer.from(chunk.toString("base64"), "utf8");
     }
-  } else if (carry !== null) {
-    yield Buffer.from(carry.toString("base64"), "utf8");
   }
 }
 

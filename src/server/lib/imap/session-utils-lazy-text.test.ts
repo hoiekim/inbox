@@ -43,15 +43,17 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = codePoints.slice(start, start + take).join("");
     return { rows: [{ chunk }], rowCount: 1 };
   }
-  // pgByteChunks' shape: SUBSTRING(col::bytea FROM $3::int FOR $4::int) —
-  // returns raw UTF-8 bytes (Buffer). Slice by BYTE offset, which is what
-  // Postgres does on the ::bytea cast. The columnStore holds the source
-  // text; we UTF-8 encode it, slice by bytes, and hand back a Buffer to
-  // match the pg driver's bytea shape (`rows[0].chunk` is a Buffer at
-  // runtime). Splitting a multi-byte UTF-8 sequence mid-way is fine and
-  // expected — the consumer is base64-encoding, not decoding.
+  // pgByteChunks' shape: SUBSTRING(convert_to(col, 'UTF8') FROM $3::int
+  // FOR $4::int) — returns raw UTF-8 bytes (Buffer). Slice by BYTE
+  // offset. `convert_to(col, 'UTF8')` on a UTF8 server encoding is a
+  // no-op transcode, i.e. it returns the column's raw UTF-8 bytes
+  // verbatim — different from `col::bytea` which sends the text through
+  // `byteain`'s escape parser and errors on any `\<letter>` sequence
+  // (3.5% of the prod corpus). This mock encodes the stored text as
+  // UTF-8 and returns the byte range; splitting a multi-byte sequence
+  // mid-way is intentional (the consumer base64-encodes, not decodes).
   const byteSubstringMatch = sql.match(
-    /SUBSTRING\((text|html)::bytea\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/
+    /SUBSTRING\(convert_to\((text|html),\s*'UTF8'\)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/
   );
   if (byteSubstringMatch) {
     const column = byteSubstringMatch[1] as "text" | "html";
@@ -63,6 +65,17 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = bytes.subarray(start, start + take);
     return { rows: [{ chunk }], rowCount: 1 };
   }
+  // Guard against a regression back to the `col::bytea` cast: byteain
+  // would parse the source text as escaped bytea input and throw on any
+  // `\<letter>` sequence. Fail LOUDLY so the mock can't silently
+  // simulate the broken shape as if it were correct — matches the
+  // reviewoie-R1 HIGH finding on PR 798.
+  if (/SUBSTRING\((text|html)::bytea\s+FROM/.test(sql)) {
+    throw new Error(
+      `Regression: pgByteChunks reverted to col::bytea cast. Use convert_to(col, 'UTF8') — ` +
+      `col::bytea invokes byteain and rejects \\<letter> byte sequences (3.5% of prod corpus).`
+    );
+  }
   // Fail loud if a SUBSTRING call arrives in a shape the mock doesn't
   // recognize — silently returning empty rows would surface as "body vs
   // empty string" downstream, which reads as a data bug instead of a mock
@@ -71,7 +84,8 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
   if (/SUBSTRING/i.test(sql)) {
     throw new Error(
       `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks / pgByteChunks SQL. ` +
-      `Expected /SUBSTRING\\((text|html)(::bytea)?\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+      `Expected pgTextChunks /SUBSTRING\\((text|html) FROM \\$3::int FOR \\$4::int\\)/ or ` +
+      `pgByteChunks /SUBSTRING\\(convert_to\\((text|html), 'UTF8'\\) FROM \\$3::int FOR \\$4::int\\)/, got: ${sql}`
     );
   }
   return { rows: [], rowCount: 0 };
@@ -762,6 +776,51 @@ describe("streamPartialFromSegments — byte-range slice", () => {
       expect(partial.equals(full.subarray(start, start + length))).toBe(true);
     }
   });
+
+  it(
+    "partial-fetch on a body containing `\\<letter>` byte sequences: convert_to path handles it (`::bytea` would throw)",
+    async () => {
+      substringCalls.length = 0;
+      columnStore.clear();
+      // Content with `\a` / `\C` / `\.` / `\ ` byte sequences that pg's
+      // `byteain` would reject as invalid bytea escape input (reviewoie
+      // PR 798 HIGH-1). `convert_to(col, 'UTF8')` doesn't parse the
+      // content as bytea — it does a charset conversion (no-op on a
+      // UTF-8 column) — so the byte-indexed reader handles this fine.
+      // The mock's `::bytea` branch throws to guard against a regression;
+      // the `convert_to` branch is a plain byte slice.
+      const backslashSample =
+        "prefix \\a mid \\C \\. \\z \\  end " + "x".repeat(400);
+      const html = backslashSample.repeat(80);
+      columnStore.set("mail-backslash:html", html);
+
+      const segments = buildMessageSegments(
+        {
+          ...baseHeaders,
+          text_octets: 0,
+          html_octets: Buffer.byteLength(html, "utf8"),
+          mail_id: "mail-backslash",
+          user_id: "user-1",
+        } as never,
+        "docId-backslash"
+      );
+
+      const fullChunks: Buffer[] = [];
+      for await (const c of sessionUtils.streamFromSegments(segments)) fullChunks.push(c);
+      const full = Buffer.concat(fullChunks as unknown as Uint8Array[]);
+
+      const totalMsg = sumSegmentBytes(segments) - 2;
+      const start = Math.floor(totalMsg / 2);
+      const length = 8_000;
+      const partialChunks: Buffer[] = [];
+      for await (const c of streamPartialFromSegments(segments, start, length)) {
+        partialChunks.push(c);
+      }
+      const partial = Buffer.concat(partialChunks as unknown as Uint8Array[]);
+      expect(partial.byteLength).toBe(length);
+      expect(partial.equals(full.subarray(start, start + length))).toBe(true);
+    }
+  );
 
   it("partial-fetch alignment shim: mis-aligned skip trims up to 3 base64 chars before emit", async () => {
     substringCalls.length = 0;
