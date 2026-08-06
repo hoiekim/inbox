@@ -208,8 +208,6 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
       case "BODYSTRUCTURE":
         fields.add("text_octets");
         fields.add("html_octets");
-        fields.add("mail_id");
-        fields.add("user_id");
         fields.add("attachments");
         break;
 
