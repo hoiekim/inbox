@@ -1039,7 +1039,9 @@ describe("buildFetchResponsePart BODYSTRUCTURE metadata-only emit (#740)", () =>
     };
     const cachedEquivalent: FetchMailInput = {
       ...base,
-      // Same octets (materialized string is 30 bytes) + same line count (3).
+      // Same octets (materialized string is 30 bytes). The emitted line count
+      // is the constant 1 on both sides — it describes the base64 transfer
+      // encoding, not the 3 decoded lines.
       text_octets: Buffer.byteLength("line one\r\nline two\r\nline three", "utf8"),
       html_octets: 0,
     };

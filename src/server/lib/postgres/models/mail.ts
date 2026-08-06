@@ -136,9 +136,10 @@ const mailSchema = {
   // a safety net for pre-migration rows.
   [RFC822_SIZE]: "BIGINT",
   // Nullable — auto-migration stamps existing rows with NULL; new rows
-  // populate at INSERT time from the split of `text` / `html` (see
-  // saveMail), so post-migration only pre-existing rows sit NULL until
-  // their first BODYSTRUCTURE observation backfills them.
+  // populate at INSERT time from the split of `text` / `html` (see saveMail).
+  // Nothing backfills the pre-existing NULLs, and nothing reads either
+  // column: they count decoded lines, which is not what RFC 3501 §7.4.2's
+  // `lines` describes. #764 owns dropping them.
   [TEXT_LINE_COUNT]: "INTEGER",
   [HTML_LINE_COUNT]: "INTEGER",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
