@@ -4,25 +4,13 @@ import session from "express-session";
 import path from "path";
 
 import { getDomain, isProduction, PostgresSessionStore } from "server";
+import { createExpressApp } from "./app";
 import apiRouter from "./routes";
 import { startCleanupScheduler } from "./rate-limit";
 import { logger } from "../logger";
 
 export const initializeHttp = async () => {
-  const app = express();
-
-  // Express seeds this setting from the environment through the same member
-  // expression the bundler folds, so in the shipped bundle it is frozen at
-  // "development" and no container environment can move it. finalhandler reads
-  // it to decide whether an unhandled error's stack goes into the response
-  // body, so it has to be set explicitly here. See lib/env.ts.
-  app.set("env", isProduction() ? "production" : "development");
-
-  // Trust first proxy for secure cookie detection behind reverse proxy.
-  // (Rate limiting reads X-Real-IP directly and does not rely on req.ip.)
-  if (isProduction()) {
-    app.set("trust proxy", 1);
-  }
+  const app = createExpressApp();
 
   // Security headers
   app.use((_req, res, next) => {
