@@ -913,31 +913,26 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
   });
 });
 
-describe("getRequestedFields BODYSTRUCTURE cached-column projection (#740)", () => {
+describe("getRequestedFields BODYSTRUCTURE metadata-only projection (#740)", () => {
   // The load-bearing invariant. BODYSTRUCTURE's projection MUST NOT include
-  // `text` / `html` after #740 — a bare `UID FETCH X BODYSTRUCTURE` was
-  // materializing multi-MB text/html per UID just to derive the `lines`
-  // field. Projection is now the pre-measured octet counts + persisted
-  // line-count columns (metadata-only); the cache-miss fallback loads
-  // text/html per row only when the persisted column is NULL.
-  it("projects text_octets + html_octets + line-count columns, NOT text/html", () => {
+  // `text` / `html` — a bare `UID FETCH X BODYSTRUCTURE` would otherwise
+  // materialize multi-MB text/html per UID. The pre-measured octet counts are
+  // everything body-fld-octets needs, and body-fld-lines is a constant, so
+  // this holds for every row with no per-row fallback.
+  it("projects exactly uid + text_octets + html_octets + attachments", () => {
     const fields = getRequestedFields([
       { type: "BODYSTRUCTURE", extensible: true },
     ]);
-    for (const f of [
-      "text_octets",
-      "html_octets",
-      "mail_id",
-      "user_id",
-      "text_line_count",
-      "html_line_count",
+    // Asserting the whole set, not membership: `text`/`html` absent is the
+    // load-bearing negative, and pinning the positive side exactly is what
+    // keeps a stream-identity column (`mail_id` / `user_id`) from being
+    // re-added for a fallback that no longer exists.
+    expect([...fields].sort()).toEqual([
       "attachments",
-    ] as const) {
-      expect(fields.has(f as FetchRequestedField)).toBe(true);
-    }
-    // The load-bearing negative — dropping these two is the whole point.
-    expect(fields.has("text")).toBe(false);
-    expect(fields.has("html")).toBe(false);
+      "html_octets",
+      "text_octets",
+      "uid",
+    ]);
   });
 
   it("bare BODY (extensible=false) projects the same columns as BODYSTRUCTURE", () => {
@@ -954,7 +949,7 @@ describe("getRequestedFields BODYSTRUCTURE cached-column projection (#740)", () 
   });
 });
 
-describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740)", () => {
+describe("buildFetchResponsePart BODYSTRUCTURE metadata-only emit (#740)", () => {
   const docId = "doc-bs-cached";
   const mailbox = "INBOX";
   const base = {
@@ -967,43 +962,39 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     attachments: [],
   };
 
-  it("derives size + lines from cached columns without loading text/html", async () => {
+  it("derives size from the cached octet column without loading text/html", async () => {
     // The load-bearing case. Row carries the lazy projection shape only
-    // — `text_octets` (raw octet count) + `text_line_count` (persisted at
-    // INSERT). Neither `text` nor `html` string is on the mail, so
-    // formatBodyStructure MUST NOT reach for them. If the cached path
-    // were bypassed and buildTextPart fell through to computing from the
-    // absent string, `lines` would come out as 1 (empty split) — not 42.
+    // — `text_octets` (raw octet count). Neither `text` nor `html` string
+    // is on the mail, so formatBodyStructure MUST NOT reach for them. If
+    // the cached path were bypassed and buildTextPart fell through to
+    // encoding the absent string, `size` would come out as 0 — not 44.
+    // `lines` is 1 on both paths: it measures the unfolded-base64 body
+    // the server actually serves, not the decoded text (RFC 3501 §7.4.2).
     const mailWithCache: FetchMailInput = {
       ...base,
       text_octets: 33, // 33 raw bytes → base64 encodes to ceil(33/3)*4 = 44
       html_octets: 0,
-      text_line_count: 42,
-      html_line_count: 0,
     };
     const part = await buildFetchResponsePart(
       mailWithCache,
       { type: "BODYSTRUCTURE", extensible: true },
       docId,
       mailbox
-      // userId omitted intentionally: no persist step should fire on a hit.
     );
     expect(part!.type).toBe("simple");
     if (part!.type === "simple") {
       // Single text part shape — no HTML, no attachments.
       // Format: (TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 <size> <lines>)
       expect(part!.content).toContain('"TEXT" "PLAIN"'.replace(/"/g, ""));
-      expect(part!.content).toContain("BASE64 44 42");
+      expect(part!.content).toContain("BASE64 44 1");
     }
   });
 
-  it("emits multipart/alternative from cached counts for a text+html mail with no strings loaded", async () => {
+  it("emits multipart/alternative from cached octets for a text+html mail with no strings loaded", async () => {
     const mailWithCache: FetchMailInput = {
       ...base,
       text_octets: 6, // → base64 8
       html_octets: 15, // → base64 20
-      text_line_count: 2,
-      html_line_count: 5,
     };
     const part = await buildFetchResponsePart(
       mailWithCache,
@@ -1013,19 +1004,19 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     );
     expect(part!.type).toBe("simple");
     if (part!.type === "simple") {
-      // Both parts + the alternative wrapper. Both must derive from cache
-      // (no strings on mail — would `NaN` or 0 on materialized fallback).
-      expect(part!.content).toContain("BASE64 8 2");
-      expect(part!.content).toContain("BASE64 20 5");
+      // Both parts + the alternative wrapper. Both sizes must derive from
+      // cache (no strings on mail — would be 0 on a materialized fallback).
+      expect(part!.content).toContain("BASE64 8 1");
+      expect(part!.content).toContain("BASE64 20 1");
       expect(part!.content).toContain('"alternative"');
     }
   });
 
   it("materialized-caller shape (mail.text / mail.html as strings) still works — same size + lines", async () => {
-    // The util.test.ts + cache-miss fallback caller shape. When the strings
-    // ARE loaded, formatBodyStructure base64+splits them the same way it
-    // has always done. Same wire bytes as the cached path for the same
-    // input, so callers can be mixed without divergence.
+    // The util.test.ts caller shape. When the strings ARE loaded,
+    // formatBodyStructure base64-encodes them directly. Same wire bytes as
+    // the octet-projection path for the same input, so callers can be
+    // mixed without divergence.
     const materialized: Partial<MailType> = {
       ...base,
       text: "line one\r\nline two\r\nline three",
@@ -1033,11 +1024,11 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     };
     const cachedEquivalent: FetchMailInput = {
       ...base,
-      // Same octets (materialized string is 30 bytes) + same line count (3).
+      // Same octets (materialized string is 30 bytes). The emitted line count
+      // is the constant 1 on both sides — it describes the base64 transfer
+      // encoding, not the 3 decoded lines.
       text_octets: Buffer.byteLength("line one\r\nline two\r\nline three", "utf8"),
       html_octets: 0,
-      text_line_count: 3,
-      html_line_count: 0,
     };
     const mat = await buildFetchResponsePart(
       materialized,
@@ -1058,12 +1049,10 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     }
   });
 
-  it("cache miss without userId falls through — uses whatever's on the mail (no persist attempted)", async () => {
-    // The cache-miss branch is guarded by `userId`: without one there's
-    // no target row to write back to, so the handler skips the fallback
-    // load AND the persist. Assert the emit still succeeds (falls back to
-    // the materialized shape when strings ARE present, or to 0/1 defaults
-    // when nothing at all is loaded).
+  it("emits without a userId — BODYSTRUCTURE reads no per-user state", async () => {
+    // `userId` is threaded through buildFetchResponsePart for the RFC822.SIZE
+    // persist; the BODYSTRUCTURE case must not have grown a dependency on it,
+    // so the emit succeeds with it omitted.
     const mailNoUser: Partial<MailType> = {
       ...base,
       text: "hi",

@@ -124,13 +124,10 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Populated here so a mail inserted after this PR is always a
-      // BODYSTRUCTURE cache hit — never triggers the fallback string-load
-      // path in fetch-helpers. Pre-migration rows sit NULL until their
-      // first BODYSTRUCTURE observation backfills them. The `""` split
-      // yields `[""]` (length 1), matching the current buildTextPart math
-      // for an empty part; buildTextPart's `hasText` predicate skips it,
-      // so a stored 1 for an empty column is never surfaced.
+      // Decoded line counts. No read path consumes them: BODYSTRUCTURE's
+      // body-fld-lines measures the transfer-encoded body, which unfolded
+      // base64 makes a constant. Retained so the columns stay populated
+      // until their removal is decided (see hoiekim/inbox#764).
       [TEXT_LINE_COUNT]: countLines(text),
       [HTML_LINE_COUNT]: countLines(html),
       // Same shape as line counts: populate at INSERT so the RFC822.SIZE
@@ -323,64 +320,13 @@ export const updateRfc822Size = async (
 };
 
 /**
- * Line count for the BODYSTRUCTURE `lines` field — the exact expression
- * buildTextPart in imap/util.ts uses to derive the field from the raw
- * text/html column. Kept here so INSERT-time population and read-side
- * fallback compute agree by construction.
- *
- * Note: `"".split(/\r?\n/)` yields `[""]` (length 1). That matches the
- * pre-existing buildTextPart math but the BODYSTRUCTURE emit path skips
- * empty parts via `hasText` / `hasHtml`, so a stored 1 for an empty
- * column is never surfaced on the wire.
+ * Decoded line count of a body column, for `text_line_count` /
+ * `html_line_count`. Nothing reads those columns — BODYSTRUCTURE's
+ * body-fld-lines describes the transfer-encoded body (RFC 3501 §7.4.2),
+ * not the decoded text. Removal is tracked in hoiekim/inbox#764.
  */
 export const countLines = (content: string): number =>
   content.split(/\r?\n/).length;
-
-/**
- * Persist the derived `text_line_count` + `html_line_count` for a mail on
- * the first BODYSTRUCTURE FETCH that computes them (backfill path for
- * pre-migration rows — new rows populate at INSERT time above).
- *
- * Same shape + rationale as `updateRfc822Size`: no `updated` bump so the
- * CONDSTORE mod-sequence isn't churned; idempotent, so concurrent
- * writers of the same values collide harmlessly; fire-and-forget from
- * the caller.
- */
-export const updateLineCounts = async (
-  user_id: string,
-  mail_id: string,
-  text_line_count: number,
-  html_line_count: number
-): Promise<void> => {
-  await mailsTable.updateWhere(
-    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-    { [TEXT_LINE_COUNT]: text_line_count, [HTML_LINE_COUNT]: html_line_count }
-  );
-};
-
-/**
- * Targeted body read for the BODYSTRUCTURE cache-miss fallback: pulls
- * only the `text` + `html` columns for one mail_id. Skipped when the
- * persisted line counts are present (the hot path — every row inserted
- * after #740 hits cache; only pre-migration rows sit NULL). After a
- * bulk backfill this branch effectively stops firing.
- *
- * Returns null when the row is gone (user deleted it mid-fetch).
- */
-export const getMailBody = async (
-  user_id: string,
-  mail_id: string
-): Promise<{ text: string; html: string } | null> => {
-  const result = await pool.query(
-    `SELECT text, html FROM mails WHERE mail_id = $1 AND user_id = $2`,
-    [mail_id, user_id]
-  );
-  if (result.rows.length === 0) return null;
-  return {
-    text: (result.rows[0].text as string | null) ?? "",
-    html: (result.rows[0].html as string | null) ?? "",
-  };
-};
 
 export const markMailRead = async (
   user_id: string,

@@ -450,6 +450,18 @@ describe("IMAP util", () => {
       expect(result).toContain("BASE64");
     });
 
+    it("advertises zero lines for a zero-octet part, matching what BODY[n] serves", () => {
+      // A mail with no text/html falls back to an empty TEXT PLAIN part.
+      // buildMessageSegments emits no body segment for it, so BODY[1] returns
+      // 0 octets — body-fld-lines must agree rather than claim one line.
+      const empty = formatBodyStructure({}, true);
+      const nonEmpty = formatBodyStructure({ text: "hi" }, true);
+      expect([
+        empty.includes(" BASE64 0 0 "),
+        nonEmpty.includes(" BASE64 4 1 "),
+      ]).toEqual([true, true]);
+    });
+
     it("should format HTML-only body structure", () => {
       const mail: Partial<MailType> = {
         html: "<p>Hello, World!</p>"
@@ -510,20 +522,18 @@ describe("IMAP util", () => {
       expect(result).toContain("PLAIN");
     });
 
-    // #740: BODYSTRUCTURE's `size` + `lines` derive from the persisted
-    // octet / line-count columns when the caller projects them (the
-    // BODYSTRUCTURE hot path — no text/html string materialization). The
-    // wire response for the same underlying content must be byte-identical
-    // whether we take the cached path or fall through to base64+split.
-    it("derives text-part size + lines from the cached synthetics with no strings loaded", () => {
+    // #740: BODYSTRUCTURE's `size` derives from the persisted octet column
+    // when the caller projects it (the BODYSTRUCTURE hot path — no text/html
+    // string materialization). The wire response for the same underlying
+    // content must be byte-identical whether we take the cached path or fall
+    // through to base64-and-measure.
+    it("derives text-part size from the cached octets with no strings loaded", () => {
       const cached = formatBodyStructure({
         text_octets: 30,
-        html_octets: 0,
-        text_line_count: 3,
-        html_line_count: 0,
+        html_octets: 0
       });
-      // ceil(30/3)*4 = 40 octets base64, three lines.
-      expect(cached).toContain("BASE64 40 3");
+      // ceil(30/3)*4 = 40 octets base64, served as one unfolded base64 line.
+      expect(cached).toContain("BASE64 40 1");
       // No HTML → single text part, not multipart.
       expect(cached).not.toContain("alternative");
     });
@@ -533,24 +543,69 @@ describe("IMAP util", () => {
       const materialized = formatBodyStructure({ text });
       const cached = formatBodyStructure({
         text_octets: Buffer.byteLength(text, "utf8"),
-        html_octets: 0,
-        text_line_count: text.split(/\r?\n/).length,
-        html_line_count: 0,
+        html_octets: 0
       });
       expect(cached).toBe(materialized);
+    });
+
+    // RFC 3501 §7.4.2 — body-fld-octets and body-fld-lines must describe the
+    // same (transfer-encoded) representation of the part.
+    describe("body-fld-lines describes the transfer-encoded body", () => {
+      it("reports the encoded line count, not the decoded one", () => {
+        const text = Array.from({ length: 40 }, (_, i) => `line ${i}`).join(
+          "\n"
+        );
+        const encoded = encodeText(text);
+        const result = formatBodyStructure({ text }, false);
+        // 40 decoded lines, but one unfolded base64 line is what is served.
+        expect(result).toBe(
+          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 ${encoded.length} 1)`
+        );
+      });
+
+      it("counts lines over the same bytes body-fld-octets measures", () => {
+        const html = "<p>a</p>\r\n<p>b</p>\r\n<p>c</p>";
+        const encoded = encodeText(html);
+        const result = formatBodyStructure({ html }, false);
+        const [, size, lines] = result.match(/BASE64 (\d+) (\d+)\)$/)!;
+        expect(Number(size)).toBe(Buffer.byteLength(encoded, "utf-8"));
+        expect(Number(lines)).toBe(encoded.split(/\r?\n/).length);
+      });
+
+      it("reports zero octets and zero lines on the empty default part", () => {
+        // buildMessageSegments emits no body segment for a mail with no
+        // text/html, so BODY[1] serves nothing — both counts must say so.
+        expect(formatBodyStructure({}, false)).toBe(
+          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 0 0)`
+        );
+      });
+    });
+
+    // RFC 3501 §7.4.2 — `body-type-1part = body-type-text [SP body-ext-1part]`,
+    // where body-ext-1part is md5/disposition/language/location. Present in
+    // BODYSTRUCTURE, absent from the bare `BODY` data item (§6.4.5).
+    describe("body-ext-1part tail on text parts", () => {
+      it("is emitted on a leaf text part and dropped from the bare BODY form", () => {
+        const mail: Partial<MailType> = { text: "Hello, World!" };
+        const encoded = encodeText("Hello, World!");
+        const head = `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 ${encoded.length} 1`;
+        expect(formatBodyStructure(mail, true)).toBe(`${head} NIL NIL NIL NIL)`);
+        expect(formatBodyStructure(mail, false)).toBe(`${head})`);
+      });
+
+      it("is emitted on text parts nested in a multipart", () => {
+        const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
+        const ext = formatBodyStructure(mail, true);
+        const nonExt = formatBodyStructure(mail, false);
+        expect(ext.match(/NIL NIL NIL NIL\)/g)).toHaveLength(3); // 2 text parts + the multipart tail
+        expect(nonExt).not.toContain("NIL NIL NIL NIL");
+      });
     });
 
     // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
     // extension data: md5/disposition/language/location on single parts and
     // param-list/disposition/language/location on the multipart wrappers (#666).
     describe("non-extensible form (extensible=false)", () => {
-      it("leaves a leaf text part identical (it carries no extension data)", () => {
-        const mail: Partial<MailType> = { text: "Hello, World!" };
-        expect(formatBodyStructure(mail, false)).toBe(
-          formatBodyStructure(mail, true)
-        );
-      });
-
       it("drops the multipart/alternative extension tail", () => {
         const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
         const ext = formatBodyStructure(mail, true);
