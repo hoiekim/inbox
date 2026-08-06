@@ -44,6 +44,7 @@ import type { SequenceState } from "./sequence-resolver";
 
 const STORED_UIDVALIDITY = 1716512400;
 const DOMAIN_UID = 100;
+const ACCOUNT_UID = 42;
 
 // pg-FakePool pattern (see users.test.ts): mock `pg` so the lazy pool in
 // postgres/client.ts is a FakePool, then run the REAL imap code. The functions
@@ -80,12 +81,18 @@ const mockQuery = mock(async (sql: string, values?: unknown[]) => {
   const sqlStr = typeof sql === "string" ? sql : "";
   // getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails
   if (sqlStr.includes("next_uid")) {
+    const kind = String(values?.[1]);
     uidReservations.push({
-      kind: String(values?.[1]),
+      kind,
       scope: String(values?.[2]),
       sent: values?.[3] === true,
     });
-    return { rows: [{ next_uid: String(DOMAIN_UID) }], rowCount: 1 };
+    // Distinct per lane. Returning one constant for both would let APPENDUID
+    // report either UID and still pass, which is exactly the selection the
+    // response has to get right (RFC 4315 §3 wants the destination
+    // mailbox's UID).
+    const next_uid = kind === "account" ? ACCOUNT_UID : DOMAIN_UID;
+    return { rows: [{ next_uid: String(next_uid) }], rowCount: 1 };
   }
   // usersTable.queryOne(...) for getImapUidValidity — narrowed to queries
   // that target the users table so an out-of-file leak (Bun's mock.module
@@ -233,6 +240,40 @@ describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
     const response = await runAppend("A004", makeAppendStore(null));
     expect(response).toContain("A004 NO APPEND failed to store message");
     expect(response).not.toContain("APPENDUID");
+  });
+
+  it("reports the destination mailbox's own UID, per lane", async () => {
+    // RFC 4315 §3: APPENDUID carries the UID the message got *in the mailbox
+    // it was appended to*. Only INBOX and the unified Sent folder are served
+    // out of the domain lane (isDomainScoped); every other box — including
+    // Archive, which is neither INBOX nor account-named — is read back through
+    // mail_mailbox_uid, so reporting the domain UID there would send the
+    // client's follow-up `UID FETCH` to a UID that box does not hold.
+    const targets = [
+      "INBOX",
+      "Sent Messages",
+      "Archive",
+      "INBOX/accounts/admin",
+      "Sent Messages/accounts/admin",
+    ];
+    const reported: Array<number | null> = [];
+    for (const [i, mailbox] of targets.entries()) {
+      const response = await runAppend(
+        `A20${i}`,
+        makeAppendStore(),
+        null,
+        mailbox
+      );
+      const match = response.match(/\[APPENDUID \d+ (\d+)\]/);
+      reported.push(match ? Number(match[1]) : null);
+    }
+    expect(reported).toEqual([
+      DOMAIN_UID,
+      DOMAIN_UID,
+      ACCOUNT_UID,
+      ACCOUNT_UID,
+      ACCOUNT_UID,
+    ]);
   });
 });
 
