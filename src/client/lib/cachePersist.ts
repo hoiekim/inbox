@@ -80,7 +80,11 @@ export const startCachePersistence = (): (() => void) =>
       key: url,
       payload: query.state.data,
       userId: currentUserId,
-      lastFetchedAt: Date.now(),
+      // The query's own fetch stamp, not `now`. This subscription also fires
+      // for hydration seeds and for optimistic setQueryData writes, both of
+      // which carry an older dataUpdatedAt — stamping `now` would re-date a
+      // week-old seed on every login and re-arm its maxAge expiry forever.
+      lastFetchedAt: query.state.dataUpdatedAt,
     });
   });
 

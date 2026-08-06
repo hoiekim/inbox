@@ -46,7 +46,8 @@ import {
   processHtmlForViewer,
   useIsOnline,
   revalidateOnMountPolicy,
-  formatDataAge
+  formatDataAge,
+  isShowingStaleData
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
@@ -556,7 +557,6 @@ const RenderedMails = ({ page }: { page: number }) => {
 
   const [activeMailId, setActiveMailId] = useState<ActiveMailMap>({});
   const [openedKebab, setOpenedKebab] = useState("");
-  const { isOnline } = useIsOnline();
 
   const accountsCache = new AccountsCache();
 
@@ -742,12 +742,13 @@ const RenderedMails = ({ page }: { page: number }) => {
   // Paired with the error guard above: gating on isSuccess alone would blank
   // the pane the instant a revalidation failed, so render retained data too.
   if (query.isSuccess || query.data) {
-    // A revalidation that failed while the server is reachable (expired
-    // session, 5xx) has no other signal — the offline banner doesn't apply and
-    // every list action is optimistic — so retained data must not render as if
-    // it were fresh. While offline the banner already says this.
+    // Retained data must not render as if it were fresh: a failed revalidation
+    // leaves a list that can be a week old, and every action on it is
+    // fire-and-forget optimistic. The offline banner reports connectivity and
+    // can only say "—" for the age on a cold offline start, so this carries the
+    // age the banner can't know rather than duplicating it.
     const staleNotice =
-      query.error && query.data && isOnline ? (
+      query.data && isShowingStaleData(query) ? (
         <div className="mails_stale_notice" role="status" aria-live="polite">
           Couldn&apos;t refresh — showing mail as of{" "}
           {formatDataAge(query.dataUpdatedAt)}

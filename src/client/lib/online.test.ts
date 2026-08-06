@@ -6,6 +6,7 @@ import {
   invalidateCacheableQueries,
   formatLastSeen,
   formatDataAge,
+  isShowingStaleData,
   OnlineState
 } from "./online";
 
@@ -122,5 +123,35 @@ describe("formatDataAge", () => {
   it("treats yesterday-late as a different day even when it is under 24h old", () => {
     const yesterday = new Date(2026, 0, 7, 23, 30).getTime();
     expect(formatDataAge(yesterday, now)).toContain("Jan");
+  });
+});
+
+describe("isShowingStaleData", () => {
+  it("classifies each react-query stamp pairing", () => {
+    const cases = [
+      // never errored (errorUpdatedAt is 0 on a fresh query)
+      { dataUpdatedAt: 5000, errorUpdatedAt: 0 },
+      // a fetch failed after the data landed — the seeded-paint-plus-401 case
+      { dataUpdatedAt: 5000, errorUpdatedAt: 6000 },
+      // a later fetch succeeded, so the failure is history
+      { dataUpdatedAt: 7000, errorUpdatedAt: 6000 },
+      // an optimistic setQueryData that carried dataUpdatedAt forward keeps
+      // the signal up even though it cleared `error`
+      { dataUpdatedAt: 5000, errorUpdatedAt: 6000 },
+      // ...and one that did NOT carry it forward would lose the signal, which
+      // is exactly why QueryCache.set passes updatedAt
+      { dataUpdatedAt: 8000, errorUpdatedAt: 6000 },
+      // simultaneous stamps resolve to "not stale" — a success at the same ms
+      // is the newer fact, since the error is what triggered the refetch
+      { dataUpdatedAt: 6000, errorUpdatedAt: 6000 },
+    ];
+    expect(cases.map(isShowingStaleData)).toEqual([
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+    ]);
   });
 });
