@@ -169,8 +169,11 @@ export async function* pgByteChunks(
   startByte: number = 1,
   chunkBytes: number = PG_TEXT_CHUNK_BYTES
 ): AsyncGenerator<Buffer, void, unknown> {
-  // The `$3::int FOR $4::int` casts are load-bearing for the SAME reason as
-  // pgTextChunks — see the note there on Postgres overload resolution.
+  // The `$3::int FOR $4::int` casts are defensive here — `substring(bytea,
+  // int, int)` is the sole overload on bytea (no SIMILAR-TO-pattern
+  // ambiguity to resolve, unlike pgTextChunks's `text` overload set) —
+  // but keeping the casts matches pgTextChunks' shape and eliminates any
+  // future risk of pg driver text-encoded params confusing type inference.
   let offset = startByte;
   for (;;) {
     const sql = `SELECT SUBSTRING(convert_to(${sourceColumn}, 'UTF8') FROM $3::int FOR $4::int) AS chunk
