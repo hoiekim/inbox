@@ -100,6 +100,28 @@ export const formatLastSeen = (lastSeenOnline: number | null): string => {
   });
 };
 
+/**
+ * Render the "as of" clock for cached data, which — unlike the banner's
+ * session-scoped `lastSeenOnline` — can be up to `maxAgeMs` old (a week for the
+ * header catalog). A bare `HH:MM` on week-old data reads as today, so anything
+ * fetched before `now`'s calendar day carries its date.
+ */
+export const formatDataAge = (
+  dataUpdatedAt: number,
+  now: number = Date.now()
+): string => {
+  const fetched = new Date(dataUpdatedAt);
+  const time = fetched.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+  if (fetched.toDateString() === new Date(now).toDateString()) return time;
+  return `${fetched.toLocaleDateString([], {
+    month: "short",
+    day: "numeric"
+  })} ${time}`;
+};
+
 const IsOnlineContext = createContext<IsOnlineContextValue>({
   isOnline: true,
   lastSeenOnline: null,

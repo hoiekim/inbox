@@ -5,6 +5,7 @@ import {
   pingHealth,
   invalidateCacheableQueries,
   formatLastSeen,
+  formatDataAge,
   OnlineState
 } from "./online";
 
@@ -101,5 +102,25 @@ describe("formatLastSeen", () => {
     const out = formatLastSeen(new Date(2026, 0, 1, 9, 5).getTime());
     expect(out).toMatch(/\d/);
     expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+describe("formatDataAge", () => {
+  const now = new Date(2026, 0, 8, 14, 0).getTime();
+
+  it("renders same-day data as a bare clock", () => {
+    const out = formatDataAge(new Date(2026, 0, 8, 9, 5).getTime(), now);
+    expect(out).toBe(formatLastSeen(new Date(2026, 0, 8, 9, 5).getTime()));
+  });
+
+  it("carries the date once the data predates today, so week-old mail can't read as today", () => {
+    const out = formatDataAge(new Date(2026, 0, 1, 9, 5).getTime(), now);
+    expect(out).not.toBe(formatLastSeen(new Date(2026, 0, 1, 9, 5).getTime()));
+    expect(out).toContain(formatLastSeen(new Date(2026, 0, 1, 9, 5).getTime()));
+  });
+
+  it("treats yesterday-late as a different day even when it is under 24h old", () => {
+    const yesterday = new Date(2026, 0, 7, 23, 30).getTime();
+    expect(formatDataAge(yesterday, now)).toContain("Jan");
   });
 });
