@@ -159,11 +159,13 @@ type FakeStore = {
 };
 
 // The listable set a Store would report for user "admin": INBOX, the unified
-// Sent folder, and one per-account box in each lane.
+// Sent folder, and one per-account box in each lane. The received per-account
+// path is `INBOX/accounts/<local>` (ACCOUNTS_FOLDER in util.ts), not
+// `accounts/<local>` — `accountToBox` builds it from that prefix.
 const EXISTING_MAILBOXES = [
   "INBOX",
   "Sent Messages",
-  "accounts/admin",
+  "INBOX/accounts/admin",
   "Sent Messages/accounts/admin",
 ];
 
@@ -266,6 +268,24 @@ describe("appendMessage — target mailbox (#695)", () => {
     // Account-scoped: the box path reaches the mail_mailbox_uid dual-write.
     expect(store.appended[0].mailbox).toBe("Sent Messages/accounts/admin");
     expect(uidReservations.every((r) => r.sent)).toBe(true);
+    // Domain reservation is unscoped; the account one is keyed on the box's
+    // address. The domain half varies with EMAIL_DOMAIN, so pin the local part.
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations[1].scope.split("@")[0]).toBe("admin");
+  });
+
+  it("files an APPEND to a per-account received box as received mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A106", store, null, "INBOX/accounts/admin");
+
+    // The received lane is the mirror of A103 — without this the suite would
+    // pass a regression that made `sent` unconditionally true for every
+    // account-scoped target.
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(store.appended[0].mailbox).toBe("INBOX/accounts/admin");
+    expect(uidReservations.every((r) => r.sent)).toBe(false);
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations[1].scope.split("@")[0]).toBe("admin");
   });
 
   it("answers NO [TRYCREATE] for a mailbox that does not exist and stores nothing", async () => {
