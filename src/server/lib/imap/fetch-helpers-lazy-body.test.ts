@@ -23,7 +23,12 @@ import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 import type { MailType } from "common";
 
-const substringCalls: Array<{ column: "text" | "html"; take: number; returnedChars: number }> = [];
+const substringCalls: Array<{
+  column: "text" | "html";
+  unit: "chars" | "bytes";
+  take: number;
+  returned: number;
+}> = [];
 const columnStore = new Map<string, string>();
 
 const mockQuery = mock(async (sql: string, values: unknown[]) => {
@@ -37,7 +42,28 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const codePoints = [...stored];
     const start = Math.max(0, offset - 1);
     const chunk = codePoints.slice(start, start + take).join("");
-    substringCalls.push({ column, take, returnedChars: chunk.length });
+    substringCalls.push({ column, unit: "chars", take, returned: chunk.length });
+    return { rows: [{ chunk }], rowCount: 1 };
+  }
+  // pgByteChunks' shape — the partial BODY[TEXT] / BODY[<part>] windows
+  // seek by BYTE offset so they can start mid-column instead of draining
+  // from code point 1. `convert_to(col, 'UTF8')` on a UTF8 server encoding
+  // returns the column's raw bytes verbatim, so the mock encodes the
+  // stored text and returns the byte range. Splitting a multi-byte
+  // sequence at a boundary is intentional: the consumer base64-encodes
+  // the bytes, it never decodes them. Same branch as the one in
+  // session-utils-lazy-text.test.ts.
+  const byteSubstringMatch = sql.match(
+    /SUBSTRING\(convert_to\((text|html),\s*'UTF8'\)\s+FROM\s+\$3::int\s+FOR\s+\$4::int\)/
+  );
+  if (byteSubstringMatch) {
+    const column = byteSubstringMatch[1] as "text" | "html";
+    const [mail_id, , offset, take] = values as [string, string, number, number];
+    const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
+    const bytes = Buffer.from(stored, "utf8");
+    const start = Math.max(0, offset - 1);
+    const chunk = bytes.subarray(start, start + take);
+    substringCalls.push({ column, unit: "bytes", take, returned: chunk.byteLength });
     return { rows: [{ chunk }], rowCount: 1 };
   }
   // Fail loud on unrecognized SUBSTRING — mirrors the guard in
@@ -46,8 +72,9 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
   // regex is stale."
   if (/SUBSTRING/i.test(sql)) {
     throw new Error(
-      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks SQL. ` +
-      `Expected /SUBSTRING\\((text|html)\\s+FROM\\s+\\$3::int\\s+FOR\\s+\\$4::int\\)/, got: ${sql}`
+      `Mock does not recognize SUBSTRING shape — likely a drift from the pgTextChunks / pgByteChunks SQL. ` +
+      `Expected pgTextChunks /SUBSTRING\\((text|html) FROM \\$3::int FOR \\$4::int\\)/ or ` +
+      `pgByteChunks /SUBSTRING\\(convert_to\\((text|html), 'UTF8'\\) FROM \\$3::int FOR \\$4::int\\)/, got: ${sql}`
     );
   }
   // Any other query (e.g. rfc822_size persist) just no-ops with an empty
@@ -72,7 +99,7 @@ mock.module("pg", pgMock);
 
 const { buildFetchResponsePart } = await import("./fetch-helpers");
 const { resetPool } = await import("../postgres/client");
-const { PG_TEXT_CHUNK_CHARS } = await import(
+const { PG_TEXT_CHUNK_CHARS, PG_TEXT_CHUNK_BYTES } = await import(
   "../postgres/repositories/mails/imap"
 );
 
@@ -143,9 +170,14 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
     // the SUBSTRING and re-added `SELECT text, html FROM mails ...`, this
     // would see one giant pull (or zero, if the SUBSTRING never fired).
     expect(substringCalls.length).toBeGreaterThan(0);
+    expect(substringCalls.map((c) => c.unit)).toEqual(
+      substringCalls.map(() => "chars")
+    );
+    expect(substringCalls.map((c) => c.take)).toEqual(
+      substringCalls.map(() => PG_TEXT_CHUNK_CHARS)
+    );
     for (const call of substringCalls) {
-      expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
-      expect(call.returnedChars).toBeLessThanOrEqual(PG_TEXT_CHUNK_CHARS);
+      expect(call.returned).toBeLessThanOrEqual(PG_TEXT_CHUNK_CHARS);
     }
 
     // Chunk count MUST scale with body size. A single giant pull (the
@@ -269,9 +301,9 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
       expect(substringCalls.length).toBeGreaterThanOrEqual(
         Math.floor(html.length / PG_TEXT_CHUNK_CHARS)
       );
-      for (const call of substringCalls) {
-        expect(call.take).toBe(PG_TEXT_CHUNK_CHARS);
-      }
+      expect(substringCalls.map((c) => c.take)).toEqual(
+        substringCalls.map(() => PG_TEXT_CHUNK_CHARS)
+      );
     });
   }
 
@@ -315,8 +347,18 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
     // column per window would make the pipeline O(n²) in round-trips and
     // put the whole body back in flight. `sliceStream` closes the upstream
     // generator via for-await `.return()` the moment `take` is satisfied.
-    const fullBodyPulls = Math.floor(html.length / PG_TEXT_CHUNK_CHARS);
-    expect(substringCalls.length).toBeGreaterThan(0);
-    expect(substringCalls.length).toBeLessThan(fullBodyPulls);
+    //
+    // The partial path seeks by BYTE (pgByteChunks), so the pull count is
+    // bounded by the window, not by the column: exactly enough 48 KiB byte
+    // pulls to cover 64 KiB. Pinning the exact count rather than "less than
+    // a full drain" is what makes this bite — a regression that dropped the
+    // early `.return()` would still land under a full-drain bound while
+    // reading far more than the window needs.
+    expect(substringCalls.map((c) => c.unit)).toEqual(
+      substringCalls.map(() => "bytes")
+    );
+    expect(substringCalls.length).toBe(
+      Math.ceil((64 * 1024) / PG_TEXT_CHUNK_BYTES)
+    );
   });
 });
