@@ -23,6 +23,7 @@ import {
 import { getCapabilities } from "./capabilities";
 import { ImapRequestHandler } from "./handler";
 import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
+import { imapTrace } from "./trace";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -122,6 +123,7 @@ export class ImapSession {
       // Only count after a successful call — a write that throws never
       // reached the wire.
       this.bytesWritten += Buffer.byteLength(data, "utf8");
+      imapTrace("out", this.sessionId, data);
       return ok;
     } catch (error) {
       logger.error("Error writing to socket", { component: "imap" }, error);
