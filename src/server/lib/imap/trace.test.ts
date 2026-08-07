@@ -47,6 +47,24 @@ describe("imapTrace", () => {
     expect(line).not.toContain("hunter2");
   });
 
+  it("drops LITERAL+ continuation lines on inbound (no <tag> <VERB> prefix)", async () => {
+    process.env.IMAP_TRACE = "1";
+    const { imapTrace } = await importTrace();
+    infoSpy.mockClear();
+    // A hypothetical LITERAL+ client sends `A1 LOGIN {5+}\r\nadmin {8+}\r\npassword\r\n`.
+    // The handler CRLF-splits with no literal-continuation state, so `admin {8+}`
+    // and `password` reach imapTrace as their own inbound lines. Neither matches
+    // <tag> <VERB> — both must be dropped before they land in the journal.
+    imapTrace("in", "session_abc", "A1 LOGIN {5+}\r\nadmin {8+}\r\npassword");
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    const line = (infoSpy.mock.calls[0][1] as { line: string }).line;
+    expect(line).toBe("A1 LOGIN [REDACTED]");
+    const anyCallHasPassword = infoSpy.mock.calls.some((c) =>
+      JSON.stringify(c).includes("password")
+    );
+    expect(anyCallHasPassword).toBe(false);
+  });
+
   it("redacts AUTHENTICATE initial response on inbound (RFC 4959)", async () => {
     process.env.IMAP_TRACE = "1";
     const { imapTrace } = await importTrace();

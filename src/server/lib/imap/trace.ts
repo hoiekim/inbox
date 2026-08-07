@@ -3,6 +3,14 @@ import { logger } from "server";
 const TRACE_ON = process.env.IMAP_TRACE === "1";
 const LINE_CAP = 512;
 
+// Inbound allow-shape. The handler CRLF-splits the socket buffer line-by-line
+// with no LITERAL continuation state, so `LOGIN {5+}\r\nadmin {8+}\r\npassword`
+// would emit two follow-up lines whose content is a secret but whose text
+// doesn't match the LOGIN/AUTHENTICATE prefix `redactCredentials` looks for.
+// Requiring `<tag> <VERB>` at the start drops every non-command line —
+// literal-continuation payload, junk, empty — before any redaction runs.
+const INBOUND_COMMAND = /^[A-Za-z0-9]+\s+[A-Z]+\b/;
+
 // LOGIN carries the plaintext password as the last quoted arg; AUTHENTICATE
 // carries the SASL initial response (RFC 4959) — base64-decoded, PLAIN yields
 // `\0user\0password`. Both must be scrubbed before the line lands in the
@@ -42,6 +50,7 @@ export const imapTrace = (
   if (!TRACE_ON) return;
   for (const raw of data.split("\r\n")) {
     if (!raw) continue;
+    if (direction === "in" && !INBOUND_COMMAND.test(raw)) continue;
     if (direction === "out" && !OUTBOUND_FRAMING.test(raw)) continue;
     const sanitized = direction === "in" ? redactCredentials(raw) : raw;
     logger.info(`IMAP wire ${direction}`, {
