@@ -6,6 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
+import { imapTrace } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
@@ -198,6 +199,7 @@ export class ImapRequestHandler {
               command: line.trim(),
               mailbox: session.selectedMailbox
             });
+            imapTrace("in", session.getSessionId(), line.trim());
 
             // Pace pipelined bursts. RFC 3501 §7 requires a tagged
             // completion for every command, so over-limit commands are
