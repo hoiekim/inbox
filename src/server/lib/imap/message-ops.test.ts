@@ -182,9 +182,10 @@ const emptySeqState = (): SequenceState => ({
   uidToSeq: new Map(),
 });
 
-// A store whose setFlags resolves to `result` and records its calls.
+// A store whose setFlags resolves to `result` (with no UNCHANGEDSINCE
+// conflicts) and records its calls.
 const makeFlagStore = (result: { uid: number; read?: boolean }[]) => {
-  const setFlags = mock(() => Promise.resolve(result));
+  const setFlags = mock(() => Promise.resolve({ updated: result, failed: [] }));
   return { store: { setFlags } as unknown as Store, setFlags };
 };
 
