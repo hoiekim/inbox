@@ -37,6 +37,7 @@ export interface UpdateOptions extends StampUpdatedOption {
 }
 
 export interface UpsertOptions extends StampUpdatedOption {
+  /** Columns to carry onto the conflict path; those the INSERT omitted are dropped. */
   updateColumns?: string[];
   returning?: string[];
 }
@@ -213,11 +214,13 @@ export function buildUpsert(
 
   const { columns, placeholders } = autoColumns(stampUpdated);
   const values: ParamValue[] = [];
+  const insertedColumns = new Set<string>();
   let paramIndex = 1;
 
   for (const [key, value] of Object.entries(data)) {
     if (isUndefined(value)) continue;
     columns.push(key);
+    insertedColumns.add(key);
     placeholders.push(`$${paramIndex}`);
     values.push(prepareParamValue(value as ParamValue));
     paramIndex++;
@@ -226,14 +229,18 @@ export function buildUpsert(
   let sql = `INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders.join(", ")})`;
 
   if (updateColumns.length > 0) {
+    // `EXCLUDED.col` for a column the INSERT omitted is that column's DEFAULT,
+    // so assigning it overwrites the stored value with NULL. Only columns this
+    // statement actually wrote can be carried onto the conflict path.
     const updateClauses = updateColumns
-      .filter((col) => col !== primaryKey)
+      .filter((col) => col !== primaryKey && insertedColumns.has(col))
       .map((col) => `${col} = EXCLUDED.${col}`);
     if (stampUpdated) updateClauses.push("updated = CURRENT_TIMESTAMP");
-    // Every requested column was the conflict key and there is no `updated` to
-    // stamp, so nothing is left to write. An empty SET list is a syntax error;
-    // re-assigning the conflict key is the no-op that keeps `DO UPDATE` — and
-    // therefore `RETURNING` — so the caller still gets the conflicting row.
+    // Every requested column was the conflict key or absent from the INSERT,
+    // and there is no `updated` to stamp, so nothing is left to write. An empty
+    // SET list is a syntax error; re-assigning the conflict key is the no-op
+    // that keeps `DO UPDATE` — and therefore `RETURNING` — so the caller still
+    // gets the conflicting row.
     if (updateClauses.length === 0) {
       updateClauses.push(`${primaryKey} = EXCLUDED.${primaryKey}`);
     }
