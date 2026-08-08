@@ -1,3 +1,6 @@
+// Environment access (standalone, no dependencies)
+export * from "./env";
+
 // Logging (standalone, no dependencies)
 export { logger } from "./logger";
 
