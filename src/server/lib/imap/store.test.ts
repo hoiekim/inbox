@@ -87,6 +87,53 @@ describe("Store.listMailboxes", () => {
     const result = await store.listMailboxes();
     expect(result).toEqual(["INBOX"]);
   });
+
+  it("lists an unsubscribed user mailbox — LIST is not subscription-filtered", async () => {
+    mockGetMailboxesByUser.mockResolvedValue([
+      { name: "Archive", special_use: null, address: null, subscribed: false },
+    ] as never);
+    const store = new Store(makeUser());
+    expect(await store.listMailboxes()).toEqual(["INBOX", "Archive"]);
+  });
+});
+
+describe("Store.listMailboxEntries — subscription state for LSUB (#688)", () => {
+  beforeEach(() => {
+    mockGetAccountStats.mockClear();
+    mockGetMailboxesByUser.mockClear();
+    mockGetAccountStats.mockResolvedValue([]);
+    mockGetMailboxesByUser.mockResolvedValue([]);
+  });
+
+  it("carries each user mailbox's subscribed column through", async () => {
+    mockGetMailboxesByUser.mockResolvedValue([
+      { name: "ZzSubYes", special_use: null, address: null, subscribed: true },
+      { name: "ZzSubNo", special_use: null, address: null, subscribed: false },
+    ] as never);
+
+    const store = new Store(makeUser());
+    const entries = await store.listMailboxEntries();
+
+    expect(entries).toContainEqual({ name: "ZzSubYes", subscribed: true });
+    expect(entries).toContainEqual({ name: "ZzSubNo", subscribed: false });
+  });
+
+  it("marks the derived mailboxes subscribed — they have no row to unsubscribe from", async () => {
+    mockGetAccountStats.mockResolvedValue([{ address: "work@alice.example.com" }] as never);
+
+    const store = new Store(makeUser());
+    const entries = await store.listMailboxEntries();
+
+    expect(entries.length).toBeGreaterThan(1);
+    expect(entries.every((entry) => entry.subscribed)).toBe(true);
+    expect(entries.map((entry) => entry.name)).toContain("INBOX");
+  });
+
+  it("falls back to a subscribed INBOX when the backend throws", async () => {
+    mockGetMailboxesByUser.mockRejectedValue(new Error("db down"));
+    const store = new Store(makeUser());
+    expect(await store.listMailboxEntries()).toEqual([{ name: "INBOX", subscribed: true }]);
+  });
 });
 
 describe("simplifyCriterion — NOT/OR operand normalisation (regression for #551)", () => {
