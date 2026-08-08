@@ -135,6 +135,52 @@ export type DeleteWhereFilter = WhereFilter;
 export type DeleteWhereFilters<TSchema extends Schema> = WhereFilters<TSchema>;
 
 /**
+ * Resolves the filter entries a mutation will bind, rejecting any bag that
+ * would produce a wider statement than the caller asked for.
+ *
+ * Mutation filters must name every predicate they intend to apply. A key that
+ * is present with an `undefined` value means the caller meant to scope the
+ * statement by that column and had nothing to scope it with. Dropping it —
+ * the right default for optional *search* filters — silently widens an UPDATE
+ * or DELETE to every row the surviving predicates match, which is how a single
+ * missing request field turns into a whole-table mutation.
+ *
+ * A key that was never passed does not appear in `Object.entries`, so the
+ * `...(condition ? { column: value } : {})` spread idiom is unaffected.
+ *
+ * Exported so the predicate rules can be pinned without intercepting the pool
+ * — `mock.module` on the shared `../client` bleeds across the whole suite.
+ */
+export function resolveMutationFilters(
+  method: string,
+  filters: Record<string, unknown>
+): [string, unknown][] {
+  const undefinedColumns = Object.entries(filters)
+    .filter(([, value]) => {
+      if (value === undefined) return true;
+      // `{ op, value: undefined }` would bind NULL and match nothing rather
+      // than widen, but it is still a caller that named a predicate it had no
+      // value for — reject it on the same terms as a bare undefined.
+      if (value !== null && typeof value === "object" && "op" in value) {
+        return (value as FilterCondition).value === undefined;
+      }
+      return false;
+    })
+    .map(([column]) => column);
+  if (undefinedColumns.length > 0) {
+    throw new Error(
+      `${method} received undefined for ${undefinedColumns.join(", ")} — ` +
+        `refusing to run a mutation without the intended predicate`
+    );
+  }
+  const entries = Object.entries(filters);
+  if (entries.length === 0) {
+    throw new Error(`${method} requires at least one filter`);
+  }
+  return entries;
+}
+
+/**
  * Builds a WHERE clause from filter entries, handling both plain-equality and
  * FilterCondition entries (including IN-list). Returns the clause string plus
  * the parameter values, with placeholders numbered starting at startParamIdx.
@@ -279,10 +325,7 @@ export abstract class Table<
   async deleteWhere(
     filters: WhereFilters<TSchema>
   ): Promise<number> {
-    const entries = Object.entries(filters).filter(([, v]) => v !== undefined);
-    if (entries.length === 0) {
-      throw new Error("deleteWhere requires at least one filter");
-    }
+    const entries = resolveMutationFilters("deleteWhere", filters);
     const { whereSql, values } = buildFilterClauses(entries, 1);
     const sql = `DELETE FROM ${this.name} WHERE ${whereSql} RETURNING ${this.primaryKey}`;
     const result = await pool.query(sql, values);
@@ -294,11 +337,8 @@ export abstract class Table<
     data: QueryData,
     returning?: string[]
   ): Promise<Record<string, unknown>[]> {
-    const filterEntries = Object.entries(filters).filter(([, v]) => v !== undefined);
+    const filterEntries = resolveMutationFilters("updateWhere", filters);
     const dataEntries = Object.entries(data).filter(([, v]) => v !== undefined);
-    if (filterEntries.length === 0) {
-      throw new Error("updateWhere requires at least one filter");
-    }
     if (dataEntries.length === 0) {
       return [];
     }
