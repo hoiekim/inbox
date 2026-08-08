@@ -230,8 +230,9 @@ export function buildUpsert(
 
   if (updateColumns.length > 0) {
     // `EXCLUDED.col` for a column the INSERT omitted is that column's DEFAULT,
-    // so assigning it overwrites the stored value with NULL. Only columns this
-    // statement actually wrote can be carried onto the conflict path.
+    // so assigning it overwrites the stored value with that default — NULL where
+    // none is declared, otherwise a silent reset to the default. Only columns
+    // this statement actually wrote can be carried onto the conflict path.
     const updateClauses = updateColumns
       .filter((col) => col !== primaryKey && insertedColumns.has(col))
       .map((col) => `${col} = EXCLUDED.${col}`);
