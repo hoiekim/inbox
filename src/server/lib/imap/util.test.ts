@@ -440,35 +440,43 @@ describe("IMAP util", () => {
   });
 
   describe("formatBodyStructure", () => {
-    it("should format text-only body structure", () => {
-      const mail: Partial<MailType> = {
-        text: "Hello, World!"
-      };
+    // RFC 3501 §9: media-type + media-subtype + body-fld-enc are `string`
+    // (quoted or literal). Bare atoms crash strict client parsers (Apple Mail
+    // iOS ≥ 26 aborts and retry-loops); assertions below pin the QUOTED form
+    // byte-for-byte so a regression to the bare-atom shape fails the suite.
+    it("quotes TEXT/PLAIN and BASE64 per RFC 3501 §9 (text-only)", () => {
+      const mail: Partial<MailType> = { text: "Hello, World!" };
       const result = formatBodyStructure(mail);
-      expect(result).toContain("TEXT");
-      expect(result).toContain("PLAIN");
-      expect(result).toContain("BASE64");
+      // The byte-perfect pin below carries the full-shape regression; here
+      // just assert the three tokens land in their quoted form so a partial
+      // regression on any one is caught in isolation.
+      expect(result).toContain('"TEXT"');
+      expect(result).toContain('"PLAIN"');
+      expect(result).toContain('"BASE64"');
     });
 
-    it("should format HTML-only body structure", () => {
-      const mail: Partial<MailType> = {
-        html: "<p>Hello, World!</p>"
-      };
+    it("quotes TEXT/HTML per RFC 3501 §9 (html-only)", () => {
+      const mail: Partial<MailType> = { html: "<p>Hello, World!</p>" };
       const result = formatBodyStructure(mail);
-      expect(result).toContain("TEXT");
-      expect(result).toContain("HTML");
+      expect(result).toContain('"TEXT"');
+      expect(result).toContain('"HTML"');
     });
 
-    it("should format multipart/alternative for text+HTML", () => {
+    it("emits multipart/alternative with NO space between sibling parts (RFC 3501 §9)", () => {
       const mail: Partial<MailType> = {
         text: "Hello",
         html: "<p>Hello</p>"
       };
       const result = formatBodyStructure(mail);
       expect(result).toContain('"alternative"');
+      // ABNF: body-type-mpart = 1*body SP media-subtype — siblings concatenate
+      // with no separator; the single SP is the sentinel before media-subtype.
+      // Correct: `)(` between siblings, ` "alternative"` before subtype.
+      expect(result).toMatch(/\)\("TEXT" "HTML"/);
+      expect(result).not.toMatch(/\) \("TEXT" "HTML"/);
     });
 
-    it("should format multipart/mixed for attachments", () => {
+    it("emits multipart/mixed with NO space between sibling parts", () => {
       const mail: Partial<MailType> = {
         text: "Hello",
         attachments: [
@@ -484,6 +492,9 @@ describe("IMAP util", () => {
       expect(result).toContain('"mixed"');
       expect(result).toContain('"application"');
       expect(result).toContain('"pdf"');
+      // Text part → attachment part concatenate with no space.
+      expect(result).toMatch(/\)\("application"/);
+      expect(result).not.toMatch(/\) \("application"/);
     });
 
     it("should include attachment filename in disposition", () => {
@@ -503,11 +514,48 @@ describe("IMAP util", () => {
       expect(result).toContain('"FILENAME" "document.pdf"');
     });
 
-    it("should default to empty text part", () => {
+    it("should default to empty text part with quoted TEXT/PLAIN", () => {
       const mail: Partial<MailType> = {};
       const result = formatBodyStructure(mail);
-      expect(result).toContain("TEXT");
-      expect(result).toContain("PLAIN");
+      expect(result).toContain('"TEXT"');
+      expect(result).toContain('"PLAIN"');
+    });
+
+    // Byte-for-byte pin — regression against the exact prod shape that
+    // Apple Mail iOS 26 stuck on. Covers all three violations at once:
+    // (a) quoted TEXT/PLAIN/HTML, (b) quoted BASE64, (c) no space between
+    // sibling parts inside the outer multipart wrapper.
+    it("full byte-perfect shape for text+html+2 attachments (the iOS regression case)", () => {
+      const mail: Partial<MailType> = {
+        text_octets: 27060,
+        html_octets: 11138020,
+        text_line_count: 522,
+        html_line_count: 230,
+        attachments: [
+          {
+            content: { data: "att1" },
+            filename: "1000025304.jpg",
+            size: 6162016,
+            contentType: "image/jpeg"
+          },
+          {
+            content: { data: "att2" },
+            filename: "1000025344.jpg",
+            size: 81495,
+            contentType: "image/jpeg"
+          }
+        ]
+      };
+      const expected =
+        '((' +
+          '("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 36080 522)' +
+          '("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" 14850696 230)' +
+          ' "alternative" NIL NIL NIL NIL' +
+        ')' +
+        '("image" "jpeg" ("NAME" "1000025304.jpg") NIL NIL "BASE64" 8216024 NIL ("ATTACHMENT" ("FILENAME" "1000025304.jpg")) NIL NIL)' +
+        '("image" "jpeg" ("NAME" "1000025344.jpg") NIL NIL "BASE64" 108660 NIL ("ATTACHMENT" ("FILENAME" "1000025344.jpg")) NIL NIL)' +
+        ' "mixed" NIL NIL NIL NIL)';
+      expect(formatBodyStructure(mail)).toBe(expected);
     });
 
     // #740: BODYSTRUCTURE's `size` + `lines` derive from the persisted
@@ -523,7 +571,7 @@ describe("IMAP util", () => {
         html_line_count: 0,
       });
       // ceil(30/3)*4 = 40 octets base64, three lines.
-      expect(cached).toContain("BASE64 40 3");
+      expect(cached).toContain('"BASE64" 40 3');
       // No HTML → single text part, not multipart.
       expect(cached).not.toContain("alternative");
     });
@@ -583,7 +631,7 @@ describe("IMAP util", () => {
         // The attachment part itself now ends at the size field (BASE64 <size>).
         const attachmentSize = Math.ceil(1024 / 3) * 4;
         expect(nonExt).toContain(`"application" "pdf"`);
-        expect(nonExt).toContain(`BASE64 ${attachmentSize})`);
+        expect(nonExt).toContain(`"BASE64" ${attachmentSize})`);
       });
     });
   });

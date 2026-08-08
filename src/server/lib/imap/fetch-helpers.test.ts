@@ -991,9 +991,10 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     expect(part!.type).toBe("simple");
     if (part!.type === "simple") {
       // Single text part shape — no HTML, no attachments.
-      // Format: (TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 <size> <lines>)
-      expect(part!.content).toContain('"TEXT" "PLAIN"'.replace(/"/g, ""));
-      expect(part!.content).toContain("BASE64 44 42");
+      // Format: ("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" <size> <lines>)
+      // Type/subtype/encoding must be quoted strings (RFC 3501 §9).
+      expect(part!.content).toContain('"TEXT" "PLAIN"');
+      expect(part!.content).toContain('"BASE64" 44 42');
     }
   });
 
@@ -1015,8 +1016,8 @@ describe("buildFetchResponsePart BODYSTRUCTURE cached-column short-circuit (#740
     if (part!.type === "simple") {
       // Both parts + the alternative wrapper. Both must derive from cache
       // (no strings on mail — would `NaN` or 0 on materialized fallback).
-      expect(part!.content).toContain("BASE64 8 2");
-      expect(part!.content).toContain("BASE64 20 5");
+      expect(part!.content).toContain('"BASE64" 8 2');
+      expect(part!.content).toContain('"BASE64" 20 5');
       expect(part!.content).toContain('"alternative"');
     }
   });
