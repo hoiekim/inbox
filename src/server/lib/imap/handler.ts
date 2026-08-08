@@ -116,20 +116,29 @@ export class ImapRequestHandler {
 
     // pendingSaslTag is stored on this (class property) so session can set it
 
-    socket.on("data", async (data) => {
+    // Per-session serial drain guard. Node emits `data` events without
+    // awaiting the async handler, so before this guard existed each TCP
+    // segment spawned its own async loop reading and mutating the shared
+    // `buffer` — and, worse, calling `handleRequest`/`session.write` in
+    // parallel. Pipelined FETCHes on one session (iOS Mail issues N
+    // `UID FETCH (BODY.PEEK[]<off.393216>)` slices in a burst for a
+    // multi-MB body) would interleave: `writeFetchResponse` writes a
+    // literal-length header `{N}\r\n`, `await writeStream(...)`, then `)`.
+    // Under WAN backpressure the `await` yields, and the concurrent
+    // handler's synchronous `write()` for the next FETCH injects its own
+    // `* n FETCH (…` header into the middle of the still-streaming
+    // literal — iOS's parser desyncs and drops the session ("Cannot Get
+    // Mail" modal). RFC 3501 explicitly permits serial command execution
+    // on a single connection, so we serialize.
+    let draining = false;
+    const drainCommands = async (): Promise<void> => {
+      if (draining) return;
+      draining = true;
       try {
-        buffer += data.toString();
-
-        // Process complete lines
-        let lineEnd;
         while (true) {
           // If accumulating literal data for APPEND, consume raw bytes first
           if (pendingAppendLine !== null) {
-            if (buffer.length < literalBytesNeeded) {
-              // Wait for more data
-              break;
-            }
-            // We have enough bytes — reconstruct the full APPEND input and parse
+            if (buffer.length < literalBytesNeeded) return;
             const literalData = buffer.substring(0, literalBytesNeeded);
             buffer = buffer.substring(literalBytesNeeded);
             // Skip optional \r\n after literal
@@ -161,8 +170,8 @@ export class ImapRequestHandler {
             continue;
           }
 
-          lineEnd = buffer.indexOf("\r\n");
-          if (lineEnd === -1) break;
+          const lineEnd = buffer.indexOf("\r\n");
+          if (lineEnd === -1) return;
 
           const line = buffer.substring(0, lineEnd);
           buffer = buffer.substring(lineEnd + 2);
@@ -180,84 +189,84 @@ export class ImapRequestHandler {
             continue;
           }
 
-          if (line.trim()) {
-            // The only valid client input during IDLE is "DONE". This line
-            // buffer already reassembles split TCP chunks and pipelined input,
-            // so handle DONE here: terminate IDLE and fall through so any
-            // command pipelined after DONE (e.g. "DONE\r\nA4 NOOP\r\n") is
-            // processed on the next loop iteration. Non-DONE input during IDLE
-            // is ignored per RFC 2177.
-            if (session.isInIdleMode()) {
-              if (line.trim().toUpperCase() === "DONE") {
-                session.endIdle();
+          if (!line.trim()) continue;
+
+          // The only valid client input during IDLE is "DONE". This line
+          // buffer already reassembles split TCP chunks and pipelined input,
+          // so handle DONE here: terminate IDLE and fall through so any
+          // command pipelined after DONE (e.g. "DONE\r\nA4 NOOP\r\n") is
+          // processed on the next loop iteration. Non-DONE input during IDLE
+          // is ignored per RFC 2177.
+          if (session.isInIdleMode()) {
+            if (line.trim().toUpperCase() === "DONE") {
+              session.endIdle();
+            }
+            continue;
+          }
+
+          logger.debug("IMAP command received", {
+            component: "imap",
+            command: line.trim(),
+            mailbox: session.selectedMailbox
+          });
+          imapTrace("in", session.getSessionId(), line.trim());
+
+          // Pace pipelined bursts. RFC 3501 §7 requires a tagged
+          // completion for every command, so over-limit commands are
+          // delayed, never skipped — clients pipeline heavily during
+          // folder sync (iOS Mail sends STATUS for every mailbox in one
+          // burst after LIST).
+          await session.waitForCommandSlot();
+
+          // Detect APPEND command with a literal size indicator {N} or {N+}
+          // e.g. "a001 APPEND INBOX (\Seen) {512}"
+          // When found, switch to literal accumulation mode instead of parsing now.
+          const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
+          if (literalMatch) {
+            const upperLine = line.trim().toUpperCase();
+            // Only intercept APPEND literals here; other commands with literals
+            // (e.g. LOGIN with quoted strings) don't need this treatment.
+            const parts = upperLine.split(/\s+/);
+            const commandWord = parts[1] || parts[0];
+            if (commandWord === "APPEND") {
+              pendingAppendLine = line.trim();
+              literalBytesNeeded = parseInt(literalMatch[1], 10);
+              // Synchronizing literals {N} (without +) require a continuation
+              // response before the client will send the literal data.
+              // Non-synchronizing literals {N+} (LITERAL+) do not.
+              const isSynchronizing = !literalMatch[2];
+              if (isSynchronizing) {
+                session.write("+ go ahead\r\n");
               }
               continue;
             }
+          }
 
-            logger.debug("IMAP command received", {
-              component: "imap",
-              command: line.trim(),
-              mailbox: session.selectedMailbox
-            });
-            imapTrace("in", session.getSessionId(), line.trim());
+          try {
+            // Parse the command using the typed parser
+            const parseResult = parseCommand(line.trim());
 
-            // Pace pipelined bursts. RFC 3501 §7 requires a tagged
-            // completion for every command, so over-limit commands are
-            // delayed, never skipped — clients pipeline heavily during
-            // folder sync (iOS Mail sends STATUS for every mailbox in one
-            // burst after LIST).
-            await session.waitForCommandSlot();
-
-            // Detect APPEND command with a literal size indicator {N} or {N+}
-            // e.g. "a001 APPEND INBOX (\Seen) {512}"
-            // When found, switch to literal accumulation mode instead of parsing now.
-            const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
-            if (literalMatch) {
-              const upperLine = line.trim().toUpperCase();
-              // Only intercept APPEND literals here; other commands with literals
-              // (e.g. LOGIN with quoted strings) don't need this treatment.
-              const parts = upperLine.split(/\s+/);
-              const commandWord = parts[1] || parts[0];
-              if (commandWord === "APPEND") {
-                pendingAppendLine = line.trim();
-                literalBytesNeeded = parseInt(literalMatch[1], 10);
-                // Synchronizing literals {N} (without +) require a continuation
-                // response before the client will send the literal data.
-                // Non-synchronizing literals {N+} (LITERAL+) do not.
-                const isSynchronizing = !literalMatch[2];
-                if (isSynchronizing) {
-                  session.write("+ go ahead\r\n");
-                }
-                continue;
-              }
-            }
-
-            try {
-              // Parse the command using the typed parser
-              const parseResult = parseCommand(line.trim());
-
-              if (parseResult.success && parseResult.value) {
-                const { tag, request } = parseResult.value;
-                await this.handleRequest(tag, request);
-              } else {
-                // If parsing failed, send error response only if socket is writable
-                logger.debug("Parse failed", {
-                  component: "imap.parser",
-                  input: line.trim(),
-                  error: parseResult.error
-                });
-                const parts = line.trim().split(" ");
-                const tag = parts[0] || "BAD";
-                const errorMsg = parseResult.error || "Invalid command syntax";
-                session.write(`${tag} BAD ${errorMsg}\r\n`);
-              }
-            } catch (error) {
-              logger.error("Error processing command", { component: "imap" }, error);
-              // Only send error response if socket is still writable
+            if (parseResult.success && parseResult.value) {
+              const { tag, request } = parseResult.value;
+              await this.handleRequest(tag, request);
+            } else {
+              // If parsing failed, send error response only if socket is writable
+              logger.debug("Parse failed", {
+                component: "imap.parser",
+                input: line.trim(),
+                error: parseResult.error
+              });
               const parts = line.trim().split(" ");
               const tag = parts[0] || "BAD";
-              session.write(`${tag} BAD Internal server error\r\n`);
+              const errorMsg = parseResult.error || "Invalid command syntax";
+              session.write(`${tag} BAD ${errorMsg}\r\n`);
             }
+          } catch (error) {
+            logger.error("Error processing command", { component: "imap" }, error);
+            // Only send error response if socket is still writable
+            const parts = line.trim().split(" ");
+            const tag = parts[0] || "BAD";
+            session.write(`${tag} BAD Internal server error\r\n`);
           }
         }
       } catch (error) {
@@ -265,7 +274,30 @@ export class ImapRequestHandler {
         if (!socket.destroyed) {
           socket.destroy();
         }
+      } finally {
+        draining = false;
       }
+    };
+
+    socket.on("data", (data) => {
+      // Sync-only: append to the shared buffer, then wake the drain.
+      // The `data` event fires synchronously per TCP segment; any await
+      // here would let a second segment race the buffer append. Keep this
+      // handler synchronous — all async work belongs inside `drainCommands`
+      // which owns the `draining` guard.
+      try {
+        buffer += data.toString();
+      } catch (error) {
+        logger.error("Error appending data to buffer", { component: "imap" }, error);
+        if (!socket.destroyed) socket.destroy();
+        return;
+      }
+      // Fire-and-forget: `drainCommands` self-serializes via `draining`.
+      // Errors inside are already logged; catch here just to prevent an
+      // unhandled-rejection.
+      void drainCommands().catch((error) => {
+        logger.error("Unhandled drain error", { component: "imap" }, error);
+      });
     });
 
     socket.on("close", () => {
@@ -306,17 +338,17 @@ export class ImapRequestHandler {
     // duration, so a memory spike can be attributed to a specific command
     // rather than only to a coarse metrics-poll window. Sampled from
     // `session.bytesWritten` (session-scoped counter) rather than wrapping
-    // `session.write` — the wrap approach was racy under Node's data-event
-    // concurrency (the handler is an async function but the socket emits
-    // `data` events without awaiting), which could restore an orphan
-    // `originalWrite` from a nested handler and permanently break the wrap
-    // for the rest of the socket's lifetime. The delta is not a mutex —
-    // overlapping commands on the same session over-attribute to whichever
-    // completed first — but no orphan-restore risk.
+    // `session.write` — the wrap approach was racy under the pre-serialized
+    // data-event handler and could restore an orphan `originalWrite` from a
+    // nested handler and permanently break the wrap for the rest of the
+    // socket's lifetime. Commands are now serialized per session (see the
+    // `drainCommands` note above), so cross-command interleaving on the
+    // same session is gone; the counter approach stays because it also
+    // avoids the wrap-restore hazard.
     //
     // RSS is process-wide, not session-scoped: under multi-socket load two
-    // concurrent commands both see the same rssDelta. `remote` in the log
-    // lets triage disambiguate.
+    // concurrent commands (on DIFFERENT sessions) both see the same
+    // rssDelta. `remote` in the log lets triage disambiguate.
     const session = this.session;
     const startedAt = performance.now();
     const memBefore = process.memoryUsage();
