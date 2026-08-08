@@ -44,7 +44,10 @@ import {
   call,
   isSentMail,
   processHtmlForViewer,
-  useIsOnline
+  useIsOnline,
+  revalidateOnMountPolicy,
+  formatDataAge,
+  isShowingStaleData
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
@@ -580,7 +583,9 @@ const RenderedMails = ({ page }: { page: number }) => {
       return body?.map((d) => new MailHeaderData(d)) || [];
     } else throw new Error(message);
   };
-  const query = useQuery<MailHeaderData[]>(queryUrl, getMails);
+  const query = useQuery<MailHeaderData[]>(queryUrl, getMails, {
+    refetchOnMount: revalidateOnMountPolicy(queryUrl)
+  });
 
   if (query.isLoading) {
     return (
@@ -592,7 +597,11 @@ const RenderedMails = ({ page }: { page: number }) => {
     );
   }
 
-  if (query.error) {
+  // react-query v3's `error` action keeps `data`, so a failed revalidation
+  // leaves the IndexedDB-seeded list intact — fall back to it instead of
+  // blanking the pane, and only show the error screen when there is nothing to
+  // fall back on. The retained list is labelled by staleNotice below.
+  if (query.error && !query.data) {
     return (
       <div className="mails_container error">Mails List Request Failed</div>
     );
@@ -730,7 +739,21 @@ const RenderedMails = ({ page }: { page: number }) => {
     });
   };
 
-  if (query.isSuccess) {
+  // Paired with the error guard above: gating on isSuccess alone would blank
+  // the pane the instant a revalidation failed, so render retained data too.
+  if (query.isSuccess || query.data) {
+    // Retained data must not render as if it were fresh: a failed revalidation
+    // leaves a list that can be a week old, and every action on it is
+    // fire-and-forget optimistic. The offline banner reports connectivity and
+    // can only say "—" for the age on a cold offline start, so this carries the
+    // age the banner can't know rather than duplicating it.
+    const staleNotice =
+      query.data && isShowingStaleData(query) ? (
+        <div className="mails_stale_notice" role="status" aria-live="polite">
+          Couldn&apos;t refresh — showing mail as of{" "}
+          {formatDataAge(query.dataUpdatedAt)}
+        </div>
+      ) : null;
     const mails = Array.isArray(query.data) ? query.data : [];
     const pagedMails = mails.slice(0, 4 + 8 * page);
 
@@ -780,12 +803,18 @@ const RenderedMails = ({ page }: { page: number }) => {
       })();
       return (
         <div className="mails_container empty">
+          {staleNotice}
           <p className="empty_state">{emptyMessage}</p>
         </div>
       );
     }
 
-    return <div className="mails_container">{result}</div>;
+    return (
+      <div className="mails_container">
+        {staleNotice}
+        {result}
+      </div>
+    );
   }
 
   return <></>;

@@ -52,7 +52,12 @@ export const hydrateQueryCache = async (userId?: string): Promise<void> => {
       void idbDeleteQuery(entry.key);
       continue;
     }
-    queryClient.setQueryData(entry.key, catalog.revive(entry.payload));
+    // Stamp the seed with when it was actually fetched, not now — the stale-
+    // data notice reads dataUpdatedAt, and the default (hydration time) would
+    // report week-old mail as just-fetched.
+    queryClient.setQueryData(entry.key, catalog.revive(entry.payload), {
+      updatedAt: entry.lastFetchedAt,
+    });
   }
 };
 
@@ -75,7 +80,11 @@ export const startCachePersistence = (): (() => void) =>
       key: url,
       payload: query.state.data,
       userId: currentUserId,
-      lastFetchedAt: Date.now(),
+      // The query's own fetch stamp, not `now`. This subscription also fires
+      // for hydration seeds and for optimistic setQueryData writes, both of
+      // which carry an older dataUpdatedAt — stamping `now` would re-date a
+      // week-old seed on every login and re-arm its maxAge expiry forever.
+      lastFetchedAt: query.state.dataUpdatedAt,
     });
   });
 
