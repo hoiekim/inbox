@@ -946,18 +946,23 @@ async function* streamLazyTextPartial(
 export async function* streamBodyFromSegments(
   segments: MessageSegment[]
 ): AsyncGenerator<Buffer, void, unknown> {
-  for (const segment of segments) {
-    if (segment.kind === "literal" && segment.role === "headers") continue;
-    yield* streamOneSegment(segment);
-  }
+  yield* streamFromSegmentList(selectBodySegments(segments));
 }
+
+/**
+ * The `BODY[TEXT]` subset of a segment list — everything except the header
+ * literal. Single source of truth for the predicate: the byte sum, the full
+ * stream and the partial stream all select through this, so a partial range
+ * can never be clamped against a different subset than the one it walks.
+ */
+export const selectBodySegments = (segments: MessageSegment[]): MessageSegment[] =>
+  segments.filter(
+    (segment) => !(segment.kind === "literal" && segment.role === "headers")
+  );
 
 /** Byte length of the `BODY[TEXT]` payload — everything except the header literal. */
 export const sumBodyBytes = (segments: MessageSegment[]): number =>
-  segments.reduce((acc, segment) => {
-    if (segment.kind === "literal" && segment.role === "headers") return acc;
-    return acc + segmentByteLength(segment);
-  }, 0);
+  sumSegmentListBytes(selectBodySegments(segments));
 
 /**
  * Stream just the body content segment(s) belonging to RFC 3501 part
@@ -973,23 +978,40 @@ export async function* streamPartBodyFromSegments(
   segments: MessageSegment[],
   partPath: string
 ): AsyncGenerator<Buffer, void, unknown> {
-  for (const segment of segments) {
-    if (segment.kind === "literal") continue;
-    if (segment.partPath !== partPath) continue;
-    yield* streamOneSegment(segment);
-  }
+  yield* streamFromSegmentList(selectPartBodySegments(segments, partPath));
 }
+
+/** The `BODY[<partPath>]` subset of a segment list. Counterpart of `selectBodySegments`. */
+export const selectPartBodySegments = (
+  segments: MessageSegment[],
+  partPath: string
+): MessageSegment[] =>
+  segments.filter(
+    (segment) => segment.kind !== "literal" && segment.partPath === partPath
+  );
 
 /** Byte length of the `BODY[<partPath>]` payload — sum of matching body segments. */
 export const sumPartBodyBytes = (
   segments: MessageSegment[],
   partPath: string
-): number =>
-  segments.reduce((acc, segment) => {
-    if (segment.kind === "literal") return acc;
-    if (segment.partPath !== partPath) return acc;
-    return acc + segmentByteLength(segment);
-  }, 0);
+): number => sumSegmentListBytes(selectPartBodySegments(segments, partPath));
+
+/**
+ * Sum a segment list verbatim — no `WIRE_TRAILER`, unlike `sumSegmentBytes`.
+ * The trailer is IMAP framing appended by the non-partial branches, not part
+ * of the RFC 2822 serialization a partial range addresses (RFC 3501 §6.4.5).
+ */
+const sumSegmentListBytes = (segments: MessageSegment[]): number =>
+  segments.reduce((acc, segment) => acc + segmentByteLength(segment), 0);
+
+/** Stream an already-selected segment list in order. */
+async function* streamFromSegmentList(
+  segments: MessageSegment[]
+): AsyncGenerator<Buffer, void, unknown> {
+  for (const segment of segments) {
+    yield* streamOneSegment(segment);
+  }
+}
 
 /** Stream exactly one segment as `streamFromSegments` would for that kind. */
 async function* streamOneSegment(
