@@ -170,6 +170,62 @@ describe("buildUpsert — empty SET degradation", () => {
   });
 });
 
+describe("buildUpsert — conflict clause covers only the columns the INSERT wrote", () => {
+  it("drops a column whose value is undefined", () => {
+    const { sql } = buildUpsert(
+      "mailboxes",
+      "mailbox_id",
+      { mailbox_id: "m1", name: "a", parent_id: undefined },
+      { updateColumns: ["mailbox_id", "name", "parent_id"], stampUpdated: false }
+    );
+    expect(insertColumns(sql)).toEqual(["mailbox_id", "name"]);
+    expect(setColumns(sql)).toEqual(["name"]);
+  });
+
+  it("drops a column absent from data entirely", () => {
+    const { sql } = buildUpsert(
+      "mailboxes",
+      "mailbox_id",
+      { mailbox_id: "m1", name: "a" },
+      { updateColumns: ["name", "parent_id"], stampUpdated: false }
+    );
+    expect(setColumns(sql)).toEqual(["name"]);
+  });
+
+  it("still stamps updated when every requested column was dropped", () => {
+    const { sql } = buildUpsert(
+      "users",
+      "user_id",
+      { user_id: "u1", username: undefined },
+      { updateColumns: ["username"] }
+    );
+    expect(setColumns(sql)).toEqual(["updated"]);
+  });
+
+  it("degrades to the conflict-key no-op when nothing is left to write", () => {
+    const { sql } = buildUpsert(
+      "mailboxes",
+      "mailbox_id",
+      { mailbox_id: "m1", name: undefined },
+      { updateColumns: ["name"], stampUpdated: false, returning: ["*"] }
+    );
+    expect(setColumns(sql)).toEqual(["mailbox_id"]);
+    expect(sql).toContain("RETURNING *");
+    expect(sql).not.toContain("DO NOTHING");
+  });
+});
+
+describe("Table.upsert — undefined column reaches neither INSERT nor conflict SET", () => {
+  it("does not null a stored password when the caller omits one", async () => {
+    // `writeUser` builds `{ username, password: hashedPassword }` and leaves
+    // password undefined when no password is supplied.
+    await usersTable.upsert({ user_id: "u1", username: "alice", password: undefined });
+    const sql = lastSql();
+    expect(insertColumns(sql)).toEqual(["updated", "user_id", "username"]);
+    expect(setColumns(sql)).toEqual(["username", "updated"]);
+  });
+});
+
 describe("every registered table, through the real Table methods", () => {
   it("registers at least the known tables", () => {
     // Guards against an empty import silently passing the sweeps below.
