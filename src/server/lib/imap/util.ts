@@ -230,13 +230,17 @@ export const formatBodyStructure = (
       ? lineCount
       : (content ?? "").split(/\r?\n/).length;
 
+    // RFC 3501 §9: media-type and media-subtype are `string` (quoted or
+    // literal), body-fld-enc is a quoted string too. Bare atoms like
+    // `TEXT PLAIN BASE64` break strict client parsers (Apple Mail on iOS
+    // ≥ 26 aborts the session mid-response and reconnects).
     const parts = [
-      "TEXT",
-      subtype.toUpperCase(),
+      `"TEXT"`,
+      `"${subtype.toUpperCase()}"`,
       `("CHARSET" "UTF-8")`,
       "NIL",
       "NIL",
-      "BASE64",
+      `"BASE64"`,
       size.toString(),
       lines.toString()
     ];
@@ -268,7 +272,7 @@ export const formatBodyStructure = (
         : "NIL",
       "NIL", // body ID
       "NIL", // body description
-      "BASE64", // encoding
+      `"BASE64"`, // encoding — quoted string per RFC 3501 §9 body-fld-enc
       size.toString()
     ];
 
@@ -312,9 +316,13 @@ export const formatBodyStructure = (
     return htmlPart();
   }
 
+  // RFC 3501 §9: `body-type-mpart = 1*body SP media-subtype [SP …]`. Sibling
+  // parts CONCATENATE — no separator. The single SP is the sentinel telling
+  // the parser "parts done, subtype next." Emitting `(partA) (partB)` breaks
+  // parsers that use SP-after-`)` as the parts-done delimiter (Apple Mail).
   // Case 3: Text and HTML (multipart/alternative)
   if (hasText && hasHtml && !hasAttachments) {
-    return `(${textPart()} ${htmlPart()} ${multipartTail("alternative")})`;
+    return `(${textPart()}${htmlPart()} ${multipartTail("alternative")})`;
   }
 
   // Case 4: Content with attachments (multipart/mixed)
@@ -323,7 +331,7 @@ export const formatBodyStructure = (
 
     // If we have both text and HTML, create a multipart/alternative first
     if (hasText && hasHtml) {
-      const alternativePart = `(${textPart()} ${htmlPart()} ${multipartTail(
+      const alternativePart = `(${textPart()}${htmlPart()} ${multipartTail(
         "alternative"
       )})`;
       bodyParts.push(alternativePart);
@@ -338,7 +346,7 @@ export const formatBodyStructure = (
       bodyParts.push(buildAttachmentPart(attachment));
     });
 
-    return `(${bodyParts.join(" ")} ${multipartTail("mixed")})`;
+    return `(${bodyParts.join("")} ${multipartTail("mixed")})`;
   }
 
   // Default case: empty text part (no lazy inputs either, so the
