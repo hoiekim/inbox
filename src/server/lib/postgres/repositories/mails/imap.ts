@@ -15,10 +15,16 @@ import {
   MAIL_MAILBOX_UID,
   MAILBOX,
   UID,
-  IS_SPAM,
 } from "../../models";
 import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
+import {
+  filtersMembership,
+  membershipCondition,
+  membershipExpression,
+  membershipFilter,
+  usesDomainUidSpace,
+} from "./views";
 
 /**
  * Character-length chunk size for the SUBSTRING body-streaming reader. Chosen
@@ -208,66 +214,15 @@ const countCodePoints = (s: string): number => {
 
 /**
  * Callers pass `mailbox` as the raw IMAP box path (e.g. `INBOX/accounts/amazon`,
- * `Sent Messages/accounts/claoie`, or a user-created box like `Archive`) — the
- * exact string the write side stores in `mail_mailbox_uid.mailbox`. `null` is
- * reserved for domain-scoped views (`INBOX`, unified `Sent Messages`), which
- * stay on `mails.uid_domain` and don't participate in the per-mailbox mapping.
- */
-
-/**
- * Prefix of the per-account received boxes (`INBOX/accounts/<local-part>`).
- * Mirrors `ACCOUNTS_FOLDER` in `imap/util.ts`, which cannot be imported here:
- * that module pulls from the `server` barrel, which re-exports this repository.
- */
-const INBOX_ACCOUNTS_PREFIX = "INBOX/accounts/";
-
-/**
- * Whether a mailbox quarantines spam-classified mail — true for the INBOX tree
- * only.
+ * `Sent Messages/accounts/claoie`, a user-created box like `Archive`, or a
+ * utility view like `Drafts`). For a mapped box that is the exact string the
+ * write side stores in `mail_mailbox_uid.mailbox`; for a utility view it is the
+ * key its membership rule is looked up under. `null` is reserved for the two
+ * views with no name of their own, `INBOX` and the unified `Sent Messages`.
  *
- * INBOX (`mailbox === null`, `sent = false`) has no address condition at all,
- * and its per-account sub-views match purely on delivery address, so a
- * spam-classified mail lands in both simply by having been received, showing up
- * intermixed with ham and counting toward EXISTS/UNSEEN. The web client routes
- * those rows to a dedicated Spam view; this is the IMAP side of the same
- * quarantine. Until a `Junk` mailbox exists, quarantined mail is reachable over
- * the web client only.
- *
- * Deliberately narrow on two axes:
- * - **Sent is never classified.** `is_spam` is only ever written on received
- *   mail, so the unified `Sent Messages` view and its sub-boxes are untouched.
- * - **User-created mailboxes keep their contents.** A mail the user COPYed into
- *   `Archive` is an explicit placement; the classifier does not get to hide it.
- *
- * Note this is not extended to `deleted`: `mails.deleted` is the IMAP
- * `\Deleted` flag, and RFC 3501 §6.4.3 requires `\Deleted` messages to stay in
- * the mailbox until EXPUNGE removes them. Soft-deleted mail leaving INBOX is a
- * `Trash` mailbox question (#725), not an INBOX predicate.
+ * Which branch a box takes is `usesDomainUidSpace`, not `mailbox === null` —
+ * see `views.ts`.
  */
-export const quarantinesSpam = (mailbox: string | null, sent: boolean): boolean =>
-  !sent && (mailbox === null || mailbox.startsWith(INBOX_ACCOUNTS_PREFIX));
-
-/**
- * Boolean expression selecting the rows a mailbox actually contains. `TRUE` for
- * every box that shows spam, so callers can interpolate it unconditionally.
- * `prefix` qualifies the column for queries that alias `mails` (e.g. `"m."`).
- */
-export const membershipExpression = (
-  mailbox: string | null,
-  sent: boolean,
-  prefix: string = ""
-): string => (quarantinesSpam(mailbox, sent) ? `${prefix}${IS_SPAM} = FALSE` : "TRUE");
-
-/**
- * The same rule as a suffix for an existing `WHERE`, empty when the box shows
- * spam so it appends cleanly to any clause.
- */
-export const membershipCondition = (
-  mailbox: string | null,
-  sent: boolean,
-  prefix: string = ""
-): string =>
-  quarantinesSpam(mailbox, sent) ? ` AND ${prefix}${IS_SPAM} = FALSE` : "";
 
 export const countMessages = async (
   user_id: string,
@@ -292,7 +247,7 @@ export const countMessages = async (
     // instead. Tracked in #743.
     const membership = membershipExpression(mailbox, sent);
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       // Domain-wide count (INBOX / unified Sent Messages) — still keyed on
       // uid_domain, unchanged by #702's per-mailbox mapping migration.
       sql = `
@@ -456,7 +411,7 @@ const getMailsByRangeUncoalesced = async (
     const modseqMailboxClause =
       changedSince !== undefined ? ` AND m.${MODSEQ} > $6` : "";
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       // Domain-wide query (INBOX / unified Sent Messages) — still on
       // uid_domain, unchanged by the per-mailbox mapping migration.
       const projection = mailsColumns.length > 0 ? mailsColumns.join(", ") : "*";
@@ -644,7 +599,7 @@ export const setMailFlags = async (
     // following EXPUNGE would destroy it.
     const membership = membershipCondition(mailbox, sent);
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       const returningCols = `${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
@@ -698,7 +653,7 @@ export const setMailFlags = async (
         // counts messages the seq map does not and shifts every position after
         // them. The join is emitted only for a box that filters; every other
         // box keeps the mapping-only scan it had.
-        const membershipJoin = quarantinesSpam(mailbox, sent)
+        const membershipJoin = filtersMembership(mailbox, sent)
           ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
              AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
              AND ${membershipExpression(mailbox, sent, "z.")}`
@@ -999,7 +954,7 @@ export const searchMailsByUid = async (
     // uses the plain column on `mails`; per-mailbox uses the
     // JOIN-aliased mapping. `buildCriterionClause` emits fragments like
     // `${uidField} >= $N`, so the alias needs to be qualified.
-    const uidField = mailbox === null ? UID_DOMAIN : `x.${UID}`;
+    const uidField = usesDomainUidSpace(mailbox) ? UID_DOMAIN : `x.${UID}`;
 
     // Always exclude expunged messages from search, and anything the mailbox
     // doesn't show — SEARCH must not return UIDs the client can't FETCH.
@@ -1013,7 +968,7 @@ export const searchMailsByUid = async (
 
     // Base table + optional mailbox join
     let fromClause: string;
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       fromClause = "mails m";
     } else {
       // JOIN mapping — the mailbox condition IS the membership predicate.
@@ -1065,7 +1020,7 @@ export const getAllUids = async (
     let sql: string;
     let values: ParamValue[];
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE${membershipCondition(mailbox, sent)}
@@ -1108,7 +1063,7 @@ export const getFirstUnseenUid = async (
     let sql: string;
     let values: ParamValue[];
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       sql = `
         SELECT ${UID_DOMAIN} as uid FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE AND read = FALSE${membershipCondition(mailbox, sent)}
@@ -1151,11 +1106,11 @@ export const expungeDeletedMails = async (
 ): Promise<number[]> => {
   try {
     // EXPUNGE removes `\Deleted` messages *from the selected mailbox*, so a
-    // quarantined mail is out of reach here too — otherwise an INBOX EXPUNGE
-    // would collect spam the client never saw and could not have flagged.
-    const quarantined = quarantinesSpam(mailbox, sent);
+    // mail the box does not show is out of reach here too — otherwise an INBOX
+    // EXPUNGE would collect spam the client never saw and could not have flagged.
+    const membership = membershipFilter(mailbox, sent);
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       // Domain-wide expunge — still on uid_domain, unchanged.
       const rows = await mailsTable.updateWhere(
         {
@@ -1163,7 +1118,7 @@ export const expungeDeletedMails = async (
           [SENT]: sent,
           [DELETED]: true,
           [EXPUNGED]: false,
-          ...(quarantined ? { [IS_SPAM]: false } : {}),
+          ...membership,
         },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.
@@ -1236,9 +1191,9 @@ export const expungeMailsByUid = async (
   try {
     // Same membership rule as EXPUNGE: MOVE's source-side removal only ever
     // addresses UIDs the selected mailbox actually holds.
-    const quarantined = quarantinesSpam(mailbox, sent);
+    const membership = membershipFilter(mailbox, sent);
 
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       // Domain-wide: simple equality on user_id+sent + IN(uids).
       const rows = await mailsTable.updateWhere(
         {
@@ -1246,7 +1201,7 @@ export const expungeMailsByUid = async (
           [SENT]: sent,
           [EXPUNGED]: false,
           [UID_DOMAIN]: { op: "IN", value: uids },
-          ...(quarantined ? { [IS_SPAM]: false } : {}),
+          ...membership,
         },
         // Bump modseq so the expunge advances HIGHESTMODSEQ (RFC 7162) — a
         // resyncing CONDSTORE/QRESYNC client detects the removal.

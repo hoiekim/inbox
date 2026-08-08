@@ -1088,65 +1088,8 @@ describe("buildCriterionClause — combinators don't orphan bound params (#672)"
   });
 });
 
-describe("INBOX quarantines spam (#605)", () => {
-  const load = async () => await import(".");
-
-  describe("quarantinesSpam", () => {
-    it("covers INBOX itself", async () => {
-      const { quarantinesSpam } = await load();
-      expect(quarantinesSpam(null, false)).toBe(true);
-    });
-
-    it("covers INBOX's per-account sub-views", async () => {
-      const { quarantinesSpam } = await load();
-      expect(quarantinesSpam("INBOX/accounts/alice", false)).toBe(true);
-    });
-
-    it("leaves the unified Sent view alone — sent mail is never classified", async () => {
-      const { quarantinesSpam } = await load();
-      expect(quarantinesSpam(null, true)).toBe(false);
-      expect(quarantinesSpam("Sent Messages/accounts/alice", true)).toBe(false);
-    });
-
-    it("leaves user-created mailboxes alone — an explicit COPY stays visible", async () => {
-      const { quarantinesSpam } = await load();
-      expect(quarantinesSpam("Archive", false)).toBe(false);
-      // A user-created box whose name merely starts with the folder's letters
-      // is not an accounts sub-view; only the full `INBOX/accounts/` path is.
-      expect(quarantinesSpam("INBOX/accountsish", false)).toBe(false);
-      expect(quarantinesSpam("INBOX/accounts", false)).toBe(false);
-    });
-  });
-
-  describe("SQL emitters", () => {
-    it("emit the is_spam predicate for a quarantining box", async () => {
-      const { membershipExpression, membershipCondition } = await load();
-      expect(membershipExpression(null, false)).toBe("is_spam = FALSE");
-      expect(membershipCondition(null, false)).toBe(" AND is_spam = FALSE");
-    });
-
-    it("qualify the column with the caller's alias", async () => {
-      const { membershipExpression, membershipCondition } = await load();
-      expect(membershipExpression("INBOX/accounts/alice", false, "m.")).toBe(
-        "m.is_spam = FALSE"
-      );
-      expect(membershipCondition("INBOX/accounts/alice", false, "m.")).toBe(
-        " AND m.is_spam = FALSE"
-      );
-    });
-
-    it("degrade to a no-op every non-quarantining box can interpolate", async () => {
-      const { membershipExpression, membershipCondition } = await load();
-      // `TRUE` keeps `COUNT(*) FILTER (WHERE …)` well-formed; "" appends
-      // cleanly to an existing WHERE. Neither needs a caller-side branch.
-      expect(membershipExpression("Archive", false)).toBe("TRUE");
-      expect(membershipCondition("Archive", false)).toBe("");
-      expect(membershipExpression(null, true)).toBe("TRUE");
-      expect(membershipCondition(null, true)).toBe("");
-    });
-  });
-
-  describe("every mailbox-scoped site applies the rule (source regression)", () => {
+describe("every mailbox applies its membership rule (#605, #725)", () => {
+  describe("every mailbox-scoped site applies it (source regression)", () => {
     // One missed site desynchronises INBOX's membership: e.g. a filtered
     // `getAllUids` (the seq→UID map) against an unfiltered `countMessages`
     // makes EXISTS exceed the addressable sequence range.
@@ -1184,20 +1127,26 @@ describe("INBOX quarantines spam (#605)", () => {
     // branch is the other: `UID STORE 1:* +FLAGS (\Deleted)` on INBOX followed
     // by EXPUNGE destroys quarantined spam the client was never shown.
     const applications: Record<string, number> = {
-      countMessages: 7,
-      getMailsByRangeUncoalesced: 5,
-      setMailFlags: 6,
-      searchMailsByUid: 1,
-      getAllUids: 2,
+      countMessages: 4, // total + unread FILTER, in each of the two branches
+      getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch
+      setMailFlags: 4, // two domain WHERE clauses, plus the mapping branch's pair
+      searchMailsByUid: 1, // one conditions list serves both branches
+      getAllUids: 2, // one per branch
       getFirstUnseenUid: 2,
-      expungeDeletedMails: 3,
+      expungeDeletedMails: 2, // domain filter bag + mapping SELECT
       expungeMailsByUid: 2,
     };
 
     const HELPERS =
-      "(?:membershipCondition|membershipExpression|quarantinesSpam)";
+      "(?:membershipCondition|membershipExpression|membershipFilter|filtersMembership)";
 
-    const applicationSites = (body: string) => {
+    const applicationSites = (rawBody: string) => {
+      // Comments mention the rule by name constantly; counting them would let a
+      // real application be deleted as long as the prose survived.
+      const body = rawBody
+        .split("\n")
+        .map((line) => line.replace(/\/\/.*$/, ""))
+        .join("\n");
       const locals = new Set(
         [...body.matchAll(new RegExp(`const\\s+(\\w+)\\s*=\\s*${HELPERS}\\(`, "g"))].map(
           (m) => m[1]
@@ -1243,18 +1192,6 @@ describe("INBOX quarantines spam (#605)", () => {
       // One per branch: domain-scoped (uid_domain) and per-mailbox (x.uid).
       expect(maxUidLines).toHaveLength(2);
       for (const line of maxUidLines) expect(line).not.toContain("FILTER");
-    });
-
-    it("does not exclude \\Deleted mail from INBOX", async () => {
-      // `mails.deleted` is the IMAP \Deleted flag; RFC 3501 §6.4.3 keeps those
-      // messages in the mailbox until EXPUNGE. Assert on what the rule actually
-      // emits — `is_spam` and nothing else — rather than on the absence of a
-      // string, which would pass just as well on a file that never had one.
-      const { membershipExpression, membershipCondition } = await import(".");
-      for (const box of [null, "INBOX/accounts/alice"]) {
-        expect(membershipExpression(box, false)).toBe("is_spam = FALSE");
-        expect(membershipCondition(box, false)).toBe(" AND is_spam = FALSE");
-      }
     });
 
     it("stamps a mod-sequence when a spam flip moves a mail out of INBOX", async () => {

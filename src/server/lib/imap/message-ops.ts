@@ -12,7 +12,13 @@ import {
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
-import { boxToAccount, deriveCopyMessageId, isDomainScoped, isInbox, isSentBox } from "./util";
+import {
+  boxToAccount,
+  canonicalMailbox,
+  deriveCopyMessageId,
+  isDomainScoped,
+  isSentBox,
+} from "./util";
 import { shouldMarkAsRead } from "./session-utils";
 import {
   FetchRequest,
@@ -552,7 +558,7 @@ export async function copyMessageTyped(
 ): Promise<void> {
   try {
     // Canonicalize destination per RFC 3501 §5.1 (INBOX case-insensitive).
-    const destMailbox = isInbox(copyRequest.mailbox) ? "INBOX" : copyRequest.mailbox;
+    const destMailbox = canonicalMailbox(copyRequest.mailbox);
 
     // RFC 4315 §2.1: destination must exist; otherwise NO [TRYCREATE].
     if (!(await store.mailboxExists(destMailbox))) {
@@ -639,10 +645,10 @@ export async function copyMessageTyped(
     // synthetic address that drives the destination-mailbox query
     // (e.g. "Archive@<domain>").
     const destAccount = boxToAccount(user.username, destMailbox);
-    // `destIsInbox` drives address routing below (INBOX has no address
-    // filter); `destIsDomainScoped` drives the destination UID space for the
-    // COPYUID response (INBOX and the unified Sent folder both use uid.domain).
-    const destIsInbox = isInbox(destMailbox);
+    // `destIsDomainScoped` drives both address routing below (a domain-scoped
+    // box has no address filter) and the destination UID space for the COPYUID
+    // response (INBOX, the unified Sent folder and the utility folders all use
+    // uid.domain).
     const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
 
@@ -724,12 +730,17 @@ export async function copyMessageTyped(
       // destinations the copy must address ALL of these to the
       // destination account so it surfaces in the destination AND does
       // not stay surfaced in the source (the source's envelope_to / cc
-      // / bcc would re-anchor it). For INBOX targets the existing
-      // header fields are fine — INBOX has no address filter (it shows
-      // every received mail in the user's domain). `to_text` is
-      // preserved so the client's FETCH BODY[HEADER] still shows the
-      // original recipient header — the override only affects routing.
-      if (destIsInbox) {
+      // / bcc would re-anchor it). `to_text` is preserved so the client's
+      // FETCH BODY[HEADER] still shows the original recipient header — the
+      // override only affects routing.
+      //
+      // A domain-scoped destination (INBOX, the unified Sent folder, a utility
+      // folder) selects rows without an address term, so the copy surfaces
+      // there on its own and the real recipient is kept. `boxToAccount` would
+      // otherwise name the folder itself (`Junk@<domain>`,
+      // `Sent Messages@<domain>`) — that overwrites the recipient and makes
+      // `getAccountStats` report a per-account mailbox by that name.
+      if (destIsDomainScoped) {
         newMail.to = sourceMail.to;
         newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
@@ -774,14 +785,10 @@ export async function copyMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      // Dual-write toward #702 PR-2b: mirror the account UID into the
-      // `mail_mailbox_uid` map when the destination is account-scoped.
-      // Domain-scoped destinations (INBOX, unified Sent Messages) skip —
-      // the mapping only tracks account UID spaces.
-      const ok = await store.storeMail(
-        newMail,
-        destIsDomainScoped ? undefined : destMailbox,
-      );
+      // storeMail derives the rest from the destination: the
+      // `mail_mailbox_uid` mapping for a mapped box (#702 PR-2b), and the
+      // membership flag for a utility folder.
+      const ok = await store.storeMail(newMail, destMailbox);
       if (!ok) {
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
         return;
@@ -859,7 +866,7 @@ export async function moveMessageTyped(
   }
 
   try {
-    const destMailbox = isInbox(moveRequest.mailbox) ? "INBOX" : moveRequest.mailbox;
+    const destMailbox = canonicalMailbox(moveRequest.mailbox);
 
     // RFC 6851 §3.4-§3.5: MOVE to the currently-selected mailbox is a
     // no-op (the messages are already where they'd land). Skip the
@@ -933,12 +940,11 @@ export async function moveMessageTyped(
     const user = store.getUser();
     const destAccount = boxToAccount(user.username, destMailbox);
     // `*IsInbox` drives address routing below (INBOX has no address filter);
-    // `*IsDomainScoped` drives the UID space (INBOX and the unified Sent folder
-    // both use uid.domain).
-    const destIsInbox = isInbox(destMailbox);
+    // `*IsDomainScoped` drives both the UID space (INBOX, the unified Sent
+    // folder and the utility folders all use uid.domain) and, for the
+    // destination, address routing below.
     const destIsDomainScoped = isDomainScoped(destMailbox);
     const destIsSent = isSentBox(destMailbox);
-    const sourceIsInbox = isInbox(selectedMailbox);
     const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
       sourceIsDomainScoped ? mail.uid!.domain : mail.uid!.account;
@@ -992,31 +998,15 @@ export async function moveMessageTyped(
         answered: sourceMail.answered,
       });
 
-      if (destIsInbox) {
-        // INBOX has no address filter; the new copy surfaces in INBOX
-        // regardless of `to_address` / `envelope_to` content. But if the
-        // source view IS address-filtered (accounts/foo, Sent Messages/
-        // accounts/foo), preserving the source's address fields would
-        // re-anchor the new copy in the source mailbox even AFTER we
-        // expunge the original — the message would re-appear in the
-        // source view under a new UID. To prevent that, clear the
-        // routing JSONB to empty when the source is non-INBOX. INBOX→
-        // INBOX is a no-op address-wise so it's safe to preserve.
-        if (sourceIsInbox) {
-          newMail.to = sourceMail.to;
-          newMail.envelopeTo = sourceMail.envelopeTo ?? [];
-        } else {
-          newMail.to = sourceMail.to
-            ? { value: [], text: sourceMail.to.text }
-            : undefined;
-          newMail.envelopeTo = [];
-          newMail.cc = sourceMail.cc
-            ? { value: [], text: sourceMail.cc.text }
-            : undefined;
-          newMail.bcc = sourceMail.bcc
-            ? { value: [], text: sourceMail.bcc.text }
-            : undefined;
-        }
+      if (destIsDomainScoped) {
+        // Same rule as COPY — a domain-scoped destination selects rows without
+        // an address term, so keep the real recipient. There is nothing to
+        // re-anchor: no mapping row is written for such a destination, and
+        // every other box reads through an INNER JOIN on `mail_mailbox_uid`
+        // (`repositories/mails/imap.ts`), so the clone cannot surface in the
+        // source view no matter what its address fields say.
+        newMail.to = sourceMail.to;
+        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
         const destAddr = { address: destAccount, name: "" };
         newMail.to = {
@@ -1044,13 +1034,8 @@ export async function moveMessageTyped(
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
-      // Dual-write toward #702 PR-2b: mirror the account UID into the
-      // `mail_mailbox_uid` map when the destination is account-scoped.
-      // Domain-scoped destinations skip — see COPY for full rationale.
-      const ok = await store.storeMail(
-        newMail,
-        destIsDomainScoped ? undefined : destMailbox,
-      );
+      // Same destination handling as COPY — see there.
+      const ok = await store.storeMail(newMail, destMailbox);
       if (!ok) {
         // Pre-deletion failure: copies already stored in the destination
         // linger; the source is untouched. Client can re-issue MOVE.
@@ -1167,21 +1152,16 @@ export async function appendMessage(
     // (false), skipping onAppended (the sequence-mapping rebuild) and
     // leaving the next seq-numbered FETCH for the appended message
     // returning wrong/missing data.
-    const targetMailbox = isInbox(appendRequest.mailbox)
-      ? "INBOX"
-      : appendRequest.mailbox;
+    const targetMailbox = canonicalMailbox(appendRequest.mailbox);
     const account = boxToAccount(user.username, targetMailbox);
     const domainUid = await getDomainUidNext(user.id);
     const accountUid = await getAccountUidNext(user.id, account);
     mail.uid.domain = domainUid;
     mail.uid.account = accountUid;
 
-    // Dual-write toward #702 PR-2b: mirror the account UID into the
-    // `mail_mailbox_uid` map when the APPEND target is account-scoped.
-    const result = await store.storeMail(
-      mail,
-      isDomainScoped(targetMailbox) ? undefined : targetMailbox,
-    );
+    // storeMail derives the mapping row and the utility-folder placement
+    // flag from the target box.
+    const result = await store.storeMail(mail, targetMailbox);
 
     const uid = isDomainScoped(targetMailbox) ? mail.uid.domain : mail.uid.account;
 

@@ -413,6 +413,7 @@ export const mailsTable = createTable<MailJSON, MailSchema, MailModel>({
     { column: UID_DOMAIN },
     { column: MODSEQ },
     { column: IS_SPAM },
+    { column: DRAFT },
     { column: EXPUNGED },
     // Address containment (@>) filters for the per-account reads —
     // buildHeaderAddressCondition in repositories/mails/http.ts. jsonb_path_ops
