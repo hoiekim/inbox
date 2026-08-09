@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from "bun:test";
 import {
   buildSequenceMapping,
+  departedSequenceNumbers,
   seqToUidNumber,
   uidToSeqNumber,
   resolveSeqRangeToUids,
@@ -586,5 +587,60 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
       true
     );
     expect(result.ranges).toEqual([]);
+  });
+});
+
+describe("departedSequenceNumbers (#742)", () => {
+  // The IDLE notifier used to write the mailbox's current count straight into
+  // `* <n> EXISTS`. RFC 3501 §7.3.1 only lets that number shrink via EXPUNGE,
+  // so a message leaving by any route this session did not drive — another
+  // session expunging, or the web client spam-marking a mail out of INBOX —
+  // desynchronised the client's sequence map with no signal.
+
+  it("returns the sequence numbers of departed messages, highest first", () => {
+    // UIDs 20 and 40 left; they sat at sequence 2 and 4.
+    expect(departedSequenceNumbers([10, 20, 30, 40, 50], [10, 30, 50])).toEqual([4, 2]);
+  });
+
+  it("is descending so each number is still valid when it is written", () => {
+    // §7.4.1 renumbers immediately, so emitting 2 before 4 would make the
+    // second EXPUNGE address the wrong message. Assert the mapped array, not
+    // a monotonicity predicate that a single-element result would satisfy.
+    const departed = departedSequenceNumbers([1, 2, 3, 4, 5, 6], [2, 5]);
+    expect(departed).toEqual([6, 4, 3, 1]);
+  });
+
+  it("replaying the result against the advertised list yields the live list", () => {
+    const advertised = [7, 8, 9, 10, 11];
+    const live = [8, 11];
+    const remaining = [...advertised];
+    // Descending order means each splice index is unaffected by the previous.
+    for (const seq of departedSequenceNumbers(advertised, live)) {
+      remaining.splice(seq - 1, 1);
+    }
+    expect(remaining).toEqual(live);
+  });
+
+  it("reports nothing when the mailbox only grew", () => {
+    expect(departedSequenceNumbers([1, 2], [1, 2, 3, 4])).toEqual([]);
+  });
+
+  it("reports nothing when the mailbox is unchanged", () => {
+    expect(departedSequenceNumbers([1, 2, 3], [1, 2, 3])).toEqual([]);
+  });
+
+  it("reports every position when the mailbox emptied", () => {
+    expect(departedSequenceNumbers([1, 2, 3], [])).toEqual([3, 2, 1]);
+  });
+
+  it("reports nothing from an empty advertised list", () => {
+    // A session that never advertised anything has nothing to retract.
+    expect(departedSequenceNumbers([], [1, 2, 3])).toEqual([]);
+  });
+
+  it("handles simultaneous departure and arrival", () => {
+    // UID 2 left while 4 and 5 arrived: only the departure is announced, and
+    // the caller's EXISTS carries the new total.
+    expect(departedSequenceNumbers([1, 2, 3], [1, 3, 4, 5])).toEqual([2]);
   });
 });

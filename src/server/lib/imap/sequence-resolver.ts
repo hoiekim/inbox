@@ -41,6 +41,31 @@ export async function buildSequenceMapping(
 }
 
 /**
+ * Sequence numbers of the messages that have left a mailbox since it was last
+ * advertised, in DESCENDING order.
+ *
+ * Descending is the order they have to be announced in: RFC 3501 §7.4.1
+ * renumbers every message after an expunged one the instant its EXPUNGE is
+ * sent, so working from the back means each number is still valid when it is
+ * written. Ascending order would need every subsequent number decremented by
+ * the count already emitted.
+ *
+ * Split out from the session so the arithmetic is testable without standing up
+ * a socket and a store double.
+ */
+export function departedSequenceNumbers(
+  advertised: number[],
+  live: number[]
+): number[] {
+  const liveUids = new Set(live);
+  const departed: number[] = [];
+  for (let seq = advertised.length; seq >= 1; seq--) {
+    if (!liveUids.has(advertised[seq - 1])) departed.push(seq);
+  }
+  return departed;
+}
+
+/**
  * Convert a sequence number to UID.
  * Handles '*' (represented as MAX_SAFE_INTEGER) by returning the highest UID.
  */

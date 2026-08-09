@@ -50,6 +50,7 @@ import {
 } from "./message-ops";
 import {
   buildSequenceMapping,
+  departedSequenceNumbers,
   SequenceState,
 } from "./sequence-resolver";
 
@@ -89,16 +90,38 @@ export class ImapSession {
   };
 
   /**
-   * Count messages in a mailbox. Returns null if the store is not available.
-   * Used by IdleManager to send accurate EXISTS notifications.
+   * Re-advertise the selected mailbox to an IDLE client, announcing whatever
+   * left it first. Returns the new message count, or null when there is no
+   * mailbox to report on.
+   *
+   * RFC 3501 §7.3.1 lets the message count shrink only via EXPUNGE, so a bare
+   * `* <n> EXISTS` lower than the last one advertised is a protocol violation:
+   * the client keeps its old sequence map and every position after the first
+   * departed message is off by one. Messages leave without this session
+   * running an EXPUNGE — another session expunging, or the web client marking
+   * a mail spam, which quarantines it out of INBOX — so a departure has to be
+   * found by diffing the mailbox against what this session last advertised,
+   * not by observing our own commands.
+   *
+   * EXPUNGEs go out in DESCENDING sequence order. §7.4.1 renumbers the
+   * messages after an expunged one immediately, so descending order leaves
+   * every number still valid at the moment it is written and needs no
+   * renumbering arithmetic.
    */
-  countMailboxMessages = async (
-    box: string
-  ): Promise<{ total: number; recent: number } | null> => {
-    if (!this.store) return null;
-    const result = await this.store.countMessages(box);
-    if (!result) return null;
-    return { total: result.total, recent: 0 };
+  notifyMailboxUpdate = async (): Promise<number | null> => {
+    if (!this.store || !this.selectedMailbox) return null;
+    // `buildSequenceMapping` replaces `seqToUid` with a fresh array rather
+    // than mutating it, so this stays a snapshot of the advertised list.
+    const advertised = this.seqState.seqToUid;
+    await buildSequenceMapping(this.store, this.selectedMailbox, this.seqState);
+    for (const seq of departedSequenceNumbers(advertised, this.seqState.seqToUid)) {
+      this.write(`* ${seq} EXPUNGE\r\n`);
+    }
+    const total = this.seqState.seqToUid.length;
+    this.selectedMailboxMessageCount = total;
+    this.write(`* ${total} EXISTS\r\n`);
+    this.write(`* 0 RECENT\r\n`);
+    return total;
   };
 
   bytesWritten = 0;

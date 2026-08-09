@@ -69,7 +69,9 @@ export class IdleManager {
 
   /**
    * Notify all IDLE sessions for specific users about new mail.
-   * Queries the actual mailbox message count before sending EXISTS per RFC 3501 §7.3.1.
+   * The session re-reads its mailbox and emits the untagged responses itself —
+   * an EXPUNGE for anything that left, then EXISTS — because RFC 3501 §7.3.1
+   * forbids the count shrinking any other way.
    */
   async notifyNewMail(usernames: string[], mailboxes?: string[]) {
     const usernameSet = new Set(usernames);
@@ -90,11 +92,8 @@ export class IdleManager {
     await Promise.all(
       notifications.map(async ({ sessionId, idleSession }) => {
         try {
-          const counts = await idleSession.session.countMailboxMessages(idleSession.mailbox);
-          const total = counts?.total ?? 1;
-
-          idleSession.session.write(`* ${total} EXISTS\r\n`);
-          idleSession.session.write(`* 0 RECENT\r\n`);
+          const total = await idleSession.session.notifyMailboxUpdate();
+          if (total === null) return;
 
           logger.debug("Notified IDLE session about new mail", {
             component: "imap.idle",
