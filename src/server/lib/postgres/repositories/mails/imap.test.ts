@@ -1146,14 +1146,41 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       // Mapping rows outlive the expunge that hid their mail, so the OFFSET
       // subquery has to filter `sent` and `expunged` exactly as getAllUids
       // does — membership alone leaves every position after an expunged row
-      // off by one.
+      // off by one. The join is UNCONDITIONAL (#741): gating it on
+      // `filtersMembership` left every box that shows spam — Archive, the Sent
+      // tree, every user-created box — on a mapping-only scan that filters
+      // neither `sent` nor `expunged`.
       const body = setFlagsSource.match(
         /export const buildSetMailFlagsQueries[\s\S]*?\n};/
       )![0];
-      const join = body.match(/const membershipJoin[\s\S]*?: "";/)![0];
+      const join = body.match(/const membershipJoin =[\s\S]*?`;/)![0];
       expect(join).toContain("z.${SENT} = $2");
       expect(join).toContain("z.${EXPUNGED} = FALSE");
       expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
+      // A ternary here is the regression: it is how the filter went missing
+      // for the boxes `membershipExpression` renders as `TRUE`.
+      expect(join).not.toContain("filtersMembership");
+      expect(join).not.toContain("?");
+    });
+
+    it("addresses no expunged mail in any branch (#741)", () => {
+      // `getAllUids` builds the seq->UID map every read path uses, and it
+      // filters `expunged = FALSE`. setMailFlags filtered it in none of its
+      // four branches, so the two lists disagreed by the expunged count:
+      // `STORE 5 +FLAGS (\Deleted)` flagged whatever sat at position 5 of the
+      // LONGER list, and the EXPUNGE behind it destroyed that message. The UID
+      // branches are the same defect without the shift — `UID STORE` reached a
+      // message that is gone, bumping its modseq and `updated`.
+      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      // Each branch closes by binding its own parameter list, so the text
+      // before each `baseValues =` is exactly one branch's SQL construction.
+      const branches = body.split("baseValues = ").slice(0, 4);
+      expect(branches).toHaveLength(4);
+      // Matched on the interpolated form so the prose in the preamble comment
+      // cannot satisfy it.
+      for (const branch of branches) {
+        expect(branch).toContain("${EXPUNGED} = FALSE");
+      }
     });
   });
 });

@@ -11,7 +11,6 @@ import {
   UID,
 } from "../../models";
 import {
-  filtersMembership,
   membershipCondition,
   membershipExpression,
   usesDomainUidSpace,
@@ -66,14 +65,18 @@ export const buildSetMailFlagsQueries = (
   // A STORE addresses messages *in the selected mailbox*, so it has to see
   // the same set the reads do — otherwise `UID STORE 1:* +FLAGS (\Deleted)`
   // on INBOX would flag quarantined spam the client was never shown, and the
-  // following EXPUNGE would destroy it.
+  // following EXPUNGE would destroy it. `expunged = FALSE` is half of that
+  // set and is spelled out at every branch below: an expunged mail is gone
+  // from the mailbox for good, so it is neither addressable by UID nor
+  // countable by a sequence number.
   const membership = membershipCondition(mailbox, sent);
 
   if (usesDomainUidSpace(mailbox)) {
     const returningCols = `${MAIL_ID}, ${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
     const uidCol = `${UID_DOMAIN} as uid`;
     if (useUid) {
-      const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
+      const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4
+        AND ${EXPUNGED} = FALSE${membership}`;
       selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
       matchedUidSql = `SELECT ${uidCol} FROM mails WHERE ${whereClause}`;
       updateSql = `UPDATE mails
@@ -84,7 +87,7 @@ export const buildSetMailFlagsQueries = (
     } else {
       const whereClause = `mail_id IN (
         SELECT mail_id FROM mails
-        WHERE user_id = $1 AND sent = $2${membership}
+        WHERE user_id = $1 AND sent = $2 AND ${EXPUNGED} = FALSE${membership}
         ORDER BY ${UID_DOMAIN} ASC
         OFFSET $3 LIMIT 1
       )`;
@@ -105,7 +108,8 @@ export const buildSetMailFlagsQueries = (
     if (useUid) {
       const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
         AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
-        AND x.${UID} >= $4 AND x.${UID} <= $5${membershipCondition(mailbox, sent, "m.")}`;
+        AND x.${UID} >= $4 AND x.${UID} <= $5
+        AND m.${EXPUNGED} = FALSE${membershipCondition(mailbox, sent, "m.")}`;
       selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
       matchedUidSql = `SELECT ${uidCol} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
       // UPDATE ... FROM syntax joins the mapping to the target mails
@@ -125,13 +129,12 @@ export const buildSetMailFlagsQueries = (
       // `sent` and `expunged` too, not just the membership rule: mapping rows
       // outlive the expunge that hid their mail, so a mapping-only scan
       // counts messages the seq map does not and shifts every position after
-      // them. The join is emitted only for a box that filters; every other
-      // box keeps the mapping-only scan it had.
-      const membershipJoin = filtersMembership(mailbox, sent)
-        ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
+      // them. The join is unconditional for that reason: `membershipExpression`
+      // is `TRUE` on a box that shows spam, but `expunged` and `sent` still
+      // have to be filtered there, and a mapping-only scan filters neither.
+      const membershipJoin = `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
            AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
-           AND ${membershipExpression(mailbox, sent, "z.")}`
-        : "";
+           AND ${membershipExpression(mailbox, sent, "z.")}`;
       const targetSubquery = `(
         SELECT y.${MAIL_ID} FROM ${MAIL_MAILBOX_UID} y
         ${membershipJoin}
