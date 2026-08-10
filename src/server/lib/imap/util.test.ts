@@ -678,7 +678,9 @@ describe("IMAP util", () => {
     // Byte-for-byte pin — regression against the exact prod shape that
     // Apple Mail iOS 26 stuck on. Covers all three violations at once:
     // (a) quoted TEXT/PLAIN/HTML, (b) quoted BASE64, (c) no space between
-    // sibling parts inside the outer multipart wrapper.
+    // sibling parts inside the outer multipart wrapper. The persisted
+    // decoded line counts are projected on purpose: they must not reach the
+    // wire, where body-fld-lines counts the transfer-encoded body instead.
     it("full byte-perfect shape for text+html+2 attachments (the iOS regression case)", () => {
       const mail: Partial<MailType> = {
         text_octets: 27060,
@@ -702,8 +704,8 @@ describe("IMAP util", () => {
       };
       const expected =
         '((' +
-          '("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 36080 522)' +
-          '("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" 14850696 230)' +
+          '("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 36080 1 NIL NIL NIL NIL)' +
+          '("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" 14850696 1 NIL NIL NIL NIL)' +
           ' "alternative" NIL NIL NIL NIL' +
         ')' +
         '("image" "jpeg" ("NAME" "1000025304.jpg") NIL NIL "BASE64" 8216024 NIL ("ATTACHMENT" ("FILENAME" "1000025304.jpg")) NIL NIL)' +
@@ -749,7 +751,7 @@ describe("IMAP util", () => {
         const result = formatBodyStructure({ text }, false);
         // 40 decoded lines, but one unfolded base64 line is what is served.
         expect(result).toBe(
-          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 ${encoded.length} 1)`
+          `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" ${encoded.length} 1)`
         );
       });
 
@@ -757,7 +759,7 @@ describe("IMAP util", () => {
         const html = "<p>a</p>\r\n<p>b</p>\r\n<p>c</p>";
         const encoded = encodeText(html);
         const result = formatBodyStructure({ html }, false);
-        const [, size, lines] = result.match(/BASE64 (\d+) (\d+)\)$/)!;
+        const [, size, lines] = result.match(/"BASE64" (\d+) (\d+)\)$/)!;
         expect(Number(size)).toBe(Buffer.byteLength(encoded, "utf-8"));
         expect(Number(lines)).toBe(encoded.split(/\r?\n/).length);
       });
@@ -766,7 +768,7 @@ describe("IMAP util", () => {
         // buildMessageSegments emits no body segment for a mail with no
         // text/html, so BODY[1] serves nothing — both counts must say so.
         expect(formatBodyStructure({}, false)).toBe(
-          `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 0 0)`
+          `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 0 0)`
         );
       });
     });
@@ -778,7 +780,7 @@ describe("IMAP util", () => {
       it("is emitted on a leaf text part and dropped from the bare BODY form", () => {
         const mail: Partial<MailType> = { text: "Hello, World!" };
         const encoded = encodeText("Hello, World!");
-        const head = `(TEXT PLAIN ("CHARSET" "UTF-8") NIL NIL BASE64 ${encoded.length} 1`;
+        const head = `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" ${encoded.length} 1`;
         expect(formatBodyStructure(mail, true)).toBe(`${head} NIL NIL NIL NIL)`);
         expect(formatBodyStructure(mail, false)).toBe(`${head})`);
       });
