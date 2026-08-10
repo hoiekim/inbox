@@ -66,6 +66,7 @@ const fakeStore = (): Store =>
     mailboxExists: async (box: string) => isInbox(box) || box === "Archive",
     countMessages: async () => ({ total: 0, unread: 0 }),
     getUidNext: async () => 1,
+    getHighestModseq: async () => 1,
     getAllUids: async () => [],
     getFirstUnseenUid: async () => null,
     getUser: () => ({ id: "u1", username: "admin" } as SignedUser),
@@ -78,7 +79,12 @@ const emptySeqState = (): SequenceState => ({
 
 const runSelect = async (name: string) => {
   const lines: string[] = [];
-  let selectedMailbox: string | null = null;
+  // Record EVERY setSelected call, not just the last. The fake Store cannot
+  // satisfy the whole happy path (see the describe comment), so SELECT ends in
+  // its catch — which now clears the selection to null, as RFC 3501 §6.3.1
+  // requires after a failed SELECT. The value under test is the one captured
+  // on the way in, so read the first non-null.
+  const selections: (string | null)[] = [];
   await selectMailbox(
     "A1",
     name,
@@ -90,11 +96,12 @@ const runSelect = async (name: string) => {
     },
     emptySeqState(),
     (mailbox) => {
-      selectedMailbox = mailbox;
+      selections.push(mailbox);
     },
     () => {}
   );
-  return { lines, selectedMailbox };
+  const selectedMailbox = selections.find((m) => m !== null) ?? null;
+  return { lines, selectedMailbox, selections };
 };
 
 const runStatus = async (mailbox: string) => {
@@ -115,7 +122,10 @@ const runStatus = async (mailbox: string) => {
 describe("SELECT canonicalizes INBOX casing (#600)", () => {
   // The fake Store can't satisfy the full SELECT happy-path flow
   // (`getImapUidValidity` calls into postgres directly, not via the store),
-  // so the OK-response tail never lands here. What matters for this fix is
+  // so the OK-response tail never lands here, and SELECT finishes in its
+  // catch — which clears the selection back to null per RFC 3501 §6.3.1.
+  // `runSelect` therefore reports the first non-null selection, the one made
+  // on the way in. What matters for this fix is
   // the `setSelected(canonicalName, …)` call on line 388 of mailbox-ops.ts:
   // that runs immediately after the existence gate and BEFORE any downstream
   // DB hit, capturing whatever the canonicalization produced. So the
