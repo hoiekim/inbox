@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
-const mockCountMessages = mock(() => Promise.resolve({ total: 0, unread: 0, maxUid: 0 }));
+const mockCountMessages = mock(() => Promise.resolve({ total: 0, unread: 0 }));
 const mockGetMailsByRange = mock(() => Promise.resolve(new Map()));
 const mockSetMailFlags = mock(() => Promise.resolve());
 const mockSearchMailsByUid = mock(() => Promise.resolve([]));

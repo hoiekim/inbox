@@ -64,7 +64,8 @@ const fakeStore = (): Store =>
   ({
     listMailboxes: async () => ["INBOX", "Archive"],
     mailboxExists: async (box: string) => isInbox(box) || box === "Archive",
-    countMessages: async () => ({ total: 0, unread: 0, maxUid: 0 }),
+    countMessages: async () => ({ total: 0, unread: 0 }),
+    getUidNext: async () => 1,
     getAllUids: async () => [],
     getFirstUnseenUid: async () => null,
     getUser: () => ({ id: "u1", username: "admin" } as SignedUser),
