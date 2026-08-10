@@ -35,36 +35,126 @@ const buildReserveUidQuery = (
   return { sql, values: [user_id, kind, scope, sent, ...seedParams] };
 };
 
+/**
+ * Build the non-allocating counterpart of `buildReserveUidQuery`: read what the
+ * NEXT reservation would return, without consuming it. This is UIDNEXT
+ * (RFC 3501 §2.3.1.1), which must exceed every UID ever assigned in the scope
+ * and must never decrease — so it has to come from the counter that actually
+ * assigns UIDs, not from a `MAX(uid)` over surviving rows (a `MAX` drops the
+ * moment the highest-UID mail is expunged or hard-deleted; see #743).
+ *
+ * `COALESCE` covers the pre-reservation state: a scope whose counter row does
+ * not exist yet answers with the very `seedSql` the first reservation would
+ * insert, so a peek and the allocation it predicts can never disagree. Same
+ * placeholder layout as the reservation ($1 user, $2 kind, $3 scope, $4 sent,
+ * $5… seed params) so `seedSql` is reused verbatim.
+ */
+const buildPeekUidNextQuery = (
+  user_id: string,
+  kind: string,
+  scope: string,
+  sent: boolean,
+  seedSql: string,
+  seedParams: ParamValue[]
+): { sql: string; values: ParamValue[] } => {
+  const sql = `
+    SELECT COALESCE(
+      (
+        SELECT ${LAST_UID} + 1 FROM ${MAIL_UID_COUNTERS}
+        WHERE ${USER_ID} = $1 AND ${UID_KIND} = $2
+          AND ${UID_SCOPE} = $3 AND ${SENT} = $4
+      ),
+      (${seedSql})
+    ) AS uid_next
+  `;
+  return { sql, values: [user_id, kind, scope, sent, ...seedParams] };
+};
+
+/** Seed for the domain-wide sequence — shared by the reservation and the peek. */
+const domainSeed = (): { sql: string; params: ParamValue[] } => ({
+  sql: `
+      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
+      WHERE ${USER_ID} = $1 AND ${SENT} = $4
+    `,
+  params: [],
+});
+
 /** Domain-wide UID-reservation query (kind="domain", no scope). */
 export const buildDomainUidQuery = (
   user_id: string,
   sent: boolean
 ): { sql: string; values: ParamValue[] } => {
-  const seedSql = `
-      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
-      WHERE ${USER_ID} = $1 AND ${SENT} = $4
-    `;
-  return buildReserveUidQuery(user_id, "domain", "", sent, seedSql, []);
+  const seed = domainSeed();
+  return buildReserveUidQuery(user_id, "domain", "", sent, seed.sql, seed.params);
 };
 
+/** Domain-wide UIDNEXT peek — same counter row as `buildDomainUidQuery`. */
+export const buildDomainUidNextQuery = (
+  user_id: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const seed = domainSeed();
+  return buildPeekUidNextQuery(user_id, "domain", "", sent, seed.sql, seed.params);
+};
+
+/**
+ * Seed for a per-account sequence — shared by the reservation and the peek.
+ *
+ * Sources from `mail_mailbox_uid.uid` — the authoritative per-mailbox UID
+ * store after #702 PR 3 dropped `mails.uid_account`. The tuple predicate
+ * matches any of the mailbox paths that the write side derives from
+ * (address, sent): the per-account paths `INBOX/accounts/<local>` and
+ * `Sent Messages/accounts/<local>`, plus the raw local part for
+ * user-created mailboxes (`Archive` etc., where `boxToAccount` returns
+ * `<name>@<domain>` and the write side stores the box name unchanged).
+ * All three shapes coexist inside `mail_mailbox_uid.mailbox`; the
+ * OR-union covers each with one indexed lookup.
+ *
+ * In practice the RESERVATION evaluates this only on the very first call for
+ * a (user, address, sent) triple — every subsequent call takes the DO UPDATE
+ * branch and doesn't re-evaluate it. Existing deployments already have counter
+ * rows for every mailbox that has ever received a mail, so the seed's specific
+ * value only matters for the exact new-mailbox-with-pre-existing-rows edge
+ * (nonexistent under any real write path but defended against for
+ * hostile-data safety). The PEEK evaluates it on the same condition — no
+ * counter row yet — and gets the identical answer by construction.
+ */
+const accountSeed = (
+  account: string,
+  sent: boolean
+): { sql: string; params: ParamValue[] } => {
+  const localPart = account.split("@")[0];
+  const perAccountPath = sent
+    ? `Sent Messages/accounts/${localPart}`
+    : `INBOX/accounts/${localPart}`;
+  return {
+    sql: `
+      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
+      WHERE ${USER_ID} = $1
+        AND ${MAILBOX} IN ($5, $6)
+    `,
+    params: [perAccountPath, localPart],
+  };
+};
+
+/** Per-account UID-reservation query (kind="account", scope=address). */
 export const buildAccountUidQuery = (
   user_id: string,
   account: string,
   sent: boolean
 ): { sql: string; values: ParamValue[] } => {
-  const localPart = account.split("@")[0];
-  const perAccountPath = sent
-    ? `Sent Messages/accounts/${localPart}`
-    : `INBOX/accounts/${localPart}`;
-  const seedSql = `
-      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
-      WHERE ${USER_ID} = $1
-        AND ${MAILBOX} IN ($5, $6)
-    `;
-  return buildReserveUidQuery(user_id, "account", account, sent, seedSql, [
-    perAccountPath,
-    localPart,
-  ]);
+  const seed = accountSeed(account, sent);
+  return buildReserveUidQuery(user_id, "account", account, sent, seed.sql, seed.params);
+};
+
+/** Per-account UIDNEXT peek — same counter row as `buildAccountUidQuery`. */
+export const buildAccountUidNextQuery = (
+  user_id: string,
+  account: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const seed = accountSeed(account, sent);
+  return buildPeekUidNextQuery(user_id, "account", account, sent, seed.sql, seed.params);
 };
 
 export const buildMailboxUidQuery = (
@@ -136,6 +226,74 @@ export const getMailboxUidNext = async (
   }
 };
 
+/**
+ * UIDNEXT for a mailbox (RFC 3501 §2.3.1.1) WITHOUT allocating a UID — what
+ * `getDomainUidNext` / `getAccountUidNext` would hand out next. `account` is
+ * the box's account address, or `null` for the two domain-scoped views
+ * (INBOX, unified Sent Messages), mirroring `Store.resolveBox`.
+ *
+ * Reading the counter rather than `MAX(uid)` over live rows is the whole point
+ * (#743): a `MAX` decreases when the highest-UID mail is expunged or hard
+ * deleted, which the RFC forbids and which re-promises a UID the counter has
+ * already handed out.
+ *
+ * THROWS on a DB fault instead of returning a floor. A fabricated-low UIDNEXT
+ * is the exact corruption this removes, and every caller (SELECT / EXAMINE /
+ * STATUS) already turns a throw into a retry-friendly tagged `NO … failed`
+ * rather than a permanent-sounding wrong answer — same reasoning as #601.
+ */
+export const getUidNext = async (
+  user_id: string,
+  account: string | null,
+  sent: boolean = false
+): Promise<number> => {
+  try {
+    const query =
+      account === null
+        ? buildDomainUidNextQuery(user_id, sent)
+        : buildAccountUidNextQuery(user_id, account, sent);
+    const result = await pool.query(query.sql, query.values);
+    return parseInt(result.rows[0]?.uid_next || "1", 10);
+  } catch (error) {
+    logger.error("Error reading UIDNEXT", {}, error);
+    throw error;
+  }
+};
+
+/**
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping.
+ * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or
+ * the pre-existing one when a row for `(user, mailbox, mail_id)` already
+ * exists (COPY-twice / partial-failure retry). Callers that need to
+ * report the destination UID over the wire (COPY's COPYUID, MOVE's
+ * COPYUID response) MUST use this returned value, not the caller's
+ * freshly-reserved `uid` param — otherwise the response advertises UIDs
+ * that don't exist in the mapping (client `UID FETCH`es on those UIDs
+ * come back empty).
+ *
+ * SQL uses `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` as
+ * a no-op update: Postgres's `INSERT ... ON CONFLICT DO NOTHING RETURNING`
+ * returns nothing for the conflict path, but `DO UPDATE ... RETURNING`
+ * always returns the row's current value. See #721 / #722.
+ *
+ * ABORTS ON FAILURE. `mail_mailbox_uid` is now the sole per-mailbox UID
+ * source (#702 PR 3 dropped `mails.uid_account`), so a transient DB
+ * fault at this write path means the mail is invisible in the
+ * destination mailbox — every account-scoped SELECT / STATUS / FETCH /
+ * SEARCH / STORE / EXPUNGE / MOVE joins this mapping and misses. The
+ * mail row itself already landed on `mails` at the point saveMail calls
+ * here, so `mails.uid_domain` still surfaces the message via INBOX /
+ * unified Sent Messages — but any per-account view is silent-drop.
+ *
+ * Throw → propagates through pgSaveMail's outer catch (non-23505 branch
+ * now re-throws, per #720) → receive.ts saveMail's catch (alarm + error
+ * dump, then re-throws) → saveMailHandler's Promise.all rejects →
+ * smtp.ts's .catch(cb) → SMTP 5xx → mailgun retries. IMAP APPEND / COPY /
+ * MOVE take the parallel path via storeMail (converts undefined-or-throw
+ * → false → tagged NO → client retries). Send-path swallows the throw
+ * back to a mailgun-response-return (mail already sent; a "retry" would
+ * duplicate delivery — the ops-side error dump preserves recovery info).
+ */
 /**
  * Drop a `mail_mailbox_uid` mapping row. Used by the mapped-utility flag hook
  * (see `syncMailboxPivot`): a STORE that clears `\Flagged` on a starred mail

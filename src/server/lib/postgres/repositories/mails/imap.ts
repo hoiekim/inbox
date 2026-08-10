@@ -204,30 +204,41 @@ export const countMessages = async (
   user_id: string,
   mailbox: string | null,
   sent: boolean
-): Promise<{ total: number; unread: number; maxUid: number }> => {
+): Promise<{ total: number; unread: number }> => {
   try {
     let sql: string;
     let values: ParamValue[];
 
+    // `total` / `unread` describe what the mailbox contains, so they honour the
+    // membership rule. UIDNEXT is NOT computed here — it comes from
+    // `getUidNext`, which reads `mail_uid_counters`, the authority that assigns
+    // UIDs. A `MAX(uid)` over these rows cannot back UIDNEXT: it drops when the
+    // highest-UID mail is spam-quarantined, expunged or hard-deleted, and RFC
+    // 3501 §2.3.1.1 requires UIDNEXT to exceed every UID ever assigned (#743).
     const membership = membershipExpression(mailbox, sent);
 
     if (usesDomainUidSpace(mailbox)) {
       sql = `
         SELECT
           COUNT(*) FILTER (WHERE ${membership}) as total,
-          COUNT(*) FILTER (WHERE read = FALSE AND ${membership}) as unread,
-          COALESCE(MAX(${UID_DOMAIN}), 0) as max_uid
+          COUNT(*) FILTER (WHERE read = FALSE AND ${membership}) as unread
         FROM mails
         WHERE user_id = $1 AND sent = $2 AND expunged = FALSE
       `;
       values = [user_id, sent];
     } else {
+      // Per-mailbox view — the `mail_mailbox_uid` mapping is the
+      // authoritative membership source. INNER JOIN encodes it: a row
+      // exists iff the mail is in this mailbox. Legacy mails that predate
+      // the write-side dual-write (pre-#615) and never got backfilled —
+      // e.g. the 140 rows the one-shot script skipped over duplicate-UID
+      // collisions from a #617-era race — have no mapping row and are
+      // intentionally invisible to reads.
       const joinMembership = membershipExpression(mailbox, sent, "m.");
       sql = `
         SELECT
           COUNT(*) FILTER (WHERE ${joinMembership}) as total,
-          COUNT(*) FILTER (WHERE m.read = FALSE AND ${joinMembership}) as unread,
-          COALESCE(MAX(x.${UID}), 0) as max_uid
+          COUNT(*) FILTER (WHERE m.read = FALSE AND ${joinMembership}) as unread
         FROM mails m
         JOIN ${MAIL_MAILBOX_UID} x
           ON x.${USER_ID} = m.${USER_ID}
@@ -242,11 +253,10 @@ export const countMessages = async (
     return {
       total: parseInt(result.rows[0]?.total || "0", 10),
       unread: parseInt(result.rows[0]?.unread || "0", 10),
-      maxUid: parseInt(result.rows[0]?.max_uid || "0", 10),
     };
   } catch (error) {
     logger.error("Failed to count messages", {}, error);
-    return { total: 0, unread: 0, maxUid: 0 };
+    return { total: 0, unread: 0 };
   }
 };
 

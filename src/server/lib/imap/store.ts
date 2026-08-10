@@ -18,6 +18,7 @@ import {
   getAllUids as pgGetAllUids,
   getFirstUnseenUid as pgGetFirstUnseenUid,
   getHighestModseq as pgGetHighestModseq,
+  getUidNext as pgGetUidNext,
   SaveMailInput,
   SetMailFlagsResult,
   StoreOperationType,
@@ -309,7 +310,7 @@ export class Store {
 
   countMessages = async (
     box: string
-  ): Promise<{ total: number; unread: number; maxUid: number } | null> => {
+  ): Promise<{ total: number; unread: number } | null> => {
     try {
       const { mailboxArg, isSent } = this.resolveMappedBox(box);
       return await countMessages(this.user.id, mailboxArg, isSent);
@@ -317,6 +318,23 @@ export class Store {
       logger.error("Error counting messages", { component: "imap.store", box }, error);
       return null;
     }
+  };
+
+  /**
+   * UIDNEXT for `box`, read from the UID counter that actually assigns UIDs.
+   *
+   * Keyed by `resolveBox` (the account address, or `null` for the domain-scoped
+   * views) rather than `resolveMappedBox` (the raw box path), because the
+   * counter rows are keyed on the address — the same key every write path
+   * reserves through (`boxToAccount` → `getAccountUidNext`).
+   *
+   * Deliberately NOT wrapped in a catch-and-return-null: a swallowed fault here
+   * would surface as a too-low UIDNEXT, which is the bug (#743). Let it
+   * propagate to the SELECT/EXAMINE/STATUS handler's tagged `NO … failed`.
+   */
+  getUidNext = async (box: string): Promise<number> => {
+    const { accountName, isSent } = this.resolveBox(box);
+    return await pgGetUidNext(this.user.id, accountName, isSent);
   };
 
   /**

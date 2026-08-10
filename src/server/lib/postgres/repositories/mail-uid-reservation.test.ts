@@ -3,6 +3,8 @@ import { describe, it, expect } from "bun:test";
 import {
   buildDomainUidQuery,
   buildAccountUidQuery,
+  buildDomainUidNextQuery,
+  buildAccountUidNextQuery,
 } from "./mails";
 import { mailUidCountersTable } from "../models";
 import { USER_ID, UID_KIND, UID_SCOPE, SENT, LAST_UID } from "../models";
@@ -77,5 +79,70 @@ describe("buildAccountUidQuery", () => {
     expect(values[3]).toBe(true);
     expect(sql).not.toContain("to_address @>");
     expect(sql).not.toContain("from_address @>");
+  });
+});
+
+/**
+ * UIDNEXT peek (#743).
+ *
+ * UIDNEXT must exceed every UID ever assigned in the mailbox and must never
+ * decrease (RFC 3501 §2.3.1.1). Deriving it from a `MAX(uid)` over the
+ * mailbox's surviving rows violates both the moment the highest-UID mail is
+ * expunged or hard-deleted, so it has to read `mail_uid_counters` — the same
+ * row the reservation increments — without consuming a UID.
+ */
+describe("UIDNEXT peek", () => {
+  it("reads the counter row without allocating — no INSERT, no DO UPDATE", () => {
+    for (const { sql } of [
+      buildDomainUidNextQuery(userId, false),
+      buildAccountUidNextQuery(userId, "user@hoie.kim", false),
+    ]) {
+      expect(sql).toContain(`FROM ${mailUidCountersTable.name}`);
+      expect(sql).not.toContain("INSERT");
+      expect(sql).not.toContain("DO UPDATE");
+      // The counter holds the LAST assigned UID, so UIDNEXT is that plus one.
+      expect(sql).toContain(`SELECT ${LAST_UID} + 1`);
+    }
+  });
+
+  it("targets the same counter row the reservation writes", () => {
+    const peek = buildDomainUidNextQuery(userId, true);
+    const reserve = buildDomainUidQuery(userId, true);
+    // The key columns and their values must match, or the peek predicts a
+    // sequence that nothing assigns from.
+    for (const col of [USER_ID, UID_KIND, UID_SCOPE, SENT]) {
+      expect(peek.sql).toContain(col);
+    }
+    expect(peek.values.slice(0, 4)).toEqual(reserve.values.slice(0, 4));
+
+    const accountPeek = buildAccountUidNextQuery(userId, "user@hoie.kim", false);
+    const accountReserve = buildAccountUidQuery(userId, "user@hoie.kim", false);
+    expect(accountPeek.values).toEqual(accountReserve.values);
+  });
+
+  it("falls back to the reservation's own seed when no counter row exists yet", () => {
+    // A scope that has never reserved (legacy mail predating the counter) must
+    // still report a UIDNEXT above its existing UIDs. COALESCEing onto the
+    // identical seed the first reservation would insert is what makes the
+    // peek and that first allocation agree.
+    const domain = buildDomainUidNextQuery(userId, false);
+    expect(domain.sql).toContain("COALESCE(");
+    expect(domain.sql).toContain("COALESCE(MAX(uid_domain), 0) + 1");
+
+    const account = buildAccountUidNextQuery(userId, "user@hoie.kim", false);
+    expect(account.sql).toContain("COALESCE(MAX(uid), 0) + 1 FROM mail_mailbox_uid");
+    expect(account.values[4]).toBe("INBOX/accounts/user");
+    expect(account.values[5]).toBe("user");
+  });
+
+  it("never sources UIDNEXT from a MAX over live `mails` rows", () => {
+    // The regression itself: `MAX(uid)` filtered to non-expunged rows drops
+    // when the highest-UID mail leaves, handing back a UID already assigned.
+    for (const { sql } of [
+      buildDomainUidNextQuery(userId, false),
+      buildAccountUidNextQuery(userId, "user@hoie.kim", false),
+    ]) {
+      expect(sql).not.toContain("expunged");
+    }
   });
 });

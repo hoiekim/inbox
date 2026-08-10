@@ -15,7 +15,8 @@ const fakeStore = (boxes: string[]): Store =>
   ({
     listMailboxes: async () => boxes,
     mailboxExists: async (box: string) => box === "INBOX" || boxes.includes(box),
-    countMessages: async () => ({ total: 0, unread: 0, maxUid: 0 }),
+    countMessages: async () => ({ total: 0, unread: 0 }),
+    getUidNext: async () => 1,
   }) as unknown as Store;
 
 const emptySeqState = (): SequenceState => ({

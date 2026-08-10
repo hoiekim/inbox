@@ -258,6 +258,13 @@ export async function statusMailbox(
       highestModseq = await store.getHighestModseq(mailbox);
     }
 
+    // Same lazy shape: UIDNEXT is its own counter read (#743), so only pay for
+    // it when the client asked for it.
+    let uidNext: number | null = null;
+    if (items.includes("UIDNEXT")) {
+      uidNext = await store.getUidNext(mailbox);
+    }
+
     const statusItems: string[] = [];
     items.forEach((item) => {
       switch (item) {
@@ -265,7 +272,7 @@ export async function statusMailbox(
           statusItems.push("MESSAGES", total.toString());
           break;
         case "UIDNEXT":
-          statusItems.push("UIDNEXT", (countResult.maxUid + 1).toString());
+          statusItems.push("UIDNEXT", uidNext!.toString());
           break;
         case "UIDVALIDITY":
           statusItems.push("UIDVALIDITY", uidValidity!.toString());
@@ -542,13 +549,13 @@ export async function selectMailbox(
     if (firstUnseenSeq) {
       write(`* OK [UNSEEN ${firstUnseenSeq}] Message ${firstUnseenSeq} is first unseen\r\n`);
     }
-    // UIDNEXT comes from the mailbox's highest assigned UID, never from the
-    // last entry of `seqToUid`. The two diverge whenever the mailbox hides a
-    // message it still holds a UID for — INBOX's spam quarantine is one such
-    // case — and taking the visible tail would let UIDNEXT decrease (RFC 3501
-    // §2.3.1.1 forbids it) and disagree with the value STATUS reports off the
-    // same unfiltered `maxUid`.
-    const uidNext = countResult.maxUid + 1 || 1;
+    // UIDNEXT comes from the UID counter, never from the last entry of
+    // `seqToUid` nor from a MAX over the mailbox's surviving rows. Both of
+    // those decrease whenever the highest-UID message leaves the mailbox —
+    // hidden by INBOX's spam quarantine, expunged, or hard-deleted — which RFC
+    // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out
+    // (#743). STATUS reads the same counter, so the two agree by construction.
+    const uidNext = await store.getUidNext(cleanName);
     write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
     write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
     // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
