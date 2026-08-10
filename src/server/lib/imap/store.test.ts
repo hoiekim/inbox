@@ -13,6 +13,7 @@ const mockGetAllUids = mock(() => Promise.resolve([]));
 const mockGetFirstUnseenUid = mock<(...args: unknown[]) => Promise<number | null>>(() =>
   Promise.resolve(null)
 );
+const mockGetUidNext = mock<(...args: unknown[]) => Promise<number>>(() => Promise.resolve(1));
 
 mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
@@ -24,6 +25,7 @@ mock.module("../postgres/repositories/mails", () => ({
   expungeDeletedMails: mockExpunge,
   getAllUids: mockGetAllUids,
   getFirstUnseenUid: mockGetFirstUnseenUid,
+  getUidNext: mockGetUidNext,
 }));
 
 const mockGetMailboxesByUser = mock(() => Promise.resolve([]));
@@ -379,5 +381,73 @@ describe("Store.getAllUids", () => {
     const store = new Store(makeUser());
 
     expect(await store.getAllUids("INBOX")).toBeNull();
+  });
+});
+
+/**
+ * `Store.getUidNext` resolves its box on the ADDRESS axis (`resolveBox` ->
+ * `boxToAccount`), NOT the raw-box-path axis (`resolveMappedBox`) that the
+ * eight #702 mapping-aware read sites use. That difference is the whole
+ * correctness claim of #743: `mail_uid_counters` rows are keyed by address,
+ * because that is the key every write path reserves through
+ * (`boxToAccount` -> `getAccountUidNext`).
+ *
+ * Harmonising this with its `resolveMappedBox` siblings would look like a
+ * tidy-up and would silently restore the bug — the peek would read a counter
+ * row keyed `uid_scope = 'INBOX/accounts/bob'`, which nothing ever writes, so
+ * COALESCE falls through to the seed and reports a UIDNEXT at or below
+ * already-assigned UIDs. These assert the axis explicitly so that edit fails.
+ */
+describe("Store.getUidNext — counter key axis", () => {
+  beforeEach(() => {
+    mockGetUidNext.mockClear();
+    mockGetUidNext.mockResolvedValue(1);
+  });
+
+  it("passes accountName=null for the two domain-scoped views", async () => {
+    const store = new Store(makeUser());
+    for (const box of ["INBOX", "Sent Messages"]) {
+      mockGetUidNext.mockClear();
+      await store.getUidNext(box);
+      expect(mockGetUidNext).toHaveBeenCalledWith("user-123", null, box === "Sent Messages");
+    }
+  });
+
+  it("passes the ADDRESS, not the box path, for a per-account received box", async () => {
+    const store = new Store(makeUser());
+    await store.getUidNext("INBOX/accounts/bob");
+    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "bob@alice.example.com", false);
+  });
+
+  it("passes the ADDRESS and sent=true for a per-account sent box", async () => {
+    const store = new Store(makeUser());
+    await store.getUidNext("Sent Messages/accounts/bob");
+    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "bob@alice.example.com", true);
+  });
+
+  it("passes the derived address for a user-created mailbox", async () => {
+    // `boxToAccount("Archive")` -> "Archive@<domain>", the same string the
+    // COPY/MOVE write path reserves under (message-ops `boxToAccount`).
+    const store = new Store(makeUser());
+    await store.getUidNext("Archive");
+    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "Archive@alice.example.com", false);
+  });
+
+  it("never passes a raw box path as the counter scope", async () => {
+    const store = new Store(makeUser());
+    for (const box of ["INBOX/accounts/bob", "Sent Messages/accounts/bob", "Archive"]) {
+      mockGetUidNext.mockClear();
+      await store.getUidNext(box);
+      const scope = mockGetUidNext.mock.calls[0][1];
+      expect(scope).not.toBe(box);
+      expect(String(scope)).toContain("@");
+    }
+  });
+
+  it("propagates a repository failure instead of substituting a floor", async () => {
+    // A swallowed fault would surface as a too-low UIDNEXT — the bug itself.
+    mockGetUidNext.mockImplementation(() => Promise.reject(new Error("DB down")));
+    const store = new Store(makeUser());
+    await expect(store.getUidNext("INBOX")).rejects.toThrow("DB down");
   });
 });

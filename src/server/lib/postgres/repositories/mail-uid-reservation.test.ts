@@ -108,11 +108,19 @@ describe("UIDNEXT peek", () => {
   it("targets the same counter row the reservation writes", () => {
     const peek = buildDomainUidNextQuery(userId, true);
     const reserve = buildDomainUidQuery(userId, true);
-    // The key columns and their values must match, or the peek predicts a
-    // sequence that nothing assigns from.
-    for (const col of [USER_ID, UID_KIND, UID_SCOPE, SENT]) {
-      expect(peek.sql).toContain(col);
-    }
+
+    // Pin the peek's WHERE predicate as a WHOLE, not column-by-column. A
+    // `toContain(col)` loop cannot catch a dropped `AND sent = $4`, because
+    // the seed subquery in the same string carries its own `sent = $4` — the
+    // substring is present either way, and the peek would silently read the
+    // other sent-lane's counter row.
+    const where = peek.sql
+      .replace(/\s+/g, " ")
+      .match(/WHERE ([^)]*?) \)/)?.[1];
+    expect(where).toBe(
+      `${USER_ID} = $1 AND ${UID_KIND} = $2 AND ${UID_SCOPE} = $3 AND ${SENT} = $4`
+    );
+
     expect(peek.values.slice(0, 4)).toEqual(reserve.values.slice(0, 4));
 
     const accountPeek = buildAccountUidNextQuery(userId, "user@hoie.kim", false);
@@ -135,9 +143,12 @@ describe("UIDNEXT peek", () => {
     expect(account.values[5]).toBe("user");
   });
 
-  it("never sources UIDNEXT from a MAX over live `mails` rows", () => {
-    // The regression itself: `MAX(uid)` filtered to non-expunged rows drops
-    // when the highest-UID mail leaves, handing back a UID already assigned.
+  it("keeps the seed fallback unfiltered — a filtered MAX is the regression", () => {
+    // The COALESCE fallback DOES read `MAX(uid_domain)` off `mails`; that is
+    // fine because it spans expunged rows (it is "highest ever assigned", not
+    // "highest surviving") and only fires when no counter row exists. What
+    // must never appear is an `expunged = FALSE` filter on it — that is the
+    // shape that drops when the highest-UID mail leaves.
     for (const { sql } of [
       buildDomainUidNextQuery(userId, false),
       buildAccountUidNextQuery(userId, "user@hoie.kim", false),

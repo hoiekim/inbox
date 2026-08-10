@@ -216,6 +216,12 @@ export async function unsubscribeMailbox(
   }
 }
 
+/** Re-throw a settled rejection, so a batched read still fails the command. */
+const unwrap = <T>(result: PromiseSettledResult<T>): T => {
+  if (result.status === "rejected") throw result.reason;
+  return result.value;
+};
+
 // ---------------------------------------------------------------------------
 // STATUS
 // ---------------------------------------------------------------------------
@@ -535,12 +541,46 @@ export async function selectMailbox(
     const { total } = countResult;
     setSelected(cleanName, total);
 
-    const uidValidity = await getImapUidValidity(store.getUser().id);
-
+    // Everything the untagged block needs is resolved BEFORE the first
+    // untagged write. Two reasons, both load-bearing:
+    //
+    // - `getUidNext` throws on a DB fault (deliberately — a swallowed fault
+    //   would surface as a too-low UIDNEXT, which is #743 itself). Reading it
+    //   after `* EXISTS` had gone out would leave the client holding a
+    //   half-written SELECT response followed by `NO SELECT failed`.
+    // - The four reads are mutually independent, so paying four serial
+    //   round-trips on a command iOS Mail issues per mailbox per sync is waste.
+    //
     // [UNSEEN <n>] is the sequence number of the first unseen message, not the
     // unread count (RFC 3501 §7.1). Map the lowest-UID unread message to its
     // 1-based sequence position; omit the response code entirely when all read.
-    const firstUnseenUid = await store.getFirstUnseenUid(cleanName);
+    //
+    // UIDNEXT comes from the UID counter, never from the last entry of
+    // `seqToUid` nor from a MAX over the mailbox's surviving rows. Both of
+    // those decrease whenever the highest-UID message leaves the mailbox —
+    // hidden by INBOX's spam quarantine, expunged, or hard-deleted — which RFC
+    // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out
+    // (#743). STATUS reads the same counter, so the two agree by construction.
+    //
+    // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
+    // HIGHESTMODSEQ so the client can detect changes since its last-known
+    // mod-sequence without a full resync.
+    //
+    // `allSettled`, not `all`: a DB outage rejects several of these at once,
+    // and `Promise.all` would leave every rejection after the first unhandled —
+    // firing the process-level `unhandledRejection` alarm on top of the tagged
+    // NO this already answers with. `unwrap` re-throws the first failure from
+    // an already-settled result, so nothing is left dangling.
+    const settled = await Promise.allSettled([
+      getImapUidValidity(store.getUser().id),
+      store.getFirstUnseenUid(cleanName),
+      store.getUidNext(cleanName),
+      store.getHighestModseq(cleanName),
+    ]);
+    const uidValidity = unwrap(settled[0]);
+    const firstUnseenUid = unwrap(settled[1]);
+    const uidNext = unwrap(settled[2]);
+    const highestModseq = unwrap(settled[3]);
     const firstUnseenSeq =
       firstUnseenUid !== null ? seqState.uidToSeq.get(firstUnseenUid) : undefined;
 
@@ -549,19 +589,8 @@ export async function selectMailbox(
     if (firstUnseenSeq) {
       write(`* OK [UNSEEN ${firstUnseenSeq}] Message ${firstUnseenSeq} is first unseen\r\n`);
     }
-    // UIDNEXT comes from the UID counter, never from the last entry of
-    // `seqToUid` nor from a MAX over the mailbox's surviving rows. Both of
-    // those decrease whenever the highest-UID message leaves the mailbox —
-    // hidden by INBOX's spam quarantine, expunged, or hard-deleted — which RFC
-    // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out
-    // (#743). STATUS reads the same counter, so the two agree by construction.
-    const uidNext = await store.getUidNext(cleanName);
     write(`* OK [UIDVALIDITY ${uidValidity}] UIDs valid\r\n`);
     write(`* OK [UIDNEXT ${uidNext}] Predicted next UID\r\n`);
-    // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
-    // HIGHESTMODSEQ on SELECT/EXAMINE so the client can detect changes since
-    // its last-known mod-sequence without a full resync.
-    const highestModseq = await store.getHighestModseq(cleanName);
     write(`* OK [HIGHESTMODSEQ ${highestModseq}] Highest mod-sequence\r\n`);
     write(`* FLAGS (\\Seen \\Flagged \\Deleted \\Draft \\Answered)\r\n`);
     write(
@@ -571,6 +600,14 @@ export async function selectMailbox(
     const command = readOnly ? "EXAMINE" : "SELECT";
     write(`${tag} OK [${mode}] ${command} completed\r\n`);
   } catch (error) {
+    // RFC 3501 §6.3.1: after a failed SELECT no mailbox is selected. The
+    // happy path calls `setSelected(cleanName, …)` before any of the reads
+    // that can throw, so without this the session stays selected (with a
+    // populated seqState) while the client has been told the SELECT failed —
+    // a later FETCH/STORE it believes is illegal would still execute. Mirrors
+    // the `countResult === null` branch above.
+    setSelected(null, 0);
+    clearSeqState();
     logger.error("Error selecting mailbox", { component: "imap", name }, error);
     write(`${tag} NO SELECT failed\r\n`);
   }
