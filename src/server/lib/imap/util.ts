@@ -255,11 +255,19 @@ export const formatBodyStructure = (
         : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
     // RFC 3501 §7.4.2: body-fld-octets and body-fld-lines both describe the
     // body *in its transfer encoding* — the bytes `BODY[n]` serves, not the
-    // decoded text. `encodeText` emits unfolded base64 (hoiekim/inbox#751), so
-    // a text part is one line on the cached path as much as the materialized
-    // one, and the count stays 1 until folding lands. A zero-octet part serves
-    // no bytes at all, so it must advertise zero lines to stay consistent with
-    // what `BODY[n]` returns.
+    // decoded text. Those bytes come from `session-utils.ts`, which
+    // base64-encodes the body with no line folding (`getBodyPart` and the
+    // streaming emitters each call `Buffer.toString("base64")` directly —
+    // the duplication is #751's complaint), so a text part is one line on
+    // the cached path as much as the materialized one. `encodeText` here
+    // only measures; it is unfolded too, which is why the two agree. A
+    // zero-octet part serves no bytes, so it advertises zero lines.
+    //
+    // The constant is only honest while that encoding stays unfolded —
+    // `util.test.ts` "the unfolded-base64 invariant the line count rests on"
+    // pins it against the real `getBodyPart` output, so folding base64 at
+    // 76 columns per RFC 2045 §6.8 (#751) reds a test instead of silently
+    // re-opening #682.
     const lines = size === 0 ? 0 : 1;
 
     // RFC 3501 §9: media-type and media-subtype are `string` (quoted or

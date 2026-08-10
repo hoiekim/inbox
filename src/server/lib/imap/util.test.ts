@@ -14,6 +14,10 @@ import {
   isDomainScoped,
   deriveCopyMessageId,
 } from "./util";
+// The producer of the bytes `BODY[n]` serves. `body-fld-lines` is a constant
+// here only because that encoding is unfolded, so the invariant is pinned
+// against it rather than against this file's own encoder.
+import { getBodyPart } from "./session-utils";
 import type { MailType, MailAddressValueType } from "common";
 
 describe("IMAP util", () => {
@@ -597,10 +601,11 @@ describe("IMAP util", () => {
       expect(result).toContain('"BASE64"');
     });
 
-    it("advertises zero lines for a zero-octet part, matching what BODY[n] serves", () => {
+    it("advertises zero lines for a zero-octet part, the only honest count when BODY[n] has nothing to serve", () => {
       // A mail with no text/html falls back to an empty TEXT PLAIN part.
-      // buildMessageSegments emits no body segment for it, so BODY[1] returns
-      // 0 octets — body-fld-lines must agree rather than claim one line.
+      // buildMessageSegments emits no body segment for it, and a BODY[1]
+      // fetch declines the data item outright rather than serving an empty
+      // literal — so claiming one line describes a line nobody receives.
       const empty = formatBodyStructure({}, true);
       const nonEmpty = formatBodyStructure({ text: "hi" }, true);
       expect([
@@ -756,7 +761,11 @@ describe("IMAP util", () => {
       });
 
       it("counts lines over the same bytes body-fld-octets measures", () => {
-        const html = "<p>a</p>\r\n<p>b</p>\r\n<p>c</p>";
+        // The body has to clear the 76-column fold threshold RFC 2045 §6.8
+        // describes (>57 raw bytes), or `encoded.split(...)` is 1 whatever
+        // the encoder does and the derived expectation asserts nothing.
+        const html = Array.from({ length: 12 }, (_, i) => `<p>row ${i}</p>`).join("\r\n");
+        expect(Buffer.byteLength(html, "utf8")).toBeGreaterThan(57);
         const encoded = encodeText(html);
         const result = formatBodyStructure({ html }, false);
         const [, size, lines] = result.match(/"BASE64" (\d+) (\d+)\)$/)!;
@@ -766,10 +775,49 @@ describe("IMAP util", () => {
 
       it("reports zero octets and zero lines on the empty default part", () => {
         // buildMessageSegments emits no body segment for a mail with no
-        // text/html, so BODY[1] serves nothing — both counts must say so.
+        // text/html, and a BODY[1] fetch omits the data item rather than
+        // serving an empty literal — both counts must say so.
         expect(formatBodyStructure({}, false)).toBe(
           `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 0 0)`
         );
+      });
+    });
+
+    // `lines` is a constant, and the only thing that makes the constant true
+    // is that the base64 the server serves is unfolded. That encoding does
+    // NOT live in this file — `getBodyPart` in session-utils.ts produces the
+    // bytes `BODY[n]` returns, and it re-implements the encoder rather than
+    // importing `encodeText` (#751). So the invariant has to be pinned
+    // against the real producer: fold the body at 76 columns per RFC 2045
+    // §6.8 and `body-fld-lines 1` starts describing a representation nobody
+    // receives, which is exactly the #682 defect this PR exists to close.
+    describe("the unfolded-base64 invariant the line count rests on", () => {
+      // Well past the 76-column wrap point, so a folding encoder cannot
+      // slip through on a body too short to wrap.
+      const text = Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\r\n");
+
+      it("the bytes BODY[n] actually serves carry no line break", () => {
+        const served = getBodyPart({ text }, "1");
+        expect(served).not.toBeNull();
+        expect(Buffer.byteLength(served!, "utf8")).toBeGreaterThan(76);
+        expect(served).not.toContain("\n");
+        expect(served).not.toContain("\r");
+      });
+
+      it("the served bytes are one line, which is what BODYSTRUCTURE advertises", () => {
+        const served = getBodyPart({ text }, "1")!;
+        const advertised = formatBodyStructure({ text }, false).match(
+          /"BASE64" (\d+) (\d+)\)$/
+        )!;
+        expect(Number(advertised[1])).toBe(Buffer.byteLength(served, "utf8"));
+        expect(Number(advertised[2])).toBe(served.split(/\r?\n/).length);
+      });
+
+      it("the measuring encoder agrees with the serving one", () => {
+        // `formatBodyStructure` sizes the materialized path with `encodeText`
+        // while the wire body comes from `getBodyPart`. Two encoders, one
+        // invariant — they have to stay byte-identical.
+        expect(encodeText(text)).toBe(getBodyPart({ text }, "1"));
       });
     });
 
