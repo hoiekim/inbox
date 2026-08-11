@@ -321,6 +321,19 @@ export async function migrateTable(
  * Returns true if successful, throws on fatal errors.
  * Uses a transaction to ensure atomicity - either all migrations succeed or none do.
  */
+/**
+ * The two independently-gated halves of the boot DDL.
+ *
+ * `schema_hash` covers the O(1) catalog work — CREATE TABLE, migrations,
+ * trigger DDL — which is fatal when it fails and cheap to re-run.
+ * `maintenance_hash` covers the row-count-scaled statements, which are not
+ * fatal. They need separate markers: gating the fatal half on the slow half
+ * would send every boot back through the throwing DDL block for as long as an
+ * index can't build, which is the crashloop #746 is about, entered by a
+ * different door.
+ */
+export type MarkerKey = "schema_hash" | "maintenance_hash";
+
 // Arbitrary stable lock key for migration serialization across instances.
 // Using a hash of the string "inbox-schema-migration" (decimal: 0x696e62) = 6908002
 const MIGRATION_ADVISORY_LOCK_KEY = 6908002;
@@ -396,18 +409,57 @@ export async function runMigrations(
   }
 }
 
-export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean> {
+/**
+ * Fast-path pre-flight for `initializePostgres`: read one row from the
+ * `schema_meta` marker table and check whether its stored hash equals the
+ * `expectedHash` derived from the current code's DDL inputs.
+ *
+ * On the happy path (steady-state boot, no DDL change deployed) this one
+ * SELECT replaces the ~35+ DDL round-trips `initializePostgres` would
+ * otherwise issue (CREATE TABLE IF NOT EXISTS × 10 + advisory-lock
+ * migration transaction + CREATE INDEX IF NOT EXISTS × 20+ + trigger DDL
+ * + reindex), each of which can queue behind concurrent PG work and hit
+ * `statement_timeout`. Under a prod restart
+ * where the postgres instance is under load from other containers, the
+ * old path can take the crashloop pattern seen at 2026-08-01
+ * 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query read
+ * timeout` before the 6th restart stuck.
+ *
+ * Returns `true` iff the marker row exists AND its `value` equals
+ * `expectedHash`. Returns `false` on any mismatch, missing marker, or
+ * query error — the caller falls back to the authoritative slow path.
+ *
+ * Correctness. `expectedHash` is computed at import time from every input
+ * the slow path emits DDL for: table schemas + indexes + constraints,
+ * `searchVectorDdl()`, `searchVectorReindexSql()`, and the literal text of
+ * each raw-DDL const in `initialize.ts` (currently `IDX_MAILS_SEARCH_SQL`).
+ * Because those same const strings are what the slow path also issues via
+ * `pool.query`, any edit to a raw block automatically drifts the digest —
+ * including trigger-body-only edits and index-only PRs that a name-check
+ * would silently miss. Whitespace changes in schema definition strings
+ * also change the hash, which is fine (the slow path is idempotent).
+ *
+ * Rolling deploys. If old and new versions coexist, an old boot with hash
+ * X sees the newer marker Y → returns false → runs slow path → overwrites
+ * to X. New boot sees X → returns false → runs slow path → overwrites to
+ * Y. Flip-flopping is safe because the slow path is idempotent.
+ */
+export async function checkSchemaAtTarget(
+  expectedHash: string,
+  key: MarkerKey = "schema_hash"
+): Promise<boolean> {
   try {
     const result = await pool.query<{ value: string }>(
-      "SELECT value FROM schema_meta WHERE key = 'schema_hash'"
+      "SELECT value FROM schema_meta WHERE key = $1",
+      [key]
     );
     if (result.rows.length === 0) {
-      logger.info("[Fast-path] schema_hash marker not present — falling back to slow path");
+      logger.info(`[Fast-path] ${key} marker not present — falling back to slow path`);
       return false;
     }
     if (result.rows[0].value !== expectedHash) {
       logger.info(
-        `[Fast-path] schema_hash mismatch (DB=${result.rows[0].value}, expected=${expectedHash}) — falling back to slow path`
+        `[Fast-path] ${key} mismatch (DB=${result.rows[0].value}, expected=${expectedHash}) — falling back to slow path`
       );
       return false;
     }
@@ -430,7 +482,10 @@ export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean
  * succeeds — never from the fast path, since the invariant is: marker
  * present + matching hash ⇒ slow-path DDL not needed.
  */
-export async function writeSchemaMarker(hash: string): Promise<void> {
+export async function writeSchemaMarker(
+  hash: string,
+  key: MarkerKey = "schema_hash"
+): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_meta (
       key TEXT PRIMARY KEY,
@@ -438,8 +493,8 @@ export async function writeSchemaMarker(hash: string): Promise<void> {
     )
   `);
   await pool.query(
-    `INSERT INTO schema_meta (key, value) VALUES ('schema_hash', $1)
+    `INSERT INTO schema_meta (key, value) VALUES ($1, $2)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-    [hash]
+    [key, hash]
   );
 }

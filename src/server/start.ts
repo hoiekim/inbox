@@ -58,7 +58,8 @@ const start = async () => {
   // throughout, and awaiting them would push first bind past the container
   // healthcheck's start period on a large table. `bootMaintenance` never
   // rejects; it alarms on its own if the work doesn't complete.
-  void bootMaintenance();
+  const maintenanceAbort = new AbortController();
+  const maintenance = bootMaintenance(maintenanceAbort.signal);
 
   const shutdown = async (signal: string) => {
     console.info(`${signal} received — shutting down gracefully`);
@@ -86,6 +87,14 @@ const start = async () => {
       )
     );
     console.info("SMTP servers closed");
+
+    // Stop boot maintenance before closing the pool. Its client is checked
+    // out for the duration of the phase, and `pool.end()` waits for every
+    // client to be released — so an in-flight index build would hold shutdown
+    // open until its budget expired and the container was SIGKILLed instead.
+    maintenanceAbort.abort();
+    await maintenance;
+    console.info("Boot maintenance stopped");
 
     // Close the database connection pool
     await pool.end();

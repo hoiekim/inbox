@@ -97,17 +97,21 @@ export const dropInvalidIndexes = async (
   const unresolved = new Set<string>();
   // Scoped to the app's own schema: an invalid index of the same name in
   // another schema would otherwise resolve the unqualified DROP through
-  // `search_path` and take out the valid index instead.
-  const { rows } = await client.query<{ relname: string }>(
-    `SELECT c.relname
-       FROM pg_index i
-       JOIN pg_class c ON c.oid = i.indexrelid
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE NOT i.indisvalid
-        AND n.nspname = current_schema()
-        AND c.relname = ANY($1)`,
-    [names]
-  );
+  // `search_path` and take out the valid index instead. Carries the long
+  // budget like every other statement here — catalog lock contention must not
+  // fail the probe on the pool's 30s.
+  const probe: TimedQueryConfig = {
+    text: `SELECT c.relname
+             FROM pg_index i
+             JOIN pg_class c ON c.oid = i.indexrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE NOT i.indisvalid
+              AND n.nspname = current_schema()
+              AND c.relname = ANY($1)`,
+    values: [names],
+    query_timeout: CLIENT_READ_TIMEOUT_MS,
+  };
+  const { rows } = await client.query<{ relname: string }>(probe);
   for (const { relname } of rows) {
     logger.warn(`[Maintenance] Dropping invalid leftover index ${relname} before rebuild.`);
     try {
@@ -126,19 +130,38 @@ export const dropInvalidIndexes = async (
 };
 
 /**
- * Runs every statement, skipping index builds already satisfied. Returns true
- * only when the database is known to reflect all of them.
+ * `complete` — the database is known to reflect every statement, so the caller
+ * may write the marker. `skipped` — another instance is doing the work, or
+ * shutdown cancelled it; benign, nothing to report. `incomplete` — something
+ * genuinely didn't land and someone should know.
  */
-export const runBootMaintenance = async (work: MaintenanceWork): Promise<boolean> => {
+export type MaintenanceResult = "complete" | "incomplete" | "skipped";
+
+/**
+ * Runs every statement, skipping index builds already satisfied.
+ *
+ * Aborting `signal` stops the phase at the next statement boundary and cancels
+ * the backend running the current one. Without that, `pool.end()` during
+ * shutdown waits on this checked-out client — up to the full budget per
+ * remaining statement — and the container is SIGKILLed before the graceful
+ * path finishes.
+ */
+export const runBootMaintenance = async (
+  work: MaintenanceWork,
+  signal?: AbortSignal
+): Promise<MaintenanceResult> => {
+  if (signal?.aborted) return "skipped";
+
   let client: PoolClient;
   try {
     client = await pool.connect();
   } catch (error: unknown) {
     logger.error("[Maintenance] Could not acquire a connection.", {}, error);
-    return false;
+    return "incomplete";
   }
 
   let locked = false;
+  let onAbort: (() => void) | undefined;
   try {
     const { rows } = await client.query<{ locked: boolean }>(
       "SELECT pg_try_advisory_lock($1) AS locked",
@@ -146,43 +169,71 @@ export const runBootMaintenance = async (work: MaintenanceWork): Promise<boolean
     );
     locked = rows[0]?.locked === true;
     if (!locked) {
+      // The winner is doing this work. Not a failure, and must not be reported
+      // as one — every rolling deploy produces one loser.
       logger.info("[Maintenance] Another instance holds the lock — skipping this boot.");
-      return false;
+      return "skipped";
     }
+
+    const pid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+      .rows[0]?.pid;
+    // The in-flight statement runs on this session, so it can only be stopped
+    // from another one — the abort handler cannot reuse `client`.
+    onAbort = () => {
+      if (pid === undefined) return;
+      logger.info("[Maintenance] Cancelling in-flight statement for shutdown.");
+      void pool.query("SELECT pg_cancel_backend($1)", [pid]).catch(() => {});
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     // `CONCURRENTLY` cannot run inside a transaction, so the budget has to be
     // a session-level GUC rather than `SET LOCAL`.
     await client.query(`SET statement_timeout = ${MAINTENANCE_TIMEOUT_MS}`);
 
-    let unresolved: Set<string>;
+    let complete = true;
+    let unresolved = new Set<string>();
     try {
       unresolved = await dropInvalidIndexes(
         client,
         work.indexes.map((s) => s.name)
       );
     } catch (error: unknown) {
-      // The probe itself failed. Every build below still gets attempted; the
-      // ones shadowed by a leftover will no-op, which the next boot retries.
+      // The probe failed, so we don't know which builds a leftover is
+      // shadowing. Every build below is still attempted, but the phase cannot
+      // claim completeness: a shadowed build no-ops silently, and writing the
+      // marker over it is exactly how an index gets stranded forever.
       logger.error("[Maintenance] Invalid-index sweep failed.", {}, error);
-      unresolved = new Set();
+      complete = false;
     }
+    if (unresolved.size > 0) complete = false;
 
-    let complete = unresolved.size === 0;
     for (const statement of [...work.indexes, ...work.statements]) {
+      if (signal?.aborted) {
+        logger.info("[Maintenance] Cancelled — stopping before the remaining statements.");
+        return "skipped";
+      }
       if (unresolved.has(statement.name)) continue;
       try {
         await runLongQuery(client, statement.sql);
       } catch (error: unknown) {
+        // A statement we cancelled ourselves is a shutdown, not a fault — and
+        // it may be the last one, so the loop's own check would never see it.
+        // Reporting it as a failure would page on every graceful stop.
+        if (signal?.aborted) {
+          logger.info("[Maintenance] Cancelled — stopping.");
+          return "skipped";
+        }
         complete = false;
         logger.error("[Maintenance] Statement failed.", { statement: statement.name }, error);
       }
     }
     if (complete) logger.info("[Maintenance] Complete — schema is at target.");
-    return complete;
+    return complete ? "complete" : "incomplete";
   } catch (error: unknown) {
     logger.error("[Maintenance] Aborted.", {}, error);
-    return false;
+    return "incomplete";
   } finally {
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
     if (locked) {
       await client
         .query("SELECT pg_advisory_unlock($1)", [MAINTENANCE_ADVISORY_LOCK_KEY])
