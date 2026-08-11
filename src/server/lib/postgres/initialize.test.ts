@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 import { mailsTable } from "./models/mail";
 import { buildCreateIndex } from "./database";
-import { indexSpecs } from "./initialize";
+import { indexSpecs, maintenanceWork } from "./initialize";
 
 const indexNameOf = (sql: string) => {
   const match = sql.match(/CREATE INDEX(?: CONCURRENTLY)? IF NOT EXISTS (\w+) /);
@@ -91,11 +91,11 @@ describe("initialize — GIN index coverage for the address containment filter",
   });
 });
 
-// `createIndexes` identifies an invalid leftover by name and drops it before
-// rebuilding. If `IndexSpec.name` and the name inside `IndexSpec.sql` could
-// disagree, the sweep would miss the leftover and `CREATE INDEX CONCURRENTLY
-// IF NOT EXISTS` would no-op against it forever — a permanently unusable index
-// with a clean boot log. These pin the two together.
+// The maintenance phase identifies an invalid leftover by `Statement.name` and
+// drops it before rebuilding. A spec whose name doesn't match the index its own
+// SQL creates would slip past the sweep, and `CREATE INDEX CONCURRENTLY IF NOT
+// EXISTS` would then no-op against the leftover forever — a permanently
+// unusable index with a clean boot log (#746).
 describe("initialize — index specs", () => {
   it("emits CONCURRENTLY for every index built at boot", () => {
     const specs = indexSpecs();
@@ -105,11 +105,12 @@ describe("initialize — index specs", () => {
     );
   });
 
-  it("carries the name that its own statement creates", () => {
-    const mismatched = indexSpecs().filter(
-      (s) => indexNameOf(s.sql) !== s.name
-    );
-    expect(mismatched).toEqual([]);
+  // The loop-generated specs derive both halves from one options object, so
+  // they agree by construction. The search index is the one hand-written pair,
+  // and therefore the only one where a typo could split them.
+  it("gives the hand-written search index the name its own statement creates", () => {
+    const search = indexSpecs().filter((s) => s.sql.includes("(search_vector)"));
+    expect(search.map((s) => s.name)).toEqual([indexNameOf(search[0].sql)]);
   });
 
   it("names every index uniquely", () => {
@@ -124,5 +125,13 @@ describe("initialize — index specs", () => {
   it("keeps the legacy name for the full-text search index", () => {
     const search = indexSpecs().filter((s) => s.sql.includes("(search_vector)"));
     expect(search.map((s) => s.name)).toEqual(["idx_mails_search"]);
+  });
+
+  // The reindex is a full-table UPDATE, so it belongs in the same non-fatal,
+  // long-budget phase as the index builds rather than in front of the listeners.
+  it("hands the search-vector reindex to the maintenance phase", () => {
+    const { indexes, statements } = maintenanceWork();
+    expect(indexes).toEqual(indexSpecs());
+    expect(statements.map((s) => s.sql.includes("SET search_vector"))).toEqual([true]);
   });
 });

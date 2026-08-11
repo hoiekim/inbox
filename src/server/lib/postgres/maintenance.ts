@@ -1,0 +1,197 @@
+/**
+ * Boot maintenance: the statements whose cost grows with the size of `mails`.
+ *
+ * Everything else `initializePostgres` issues is O(1) catalog work — CREATE
+ * TABLE, ALTER TABLE ADD COLUMN, trigger DDL. These two are not:
+ *
+ * - **Index builds.** ~278 ms per GIN index at 11,851 mails (#746).
+ * - **The search-vector reindex.** A full-table UPDATE; the scan half alone
+ *   measured ~4.2 s at 11,851 mails, so it reaches a 30s wall roughly 12x
+ *   sooner than any index build does.
+ *
+ * Run through `pool.query` they carried the pool's 30s `statement_timeout`,
+ * and an abort (57014) propagated out of `initializePostgres` into
+ * `handleStartupFailure`, which exits the process — so `restart: always`
+ * retried the same doomed statement forever with no port ever bound.
+ *
+ * This module runs them instead on a dedicated session with a build-sized
+ * budget, each statement independently fallible, serialized across instances
+ * by its own advisory lock. It never throws. The caller starts it *after* the
+ * listeners are bound and does not await it: index builds are `CONCURRENTLY`
+ * precisely so the table stays writable during them, which is worth nothing
+ * if the app isn't serving yet.
+ *
+ * `runBootMaintenance` reports whether the database is known to be fully in
+ * step with the code's DDL, which is what gates the schema marker — writing
+ * the marker while a statement is still outstanding would make every later
+ * boot fast-path past it, silently and forever.
+ */
+
+import { PoolClient, QueryConfig } from "pg";
+import { pool } from "./client";
+import { logger } from "../logger";
+
+export interface Statement {
+  /** Identifies the statement in logs; for an index, its index name. */
+  name: string;
+  sql: string;
+}
+
+export interface MaintenanceWork {
+  /** Index builds. Invalid leftovers are swept before these run. */
+  indexes: Statement[];
+  /** Row-count-scaled statements that build no index. */
+  statements: Statement[];
+}
+
+/**
+ * Per-statement budget. Generous enough that reaching it means the statement
+ * is pathological rather than merely large, but still finite: an unbounded
+ * statement on a wedged session would hold the advisory lock for the lifetime
+ * of the process.
+ */
+export const MAINTENANCE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * pg's client-side read timer is independent of the server GUC, so every
+ * statement here has to carry it explicitly. It cannot be disabled per-query:
+ * `client.js` reads `config.query_timeout || connectionParameters.query_timeout`,
+ * so 0 falls back to the pool's 30s.
+ */
+const CLIENT_READ_TIMEOUT_MS = MAINTENANCE_TIMEOUT_MS + 30_000;
+
+/** `query_timeout` is read per-query by pg 8 but absent from `QueryConfig`. */
+interface TimedQueryConfig extends QueryConfig {
+  query_timeout: number;
+}
+
+/**
+ * Serializes maintenance across instances (rolling deploy, pm2 cluster).
+ * Distinct from `MIGRATION_ADVISORY_LOCK_KEY` in migration.ts — the two phases
+ * are sequential within one boot but must not collide across instances.
+ */
+const MAINTENANCE_ADVISORY_LOCK_KEY = 6908003;
+
+/** Runs `sql` on the maintenance session with the long budget on both sides. */
+const runLongQuery = async (client: PoolClient, sql: string) => {
+  const config: TimedQueryConfig = { text: sql, query_timeout: CLIENT_READ_TIMEOUT_MS };
+  return client.query(config);
+};
+
+/**
+ * A `CREATE INDEX CONCURRENTLY` that fails leaves the index in the catalog
+ * marked invalid. `CREATE INDEX CONCURRENTLY IF NOT EXISTS` then matches it by
+ * name and no-ops, so without this sweep the retry could never succeed — the
+ * container would boot cleanly forever while the index stayed unusable.
+ *
+ * Only runs while the maintenance lock is held, so an invalid entry here is
+ * always a dead leftover rather than another instance's in-progress build.
+ *
+ * Returns the names it could not clear, so their builds aren't reported as
+ * successful when the no-op silently "succeeds".
+ */
+export const dropInvalidIndexes = async (
+  client: PoolClient,
+  names: string[]
+): Promise<Set<string>> => {
+  const unresolved = new Set<string>();
+  // Scoped to the app's own schema: an invalid index of the same name in
+  // another schema would otherwise resolve the unqualified DROP through
+  // `search_path` and take out the valid index instead.
+  const { rows } = await client.query<{ relname: string }>(
+    `SELECT c.relname
+       FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT i.indisvalid
+        AND n.nspname = current_schema()
+        AND c.relname = ANY($1)`,
+    [names]
+  );
+  for (const { relname } of rows) {
+    logger.warn(`[Maintenance] Dropping invalid leftover index ${relname} before rebuild.`);
+    try {
+      // `relname` came back from a match against `names`, which is built from
+      // the index specs — not from user input — so interpolating it is safe.
+      // `DROP INDEX` takes no parameters. It gets the long budget too: it is
+      // `CONCURRENTLY`, so it waits out concurrent lockers and would otherwise
+      // inherit the pool's 30s and fail exactly on the boot that needs it.
+      await runLongQuery(client, `DROP INDEX CONCURRENTLY IF EXISTS ${relname}`);
+    } catch (error: unknown) {
+      unresolved.add(relname);
+      logger.error("[Maintenance] Could not drop invalid index.", { index: relname }, error);
+    }
+  }
+  return unresolved;
+};
+
+/**
+ * Runs every statement, skipping index builds already satisfied. Returns true
+ * only when the database is known to reflect all of them.
+ */
+export const runBootMaintenance = async (work: MaintenanceWork): Promise<boolean> => {
+  let client: PoolClient;
+  try {
+    client = await pool.connect();
+  } catch (error: unknown) {
+    logger.error("[Maintenance] Could not acquire a connection.", {}, error);
+    return false;
+  }
+
+  let locked = false;
+  try {
+    const { rows } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock($1) AS locked",
+      [MAINTENANCE_ADVISORY_LOCK_KEY]
+    );
+    locked = rows[0]?.locked === true;
+    if (!locked) {
+      logger.info("[Maintenance] Another instance holds the lock — skipping this boot.");
+      return false;
+    }
+
+    // `CONCURRENTLY` cannot run inside a transaction, so the budget has to be
+    // a session-level GUC rather than `SET LOCAL`.
+    await client.query(`SET statement_timeout = ${MAINTENANCE_TIMEOUT_MS}`);
+
+    let unresolved: Set<string>;
+    try {
+      unresolved = await dropInvalidIndexes(
+        client,
+        work.indexes.map((s) => s.name)
+      );
+    } catch (error: unknown) {
+      // The probe itself failed. Every build below still gets attempted; the
+      // ones shadowed by a leftover will no-op, which the next boot retries.
+      logger.error("[Maintenance] Invalid-index sweep failed.", {}, error);
+      unresolved = new Set();
+    }
+
+    let complete = unresolved.size === 0;
+    for (const statement of [...work.indexes, ...work.statements]) {
+      if (unresolved.has(statement.name)) continue;
+      try {
+        await runLongQuery(client, statement.sql);
+      } catch (error: unknown) {
+        complete = false;
+        logger.error("[Maintenance] Statement failed.", { statement: statement.name }, error);
+      }
+    }
+    if (complete) logger.info("[Maintenance] Complete — schema is at target.");
+    return complete;
+  } catch (error: unknown) {
+    logger.error("[Maintenance] Aborted.", {}, error);
+    return false;
+  } finally {
+    if (locked) {
+      await client
+        .query("SELECT pg_advisory_unlock($1)", [MAINTENANCE_ADVISORY_LOCK_KEY])
+        .catch(() => {});
+    }
+    // Destroy rather than return to the pool: the session carries a
+    // `statement_timeout` override, and a `RESET` can't be trusted to run on a
+    // connection whose last statement just failed. One discarded connection
+    // per boot is free.
+    client.release(true);
+  }
+};

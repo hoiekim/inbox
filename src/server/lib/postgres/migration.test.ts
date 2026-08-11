@@ -140,33 +140,52 @@ describe("initializePostgres — fast-path integration", () => {
     expect(ddlCalls).toEqual([]);
   });
 
-  it("writes the marker with CURRENT_SCHEMA_HASH after the slow path succeeds", async () => {
-    // Symmetric counterpart: with no marker present, the slow path must run
-    // AND end by writing the marker. Dropping the writeSchemaMarker call
-    // reintroduces a startup crashloop, and this test locks the invariant in.
-    const { initializePostgres, CURRENT_SCHEMA_HASH } = await import("./initialize");
+  // `initializePostgres` no longer writes the marker — `bootMaintenance` does,
+  // once the row-count-scaled statements it gates on have landed. A refactor
+  // that moves the write back in front of them reintroduces exactly the
+  // silently-stranded-work failure #746 is about.
+  it("does not write the marker before boot maintenance runs", async () => {
+    const { initializePostgres } = await import("./initialize");
 
-    const seenCalls: Array<{ sql: string; values: unknown[] | undefined }> = [];
-    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
-      seenCalls.push({ sql, values });
-      // No marker present — force slow path.
-      if (typeof sql === "string" && sql.includes("schema_meta") && /SELECT\s+value/i.test(sql)) {
-        return { rows: [], rowCount: 0 };
-      }
-      // The index-build phase only proceeds when it wins the advisory lock.
-      if (typeof sql === "string" && sql.includes("pg_try_advisory_lock")) {
-        return { rows: [{ locked: true }], rowCount: 1 };
-      }
-      // Everything else (DDL, migration probes, advisory locks, etc.)
-      // succeeds trivially so the slow path runs to completion.
+    const seenCalls: string[] = [];
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seenCalls.push(text);
       return { rows: [], rowCount: 0 };
     });
 
     await initializePostgres();
 
-    const markerWrite = seenCalls.find(
+    expect(seenCalls.filter((sql) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
+  });
+});
+
+describe("bootMaintenance — marker gating", () => {
+  const collect = (
+    onStatement: (text: string) => void = () => {}
+  ): Array<{ sql: string; values: unknown[] | undefined }> => {
+    const seen: Array<{ sql: string; values: unknown[] | undefined }> = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seen.push({ sql: text, values });
+      // The phase only proceeds when it wins the advisory lock.
+      if (text.includes("pg_try_advisory_lock")) {
+        return { rows: [{ locked: true }], rowCount: 1 };
+      }
+      onStatement(text);
+      return { rows: [], rowCount: 0 };
+    });
+    return seen;
+  };
+
+  it("writes the marker with CURRENT_SCHEMA_HASH once every statement lands", async () => {
+    const { bootMaintenance, CURRENT_SCHEMA_HASH } = await import("./initialize");
+
+    const seen = collect();
+    await bootMaintenance();
+
+    const markerWrite = seen.find(
       ({ sql, values }) =>
-        typeof sql === "string" &&
         sql.includes("INSERT INTO schema_meta") &&
         Array.isArray(values) &&
         values[0] === CURRENT_SCHEMA_HASH
@@ -178,31 +197,46 @@ describe("initializePostgres — fast-path integration", () => {
   // while an index is missing would strand that index forever: every later
   // boot fast-paths past the build with no error anywhere (#746).
   it("withholds the marker — without throwing — when an index build fails", async () => {
-    const { initializePostgres } = await import("./initialize");
+    const { bootMaintenance } = await import("./initialize");
 
-    const seenCalls: string[] = [];
     let attemptedIndexBuilds = 0;
-    mockQuery.mockImplementation(async (sql: string) => {
-      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
-      seenCalls.push(text);
-      if (text.includes("schema_meta") && /SELECT\s+value/i.test(text)) {
-        return { rows: [], rowCount: 0 };
-      }
-      if (text.includes("pg_try_advisory_lock")) {
-        return { rows: [{ locked: true }], rowCount: 1 };
-      }
+    const seen = collect((text) => {
       if (text.startsWith("CREATE INDEX CONCURRENTLY")) {
         attemptedIndexBuilds++;
         throw new Error("canceling statement due to statement timeout");
       }
-      return { rows: [], rowCount: 0 };
     });
 
     // Resolves rather than rejecting: a slow index build must not take the
     // process down, or `restart: always` retries the same doomed build.
-    await initializePostgres();
+    await bootMaintenance();
 
+    // Every index is attempted, not just the first — one slow build must not
+    // cost the rest of them.
     expect(attemptedIndexBuilds).toBeGreaterThan(1);
-    expect(seenCalls.filter((sql) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
+    expect(seen.filter(({ sql }) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
+  });
+
+  // The reindex is a full-table UPDATE whose 30s wall arrives ~12x sooner than
+  // any index build's, so it gets the same non-fatal, marker-gating treatment.
+  it("withholds the marker when only the search-vector reindex fails", async () => {
+    const { bootMaintenance } = await import("./initialize");
+
+    let attemptedReindexes = 0;
+    const seen = collect((text) => {
+      if (text.includes("SET search_vector")) {
+        attemptedReindexes++;
+        throw new Error("canceling statement due to statement timeout");
+      }
+    });
+
+    await bootMaintenance();
+
+    expect(attemptedReindexes).toBe(1);
+    expect(seen.filter(({ sql }) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
+    // The indexes are not collateral damage — they still get built.
+    expect(
+      seen.filter(({ sql }) => sql.startsWith("CREATE INDEX CONCURRENTLY")).length
+    ).toBeGreaterThan(1);
   });
 });

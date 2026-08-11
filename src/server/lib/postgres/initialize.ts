@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
-import { createIndexes, IndexSpec } from "./indexes";
+import { runBootMaintenance, MaintenanceWork, Statement } from "./maintenance";
+import { sendAlarm } from "../alarm";
 import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
@@ -57,11 +58,11 @@ const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
 
 /**
  * Every index the app owns, as (name, statement) pairs. Names are exposed
- * alongside the SQL because `createIndexes` has to identify invalid leftovers
- * by name before it can rebuild them.
+ * alongside the SQL because the maintenance phase has to identify invalid
+ * leftovers by name before it can rebuild them.
  */
-export const indexSpecs = (): IndexSpec[] => {
-  const specs: IndexSpec[] = [];
+export const indexSpecs = (): Statement[] => {
+  const specs: Statement[] = [];
   for (const table of tables) {
     for (const idx of table.indexes) {
       const options = { using: idx.using, opclass: idx.opclass, concurrently: true };
@@ -74,6 +75,12 @@ export const indexSpecs = (): IndexSpec[] => {
   specs.push({ name: MAILS_SEARCH_INDEX_NAME, sql: IDX_MAILS_SEARCH_SQL });
   return specs;
 };
+
+/** The statements `bootMaintenance` hands to the long-budget session. */
+export const maintenanceWork = (): MaintenanceWork => ({
+  indexes: indexSpecs(),
+  statements: [{ name: "search_vector reindex", sql: searchVectorReindexSql() }],
+});
 
 // Digest of every input the slow-path DDL consumes. Any code change to a
 // table schema, its indexes, its constraints, `searchVectorDdl()`,
@@ -148,38 +155,50 @@ export const initializePostgres = async (): Promise<void> => {
       tables.map((t) => ({ name: t.name, schema: t.schema }))
     );
 
-    // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
-    // the reindex — all three derived from `searchVectorExpression` so the
-    // trigger and the direct write can't drift apart. See search-vector.ts.
+    // Trigger function + the INSERT / column-scoped UPDATE trigger pair. The
+    // reindex they share an expression with runs in `bootMaintenance` — it is
+    // the one statement here whose cost scales with the table.
     for (const sql of searchVectorDdl()) await pool.query(sql);
-    await pool.query(searchVectorReindexSql());
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);
     throw new Error("Failed to setup PostgreSQL tables.");
   }
 
-  // Indexes come last and outside the throwing block on purpose. They are the
-  // only boot DDL whose cost scales with the table, so a failure here means
-  // "the build was too slow", not "the schema is broken" — and the app serves
-  // correctly without an index, just slower. Taking the process down for it
-  // only crashloops the container into the same doomed build (#746). Instead
-  // the marker is withheld, so the next boot skips the fast path and retries.
-  // Migrations have already committed, which `CONCURRENTLY` requires: it
-  // cannot run inside a transaction.
-  if (!(await createIndexes(indexSpecs()))) {
-    logger.warn(
-      "[Index] Not every index is in place — withholding the schema marker so the next boot retries."
-    );
-    logger.info("Database tables created/verified successfully.");
+  logger.info("Database tables created/verified successfully.");
+};
+
+/**
+ * The row-count-scaled half of the boot DDL: index builds and the search-vector
+ * reindex. Deliberately NOT part of `initializePostgres`, on two counts.
+ *
+ * It must not be fatal. A statement here failing means "too slow for its
+ * budget", not "the schema is broken" — the app serves correctly without an
+ * index, and with a stale search vector on rows nothing has touched. Exiting
+ * for it just crashloops the container into the same doomed statement (#746),
+ * with no port ever bound to diagnose from.
+ *
+ * And it must not gate the listeners. Index builds are `CONCURRENTLY` so the
+ * table stays writable while they run, which buys nothing if HTTP/SMTP/IMAP
+ * aren't up yet. `start.ts` calls this after binding and does not await it.
+ *
+ * The schema marker is written here rather than in `initializePostgres`
+ * because it is what lets the next boot skip the DDL entirely: writing it
+ * while a statement is still outstanding would strand that work forever, with
+ * every later boot fast-pathing past it and no error anywhere.
+ */
+export const bootMaintenance = async (): Promise<void> => {
+  if (!(await runBootMaintenance(maintenanceWork()))) {
+    const message =
+      "Boot maintenance did not complete — an index or the search-vector reindex " +
+      "is outstanding. The schema marker is withheld, so the next boot retries.";
+    logger.warn(`[Maintenance] ${message}`);
+    // The old behavior paged through `handleStartupFailure`. Degrading instead
+    // of exiting must not also mean degrading silently.
+    await sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined);
     return;
   }
 
-  // Record the marker so subsequent boots can fast-path. Written AFTER every
-  // DDL succeeded — if any step above threw or an index is missing, we don't
-  // want the marker in the DB.
   await writeSchemaMarker(CURRENT_SCHEMA_HASH);
-
-  logger.info("Database tables created/verified successfully.");
 };
 
 export const initializeAdminUser = async (): Promise<void> => {
