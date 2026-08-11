@@ -220,6 +220,60 @@ describe("runBootMaintenance — shutdown cancellation", () => {
     expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
   });
 
+  // `addEventListener` does not fire on an already-aborted signal, so an abort
+  // landing between the entry check and the listener registration — during
+  // connect, the try-lock, or the pid read — would be dropped, and the phase
+  // would run every statement to completion after SIGTERM.
+  it("honours an abort that lands before the listener is registered", async () => {
+    const abort = new AbortController();
+    const seen: string[] = [];
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seen.push(text);
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) {
+        abort.abort();
+        return { rows: [{ pid: 4242 }], rowCount: 1 };
+      }
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+    // It stops before the sweep, not just before the builds: the sweep issues
+    // `DROP INDEX CONCURRENTLY`, which is itself a long-budget statement.
+    expect(seen.filter((s) => s.includes("FROM pg_index"))).toEqual([]);
+    expect(seen.filter((s) => s.startsWith("SET statement_timeout"))).toEqual([]);
+    expect(seen.filter((s) => s.startsWith("CREATE INDEX"))).toEqual([]);
+    expect(seen).not.toContain(STATEMENTS[0].sql);
+    expect(seen.some((s) => s.includes("pg_advisory_unlock"))).toBe(true);
+  });
+
+  // A `DROP INDEX CONCURRENTLY` waits out concurrent lockers on the same long
+  // budget, so the sweep loop has to watch the signal too.
+  it("stops issuing DROPs once aborted", async () => {
+    const abort = new AbortController();
+    const seen: string[] = [];
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seen.push(text);
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) {
+        return { rows: [{ relname: "idx_alpha" }, { relname: "idx_beta" }], rowCount: 2 };
+      }
+      // Shutdown arrives while the first DROP is running.
+      if (text.startsWith("DROP INDEX")) abort.abort();
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+    expect(seen.filter((s) => s.startsWith("DROP INDEX"))).toEqual([
+      "DROP INDEX CONCURRENTLY IF EXISTS idx_alpha",
+    ]);
+    expect(seen.filter((s) => s.startsWith("CREATE INDEX"))).toEqual([]);
+  });
+
   it("does not connect at all when the signal is already aborted", async () => {
     const abort = new AbortController();
     abort.abort();
