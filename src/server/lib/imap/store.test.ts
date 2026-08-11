@@ -82,10 +82,61 @@ describe("Store.listMailboxes", () => {
     expect(mockGetAccountStats).toHaveBeenCalledWith("admin-1", true, "example.com");
   });
 
-  it("returns ['INBOX'] when no accounts and no user mailboxes exist", async () => {
+  it("returns only the server-defined boxes when no accounts and no user mailboxes exist", async () => {
+    // The utility folders are unconditional (#725): a client has to see
+    // `Drafts` before it has a draft to put there, and RFC 6154 role discovery
+    // reads them off LIST. The account folders stay conditional.
     const store = new Store(makeUser());
     const result = await store.listMailboxes();
-    expect(result).toEqual(["INBOX"]);
+    expect(result).toEqual(["INBOX", "Drafts", "Junk"]);
+  });
+});
+
+describe("Store.storeMail — what the destination box decides (#725)", () => {
+  const makeMail = () =>
+    ({
+      messageId: "m-1",
+      subject: "s",
+      draft: false,
+      uid: { domain: 7, account: 3 },
+    }) as never;
+
+  const savedInput = () =>
+    mockSaveMail.mock.calls[0][0] as unknown as Record<string, unknown>;
+
+  beforeEach(() => {
+    mockSaveMail.mockClear();
+    mockSaveMail.mockResolvedValue({ _id: "x" } as never);
+  });
+
+  it("sets the membership flag for a utility destination", async () => {
+    // A client that APPENDs to `Drafts` without sending `\Draft` still means
+    // "this is a draft". Without the flag the row is written and shows up in no
+    // mailbox the client asked for.
+    await new Store(makeUser()).storeMail(makeMail(), "Drafts");
+    expect(savedInput().placement).toEqual({ draft: true });
+  });
+
+  it("records no mapping row for a utility destination", async () => {
+    // Utility views enumerate uid_domain; a mapping row would give the mail a
+    // per-box UID nothing reads and burn a counter value.
+    await new Store(makeUser()).storeMail(makeMail(), "Junk");
+    expect(savedInput().mailbox).toBeUndefined();
+    expect(savedInput().placement).toEqual({ is_spam: true });
+  });
+
+  it("records the mapping row for a mapped destination and touches no flag", async () => {
+    await new Store(makeUser()).storeMail(makeMail(), "INBOX/accounts/alice");
+    expect(savedInput().mailbox).toBe("INBOX/accounts/alice");
+    expect(savedInput().placement).toBeUndefined();
+  });
+
+  it("records no mapping row for INBOX or the unified Sent view", async () => {
+    await new Store(makeUser()).storeMail(makeMail(), "INBOX");
+    expect(savedInput().mailbox).toBeUndefined();
+    mockSaveMail.mockClear();
+    await new Store(makeUser()).storeMail(makeMail(), "Sent Messages");
+    expect(savedInput().mailbox).toBeUndefined();
   });
 });
 

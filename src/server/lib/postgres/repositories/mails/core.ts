@@ -9,6 +9,7 @@ import {
   MAIL_ID,
   USER_ID,
   ENVELOPE_TO,
+  MODSEQ,
   DB_NOW,
   RFC822_SIZE,
   TEXT_LINE_COUNT,
@@ -61,6 +62,14 @@ export interface SaveMailInput {
   spam_score?: number;
   spam_reasons?: string[] | null;
   is_spam?: boolean;
+  /**
+   * Flags the destination box selects on, when it is a flag-derived utility
+   * view (`Drafts`, `Junk`). Applied on both the INSERT and the 23505 merge
+   * branch: membership there is the flag, so a merge that skipped it would
+   * answer `OK [APPENDUID …]` for a message that landed in no box the client
+   * named. `utilityPlacement` in `imap/util.ts` produces it.
+   */
+  placement?: { draft?: boolean; is_spam?: boolean };
   /**
    * Destination mailbox path (per-account like `INBOX/accounts/claude` /
    * `Sent Messages/accounts/claude`, or user-created like `Archive`). When
@@ -168,6 +177,7 @@ export const saveMail = async (
       spam_score: input.spam_score ?? 0,
       spam_reasons: input.spam_reasons ? JSON.stringify(input.spam_reasons) : null,
       is_spam: input.is_spam ?? false,
+      ...input.placement,
     };
 
     const row = await mailsTable.insert(data, [MAIL_ID]);
@@ -237,6 +247,22 @@ export const saveMail = async (
       // `ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING`, so the
       // loser's counter tick and mapping-insert round-trip are wasted
       // (rare, sub-ms, off the SMTP reply path) — the winner's row wins.
+      // A mapped destination gets its membership from the mapping row below; a
+      // utility destination gets it from the flag, and `existing` predates this
+      // write, so the flag has to be set here too. Without it the APPEND is
+      // acknowledged and the message is in no box the client named. The flip is
+      // a membership change, so it advances the mod-sequence like markMailSpam.
+      if (input.placement) {
+        await mailsTable.updateWhere(
+          { user_id: input.user_id, message_id: input.message_id },
+          {
+            ...input.placement,
+            [MODSEQ]: await getNextModseq(input.user_id),
+            updated: DB_NOW,
+          }
+        );
+      }
+
       let persistedUid: number | undefined;
       if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
         persistedUid = await writeMailboxUid(
@@ -443,7 +469,7 @@ export const deleteMail = async (
  * Distinguishing "no change" from "not found" lets the caller skip classifier
  * training on idempotent re-marks while still surfacing real auth failures.
  *
- * The flip moves the mail in or out of IMAP's INBOX (see `quarantinesSpam`), so
+ * The flip moves the mail in or out of IMAP's INBOX (see `isInboxTree`), so
  * it advances the mod-sequence the way every other membership change does. That
  * keeps HIGHESTMODSEQ honest — without it a CONDSTORE client (RFC 7162 §3.1.2)
  * reads an unchanged value and concludes the mailbox never changed. It is not

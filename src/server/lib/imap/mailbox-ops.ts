@@ -18,6 +18,9 @@ import {
   isAccountsFolder,
   isInbox,
   isSentMessagesAccountsFolder,
+  isUtilityFolder,
+  utilityFolder,
+  canonicalMailbox,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
 } from "./util";
@@ -49,7 +52,7 @@ export async function createMailbox(
   // Without this guard, the DB would accept the INSERT (no row named
   // "inbox" exists) and leave a phantom user-mailbox row that's de-duped
   // out of LIST but lingers in the table.
-  if (isInbox(cleanName)) {
+  if (isInbox(cleanName) || isUtilityFolder(cleanName)) {
     write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);
     return;
   }
@@ -89,6 +92,13 @@ export async function deleteMailbox(
   // get a misleading "does not exist" instead of the correct refusal.
   if (isInbox(cleanName)) {
     write(`${tag} NO [CANNOT] Cannot delete INBOX\r\n`);
+    return;
+  }
+  // Same reason INBOX is refused: a utility folder is a server-defined view
+  // with no row behind it, so `deleteMailboxByName` would report "does not
+  // exist" for a box the client can see in LIST.
+  if (isUtilityFolder(cleanName)) {
+    write(`${tag} NO [CANNOT] Cannot delete system mailbox\r\n`);
     return;
   }
   try {
@@ -137,8 +147,12 @@ export async function renameMailbox(
     write(`${tag} NO [CANNOT] RENAME INBOX is not supported\r\n`);
     return;
   }
-  // Target must not collide with the synthetic INBOX either.
-  if (isInbox(cleanNew)) {
+  if (isUtilityFolder(cleanOld)) {
+    write(`${tag} NO [CANNOT] Cannot rename system mailbox\r\n`);
+    return;
+  }
+  // Target must not collide with a synthetic mailbox either.
+  if (isInbox(cleanNew) || isUtilityFolder(cleanNew)) {
     write(`${tag} NO [ALREADYEXISTS] Target mailbox already exists\r\n`);
     return;
   }
@@ -217,7 +231,7 @@ export async function statusMailbox(
   // RFC 3501 §5.1: INBOX is case-insensitive. Canonicalize so downstream
   // responses (* STATUS "INBOX" ...) echo the canonical name regardless of
   // the casing the client used.
-  const mailbox = isInbox(mailboxArg) ? "INBOX" : mailboxArg;
+  const mailbox = canonicalMailbox(mailboxArg);
   try {
     if (!(await store.mailboxExists(mailbox))) {
       write(`${tag} NO Mailbox does not exist\r\n`);
@@ -282,6 +296,17 @@ export async function statusMailbox(
 // ---------------------------------------------------------------------------
 
 export function getMailboxAttributes(box: string, allBoxes: string[]): string {
+  // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
+  // in a plain LIST response, which is how a client maps a role to a box name
+  // without guessing at the name.
+  const utility = utilityFolder(box);
+  if (utility) {
+    // The CREATE guard only refuses the utility name itself, so `Drafts/sub`
+    // is a legal user box — scan for children like every other branch rather
+    // than asserting \HasNoChildren and contradicting the same LIST response.
+    const hasChildren = allBoxes.some((b) => b.startsWith(`${box}/`));
+    return `${utility.specialUse} ${hasChildren ? "\\HasChildren" : "\\HasNoChildren"}`;
+  }
   if (isAccountsFolder(box)) {
     return "\\HasChildren \\Noselect";
   }
@@ -417,7 +442,7 @@ export async function selectMailbox(
   // mailbox stored on the session and every downstream response (`* OK
   // [READ-WRITE]`, EXISTS/RECENT, FETCH responses) reflect "INBOX" rather
   // than whatever casing the client sent.
-  const cleanName = isInbox(unquoted) ? "INBOX" : unquoted;
+  const cleanName = canonicalMailbox(unquoted);
 
   if (isAccountsFolder(cleanName)) {
     write(`${tag} NO [CANNOT] ${ACCOUNTS_FOLDER} is not selectable\r\n`);

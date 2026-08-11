@@ -15,6 +15,7 @@ import {
   MAIL_ID,
   UID,
 } from "../../models";
+import { usesDomainUidSpace } from "./views";
 
 /**
  * Build the atomic UID-reservation upsert.
@@ -255,6 +256,13 @@ export const getNextModseq = async (user_id: string): Promise<number> => {
  * (QRESYNC, later phases) detects the removal. Returns 1 for an empty mailbox
  * (the DEFAULT-1 floor), never 0 — a 0 HIGHESTMODSEQ signals "no persistent
  * mod-sequences", which this store does support.
+ *
+ * Membership is deliberately NOT applied: the value only has to be an upper
+ * bound the client can compare against, and a bound that ignores the filter
+ * still moves whenever a message enters or leaves the box (both are stamped
+ * writes). Filtering it would let the value fall — a mail leaving `Drafts`
+ * would take the maximum with it — and a HIGHESTMODSEQ that decreases makes a
+ * CONDSTORE client conclude nothing changed.
  */
 export const getHighestModseq = async (
   user_id: string,
@@ -264,7 +272,7 @@ export const getHighestModseq = async (
   try {
     let sql: string;
     let values: ParamValue[];
-    if (mailbox === null) {
+    if (usesDomainUidSpace(mailbox)) {
       sql = `
         SELECT COALESCE(MAX(${MODSEQ}), 1) AS highest FROM mails
         WHERE ${USER_ID} = $1 AND ${SENT} = $2
