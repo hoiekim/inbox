@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeAll } from "bun:test";
 import { mailsTable } from "./models/mail";
 import { buildCreateIndex } from "./database";
+import { indexSpecs } from "./initialize";
+
+const indexNameOf = (sql: string) => {
+  const match = sql.match(/CREATE INDEX(?: CONCURRENTLY)? IF NOT EXISTS (\w+) /);
+  if (!match) throw new Error(`no index name in: ${sql}`);
+  return match[1];
+};
 
 describe("initialize — GIN index coverage for the address containment filter", () => {
   let conditionSource: string;
@@ -61,7 +68,9 @@ describe("initialize — GIN index coverage for the address containment filter",
 
   it("emits a jsonb_path_ops GIN index, not a btree, for each address column", () => {
     for (const column of ginIndexedColumns()) {
-      expect(buildCreateIndex("mails", column, undefined, "gin", "jsonb_path_ops")).toBe(
+      expect(
+        buildCreateIndex("mails", column, { using: "gin", opclass: "jsonb_path_ops" })
+      ).toBe(
         `CREATE INDEX IF NOT EXISTS idx_mails_${column}_gin ` +
           `ON mails USING gin (${column} jsonb_path_ops)`
       );
@@ -72,18 +81,48 @@ describe("initialize — GIN index coverage for the address containment filter",
   // btree on the same column: the model loop creates btrees first, so a name
   // collision would make `CREATE INDEX IF NOT EXISTS` silently no-op the GIN
   // index and revert the optimization with no error and no failing test.
-  const indexNameOf = (sql: string) => {
-    const match = sql.match(/CREATE INDEX IF NOT EXISTS (\w+) /);
-    if (!match) throw new Error(`no index name in: ${sql}`);
-    return match[1];
-  };
-
   it("names GIN indexes distinctly from the btree on the same column", () => {
     for (const column of ginIndexedColumns()) {
       const gin = indexNameOf(
-        buildCreateIndex("mails", column, undefined, "gin", "jsonb_path_ops")
+        buildCreateIndex("mails", column, { using: "gin", opclass: "jsonb_path_ops" })
       );
       expect(gin).not.toBe(indexNameOf(buildCreateIndex("mails", column)));
     }
+  });
+});
+
+// `createIndexes` identifies an invalid leftover by name and drops it before
+// rebuilding. If `IndexSpec.name` and the name inside `IndexSpec.sql` could
+// disagree, the sweep would miss the leftover and `CREATE INDEX CONCURRENTLY
+// IF NOT EXISTS` would no-op against it forever — a permanently unusable index
+// with a clean boot log. These pin the two together.
+describe("initialize — index specs", () => {
+  it("emits CONCURRENTLY for every index built at boot", () => {
+    const specs = indexSpecs();
+    expect(specs.length).toBeGreaterThan(0);
+    expect(specs.filter((s) => !s.sql.startsWith("CREATE INDEX CONCURRENTLY "))).toEqual(
+      []
+    );
+  });
+
+  it("carries the name that its own statement creates", () => {
+    const mismatched = indexSpecs().filter(
+      (s) => indexNameOf(s.sql) !== s.name
+    );
+    expect(mismatched).toEqual([]);
+  });
+
+  it("names every index uniquely", () => {
+    const names = indexSpecs().map((s) => s.name);
+    const duplicated = names.filter((n, i) => names.indexOf(n) !== i);
+    expect(duplicated).toEqual([]);
+  });
+
+  // The full-text index predates `table.indexes` and exists in production
+  // under this name. Regenerating it from the column would build a second,
+  // identical GIN index alongside the first.
+  it("keeps the legacy name for the full-text search index", () => {
+    const search = indexSpecs().filter((s) => s.sql.includes("(search_vector)"));
+    expect(search.map((s) => s.name)).toEqual(["idx_mails_search"]);
   });
 });
