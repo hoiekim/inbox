@@ -2,6 +2,7 @@ import "./config";
 
 import {
   initializePostgres,
+  bootMaintenance,
   initializeAdminUser,
   push,
   initializeImap,
@@ -49,6 +50,14 @@ const start = async () => {
   const smtpServers = await initializeSmtp();
   const imapServers = await initializeImap();
   push.cleanSubscriptions();
+
+  // Index builds and the search-vector reindex scale with the size of `mails`,
+  // so they run after the listeners are bound rather than in front of them —
+  // the builds are `CONCURRENTLY` precisely so the table stays writable
+  // throughout, and awaiting them would push first bind past the container
+  // healthcheck's start period on a large table. `bootMaintenance` never
+  // rejects; it alarms on its own if the work doesn't complete.
+  void bootMaintenance();
 
   const shutdown = async (signal: string) => {
     console.info(`${signal} received — shutting down gracefully`);
