@@ -55,9 +55,10 @@ const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
 
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
 // `searchVector*`. Extracted as module-scoped constants so their literal
-// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string the
-// slow path issues. That way any edit to a raw block automatically
-// changes the digest (no descriptive-sentinel discipline required).
+// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string
+// `indexSpecs()` hands to the maintenance phase. That way any edit to a raw
+// block automatically changes the digest (no descriptive-sentinel discipline
+// required).
 const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
   indexName: MAILS_SEARCH_INDEX_NAME,
   using: "gin",

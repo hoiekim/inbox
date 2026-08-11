@@ -92,7 +92,8 @@ const runLongQuery = async (client: PoolClient, sql: string) => {
  */
 export const dropInvalidIndexes = async (
   client: PoolClient,
-  names: string[]
+  names: string[],
+  signal?: AbortSignal
 ): Promise<Set<string>> => {
   const unresolved = new Set<string>();
   // Scoped to the app's own schema: an invalid index of the same name in
@@ -113,6 +114,13 @@ export const dropInvalidIndexes = async (
   };
   const { rows } = await client.query<{ relname: string }>(probe);
   for (const { relname } of rows) {
+    // A `DROP INDEX CONCURRENTLY` waits out concurrent lockers on a 10-minute
+    // budget, so issuing one after shutdown has started would hold the pool
+    // open past the container's grace period.
+    if (signal?.aborted) {
+      unresolved.add(relname);
+      continue;
+    }
     logger.warn(`[Maintenance] Dropping invalid leftover index ${relname} before rebuild.`);
     try {
       // `relname` came back from a match against `names`, which is built from
@@ -178,13 +186,19 @@ export const runBootMaintenance = async (
     const pid = (await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
       .rows[0]?.pid;
     // The in-flight statement runs on this session, so it can only be stopped
-    // from another one — the abort handler cannot reuse `client`.
+    // from another one — the abort handler cannot reuse `client`. Not `once`:
+    // the sweep and the statement loop each have a cancellable statement, so
+    // the handler has to survive the first firing.
     onAbort = () => {
       if (pid === undefined) return;
       logger.info("[Maintenance] Cancelling in-flight statement for shutdown.");
       void pool.query("SELECT pg_cancel_backend($1)", [pid]).catch(() => {});
     };
-    signal?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort);
+    // `addEventListener` does not fire on an already-aborted signal, so an
+    // abort that landed during `connect` / the lock / the pid read would
+    // otherwise be dropped and the phase would run to completion post-SIGTERM.
+    if (signal?.aborted) return "skipped";
 
     // `CONCURRENTLY` cannot run inside a transaction, so the budget has to be
     // a session-level GUC rather than `SET LOCAL`.
@@ -195,7 +209,8 @@ export const runBootMaintenance = async (
     try {
       unresolved = await dropInvalidIndexes(
         client,
-        work.indexes.map((s) => s.name)
+        work.indexes.map((s) => s.name),
+        signal
       );
     } catch (error: unknown) {
       // The probe failed, so we don't know which builds a leftover is
@@ -206,6 +221,7 @@ export const runBootMaintenance = async (
       complete = false;
     }
     if (unresolved.size > 0) complete = false;
+    if (signal?.aborted) return "skipped";
 
     for (const statement of [...work.indexes, ...work.statements]) {
       if (signal?.aborted) {

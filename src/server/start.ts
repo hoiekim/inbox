@@ -64,6 +64,12 @@ const start = async () => {
   const shutdown = async (signal: string) => {
     console.info(`${signal} received — shutting down gracefully`);
 
+    // First, and synchronously: cancelling an in-flight index build is a
+    // round-trip on another connection, so it overlaps the server closes below
+    // instead of serializing behind them. Compose's default grace period is
+    // 10s and `await maintenance` has to fit inside it.
+    maintenanceAbort.abort();
+
     // Stop accepting new HTTP connections; finish in-flight requests
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     console.info("HTTP server closed");
@@ -88,11 +94,9 @@ const start = async () => {
     );
     console.info("SMTP servers closed");
 
-    // Stop boot maintenance before closing the pool. Its client is checked
-    // out for the duration of the phase, and `pool.end()` waits for every
-    // client to be released — so an in-flight index build would hold shutdown
-    // open until its budget expired and the container was SIGKILLed instead.
-    maintenanceAbort.abort();
+    // The maintenance client is checked out for the duration of the phase, and
+    // `pool.end()` waits for every client to be released — so the phase has to
+    // have finished unwinding (from the abort above) before the pool closes.
     await maintenance;
     console.info("Boot maintenance stopped");
 

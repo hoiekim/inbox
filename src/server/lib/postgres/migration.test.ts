@@ -8,7 +8,8 @@
  * the real query through the pool, control the `schema_meta` response
  * per test.
  */
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, mock, spyOn, beforeAll, afterAll } from "bun:test";
+import * as alarm from "../alarm";
 import { restoreLeaves } from "test-helpers";
 
 const mockQuery = mock(
@@ -221,6 +222,47 @@ describe("bootMaintenance — marker gating", () => {
     expect(markerWrites.map(({ values }) => values)).toEqual([
       ["maintenance_hash", CURRENT_SCHEMA_HASH],
     ]);
+  });
+
+  // Degrading instead of exiting removed the page `handleStartupFailure` used
+  // to produce, so the replacement alarm has to fire on exactly the outcome it
+  // replaces — and on nothing else. Both halves were unguarded until now.
+  describe("alarm mapping", () => {
+    const runWith = async (onStatement: (text: string) => void) => {
+      const { bootMaintenance } = await import("./initialize");
+      const sendSpy = spyOn(alarm, "sendAlarm").mockResolvedValue(undefined);
+      collect(onStatement);
+      await bootMaintenance();
+      const calls = sendSpy.mock.calls.map(([title]) => title);
+      sendSpy.mockRestore();
+      return calls;
+    };
+
+    it("pages when a statement is genuinely outstanding", async () => {
+      const calls = await runWith((text) => {
+        if (text.startsWith("CREATE INDEX CONCURRENTLY")) throw new Error("too slow");
+      });
+      expect(calls).toEqual(["Boot Maintenance Incomplete"]);
+    });
+
+    it("stays quiet on a clean run", async () => {
+      expect(await runWith(() => {})).toEqual([]);
+    });
+
+    // Every rolling deploy produces one instance that loses the lock. Paging
+    // for it trains the alarm to be ignored.
+    it("stays quiet when another instance holds the lock", async () => {
+      const { bootMaintenance } = await import("./initialize");
+      const sendSpy = spyOn(alarm, "sendAlarm").mockResolvedValue(undefined);
+      mockQuery.mockImplementation(async (sql: string) => {
+        const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+        if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: false }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      await bootMaintenance();
+      expect(sendSpy.mock.calls).toEqual([]);
+      sendSpy.mockRestore();
+    });
   });
 
   // Without its own marker every restart would re-run a full-table tsvector
