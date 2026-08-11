@@ -61,14 +61,18 @@ const arrange = (options: { invalid?: string[]; fail?: string[]; locked?: boolea
   mockQuery.mockImplementation(async (sql: string) => {
     const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
     seen.push(text);
+    // Checked before the canned responses so `fail` can target the probe too.
+    if (fail.some((needle) => text.includes(needle))) {
+      throw new Error(`boom: ${text}`);
+    }
     if (text.includes("pg_try_advisory_lock")) {
       return { rows: [{ locked }], rowCount: 1 };
     }
+    if (text.includes("pg_backend_pid")) {
+      return { rows: [{ pid: 4242 }], rowCount: 1 };
+    }
     if (text.includes("FROM pg_index")) {
       return { rows: invalid.map((relname) => ({ relname })), rowCount: invalid.length };
-    }
-    if (fail.some((needle) => text.includes(needle))) {
-      throw new Error(`boom: ${text}`);
     }
     return { rows: [], rowCount: 0 };
   });
@@ -78,7 +82,7 @@ const arrange = (options: { invalid?: string[]; fail?: string[]; locked?: boolea
 describe("runBootMaintenance — invalid-leftover sweep", () => {
   it("drops an invalid leftover before rebuilding it", async () => {
     const seen = arrange({ invalid: ["idx_beta"] });
-    expect(await runBootMaintenance(work())).toBe(true);
+    expect(await runBootMaintenance(work())).toBe("complete");
 
     const drop = seen.findIndex((s) => s.startsWith("DROP INDEX CONCURRENTLY"));
     const rebuild = seen.indexOf(INDEXES[1].sql);
@@ -89,7 +93,7 @@ describe("runBootMaintenance — invalid-leftover sweep", () => {
 
   it("drops nothing when no index is invalid", async () => {
     const seen = arrange();
-    expect(await runBootMaintenance(work())).toBe(true);
+    expect(await runBootMaintenance(work())).toBe("complete");
     expect(seen.filter((s) => s.startsWith("DROP INDEX"))).toEqual([]);
   });
 
@@ -107,25 +111,33 @@ describe("runBootMaintenance — invalid-leftover sweep", () => {
   // is what would strand the index behind a written marker.
   it("skips — and does not claim success for — an index whose DROP failed", async () => {
     const seen = arrange({ invalid: ["idx_beta"], fail: ["DROP INDEX"] });
-    expect(await runBootMaintenance(work())).toBe(false);
+    expect(await runBootMaintenance(work())).toBe("incomplete");
     expect(seen).not.toContain(INDEXES[1].sql);
     // The unaffected index and the trailing statements still run.
     expect(seen).toContain(INDEXES[0].sql);
     expect(seen).toContain(STATEMENTS[0].sql);
   });
 
-  it("still attempts every build when the probe itself fails", async () => {
+  // A failed probe means we don't know which builds a leftover is shadowing,
+  // and a shadowed `CREATE INDEX CONCURRENTLY IF NOT EXISTS` no-ops silently.
+  // Claiming completeness there is what writes the marker over a stranded
+  // index — so the builds are still attempted, but the phase reports
+  // incomplete and the next boot retries.
+  it("attempts every build when the probe fails, but does not claim completeness", async () => {
     const seen = arrange({ fail: ["FROM pg_index"] });
-    expect(await runBootMaintenance(work())).toBe(true);
+    expect(await runBootMaintenance(work())).toBe("incomplete");
     expect(seen).toContain(INDEXES[0].sql);
     expect(seen).toContain(INDEXES[1].sql);
   });
 });
 
 describe("runBootMaintenance — session and locking", () => {
-  it("runs nothing when another instance holds the lock", async () => {
+  // "skipped", not "incomplete": the instance holding the lock is doing the
+  // work. Every rolling deploy produces a loser, and paging for each one
+  // trains the alarm to be ignored.
+  it("runs nothing and reports skipped when another instance holds the lock", async () => {
     const seen = arrange({ locked: false });
-    expect(await runBootMaintenance(work())).toBe(false);
+    expect(await runBootMaintenance(work())).toBe("skipped");
     expect(seen.filter((s) => s.startsWith("CREATE INDEX"))).toEqual([]);
     expect(seen).not.toContain(STATEMENTS[0].sql);
   });
@@ -141,7 +153,7 @@ describe("runBootMaintenance — session and locking", () => {
 
   it("releases the advisory lock even when a statement throws", async () => {
     const seen = arrange({ fail: ["CREATE INDEX"] });
-    expect(await runBootMaintenance(work())).toBe(false);
+    expect(await runBootMaintenance(work())).toBe("incomplete");
     expect(seen.some((s) => s.includes("pg_advisory_unlock"))).toBe(true);
   });
 
@@ -153,6 +165,77 @@ describe("runBootMaintenance — session and locking", () => {
 
   it("reports failure without throwing when every statement fails", async () => {
     arrange({ fail: ["CREATE INDEX", "UPDATE t"] });
-    expect(await runBootMaintenance(work())).toBe(false);
+    expect(await runBootMaintenance(work())).toBe("incomplete");
+  });
+});
+
+// `pool.end()` waits for every checked-out client to be released, so an
+// in-flight build would hold graceful shutdown open until its budget expired
+// and the container was SIGKILLed instead.
+describe("runBootMaintenance — shutdown cancellation", () => {
+  it("cancels the in-flight backend and stops before the remaining statements", async () => {
+    const abort = new AbortController();
+    const cancelArgs: unknown[][] = [];
+    const seen: string[] = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seen.push(text);
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      if (text.includes("pg_cancel_backend")) cancelArgs.push(values ?? []);
+      // Shutdown arrives while the first index is building.
+      if (text === INDEXES[0].sql) abort.abort();
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+    // The running statement is cancelled from another session, by pid.
+    expect(cancelArgs).toEqual([[4242]]);
+    // The first build was already in flight; the rest were never issued.
+    expect(seen).toContain(INDEXES[0].sql);
+    expect(seen).not.toContain(INDEXES[1].sql);
+    expect(seen).not.toContain(STATEMENTS[0].sql);
+    // The lock is still handed back, or the next boot's try-lock fails.
+    expect(seen.some((s) => s.includes("pg_advisory_unlock"))).toBe(true);
+  });
+
+  // The cancelled statement throws, and if it is the last one the loop's own
+  // abort check never runs again. Letting that surface as "incomplete" would
+  // page on every graceful stop.
+  it("reports skipped, not incomplete, when the cancelled statement is the last one", async () => {
+    const abort = new AbortController();
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      if (text === STATEMENTS[0].sql) {
+        abort.abort();
+        throw new Error("canceling statement due to user request");
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+  });
+
+  it("does not connect at all when the signal is already aborted", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const seen = arrange();
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+    expect(seen).toEqual([]);
+  });
+
+  it("leaves no abort listener behind after a normal run", async () => {
+    const abort = new AbortController();
+    arrange();
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("complete");
+
+    // A leaked listener would cancel a backend pid that has since been reused.
+    const seen = arrange();
+    abort.abort();
+    expect(seen.filter((s) => s.includes("pg_cancel_backend"))).toEqual([]);
   });
 });

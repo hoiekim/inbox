@@ -107,7 +107,30 @@ describe("writeSchemaMarker", () => {
     expect(calls[0][0]).toContain("CREATE TABLE IF NOT EXISTS schema_meta");
     expect(calls[1][0]).toContain("INSERT INTO schema_meta");
     expect(calls[1][0]).toContain("ON CONFLICT (key) DO UPDATE");
-    expect(calls[1][1]).toEqual(["MYHASH"]);
+    expect(calls[1][1]).toEqual(["schema_hash", "MYHASH"]);
+  });
+
+  // The two halves of the boot DDL are gated separately: the fatal schema work
+  // and the non-fatal row-scaled work. Sharing one key would send every boot
+  // back through the throwing DDL block for as long as an index can't build.
+  it("writes the row-scaled work under its own key", async () => {
+    const calls: Array<[string, unknown[] | undefined]> = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
+      calls.push([sql, values]);
+      return { rows: [], rowCount: 0 };
+    });
+    await writeSchemaMarker("MYHASH", "maintenance_hash");
+    expect(calls[1][1]).toEqual(["maintenance_hash", "MYHASH"]);
+  });
+
+  it("reads back the key it was asked for", async () => {
+    const calls: Array<[string, unknown[] | undefined]> = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
+      calls.push([sql, values]);
+      return { rows: [{ value: "MYHASH" }], rowCount: 1 };
+    });
+    expect(await checkSchemaAtTarget("MYHASH", "maintenance_hash")).toBe(true);
+    expect(calls[0][1]).toEqual(["maintenance_hash"]);
   });
 });
 
@@ -140,23 +163,28 @@ describe("initializePostgres — fast-path integration", () => {
     expect(ddlCalls).toEqual([]);
   });
 
-  // `initializePostgres` no longer writes the marker — `bootMaintenance` does,
-  // once the row-count-scaled statements it gates on have landed. A refactor
-  // that moves the write back in front of them reintroduces exactly the
-  // silently-stranded-work failure #746 is about.
-  it("does not write the marker before boot maintenance runs", async () => {
-    const { initializePostgres } = await import("./initialize");
+  // The schema half writes its own marker as soon as its own DDL succeeds, and
+  // must NOT wait on the row-scaled half — gating it on maintenance would send
+  // every boot back through this throwing block for as long as an index can't
+  // build, which is #746's crashloop entered by a different door.
+  it("writes the schema marker without waiting on boot maintenance", async () => {
+    const { initializePostgres, CURRENT_SCHEMA_HASH } = await import("./initialize");
 
-    const seenCalls: string[] = [];
-    mockQuery.mockImplementation(async (sql: string) => {
+    const seenCalls: Array<{ sql: string; values: unknown[] | undefined }> = [];
+    mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
       const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
-      seenCalls.push(text);
+      seenCalls.push({ sql: text, values });
       return { rows: [], rowCount: 0 };
     });
 
     await initializePostgres();
 
-    expect(seenCalls.filter((sql) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
+    const markerWrites = seenCalls.filter(({ sql }) => sql.includes("INSERT INTO schema_meta"));
+    expect(markerWrites.map(({ values }) => values)).toEqual([
+      ["schema_hash", CURRENT_SCHEMA_HASH],
+    ]);
+    // It builds no index — that is the maintenance phase's job.
+    expect(seenCalls.filter(({ sql }) => sql.startsWith("CREATE INDEX"))).toEqual([]);
   });
 });
 
@@ -172,25 +200,49 @@ describe("bootMaintenance — marker gating", () => {
       if (text.includes("pg_try_advisory_lock")) {
         return { rows: [{ locked: true }], rowCount: 1 };
       }
+      // No maintenance marker present, so the phase runs rather than skipping.
+      if (text.includes("SELECT value FROM schema_meta")) {
+        return { rows: [], rowCount: 0 };
+      }
       onStatement(text);
       return { rows: [], rowCount: 0 };
     });
     return seen;
   };
 
-  it("writes the marker with CURRENT_SCHEMA_HASH once every statement lands", async () => {
+  it("writes the maintenance marker once every statement lands", async () => {
     const { bootMaintenance, CURRENT_SCHEMA_HASH } = await import("./initialize");
 
     const seen = collect();
     await bootMaintenance();
 
-    const markerWrite = seen.find(
-      ({ sql, values }) =>
-        sql.includes("INSERT INTO schema_meta") &&
-        Array.isArray(values) &&
-        values[0] === CURRENT_SCHEMA_HASH
-    );
-    expect(markerWrite).toBeDefined();
+    const markerWrites = seen.filter(({ sql }) => sql.includes("INSERT INTO schema_meta"));
+    // Under its own key — never the schema one, which gates the fatal DDL.
+    expect(markerWrites.map(({ values }) => values)).toEqual([
+      ["maintenance_hash", CURRENT_SCHEMA_HASH],
+    ]);
+  });
+
+  // Without its own marker every restart would re-run a full-table tsvector
+  // recompute that changes nothing.
+  it("skips the whole phase when the maintenance marker is already at target", async () => {
+    const { bootMaintenance, CURRENT_SCHEMA_HASH } = await import("./initialize");
+
+    const seen: string[] = [];
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seen.push(text);
+      if (text.includes("SELECT value FROM schema_meta")) {
+        return { rows: [{ value: CURRENT_SCHEMA_HASH }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    await bootMaintenance();
+
+    expect(seen.filter((sql) => sql.startsWith("CREATE INDEX"))).toEqual([]);
+    expect(seen.filter((sql) => sql.includes("SET search_vector"))).toEqual([]);
+    expect(seen.filter((sql) => sql.includes("advisory_lock"))).toEqual([]);
   });
 
   // The marker is what lets the next boot skip the DDL entirely. Writing it

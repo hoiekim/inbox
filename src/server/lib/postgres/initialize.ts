@@ -4,7 +4,12 @@ import { writeUser, searchUser } from "./repositories";
 import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
 import { runBootMaintenance, MaintenanceWork, Statement } from "./maintenance";
 import { sendAlarm } from "../alarm";
-import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
+import {
+  checkSchemaAtTarget,
+  runMigrations,
+  writeSchemaMarker,
+  MarkerKey,
+} from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
@@ -44,6 +49,9 @@ export const tables: Table<unknown, Schema>[] = [
 // name — regenerating it as `idx_mails_search_vector_gin` would leave the
 // existing index in place and build a duplicate alongside it.
 const MAILS_SEARCH_INDEX_NAME = "idx_mails_search";
+
+/** Gates the row-scaled phase independently of the fatal schema DDL. */
+const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
 
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
 // `searchVector*`. Extracted as module-scoped constants so their literal
@@ -159,6 +167,13 @@ export const initializePostgres = async (): Promise<void> => {
     // reindex they share an expression with runs in `bootMaintenance` — it is
     // the one statement here whose cost scales with the table.
     for (const sql of searchVectorDdl()) await pool.query(sql);
+
+    // Record the marker so subsequent boots can fast-path. Written AFTER every
+    // statement in this block succeeded, and gated only on them: the
+    // row-scaled work in `bootMaintenance` has its own marker, because sending
+    // every boot back through this throwing block for as long as an index
+    // can't build would just move the crashloop rather than remove it.
+    await writeSchemaMarker(CURRENT_SCHEMA_HASH);
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);
     throw new Error("Failed to setup PostgreSQL tables.");
@@ -181,24 +196,43 @@ export const initializePostgres = async (): Promise<void> => {
  * table stays writable while they run, which buys nothing if HTTP/SMTP/IMAP
  * aren't up yet. `start.ts` calls this after binding and does not await it.
  *
- * The schema marker is written here rather than in `initializePostgres`
- * because it is what lets the next boot skip the DDL entirely: writing it
- * while a statement is still outstanding would strand that work forever, with
- * every later boot fast-pathing past it and no error anywhere.
+ * It carries its own marker, separate from the schema one. That marker is what
+ * lets a steady-state boot skip the phase entirely — without it every restart
+ * would re-run a full-table tsvector recompute that changes nothing. Writing
+ * it while a statement is still outstanding would strand that work forever,
+ * with every later boot fast-pathing past it and no error anywhere, so it is
+ * written only on a clean sweep.
+ *
+ * Never rejects: `start.ts` does not await it, so a rejection here would
+ * surface as a contextless unhandled-rejection page.
  */
-export const bootMaintenance = async (): Promise<void> => {
-  if (!(await runBootMaintenance(maintenanceWork()))) {
+export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
+  try {
+    if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY)) {
+      logger.info("[Maintenance] Already at target — skipping.");
+      return;
+    }
+
+    const result = await runBootMaintenance(maintenanceWork(), signal);
+    if (result === "complete") {
+      await writeSchemaMarker(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY);
+      return;
+    }
+    // `skipped` means another instance is doing the work, or shutdown
+    // cancelled it. Every rolling deploy produces one of those; paging for it
+    // would train the alarm to be ignored.
+    if (result === "skipped") return;
+
     const message =
       "Boot maintenance did not complete — an index or the search-vector reindex " +
-      "is outstanding. The schema marker is withheld, so the next boot retries.";
+      "is outstanding. The maintenance marker is withheld, so the next boot retries.";
     logger.warn(`[Maintenance] ${message}`);
     // The old behavior paged through `handleStartupFailure`. Degrading instead
     // of exiting must not also mean degrading silently.
     await sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined);
-    return;
+  } catch (error: unknown) {
+    logger.error("[Maintenance] Phase failed unexpectedly.", {}, error);
   }
-
-  await writeSchemaMarker(CURRENT_SCHEMA_HASH);
 };
 
 export const initializeAdminUser = async (): Promise<void> => {
