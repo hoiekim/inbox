@@ -69,21 +69,48 @@ export function buildCreateTable(
   `.trim();
 }
 
-export function buildCreateIndex(
+export interface CreateIndexOptions {
+  indexName?: string;
+  using?: string;
+  opclass?: string;
+  /**
+   * Emit `CREATE INDEX CONCURRENTLY`, which builds without taking a write
+   * lock on the table. The trade-offs — cannot run inside a transaction, and
+   * a failed build leaves an invalid index behind that has to be dropped
+   * before the next attempt — are handled by `indexes.ts`.
+   */
+  concurrently?: boolean;
+}
+
+/**
+ * The name `buildCreateIndex` embeds. Exposed separately because the
+ * invalid-leftover sweep in `indexes.ts` has to name the same index the
+ * create statement would.
+ */
+export function buildIndexName(
   tableName: string,
   column: string,
-  indexName?: string,
-  using?: string,
-  opclass?: string
+  options: Pick<CreateIndexOptions, "indexName" | "using"> = {}
 ): string {
+  const { indexName, using } = options;
   // Non-btree indexes take a method suffix so they can't collide with the
   // btree name for the same column — `CREATE INDEX IF NOT EXISTS` would
   // silently no-op the second one, reverting the optimization with no error.
   const suffix = using ? `_${using}` : "";
-  const name = indexName || `idx_${tableName}_${column}${suffix}`;
+  return indexName || `idx_${tableName}_${column}${suffix}`;
+}
+
+export function buildCreateIndex(
+  tableName: string,
+  column: string,
+  options: CreateIndexOptions = {}
+): string {
+  const { using, opclass, concurrently } = options;
+  const name = buildIndexName(tableName, column, options);
   const target = opclass ? `${column} ${opclass}` : column;
   const method = using ? ` USING ${using}` : "";
-  return `CREATE INDEX IF NOT EXISTS ${name} ON ${tableName}${method} (${target})`;
+  const modifier = concurrently ? " CONCURRENTLY" : "";
+  return `CREATE INDEX${modifier} IF NOT EXISTS ${name} ON ${tableName}${method} (${target})`;
 }
 
 export function prepareParamValue(value: ParamValue): ParamValue {

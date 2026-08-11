@@ -119,7 +119,10 @@ describe("initializePostgres — fast-path integration", () => {
 
     const seenSql: string[] = [];
     mockQuery.mockImplementation(async (sql: string) => {
-      seenSql.push(sql);
+      // Index builds are submitted as a query config so they can carry their
+      // own `query_timeout`; unwrap them or the DDL assertion below can't see
+      // them.
+      seenSql.push(typeof sql === "string" ? sql : (sql as { text: string }).text);
       // Every SELECT that looks like the marker read returns a matching
       // row. Anything else returns empty, so any DDL that DOES reach the
       // mock silently succeeds — the assertion is that no DDL should
@@ -132,7 +135,7 @@ describe("initializePostgres — fast-path integration", () => {
 
     await initializePostgres();
 
-    const ddlPattern = /CREATE\s+TABLE(?!\s+IF\s+NOT\s+EXISTS\s+schema_meta)|ALTER\s+TABLE|CREATE\s+INDEX|CREATE\s+TRIGGER|CREATE\s+OR\s+REPLACE\s+FUNCTION|DROP\s+TRIGGER|pg_advisory_lock/i;
+    const ddlPattern = /CREATE\s+TABLE(?!\s+IF\s+NOT\s+EXISTS\s+schema_meta)|ALTER\s+TABLE|CREATE\s+INDEX|CREATE\s+TRIGGER|CREATE\s+OR\s+REPLACE\s+FUNCTION|DROP\s+TRIGGER|advisory_lock/i;
     const ddlCalls = seenSql.filter((sql) => ddlPattern.test(sql));
     expect(ddlCalls).toEqual([]);
   });
@@ -147,8 +150,12 @@ describe("initializePostgres — fast-path integration", () => {
     mockQuery.mockImplementation(async (sql: string, values?: unknown[]) => {
       seenCalls.push({ sql, values });
       // No marker present — force slow path.
-      if (sql.includes("schema_meta") && /SELECT\s+value/i.test(sql)) {
+      if (typeof sql === "string" && sql.includes("schema_meta") && /SELECT\s+value/i.test(sql)) {
         return { rows: [], rowCount: 0 };
+      }
+      // The index-build phase only proceeds when it wins the advisory lock.
+      if (typeof sql === "string" && sql.includes("pg_try_advisory_lock")) {
+        return { rows: [{ locked: true }], rowCount: 1 };
       }
       // Everything else (DDL, migration probes, advisory locks, etc.)
       // succeeds trivially so the slow path runs to completion.
@@ -165,5 +172,37 @@ describe("initializePostgres — fast-path integration", () => {
         values[0] === CURRENT_SCHEMA_HASH
     );
     expect(markerWrite).toBeDefined();
+  });
+
+  // The marker is what lets the next boot skip the DDL entirely. Writing it
+  // while an index is missing would strand that index forever: every later
+  // boot fast-paths past the build with no error anywhere (#746).
+  it("withholds the marker — without throwing — when an index build fails", async () => {
+    const { initializePostgres } = await import("./initialize");
+
+    const seenCalls: string[] = [];
+    let attemptedIndexBuilds = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      seenCalls.push(text);
+      if (text.includes("schema_meta") && /SELECT\s+value/i.test(text)) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("pg_try_advisory_lock")) {
+        return { rows: [{ locked: true }], rowCount: 1 };
+      }
+      if (text.startsWith("CREATE INDEX CONCURRENTLY")) {
+        attemptedIndexBuilds++;
+        throw new Error("canceling statement due to statement timeout");
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    // Resolves rather than rejecting: a slow index build must not take the
+    // process down, or `restart: always` retries the same doomed build.
+    await initializePostgres();
+
+    expect(attemptedIndexBuilds).toBeGreaterThan(1);
+    expect(seenCalls.filter((sql) => sql.includes("INSERT INTO schema_meta"))).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
-import { buildCreateTable, buildCreateIndex } from "./database";
+import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
+import { createIndexes, IndexSpec } from "./indexes";
 import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
@@ -38,15 +39,41 @@ export const tables: Table<unknown, Schema>[] = [
   mailgunEventsTable,
 ];
 
+// The full-text search index predates `table.indexes` and keeps its original
+// name — regenerating it as `idx_mails_search_vector_gin` would leave the
+// existing index in place and build a duplicate alongside it.
+const MAILS_SEARCH_INDEX_NAME = "idx_mails_search";
+
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
 // `searchVector*`. Extracted as module-scoped constants so their literal
 // text is what feeds `CURRENT_SCHEMA_HASH` below — the same string the
 // slow path issues. That way any edit to a raw block automatically
 // changes the digest (no descriptive-sentinel discipline required).
-const IDX_MAILS_SEARCH_SQL = `
-      CREATE INDEX IF NOT EXISTS idx_mails_search
-      ON mails USING GIN(search_vector)
-    `;
+const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
+  indexName: MAILS_SEARCH_INDEX_NAME,
+  using: "gin",
+  concurrently: true,
+});
+
+/**
+ * Every index the app owns, as (name, statement) pairs. Names are exposed
+ * alongside the SQL because `createIndexes` has to identify invalid leftovers
+ * by name before it can rebuild them.
+ */
+export const indexSpecs = (): IndexSpec[] => {
+  const specs: IndexSpec[] = [];
+  for (const table of tables) {
+    for (const idx of table.indexes) {
+      const options = { using: idx.using, opclass: idx.opclass, concurrently: true };
+      specs.push({
+        name: buildIndexName(table.name, idx.column, options),
+        sql: buildCreateIndex(table.name, idx.column, options),
+      });
+    }
+  }
+  specs.push({ name: MAILS_SEARCH_INDEX_NAME, sql: IDX_MAILS_SEARCH_SQL });
+  return specs;
+};
 
 // Digest of every input the slow-path DDL consumes. Any code change to a
 // table schema, its indexes, its constraints, `searchVectorDdl()`,
@@ -121,39 +148,38 @@ export const initializePostgres = async (): Promise<void> => {
       tables.map((t) => ({ name: t.name, schema: t.schema }))
     );
 
-    // Create indexes after migrations ensure all columns exist
-    for (const table of tables) {
-      for (const idx of table.indexes) {
-        const createIndexSql = buildCreateIndex(
-          table.name,
-          idx.column,
-          undefined,
-          idx.using,
-          idx.opclass
-        );
-        await pool.query(createIndexSql);
-      }
-    }
-
-    // Create GIN index for full-text search on mails
-    await pool.query(IDX_MAILS_SEARCH_SQL);
-
     // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
     // the reindex — all three derived from `searchVectorExpression` so the
     // trigger and the direct write can't drift apart. See search-vector.ts.
     for (const sql of searchVectorDdl()) await pool.query(sql);
     await pool.query(searchVectorReindexSql());
-
-    // Record the marker so subsequent boots can fast-path. Written AFTER
-    // every DDL succeeded — if any step above threw, we don't want the
-    // marker in the DB.
-    await writeSchemaMarker(CURRENT_SCHEMA_HASH);
-
-    logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);
     throw new Error("Failed to setup PostgreSQL tables.");
   }
+
+  // Indexes come last and outside the throwing block on purpose. They are the
+  // only boot DDL whose cost scales with the table, so a failure here means
+  // "the build was too slow", not "the schema is broken" — and the app serves
+  // correctly without an index, just slower. Taking the process down for it
+  // only crashloops the container into the same doomed build (#746). Instead
+  // the marker is withheld, so the next boot skips the fast path and retries.
+  // Migrations have already committed, which `CONCURRENTLY` requires: it
+  // cannot run inside a transaction.
+  if (!(await createIndexes(indexSpecs()))) {
+    logger.warn(
+      "[Index] Not every index is in place — withholding the schema marker so the next boot retries."
+    );
+    logger.info("Database tables created/verified successfully.");
+    return;
+  }
+
+  // Record the marker so subsequent boots can fast-path. Written AFTER every
+  // DDL succeeded — if any step above threw or an index is missing, we don't
+  // want the marker in the DB.
+  await writeSchemaMarker(CURRENT_SCHEMA_HASH);
+
+  logger.info("Database tables created/verified successfully.");
 };
 
 export const initializeAdminUser = async (): Promise<void> => {
