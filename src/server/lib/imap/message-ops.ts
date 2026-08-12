@@ -636,7 +636,14 @@ export async function copyMessageTyped(
     }
 
     // The full set of fields we need to clone — anything the FETCH/render
-    // pipeline might surface to a client of the destination mailbox.
+    // pipeline might surface to a client of the destination mailbox. `read`
+    // / `saved` / `deleted` / `draft` / `answered` are explicit here because
+    // RFC 3501 §6.4.7 requires COPY to preserve flags on the copy — and
+    // `getMessages` won't return them unless they're named. Without this
+    // the COPY of a starred INBOX mail to `Archive` loses the star, which
+    // #725's mapped-utility invariant assumes DOES propagate (saveMail's
+    // pivot sync fires on `data.saved = true`, which needs the field
+    // populated here).
     const cloneFields = [
       "subject",
       "date",
@@ -652,7 +659,11 @@ export async function copyMessageTyped(
       "attachments",
       "messageId",
       "insight",
-      "flags",
+      "read",
+      "saved",
+      "deleted",
+      "draft",
+      "answered",
       "uid",
     ];
 
@@ -963,6 +974,11 @@ export async function moveMessageTyped(
       return;
     }
 
+    // Same field list as the COPY path — see the docblock there for the
+    // RFC 3501 §6.4.7 flag-preservation rationale. MOVE = COPY + expunge,
+    // so if the copy loses `saved` the mail vanishes from Starred both
+    // on the source side (source gets expunged) and on the destination
+    // (copy has no `saved = TRUE`, no Starred pivot).
     const cloneFields = [
       "subject",
       "date",
@@ -978,7 +994,11 @@ export async function moveMessageTyped(
       "attachments",
       "messageId",
       "insight",
-      "flags",
+      "read",
+      "saved",
+      "deleted",
+      "draft",
+      "answered",
       "uid",
     ];
 
