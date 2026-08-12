@@ -500,6 +500,13 @@ const getMailsByRangeUncoalesced = async (
 };
 
 export interface UpdatedMailFlags {
+  // The mail_id the row identifies. Needed by the caller to sync pivot rows
+  // in `mail_mailbox_uid` for mapped-utility folders (`Starred`, `Trash`) —
+  // a STORE that flips `saved` / `deleted` has to insert or delete the
+  // corresponding pivot so the utility view stays truthful. See
+  // `syncMailboxPivot` in `counters.ts` and the STORE hook in
+  // `imap/message-ops.ts`.
+  mail_id: string;
   uid: number;
   read: boolean;
   saved: boolean;
@@ -600,7 +607,7 @@ export const setMailFlags = async (
     const membership = membershipCondition(mailbox, sent);
 
     if (usesDomainUidSpace(mailbox)) {
-      const returningCols = `${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
+      const returningCols = `${MAIL_ID}, ${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
@@ -628,7 +635,7 @@ export const setMailFlags = async (
       // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees)
       // — the mapping table is the sole per-mailbox UID source after
       // #702 PR 3 dropped `mails.uid_account`.
-      const returningCols = `x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
+      const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
           AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
@@ -702,6 +709,7 @@ export const setMailFlags = async (
 };
 
 const toUpdatedMailFlags = (row: Record<string, unknown>): UpdatedMailFlags => ({
+  mail_id: row.mail_id as string,
   uid: row.uid as number,
   read: row.read as boolean,
   saved: row.saved as boolean,

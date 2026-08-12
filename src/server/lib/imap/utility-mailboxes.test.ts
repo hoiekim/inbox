@@ -49,6 +49,8 @@ describe("isUtilityFolder", () => {
   it("matches the defined names exactly", () => {
     expect(isUtilityFolder("Drafts")).toBe(true);
     expect(isUtilityFolder("Junk")).toBe(true);
+    expect(isUtilityFolder("Starred")).toBe(true);
+    expect(isUtilityFolder("Trash")).toBe(true);
   });
 
   it("is case-insensitive, matching the LIST de-dup", () => {
@@ -70,8 +72,18 @@ describe("isUtilityFolder", () => {
     expect(isUtilityFolder("")).toBe(false);
   });
 
-  it("puts every utility folder in the domain UID space", () => {
-    for (const name of NAMES) expect(isDomainScoped(name)).toBe(true);
+  it("splits utility folders by uidSpace: Drafts/Junk domain-scoped, Starred/Trash mapped", () => {
+    // Pre-#725-remainder invariant was "every utility folder is domain-scoped."
+    // The remainder needs a view spanning both `sent` axes (`Starred`, `Trash`),
+    // and the domain-scoped counter (`mail_uid_counters` keyed on
+    // `(user_id, uid_kind, uid_scope, sent)`) can't emit unique UIDs across
+    // that span — hence the split.
+    expect(isDomainScoped("Drafts")).toBe(true);
+    expect(isDomainScoped("Junk")).toBe(true);
+    expect(isDomainScoped("Starred")).toBe(false);
+    expect(isDomainScoped("Trash")).toBe(false);
+    // All four remain utility folders — same LIST/CREATE/RENAME semantics.
+    for (const name of NAMES) expect(isUtilityFolder(name)).toBe(true);
   });
 });
 

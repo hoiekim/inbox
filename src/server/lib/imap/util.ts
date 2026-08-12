@@ -381,18 +381,70 @@ export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
  *   be in it. These views select by flag, so a COPY / MOVE / APPEND that names
  *   one and does not set the flag would report success and leave the message
  *   nowhere the client can see it.
+ * - `uidSpace` picks the UID enumeration:
+ *   - `"domain"`: UIDs come from `mails.uid_domain`, and membership is a
+ *     predicate over `mails` (`Drafts`, `Junk`). No mapping rows, no counter
+ *     rows. Works only for views that resolve to a single value of the `sent`
+ *     axis — `mail_uid_counters` keys on `(user_id, uid_kind, uid_scope, sent)`
+ *     so two mails with the same `uid_domain` (one sent, one received) collide
+ *     in a view that spans both. `Drafts` and `Junk` are both effectively
+ *     `sent = false`, so the collision doesn't fire.
+ *   - `"mapped"`: UIDs come from `mail_mailbox_uid.uid`, and membership is a
+ *     row in `mail_mailbox_uid` keyed on `(user_id, mailbox, mail_id)` — same
+ *     shape the per-account `INBOX/accounts/<local>` boxes already use. This
+ *     gives the view a UID space of its own, so it works for a view that
+ *     spans both `sent = true` and `sent = false`. Used for `Starred` (a mail
+ *     may be flagged in either direction) and `Trash` (soft-deletion applies
+ *     to sent mail too — see #725).
+ *
+ *     Mapped-utility rows are populated by the flag-write hooks — a STORE that
+ *     flips `saved` inserts the pivot row for `Starred`, a STORE that flips
+ *     `deleted` inserts the pivot for `Trash`, and clearing the flag drops the
+ *     row. The receive/send paths do the same on initial-flag writes.
  *
  * The matching read-side predicate lives in `repositories/mails/views.ts`,
  * which this module cannot import (the repository is re-exported by the
  * `server` barrel this file pulls from). `views.test.ts` pins the two together.
  */
+export type UtilityPlacement = {
+  draft?: boolean;
+  is_spam?: boolean;
+  saved?: boolean;
+  deleted?: boolean;
+};
+
+export type UtilityUidSpace = "domain" | "mapped";
+
 export const UTILITY_FOLDERS: {
   name: string;
   specialUse: string;
-  placement: { draft?: boolean; is_spam?: boolean };
+  placement: UtilityPlacement;
+  uidSpace: UtilityUidSpace;
 }[] = [
-  { name: "Drafts", specialUse: "\\Drafts", placement: { draft: true } },
-  { name: "Junk", specialUse: "\\Junk", placement: { is_spam: true } },
+  {
+    name: "Drafts",
+    specialUse: "\\Drafts",
+    placement: { draft: true },
+    uidSpace: "domain",
+  },
+  {
+    name: "Junk",
+    specialUse: "\\Junk",
+    placement: { is_spam: true },
+    uidSpace: "domain",
+  },
+  {
+    name: "Starred",
+    specialUse: "\\Flagged",
+    placement: { saved: true },
+    uidSpace: "mapped",
+  },
+  {
+    name: "Trash",
+    specialUse: "\\Trash",
+    placement: { deleted: true },
+    uidSpace: "mapped",
+  },
 ];
 
 /**
@@ -406,13 +458,19 @@ export const UTILITY_FOLDERS: {
 export const utilityFolder = (box: string) =>
   UTILITY_FOLDERS.find((folder) => folder.name.toLowerCase() === box.toLowerCase());
 
-/** Returns true for a server-defined utility mailbox (`Drafts`, `Junk`). */
+/** Returns true for a server-defined utility mailbox (`Drafts`, `Junk`, `Starred`, `Trash`). */
 export const isUtilityFolder = (box: string): boolean => !!utilityFolder(box);
 
+/** Returns true for a utility folder whose UID space is `mail_mailbox_uid.uid`
+ * rather than `mails.uid_domain` — i.e. one whose read/write path is the same
+ * as the per-account `INBOX/accounts/<local>` boxes and needs a pivot row per
+ * membership. Today: `Starred` and `Trash`. */
+export const isMappedUtilityFolder = (box: string): boolean =>
+  utilityFolder(box)?.uidSpace === "mapped";
+
 /** The flags a mail must carry to land in `box`, or `undefined` for any other box. */
-export const utilityPlacement = (
-  box: string
-): { draft?: boolean; is_spam?: boolean } | undefined => utilityFolder(box)?.placement;
+export const utilityPlacement = (box: string): UtilityPlacement | undefined =>
+  utilityFolder(box)?.placement;
 
 /**
  * The canonical spelling of a server-defined mailbox name, unchanged for any
@@ -461,19 +519,25 @@ export const isInbox = (box: string): boolean => {
 /**
  * Returns true for the mailboxes whose UID space is `uid_domain` rather than
  * the per-mailbox UID (`mail_mailbox_uid.uid`): INBOX, the unified
- * "Sent Messages" folder, and the utility folders. None of them hold mapping
- * rows. FETCH / COPY / MOVE / APPEND must gate on this predicate (not `isInbox`
- * alone): the unified Sent folder is domain-scoped too, so keying its emitted
- * UID off the per-mailbox UID makes `uidToSeqNumber` miss (messages silently
- * dropped from FETCH, wrong COPYUID source UIDs). See #702.
+ * "Sent Messages" folder, and the DOMAIN-SCOPED utility folders (`Drafts`,
+ * `Junk`). Mapped-utility folders (`Starred`, `Trash`, #725) join
+ * `mail_mailbox_uid` like `INBOX/accounts/<local>` and are NOT included —
+ * that's the whole point of separating the two `uidSpace` classes on
+ * `UTILITY_FOLDERS`. FETCH / COPY / MOVE / APPEND must gate on this
+ * predicate (not `isInbox` alone): the unified Sent folder is domain-scoped
+ * too, so keying its emitted UID off the per-mailbox UID makes
+ * `uidToSeqNumber` miss (messages silently dropped from FETCH, wrong
+ * COPYUID source UIDs). See #702.
  *
  * Not the same question as "does the repository take `null` for this box":
- * a utility folder is domain-scoped but still passes its name, because that is
+ * a domain-scoped utility folder still passes its name, because that is
  * what its membership predicate is keyed on. `Store.resolveMappedBox` draws
  * that second line.
  */
 export const isDomainScoped = (box: string): boolean => {
-  return isInbox(box) || box === SENT_MESSAGES_FOLDER || isUtilityFolder(box);
+  if (isInbox(box) || box === SENT_MESSAGES_FOLDER) return true;
+  const utility = utilityFolder(box);
+  return utility?.uidSpace === "domain";
 };
 
 /** Returns true for the accounts/ parent folder itself (non-selectable). */

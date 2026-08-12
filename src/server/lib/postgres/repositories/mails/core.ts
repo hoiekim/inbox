@@ -15,7 +15,7 @@ import {
   TEXT_LINE_COUNT,
   HTML_LINE_COUNT,
 } from "../../models";
-import { getNextModseq, writeMailboxUid } from "./counters";
+import { getNextModseq, syncMailboxPivot, writeMailboxUid } from "./counters";
 import {
   computeFullMessageSize,
   type FetchMailInput,
@@ -436,7 +436,15 @@ export const markMailSaved = async (
       { saved, updated: DB_NOW },
       [MAIL_ID]
     );
-    return rows.length > 0;
+    if (rows.length === 0) return false;
+    // Mirror the flag into the `Starred` pivot so the IMAP utility view
+    // agrees with the web client (#725). If skipped, a "Save" from the web
+    // sets `mails.saved = true` and the `Starred` mailbox stays empty for
+    // that message — the two surfaces diverge on the same row. The IMAP
+    // STORE path syncs the pivot in `storeFlagsTyped`; this is the HTTP
+    // sibling. `syncMailboxPivot` is idempotent so a repeat mark is safe.
+    await syncMailboxPivot(user_id, "Starred", mail_id, saved);
+    return true;
   } catch (error) {
     logger.error("Failed to mark mail as saved", {}, error);
     return false;
