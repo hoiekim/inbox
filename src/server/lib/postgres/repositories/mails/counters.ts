@@ -299,25 +299,6 @@ export const syncMailboxPivot = async (
   }
 };
 
-/**
- * Sync every mapped-utility pivot for one mail against its current flags.
- * Convenience over `syncMailboxPivot` for a caller that just mutated a mail
- * and needs `Starred` and `Trash` both to reflect the new `saved` and
- * `deleted` values. Runs the two pivot writes in parallel — they touch
- * disjoint rows and don't share a lock.
- */
-export const syncMappedUtilityPivots = async (
-  user_id: string,
-  mail_id: string,
-  saved: boolean,
-  deleted: boolean
-): Promise<void> => {
-  await Promise.all([
-    syncMailboxPivot(user_id, "Starred", mail_id, saved),
-    syncMailboxPivot(user_id, "Trash", mail_id, deleted),
-  ]);
-};
-
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,

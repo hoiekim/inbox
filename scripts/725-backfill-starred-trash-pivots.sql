@@ -5,11 +5,14 @@
 -- (mails.deleted = TRUE) via the web client, POST /mark, or a legacy IMAP client.
 -- Without this the two boxes ship empty and only new stars/deletes populate them.
 --
--- Idempotent: the pivot INSERT uses ON CONFLICT DO NOTHING keyed on
--- (user_id, mailbox, mail_id), and the counter seed uses GREATEST() over the
--- existing row. Re-runs are safe and cheap. A live star that happens between
--- the pivot insert and the counter seed collides only on the counter row; the
--- live path's atomic reservation still returns a distinct value.
+-- Idempotent under two rules:
+--   1. Skip mails that already have a pivot for the target mailbox (NOT EXISTS).
+--   2. Continue UID assignment from the current MAX(uid) for (user, mailbox), so
+--      ROW_NUMBER() never collides with an existing pivot's uid on the
+--      (user_id, mailbox, uid) UNIQUE index. ON CONFLICT DO NOTHING keys on the
+--      PK (user_id, mailbox, mail_id), which does NOT cover a uid collision on
+--      the separate UNIQUE index — Postgres arbiters are per-index. So we make
+--      sure the two never overlap in the first place.
 --
 -- Sent-mail note: the pivot INSERT covers sent-starred / sent-deleted mails
 -- too. The IMAP read side today JOINs mails and filters sent = FALSE, so those
@@ -24,32 +27,58 @@
 
 BEGIN;
 
-WITH starred_rows AS (
+WITH existing_max_starred AS (
+  SELECT user_id, MAX(uid) AS max_uid
+  FROM mail_mailbox_uid
+  WHERE mailbox = 'Starred'
+  GROUP BY user_id
+),
+starred_rows AS (
   SELECT
-    user_id,
-    mail_id,
-    ROW_NUMBER() OVER (
-      PARTITION BY user_id
-      ORDER BY date ASC, mail_id ASC
+    m.user_id,
+    m.mail_id,
+    COALESCE(em.max_uid, 0) + ROW_NUMBER() OVER (
+      PARTITION BY m.user_id
+      ORDER BY m.date ASC, m.mail_id ASC
     ) AS uid
-  FROM mails
-  WHERE saved = TRUE
+  FROM mails m
+  LEFT JOIN existing_max_starred em ON em.user_id = m.user_id
+  WHERE m.saved = TRUE
+    AND NOT EXISTS (
+      SELECT 1 FROM mail_mailbox_uid x
+      WHERE x.user_id = m.user_id
+        AND x.mailbox = 'Starred'
+        AND x.mail_id = m.mail_id
+    )
 )
 INSERT INTO mail_mailbox_uid (user_id, mailbox, mail_id, uid)
 SELECT user_id, 'Starred', mail_id, uid
 FROM starred_rows
 ON CONFLICT (user_id, mailbox, mail_id) DO NOTHING;
 
-WITH trash_rows AS (
+WITH existing_max_trash AS (
+  SELECT user_id, MAX(uid) AS max_uid
+  FROM mail_mailbox_uid
+  WHERE mailbox = 'Trash'
+  GROUP BY user_id
+),
+trash_rows AS (
   SELECT
-    user_id,
-    mail_id,
-    ROW_NUMBER() OVER (
-      PARTITION BY user_id
-      ORDER BY date ASC, mail_id ASC
+    m.user_id,
+    m.mail_id,
+    COALESCE(em.max_uid, 0) + ROW_NUMBER() OVER (
+      PARTITION BY m.user_id
+      ORDER BY m.date ASC, m.mail_id ASC
     ) AS uid
-  FROM mails
-  WHERE deleted = TRUE
+  FROM mails m
+  LEFT JOIN existing_max_trash em ON em.user_id = m.user_id
+  WHERE m.deleted = TRUE
+    AND NOT EXISTS (
+      SELECT 1 FROM mail_mailbox_uid x
+      WHERE x.user_id = m.user_id
+        AND x.mailbox = 'Trash'
+        AND x.mail_id = m.mail_id
+    )
 )
 INSERT INTO mail_mailbox_uid (user_id, mailbox, mail_id, uid)
 SELECT user_id, 'Trash', mail_id, uid
