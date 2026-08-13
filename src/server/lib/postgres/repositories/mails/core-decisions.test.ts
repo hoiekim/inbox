@@ -15,7 +15,7 @@
  * `reference_bun_mock_module_global_hoisting.md`).
  */
 import { describe, it, expect } from "bun:test";
-import { decideMappedPivots } from "./core";
+import { decideMappedPivots } from "./pivot-decisions";
 
 describe("decideMappedPivots — gating logic for mapped-utility pivot writes", () => {
   it("undefined flag = skip its pivot (INSERT-branch convention for false-flag fresh rows)", () => {
