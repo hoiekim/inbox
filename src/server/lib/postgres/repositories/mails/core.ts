@@ -15,7 +15,19 @@ import {
   TEXT_LINE_COUNT,
   HTML_LINE_COUNT,
 } from "../../models";
-import { getNextModseq, writeMailboxUid } from "./counters";
+import {
+  getNextModseq,
+  syncMailboxPivot,
+  writeMailboxUid,
+} from "./counters";
+
+// The two mapped-utility mailbox names — kept as string literals to avoid a
+// cycle back into `imap/util.ts` (which pulls this module's barrel). The
+// `mail_mailbox_uid` writes here are keyed on the same canonical spelling
+// that `canonicalMailbox` produces, so a `COPY 5 "starred"` on the wire
+// still lands on `Starred`.
+const STARRED_MAILBOX = "Starred";
+const TRASH_MAILBOX = "Trash";
 import {
   computeFullMessageSize,
   type FetchMailInput,
@@ -63,13 +75,21 @@ export interface SaveMailInput {
   spam_reasons?: string[] | null;
   is_spam?: boolean;
   /**
-   * Flags the destination box selects on, when it is a flag-derived utility
-   * view (`Drafts`, `Junk`). Applied on both the INSERT and the 23505 merge
-   * branch: membership there is the flag, so a merge that skipped it would
-   * answer `OK [APPENDUID …]` for a message that landed in no box the client
-   * named. `utilityPlacement` in `imap/util.ts` produces it.
+   * Flags the destination box selects on. `Drafts` / `Junk` (domain-scoped
+   * utility views) select rows by the flag, so a merge that skipped this
+   * would answer `OK [APPENDUID …]` for a message that landed in no box the
+   * client named. `Starred` / `Trash` (mapped-utility, #725) do the reverse:
+   * a pivot row IS the membership, and saveMail mirrors `saved` / `deleted`
+   * here into the pivot on both the INSERT and the 23505 merge branch so a
+   * placement flip stays in agreement with the `mail_mailbox_uid` row.
+   * `utilityPlacement` in `imap/util.ts` produces it.
    */
-  placement?: { draft?: boolean; is_spam?: boolean };
+  placement?: {
+    draft?: boolean;
+    is_spam?: boolean;
+    saved?: boolean;
+    deleted?: boolean;
+  };
   /**
    * Destination mailbox path (per-account like `INBOX/accounts/claude` /
    * `Sent Messages/accounts/claude`, or user-created like `Archive`). When
@@ -200,6 +220,30 @@ export const saveMail = async (
           input.uid_mailbox as number
         );
       }
+      // Mapped-utility invariant (#725): `mails.saved = TRUE ⇔ pivot on
+      // Starred`, `mails.deleted = TRUE ⇔ pivot on Trash`. A COPY of a
+      // starred INBOX mail to `Archive`, a MOVE of a starred mail, or an
+      // APPEND with `\Flagged` all carry `saved = TRUE` on the new row here;
+      // without this the row is starred but has no `Starred` pivot, so the
+      // utility view stays empty for it. Skip the write when the destination
+      // IS the mapped-utility being synced — `writeMailboxUid` above already
+      // handled that pivot for the reserved UID.
+      if (data.saved && input.mailbox !== STARRED_MAILBOX) {
+        await syncMailboxPivot(
+          input.user_id,
+          STARRED_MAILBOX,
+          inserted_id,
+          true
+        );
+      }
+      if (data.deleted && input.mailbox !== TRASH_MAILBOX) {
+        await syncMailboxPivot(
+          input.user_id,
+          TRASH_MAILBOX,
+          inserted_id,
+          true
+        );
+      }
       // On the INSERT branch the row we just wrote has our input.uid_domain
       // (no conflict) — return it verbatim so storeMail can reconcile
       // mail.uid.domain for domain-scoped COPY/APPEND wire responses.
@@ -270,6 +314,35 @@ export const saveMail = async (
           input.mailbox,
           existing.mail_id,
           input.uid_mailbox as number
+        );
+      }
+      // Mirror the placement flip into the mapped-utility pivots — same
+      // invariant as the INSERT branch above. A placement that transitions
+      // `saved` to TRUE (COPY of an already-saved mail into `Starred` where
+      // a same-Message-ID row already existed) has to write the pivot too;
+      // a transition to FALSE has to drop it. Same on `deleted` / `Trash`.
+      // Skipped when the destination IS the mapped-utility being synced —
+      // `writeMailboxUid` above handled that pivot for the reserved UID.
+      if (
+        input.placement?.saved !== undefined &&
+        input.mailbox !== STARRED_MAILBOX
+      ) {
+        await syncMailboxPivot(
+          input.user_id,
+          STARRED_MAILBOX,
+          existing.mail_id,
+          input.placement.saved
+        );
+      }
+      if (
+        input.placement?.deleted !== undefined &&
+        input.mailbox !== TRASH_MAILBOX
+      ) {
+        await syncMailboxPivot(
+          input.user_id,
+          TRASH_MAILBOX,
+          existing.mail_id,
+          input.placement.deleted
         );
       }
       // On the 23505 merge branch the caller's input.uid_domain is a
@@ -436,7 +509,15 @@ export const markMailSaved = async (
       { saved, updated: DB_NOW },
       [MAIL_ID]
     );
-    return rows.length > 0;
+    if (rows.length === 0) return false;
+    // Mirror the flag into the `Starred` pivot so the IMAP utility view
+    // agrees with the web client (#725). If skipped, a "Save" from the web
+    // sets `mails.saved = true` and the `Starred` mailbox stays empty for
+    // that message — the two surfaces diverge on the same row. The IMAP
+    // STORE path syncs the pivot in `storeFlagsTyped`; this is the HTTP
+    // sibling. `syncMailboxPivot` is idempotent so a repeat mark is safe.
+    await syncMailboxPivot(user_id, "Starred", mail_id, saved);
+    return true;
   } catch (error) {
     logger.error("Failed to mark mail as saved", {}, error);
     return false;

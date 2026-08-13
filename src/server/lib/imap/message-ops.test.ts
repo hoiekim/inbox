@@ -183,9 +183,20 @@ const emptySeqState = (): SequenceState => ({
 });
 
 // A store whose setFlags resolves to `result` and records its calls.
-const makeFlagStore = (result: { uid: number; read?: boolean }[]) => {
+// getUser is included so the #725 pivot-sync path in storeFlagsTyped
+// (which reads `store.getUser().id`) doesn't throw when the STORE touches
+// `\Flagged` / `\Deleted`.
+const makeFlagStore = (
+  result: { uid: number; mail_id?: string; read?: boolean; saved?: boolean; deleted?: boolean }[]
+) => {
   const setFlags = mock(() => Promise.resolve(result));
-  return { store: { setFlags } as unknown as Store, setFlags };
+  return {
+    store: {
+      setFlags,
+      getUser: () => ({ id: "user-123", username: "admin" }),
+    } as unknown as Store,
+    setFlags,
+  };
 };
 
 const uidStoreRequest = (start: number, end?: number): StoreRequest => ({
@@ -699,5 +710,112 @@ describe("searchTyped — multi-element bare set executes (#659)", () => {
     const { out } = await run("t4", seqReq([{ start: 1, end: 3 }]), true);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storeFlagsTyped — mapped-utility pivot sync (#725)
+// ---------------------------------------------------------------------------
+
+describe("storeFlagsTyped — Starred / Trash pivot sync (#725)", () => {
+  const seqState: SequenceState = {
+    seqToUid: [42],
+    uidToSeq: new Map([[42, 1]]),
+  };
+
+  const flaggedRequest = (op: "+FLAGS" | "-FLAGS", flag: string): StoreRequest => ({
+    sequenceSet: { type: "uid", ranges: [{ start: 42 }] },
+    operation: op,
+    flags: [flag],
+  });
+
+  // Which pool operations fired during the last STORE — pattern-matched off
+  // the SQL text mockQuery sees. Deliberately loose: the counters module owns
+  // the exact query text; this test only pins WHICH operations happened.
+  const seenOps = () => {
+    const ops = { pivotInsert: false, pivotDelete: false, counterTick: false };
+    for (const call of mockQuery.mock.calls) {
+      const sql = String(call[0] ?? "").toLowerCase();
+      if (sql.includes("insert into mail_mailbox_uid")) ops.pivotInsert = true;
+      if (sql.includes("delete from mail_mailbox_uid")) ops.pivotDelete = true;
+      if (sql.includes("mail_uid_counters")) ops.counterTick = true;
+    }
+    return ops;
+  };
+
+  it("inserts a Starred pivot when +FLAGS (\\Flagged) sets saved on a mail", async () => {
+    const { store } = makeFlagStore([
+      { uid: 42, mail_id: "mail-abc", saved: true, deleted: false },
+    ]);
+    const { write } = makeWriter();
+
+    await storeFlagsTyped(
+      "P1",
+      flaggedRequest("+FLAGS", "\\Flagged"),
+      true,
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    // The pivot-insert path fired; the pivot-delete did not (this is a set).
+    const ops = seenOps();
+    expect(ops.pivotInsert).toBe(true);
+    expect(ops.pivotDelete).toBe(false);
+    expect(ops.counterTick).toBe(true);
+  });
+
+  it("deletes the Trash pivot when -FLAGS (\\Deleted) clears deleted on a mail", async () => {
+    const { store } = makeFlagStore([
+      { uid: 42, mail_id: "mail-abc", saved: false, deleted: false },
+    ]);
+    const { write } = makeWriter();
+
+    await storeFlagsTyped(
+      "P2",
+      flaggedRequest("-FLAGS", "\\Deleted"),
+      true,
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    // Delete branch, no counter tick (see `syncMailboxPivot`'s delete arm —
+    // pinned in counters.test.ts too, asserted here at the wire integration
+    // layer to catch a regression in either half without needing both).
+    const ops = seenOps();
+    expect(ops.pivotDelete).toBe(true);
+    expect(ops.pivotInsert).toBe(false);
+    expect(ops.counterTick).toBe(false);
+  });
+
+  it("does not touch any pivot when +FLAGS (\\Seen) is the only change", async () => {
+    // The gate. `touchesSaved` / `touchesDeleted` are false for a Seen-only
+    // STORE, so a 100-row bulk `+FLAGS \Seen` skips 200 useless pivot
+    // upserts. Pins that skip.
+    const { store } = makeFlagStore([
+      { uid: 42, mail_id: "mail-abc", read: true, saved: false, deleted: false },
+    ]);
+    const { write } = makeWriter();
+
+    await storeFlagsTyped(
+      "P3",
+      flaggedRequest("+FLAGS", "\\Seen"),
+      true,
+      store,
+      "INBOX",
+      false,
+      seqState,
+      write
+    );
+
+    const ops = seenOps();
+    expect(ops.pivotInsert).toBe(false);
+    expect(ops.pivotDelete).toBe(false);
+    expect(ops.counterTick).toBe(false);
   });
 });

@@ -84,11 +84,12 @@ describe("Store.listMailboxes", () => {
 
   it("returns only the server-defined boxes when no accounts and no user mailboxes exist", async () => {
     // The utility folders are unconditional (#725): a client has to see
-    // `Drafts` before it has a draft to put there, and RFC 6154 role discovery
+    // `Drafts` before it has a draft to put there, `Starred` / `Trash`
+    // before it can promote a mail to them, and RFC 6154 role discovery
     // reads them off LIST. The account folders stay conditional.
     const store = new Store(makeUser());
     const result = await store.listMailboxes();
-    expect(result).toEqual(["INBOX", "Drafts", "Junk"]);
+    expect(result).toEqual(["INBOX", "Drafts", "Junk", "Starred", "Trash"]);
   });
 });
 

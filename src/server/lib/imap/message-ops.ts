@@ -7,7 +7,9 @@ import {
   markRead,
   getDomainUidNext,
   getAccountUidNext,
+  getMailboxUidNext,
   getImapUidValidity,
+  syncMailboxPivot,
 } from "server";
 import { logger } from "server";
 import { Store } from "./store";
@@ -17,6 +19,7 @@ import {
   canonicalMailbox,
   deriveCopyMessageId,
   isDomainScoped,
+  isMappedUtilityFolder,
   isSentBox,
 } from "./util";
 import { shouldMarkAsRead } from "./session-utils";
@@ -429,6 +432,17 @@ export async function storeFlagsTyped(
     const { sequenceSet, operation, flags, silent } = storeRequest;
     const ranges = convertSequenceSet(sequenceSet);
 
+    // Which mapped-utility pivots the STORE might have moved (#725). A
+    // FLAGS (SET) always resets both flags, so both may have changed. A
+    // +FLAGS / -FLAGS only touches the flags in `flags`. The invariant
+    // before this STORE is `pivot ⇔ mails.<flag>` (see `syncMailboxPivot`),
+    // so a flag the STORE didn't name is guaranteed unchanged and we skip
+    // the pivot write for it — otherwise every STORE of `\Seen` on 100
+    // rows would round-trip 200 useless pivot upserts.
+    const baseOp = operation.replace(".SILENT", "");
+    const touchesSaved = baseOp === "FLAGS" || flags.includes("\\Flagged");
+    const touchesDeleted = baseOp === "FLAGS" || flags.includes("\\Deleted");
+
     for (const { start, end } of ranges) {
       let uidStart = start;
       let uidEnd = end;
@@ -474,6 +488,34 @@ export async function storeFlagsTyped(
       // desynchronizes the client. Skip empty ranges instead.
       if (updatedMails.length === 0) {
         continue;
+      }
+
+      // Mirror the post-STORE flag values into the mapped-utility pivots
+      // (#725) — one pivot per mapped-utility folder we might have moved.
+      // Runs concurrently across mails (each row's writes are on disjoint
+      // pivot rows); a failure aborts the STORE via the outer try/catch so
+      // the client retries rather than seeing a half-synced view. `userId`
+      // is fetched lazily here — the STORE tests that mock `store` with
+      // only `setFlags` still exercise the RFC compliance paths without
+      // needing a full session.
+      if (touchesSaved || touchesDeleted) {
+        const userId = store.getUser().id;
+        await Promise.all(
+          updatedMails.flatMap((mail) => {
+            const writes: Promise<void>[] = [];
+            if (touchesSaved) {
+              writes.push(
+                syncMailboxPivot(userId, "Starred", mail.mail_id, mail.saved)
+              );
+            }
+            if (touchesDeleted) {
+              writes.push(
+                syncMailboxPivot(userId, "Trash", mail.mail_id, mail.deleted)
+              );
+            }
+            return writes;
+          })
+        );
       }
 
       // A .SILENT store suppresses the FLAGS echo, but RFC 4551 §3.3.2
@@ -594,7 +636,14 @@ export async function copyMessageTyped(
     }
 
     // The full set of fields we need to clone — anything the FETCH/render
-    // pipeline might surface to a client of the destination mailbox.
+    // pipeline might surface to a client of the destination mailbox. `read`
+    // / `saved` / `deleted` / `draft` / `answered` are explicit here because
+    // RFC 3501 §6.4.7 requires COPY to preserve flags on the copy — and
+    // `getMessages` won't return them unless they're named. Without this
+    // the COPY of a starred INBOX mail to `Archive` loses the star, which
+    // #725's mapped-utility invariant assumes DOES propagate (saveMail's
+    // pivot sync fires on `data.saved = true`, which needs the field
+    // populated here).
     const cloneFields = [
       "subject",
       "date",
@@ -610,7 +659,11 @@ export async function copyMessageTyped(
       "attachments",
       "messageId",
       "insight",
-      "flags",
+      "read",
+      "saved",
+      "deleted",
+      "draft",
+      "answered",
       "uid",
     ];
 
@@ -645,11 +698,23 @@ export async function copyMessageTyped(
     // synthetic address that drives the destination-mailbox query
     // (e.g. "Archive@<domain>").
     const destAccount = boxToAccount(user.username, destMailbox);
-    // `destIsDomainScoped` drives both address routing below (a domain-scoped
-    // box has no address filter) and the destination UID space for the COPYUID
-    // response (INBOX, the unified Sent folder and the utility folders all use
-    // uid.domain).
+    // Two overlapping axes on the destination:
+    // - `destIsDomainScoped` — UID space for the COPYUID response.
+    //   INBOX / unified `Sent Messages` / domain-scoped utility folders
+    //   (`Drafts`, `Junk`) emit `uid.domain`.
+    // - `destIsMappedUtility` — the `Starred` / `Trash` remainder of #725.
+    //   Same shape as a per-account mapped destination (writes a
+    //   `mail_mailbox_uid` row and emits `uid.account` in COPYUID), but the
+    //   counter is per-mailbox rather than per-account. `getMailboxUidNext`
+    //   handles the difference — see `buildMailboxUidQuery`'s docstring for
+    //   the sent-axis rationale.
+    // - `destPreservesRecipient` — row-selection is address-free (scope for
+    //   the domain views, flag for utility folders), so the copy keeps the
+    //   source's `to`/`envelope_to` unchanged. Only per-account and
+    //   user-created boxes need the re-anchor to `destAccount`.
     const destIsDomainScoped = isDomainScoped(destMailbox);
+    const destIsMappedUtility = isMappedUtilityFolder(destMailbox);
+    const destPreservesRecipient = destIsDomainScoped || destIsMappedUtility;
     const destIsSent = isSentBox(destMailbox);
 
     // Source-side UID extraction for the COPYUID response — domain-scoped for
@@ -734,13 +799,15 @@ export async function copyMessageTyped(
       // FETCH BODY[HEADER] still shows the original recipient header — the
       // override only affects routing.
       //
-      // A domain-scoped destination (INBOX, the unified Sent folder, a utility
-      // folder) selects rows without an address term, so the copy surfaces
-      // there on its own and the real recipient is kept. `boxToAccount` would
-      // otherwise name the folder itself (`Junk@<domain>`,
-      // `Sent Messages@<domain>`) — that overwrites the recipient and makes
-      // `getAccountStats` report a per-account mailbox by that name.
-      if (destIsDomainScoped) {
+      // A destination that selects rows without an address term (INBOX,
+      // the unified Sent folder, a domain-scoped utility folder, or a
+      // mapped-utility folder — `Starred`/`Trash`) keeps the real recipient.
+      // `boxToAccount` would otherwise name the folder itself
+      // (`Junk@<domain>`, `Starred@<domain>`) — that overwrites the
+      // recipient, makes `getAccountStats` report a per-account mailbox by
+      // that name, and (for the mapped-utility case) would keep the source
+      // and the copy from surfacing correctly in their intended boxes.
+      if (destPreservesRecipient) {
         newMail.to = sourceMail.to;
         newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
@@ -768,26 +835,32 @@ export async function copyMessageTyped(
       }
       newMail.sent = destIsSent;
 
-      // Fresh UIDs in the destination's UID space. The `sent` arg
-      // matters: the UID counter is keyed by `sent`, so a copy to a
-      // Sent box without the arg would draw from the received-side
-      // counter and collide with existing sent rows. Reservation is
-      // atomic (getDomainUidNext/getAccountUidNext upsert a per-(user,
-      // sent) counter), so concurrent COPYs to the same destination no
-      // longer race to the same UID. A reservation failure throws and
-      // is caught below as a tagged NO — never a fabricated UID.
+      // Fresh UIDs in the destination's UID space. Three cases collapse
+      // into `newDomainUid` + `newAccountUid`:
+      // - Domain-scoped destination: `newDomainUid` is the wire UID; the
+      //   `getAccountUidNext` reservation still runs so the receive path's
+      //   per-account counter stays contiguous (a domain-scoped COPY that
+      //   skipped it would let a later receive collide on `uid_mailbox`).
+      // - Per-account / user-created destination: `newAccountUid` is the
+      //   wire UID and comes from the `(user, account, sent)` counter.
+      // - Mapped-utility destination (`Starred`/`Trash`): `newAccountUid`
+      //   is the wire UID and comes from the per-mailbox counter, which
+      //   does NOT key on `sent` — see `buildMailboxUidQuery`.
+      // All three reservations are atomic (counter upsert), so concurrent
+      // COPYs to the same destination don't race to the same UID. A
+      // reservation failure throws and is caught below as a tagged NO —
+      // never a fabricated UID.
       const newDomainUid = await getDomainUidNext(user.id, destIsSent);
-      const newAccountUid = await getAccountUidNext(
-        user.id,
-        destAccount,
-        destIsSent
-      );
+      const newAccountUid = destIsMappedUtility
+        ? await getMailboxUidNext(user.id, destMailbox)
+        : await getAccountUidNext(user.id, destAccount, destIsSent);
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
       // storeMail derives the rest from the destination: the
-      // `mail_mailbox_uid` mapping for a mapped box (#702 PR-2b), and the
-      // membership flag for a utility folder.
+      // `mail_mailbox_uid` mapping for a mapped box (per-account or
+      // mapped-utility, both keyed off `destMailbox`), and the membership
+      // flag for a utility folder.
       const ok = await store.storeMail(newMail, destMailbox);
       if (!ok) {
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
@@ -901,6 +974,11 @@ export async function moveMessageTyped(
       return;
     }
 
+    // Same field list as the COPY path — see the docblock there for the
+    // RFC 3501 §6.4.7 flag-preservation rationale. MOVE = COPY + expunge,
+    // so if the copy loses `saved` the mail vanishes from Starred both
+    // on the source side (source gets expunged) and on the destination
+    // (copy has no `saved = TRUE`, no Starred pivot).
     const cloneFields = [
       "subject",
       "date",
@@ -916,7 +994,11 @@ export async function moveMessageTyped(
       "attachments",
       "messageId",
       "insight",
-      "flags",
+      "read",
+      "saved",
+      "deleted",
+      "draft",
+      "answered",
       "uid",
     ];
 
@@ -939,11 +1021,12 @@ export async function moveMessageTyped(
 
     const user = store.getUser();
     const destAccount = boxToAccount(user.username, destMailbox);
-    // `*IsInbox` drives address routing below (INBOX has no address filter);
-    // `*IsDomainScoped` drives both the UID space (INBOX, the unified Sent
-    // folder and the utility folders all use uid.domain) and, for the
-    // destination, address routing below.
+    // Same three-axis split as copyMessageTyped — see the docblock there
+    // for the domain-scoped / mapped-utility / preserves-recipient
+    // rationale. The MOVE path drives all three the same way COPY does.
     const destIsDomainScoped = isDomainScoped(destMailbox);
+    const destIsMappedUtility = isMappedUtilityFolder(destMailbox);
+    const destPreservesRecipient = destIsDomainScoped || destIsMappedUtility;
     const destIsSent = isSentBox(destMailbox);
     const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
@@ -998,13 +1081,15 @@ export async function moveMessageTyped(
         answered: sourceMail.answered,
       });
 
-      if (destIsDomainScoped) {
-        // Same rule as COPY — a domain-scoped destination selects rows without
-        // an address term, so keep the real recipient. There is nothing to
-        // re-anchor: no mapping row is written for such a destination, and
-        // every other box reads through an INNER JOIN on `mail_mailbox_uid`
-        // (`repositories/mails/imap.ts`), so the clone cannot surface in the
-        // source view no matter what its address fields say.
+      if (destPreservesRecipient) {
+        // Same rule as COPY — a destination that selects rows without an
+        // address term (INBOX, unified Sent, a domain-scoped OR
+        // mapped-utility folder) keeps the real recipient. There is
+        // nothing to re-anchor: the source's view reads through an INNER
+        // JOIN on `mail_mailbox_uid` (`repositories/mails/imap.ts`) that
+        // this clone is not on the source side of, so the clone cannot
+        // surface in the source view no matter what its address fields
+        // say.
         newMail.to = sourceMail.to;
         newMail.envelopeTo = sourceMail.envelopeTo ?? [];
       } else {
@@ -1026,11 +1111,9 @@ export async function moveMessageTyped(
       newMail.sent = destIsSent;
 
       const newDomainUid = await getDomainUidNext(user.id, destIsSent);
-      const newAccountUid = await getAccountUidNext(
-        user.id,
-        destAccount,
-        destIsSent
-      );
+      const newAccountUid = destIsMappedUtility
+        ? await getMailboxUidNext(user.id, destMailbox)
+        : await getAccountUidNext(user.id, destAccount, destIsSent);
       newMail.uid.domain = newDomainUid;
       newMail.uid.account = newAccountUid;
 
@@ -1155,7 +1238,13 @@ export async function appendMessage(
     const targetMailbox = canonicalMailbox(appendRequest.mailbox);
     const account = boxToAccount(user.username, targetMailbox);
     const domainUid = await getDomainUidNext(user.id);
-    const accountUid = await getAccountUidNext(user.id, account);
+    // Same split as COPY/MOVE: a mapped-utility target (`Starred`/`Trash`)
+    // reserves from the per-mailbox counter (no `sent` axis), everything
+    // else from the per-account counter. `mail.sent` on an APPENDed row is
+    // false — the counter axis matches.
+    const accountUid = isMappedUtilityFolder(targetMailbox)
+      ? await getMailboxUidNext(user.id, targetMailbox)
+      : await getAccountUidNext(user.id, account);
     mail.uid.domain = domainUid;
     mail.uid.account = accountUid;
 

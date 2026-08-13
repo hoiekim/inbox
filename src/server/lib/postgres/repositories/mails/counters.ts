@@ -108,6 +108,38 @@ export const buildAccountUidQuery = (
   ]);
 };
 
+/**
+ * Per-mailbox UID-reservation query (kind="mailbox", scope=mailbox path).
+ *
+ * Distinct from `buildAccountUidQuery` in ONE axis: this counter row is NOT
+ * keyed on `sent`. That axis matters for per-account boxes because
+ * `INBOX/accounts/<local>` and `Sent Messages/accounts/<local>` are two
+ * different mailboxes — different UID spaces, ok to reuse UID values across
+ * the pair. It does NOT match for the mapped-utility folders (`Starred`,
+ * `Trash`, #725), whose membership spans both directions: a single mailbox
+ * that has to enumerate one strictly monotonic UID sequence covering starred
+ * received mail AND starred sent mail. Two `sent`-keyed counters handing out
+ * `1, 2, 3, …` to sent-starred and `1, 2, 3, …` to received-starred would
+ * collide on `mail_mailbox_uid_user_id_mailbox_uid_key` at INSERT time.
+ * Hardcoded `sent=false` here is just a placeholder to occupy the
+ * composite-key column — one counter row per (user_id, mailbox).
+ *
+ * Seed on first-ever reservation: `MAX(uid) + 1` in `mail_mailbox_uid` for
+ * the same (user_id, mailbox). Idempotent — if a backfill script pre-seeded
+ * rows without touching the counter, the first live reservation catches up
+ * to `MAX + 1` and every reservation after is `DO UPDATE + 1`.
+ */
+export const buildMailboxUidQuery = (
+  user_id: string,
+  mailbox: string
+): { sql: string; values: ParamValue[] } => {
+  const seedSql = `
+      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
+      WHERE ${USER_ID} = $1 AND ${MAILBOX} = $5
+    `;
+  return buildReserveUidQuery(user_id, "mailbox", mailbox, false, seedSql, [mailbox]);
+};
+
 const reserveNextUid = async (query: {
   sql: string;
   values: ParamValue[];
@@ -148,6 +180,25 @@ export const getAccountUidNext = async (
 };
 
 /**
+ * Reserve the next UID for a mapped-utility mailbox (`Starred`, `Trash`).
+ * Callers pass the literal box name — the same string persisted in
+ * `mail_mailbox_uid.mailbox`. Not for per-account boxes: those still route
+ * through `getAccountUidNext` because their sent/received halves are
+ * DIFFERENT mailboxes and legitimately share the UID number space.
+ */
+export const getMailboxUidNext = async (
+  user_id: string,
+  mailbox: string
+): Promise<number> => {
+  try {
+    return await reserveNextUid(buildMailboxUidQuery(user_id, mailbox));
+  } catch (error) {
+    logger.error("Error getting mailbox UID next", { mailbox }, error);
+    throw error;
+  }
+};
+
+/**
  * Record a UID assignment in the per-(user, mailbox, mail) mapping.
  * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or
  * the pre-existing one when a row for `(user, mailbox, mail_id)` already
@@ -181,6 +232,73 @@ export const getAccountUidNext = async (
  * back to a mailgun-response-return (mail already sent; a "retry" would
  * duplicate delivery — the ops-side error dump preserves recovery info).
  */
+/**
+ * Drop a `mail_mailbox_uid` mapping row. Used by the mapped-utility flag hook
+ * (see `syncMailboxPivot`): a STORE that clears `\Flagged` on a starred mail
+ * has to remove its `Starred` pivot so the utility view stops surfacing it.
+ * Idempotent — a delete against a non-existent pivot is a legal no-op.
+ *
+ * Not a substitute for `expungeMailsByUid` on a mapped destination: expunge
+ * flips `mails.expunged = TRUE` and keeps the pivot so the mailbox's UID
+ * sequence stays intact (RFC 3501 §2.3.1.1). This drops the pivot outright,
+ * so the UID it held is retired forever — a re-star draws a fresh higher UID
+ * from `getMailboxUidNext`, which is exactly what the RFC requires.
+ */
+export const deleteMailboxUid = async (
+  user_id: string,
+  mailbox: string,
+  mail_id: string
+): Promise<void> => {
+  try {
+    await pool.query(
+      `DELETE FROM ${MAIL_MAILBOX_UID}
+       WHERE ${USER_ID} = $1 AND ${MAILBOX} = $2 AND ${MAIL_ID} = $3`,
+      [user_id, mailbox, mail_id]
+    );
+  } catch (error) {
+    logger.error(
+      "Failed to delete mail_mailbox_uid mapping",
+      { user_id, mailbox, mail_id },
+      error
+    );
+    throw error;
+  }
+};
+
+/**
+ * Mirror a mail's mapped-utility membership flag into `mail_mailbox_uid`.
+ * The pivot table for a mapped-utility folder (`Starred`, `Trash`) has to
+ * agree with the corresponding `mails` flag (`saved`, `deleted`) — the view
+ * shows exactly the mails with a pivot row, so a divergence is a mail
+ * visible in one surface (web / flag) and invisible in the other (IMAP /
+ * pivot). Called from every path that flips the flag: `setMailFlags`
+ * (IMAP STORE), `markMailSaved` (HTTP /mark), and future writers.
+ *
+ * `isPresent` names the target state, not the delta — the caller passes the
+ * post-write flag value from `mails.saved` / `mails.deleted`, and this
+ * either inserts (writeMailboxUid ON CONFLICT DO NOTHING via DO UPDATE that
+ * keeps the existing uid) or deletes to match. Both branches are idempotent,
+ * so a repeat STORE that doesn't change the flag stays cheap.
+ */
+export const syncMailboxPivot = async (
+  user_id: string,
+  mailbox: string,
+  mail_id: string,
+  isPresent: boolean
+): Promise<void> => {
+  if (isPresent) {
+    // Reserve a fresh mailbox UID and try to insert. If the pivot already
+    // exists (this STORE was a no-op re-star), writeMailboxUid's
+    // ON CONFLICT DO UPDATE keeps the old uid and the reservation is
+    // wasted — cheap, and preserves UID monotonicity for the case that
+    // matters: unstar-then-restar draws a NEW higher uid, per RFC.
+    const uid = await getMailboxUidNext(user_id, mailbox);
+    await writeMailboxUid(user_id, mailbox, mail_id, uid);
+  } else {
+    await deleteMailboxUid(user_id, mailbox, mail_id);
+  }
+};
+
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,

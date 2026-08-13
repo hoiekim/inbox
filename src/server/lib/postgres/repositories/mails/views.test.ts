@@ -119,29 +119,42 @@ describe("INBOX", () => {
 });
 
 describe("the IMAP-side folder table agrees with the predicate", () => {
-  it("names the same boxes", async () => {
+  // Only the DOMAIN-scoped utility folders participate in the views.ts side.
+  // Mapped-utility folders (`Starred`, `Trash`, #725 remainder) hold their
+  // membership in `mail_mailbox_uid` pivot rows, not in a flag predicate —
+  // there is no `membershipFilter` for them, and their UID space is
+  // `mail_mailbox_uid.uid` rather than `mails.uid_domain`. They live in
+  // `UTILITY_FOLDERS` for LIST + placement purposes only.
+  it("names the same domain-scoped boxes", async () => {
     const { UTILITY_FOLDERS } = await import("../../../imap/util");
-    expect(UTILITY_FOLDERS.map((folder) => folder.name).sort()).toEqual(
-      [DRAFTS_VIEW, JUNK_VIEW].sort()
-    );
+    const domainScoped = UTILITY_FOLDERS.filter((f) => f.uidSpace === "domain")
+      .map((f) => f.name)
+      .sort();
+    expect(domainScoped).toEqual([DRAFTS_VIEW, JUNK_VIEW].sort());
   });
 
-  it("writes exactly the flags the view reads", async () => {
-    // A COPY / MOVE / APPEND into a utility folder sets `placement`; the view
-    // selects on `membershipFilter`. If they ever disagree, the write reports
-    // success and the message is invisible in the box the client named.
+  it("writes exactly the flags the domain-scoped view reads", async () => {
+    // A COPY / MOVE / APPEND into a domain-scoped utility folder sets
+    // `placement`; the view selects on `membershipFilter`. If they ever
+    // disagree, the write reports success and the message is invisible in
+    // the box the client named. Mapped-utility folders have their own
+    // placement-write coupling (see the flag-STORE hook), not asserted here.
     const { UTILITY_FOLDERS } = await import("../../../imap/util");
-    for (const { name, placement } of UTILITY_FOLDERS) {
+    for (const { name, placement, uidSpace } of UTILITY_FOLDERS) {
+      if (uidSpace !== "domain") continue;
       expect(placement, `no placement for ${name}`).toEqual(
         membershipFilter(name, false)
       );
     }
   });
 
-  it("is listed as domain-scoped on the IMAP side too", async () => {
+  it("is listed as domain-scoped on the IMAP side too (for domain-scoped views only)", async () => {
     // `isDomainScoped` drives which UID the wire reports (COPYUID / APPENDUID /
     // FETCH); it has to agree with `usesDomainUidSpace`, which drives which UID
     // the query selects. Disagreement emits a UID that addresses nothing.
+    // Mapped-utility folders return false from both — their agreement is
+    // pinned separately (see the isDomainScoped + isMappedUtilityFolder tests
+    // in `utility-mailboxes.test.ts`).
     const { isDomainScoped } = await import("../../../imap/util");
     for (const view of [DRAFTS_VIEW, JUNK_VIEW]) {
       expect(isDomainScoped(view)).toBe(usesDomainUidSpace(view));

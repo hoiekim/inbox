@@ -49,6 +49,8 @@ describe("isUtilityFolder", () => {
   it("matches the defined names exactly", () => {
     expect(isUtilityFolder("Drafts")).toBe(true);
     expect(isUtilityFolder("Junk")).toBe(true);
+    expect(isUtilityFolder("Starred")).toBe(true);
+    expect(isUtilityFolder("Trash")).toBe(true);
   });
 
   it("is case-insensitive, matching the LIST de-dup", () => {
@@ -70,8 +72,18 @@ describe("isUtilityFolder", () => {
     expect(isUtilityFolder("")).toBe(false);
   });
 
-  it("puts every utility folder in the domain UID space", () => {
-    for (const name of NAMES) expect(isDomainScoped(name)).toBe(true);
+  it("splits utility folders by uidSpace: Drafts/Junk domain-scoped, Starred/Trash mapped", () => {
+    // Pre-#725-remainder invariant was "every utility folder is domain-scoped."
+    // The remainder needs a view spanning both `sent` axes (`Starred`, `Trash`),
+    // and the domain-scoped counter (`mail_uid_counters` keyed on
+    // `(user_id, uid_kind, uid_scope, sent)`) can't emit unique UIDs across
+    // that span — hence the split.
+    expect(isDomainScoped("Drafts")).toBe(true);
+    expect(isDomainScoped("Junk")).toBe(true);
+    expect(isDomainScoped("Starred")).toBe(false);
+    expect(isDomainScoped("Trash")).toBe(false);
+    // All four remain utility folders — same LIST/CREATE/RENAME semantics.
+    for (const name of NAMES) expect(isUtilityFolder(name)).toBe(true);
   });
 });
 
@@ -96,6 +108,12 @@ describe("LIST attributes", () => {
   it("reports the RFC 6154 special-use attribute", () => {
     expect(getMailboxAttributes("Drafts", NAMES)).toBe("\\Drafts \\HasNoChildren");
     expect(getMailboxAttributes("Junk", NAMES)).toBe("\\Junk \\HasNoChildren");
+    // #725 mapped-utility variants — RFC 6154 role discovery works only if
+    // LIST advertises the attribute for these too. Apple Mail's "Choose
+    // Mailbox Behaviors" screen keys off `\Flagged` / `\Trash` when the
+    // user picks which server folder is Starred / Trash.
+    expect(getMailboxAttributes("Starred", NAMES)).toBe("\\Flagged \\HasNoChildren");
+    expect(getMailboxAttributes("Trash", NAMES)).toBe("\\Trash \\HasNoChildren");
   });
 
   it("leaves every other box's attributes alone", () => {
@@ -137,10 +155,34 @@ describe("utilityPlacement", () => {
   it("returns the flag a write into the box must set", () => {
     expect(utilityPlacement("Drafts")).toEqual({ draft: true });
     expect(utilityPlacement("Junk")).toEqual({ is_spam: true });
+    // #725 mapped-utility variants — read side selects rows via the pivot
+    // table, but the flag still has to be set here so `mails.saved = TRUE ⇔
+    // pivot on Starred` (see saveMail INSERT/merge sync). A COPY into Starred
+    // that skipped `saved = TRUE` on the row would land a mail with a Starred
+    // pivot but a stale flag — the two surfaces (IMAP view / web
+    // `mails.saved`) would disagree on membership.
+    expect(utilityPlacement("Starred")).toEqual({ saved: true });
+    expect(utilityPlacement("Trash")).toEqual({ deleted: true });
   });
 
   it("returns nothing for any other box", () => {
     expect(utilityPlacement("Archive")).toBeUndefined();
     expect(utilityPlacement("INBOX")).toBeUndefined();
+  });
+
+  it("returns distinct flag mappings — no accidental sibling copy-paste", () => {
+    // The four utility folders each map to a DIFFERENT flag. A future
+    // config edit that miscopies a sibling's placement (e.g. Starred's
+    // `saved: true` gets replaced with `deleted: true` — cursor drift while
+    // editing UTILITY_FOLDERS) would land stars in the Trash view. Pin the
+    // shape so a mis-copy fails a test rather than just the sandbox.
+    const placements = [
+      utilityPlacement("Drafts"),
+      utilityPlacement("Junk"),
+      utilityPlacement("Starred"),
+      utilityPlacement("Trash"),
+    ];
+    const keys = placements.map((p) => Object.keys(p ?? {}).join(","));
+    expect(new Set(keys).size).toBe(placements.length);
   });
 });
