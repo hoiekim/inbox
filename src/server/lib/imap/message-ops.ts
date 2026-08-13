@@ -573,7 +573,7 @@ export async function storeFlagsTyped(
  * always in the same shape; resolving them here means the two callers can't
  * disagree about what a destination like `Starred` looks like.
  */
-type DestContext = {
+export type DestContext = {
   destAccount: string;
   destIsSent: boolean;
   destIsDomainScoped: boolean;
@@ -588,7 +588,7 @@ type DestContext = {
  * overloaded to mean both 'address-free filtering' AND 'domain UID space',
  * which is why `Starred`/`Trash` couldn't exist).
  */
-const resolveDestContext = (
+export const resolveDestContext = (
   username: string,
   destMailbox: string
 ): DestContext => {
@@ -640,7 +640,7 @@ const resolveDestContext = (
  *   pair, whose storeMail branch writes into `mail_mailbox_uid` keyed on
  *   the mailbox name).
  */
-const cloneMailToDestination = async (
+export const cloneMailToDestination = async (
   store: Store,
   sourceMail: Partial<MailType>,
   srcUid: number,

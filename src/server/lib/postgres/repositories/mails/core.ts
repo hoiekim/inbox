@@ -34,6 +34,43 @@ const STARRED_MAILBOX = "Starred";
 const TRASH_MAILBOX = "Trash";
 
 /**
+ * One pivot write the caller should issue for a saveMail row — `mailbox` is
+ * the mapped-utility name (Starred / Trash), `present` is the target flag
+ * value.
+ */
+export type MappedPivotDecision = { mailbox: string; present: boolean };
+
+/**
+ * The gating logic behind `syncMappedPivotsForRow`, extracted so the
+ * `undefined` ↔ skip convention can be unit-tested without a Postgres pool
+ * (the pool-facing sibling requires the FakePool recipe which is fragile
+ * across test files — see `reference_bun_mock_module_global_hoisting.md`).
+ * Returns the pivot writes the caller should issue, in order.
+ *
+ * - `saved === undefined` / `deleted === undefined` → skip the corresponding
+ *   pivot (INSERT branch uses this for a false-flag fresh row that never
+ *   had a pivot; merge branch uses it for flags the placement didn't touch).
+ * - `destMailbox === STARRED_MAILBOX` / `TRASH_MAILBOX` → skip that pivot;
+ *   the caller's own `writeMailboxUid` above (for the reserved UID) already
+ *   handled it, and calling `syncMailboxPivot` on top would waste a counter
+ *   tick on a ON CONFLICT DO UPDATE that keeps the same uid.
+ */
+export const decideMappedPivots = (
+  saved: boolean | undefined,
+  deleted: boolean | undefined,
+  destMailbox: string | undefined
+): MappedPivotDecision[] => {
+  const decisions: MappedPivotDecision[] = [];
+  if (saved !== undefined && destMailbox !== STARRED_MAILBOX) {
+    decisions.push({ mailbox: STARRED_MAILBOX, present: saved });
+  }
+  if (deleted !== undefined && destMailbox !== TRASH_MAILBOX) {
+    decisions.push({ mailbox: TRASH_MAILBOX, present: deleted });
+  }
+  return decisions;
+};
+
+/**
  * Mirror the mapped-utility invariants (#725) — `mails.saved = TRUE ⇔ pivot
  * on Starred`, `mails.deleted = TRUE ⇔ pivot on Trash` — after any saveMail
  * write. Called from both the INSERT branch (`saved`/`deleted` are the new
@@ -41,28 +78,19 @@ const TRASH_MAILBOX = "Trash";
  * `input.placement.saved`/`input.placement.deleted`, i.e. the intended
  * post-placement state).
  *
- * Passing `undefined` for either flag SKIPS its pivot write. The INSERT
- * branch uses this to avoid a wasted delete for a fresh row that never had a
- * pivot; the merge branch uses it to skip flags the placement didn't touch
- * (invariant already held pre-write, no flag flip means it still holds).
- *
- * `destMailbox` is the write's target — skipping the sync when it IS the
- * mapped-utility being synced avoids duplicating the pivot write that the
- * `writeMailboxUid` call above (in saveMail) already performed for the
- * reserved UID.
+ * `decideMappedPivots` above encodes the gating logic; this wrapper is the
+ * pool-touching side and stays trivial so the unit tests can pin the
+ * decisions instead of the effect.
  */
-const syncMappedPivotsForRow = async (
+export const syncMappedPivotsForRow = async (
   user_id: string,
   mail_id: string,
   saved: boolean | undefined,
   deleted: boolean | undefined,
   destMailbox: string | undefined
 ): Promise<void> => {
-  if (saved !== undefined && destMailbox !== STARRED_MAILBOX) {
-    await syncMailboxPivot(user_id, STARRED_MAILBOX, mail_id, saved);
-  }
-  if (deleted !== undefined && destMailbox !== TRASH_MAILBOX) {
-    await syncMailboxPivot(user_id, TRASH_MAILBOX, mail_id, deleted);
+  for (const { mailbox, present } of decideMappedPivots(saved, deleted, destMailbox)) {
+    await syncMailboxPivot(user_id, mailbox, mail_id, present);
   }
 };
 
