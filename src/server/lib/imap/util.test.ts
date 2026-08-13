@@ -1210,6 +1210,52 @@ describe("IMAP util", () => {
         expect(attachment[0]).toBe("application");
         expect(attachment[1]).toBe("octet-stream");
       });
+
+      it("emits a real media type when the stored contentType has no type half", () => {
+        // "/pdf" splits to ["", "pdf"] — an empty string, not undefined, so a
+        // destructuring default would not fire and `"" "pdf"` would reach the
+        // wire as an empty media type.
+        const attachment = attachmentBody("a.bin", "/pdf");
+        expect(attachment[0]).toBe("application");
+        expect(attachment[1]).toBe("pdf");
+      });
+
+      it("routes the media type and subtype through the encoder", () => {
+        // contentType is stored per-attachment and is not validated, so the
+        // type halves are as attacker-influenced as the filename.
+        const attachment = attachmentBody("a.bin", 'ap"p/pd\\f');
+        expect(attachment[0]).toBe('ap"p');
+        expect(attachment[1]).toBe("pd\\f");
+      });
+    });
+
+    describe("address local part and domain", () => {
+      // Both halves come from the stored address, which mailparser fills from
+      // the inbound header — a quoted local part is legal RFC 5322 and reaches
+      // the wire as a quoted string like every other stored value.
+      it("round-trips a local part containing a quote and a backslash", () => {
+        const envelope = parseEnvelope({
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "X", address: 'we"ird\\local@example.com' }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[2]).toEqual([
+          ["X", null, 'we"ird\\local', "example.com"],
+        ]);
+      });
+
+      it("round-trips a domain containing a quoted-special", () => {
+        const envelope = parseEnvelope({
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "X", address: 'user@ex"ample.com' }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[2]).toEqual([["X", null, "user", 'ex"ample.com']]);
+      });
     });
 
     describe("quoteString / formatNString", () => {
