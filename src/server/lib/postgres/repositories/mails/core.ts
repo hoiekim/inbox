@@ -20,6 +20,10 @@ import {
   syncMailboxPivot,
   writeMailboxUid,
 } from "./counters";
+import {
+  computeFullMessageSize,
+  type FetchMailInput,
+} from "../../../imap/session-utils";
 
 // The two mapped-utility mailbox names — kept as string literals to avoid a
 // cycle back into `imap/util.ts` (which pulls this module's barrel). The
@@ -61,10 +65,6 @@ const syncMappedPivotsForRow = async (
     await syncMailboxPivot(user_id, TRASH_MAILBOX, mail_id, deleted);
   }
 };
-import {
-  computeFullMessageSize,
-  type FetchMailInput,
-} from "../../../imap/session-utils";
 
 export interface SaveMailInput {
   user_id: string;
