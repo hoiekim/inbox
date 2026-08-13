@@ -53,6 +53,12 @@ export const encodeText = (str: string) => {
  * an external sender picks these bytes. Route every stored string through
  * here rather than escaping at the call site — partial escaping at four sites
  * is what produced both bugs.
+ *
+ * Scope note: this enforces the framing rules — the ones whose violation
+ * desyncs the connection. It deliberately passes 8-bit octets through, even
+ * though `CHAR` is strictly %x01-7F, because the server already emits UTF-8
+ * in quoted strings and clients read it. Encoding non-ASCII properly means
+ * emitting a literal (or negotiating UTF8=ACCEPT), which is a separate change.
  */
 export const quoteString = (value: string): string => {
   const sanitized = value.replace(/[\r\n\0]+/g, " ");
@@ -266,12 +272,17 @@ export const formatBodyStructure = (
     buildTextPart("html", mail.html, mail.html_octets, mail.html_line_count);
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
-    // Defaults cover a stored contentType with no "/" (e.g. "application"),
-    // which otherwise destructures `subtype` to undefined and reaches the wire
-    // as the literal string "undefined".
-    const [type = "application", subtype = "octet-stream"] = (
+    // A stored contentType is not guaranteed to be `type/subtype`. Normalizing
+    // both halves on falsiness (rather than a destructuring default, which only
+    // fires on undefined) covers every malformed shape: "application" leaves
+    // the subtype undefined, "/pdf" leaves the type an empty string, and
+    // "application/" leaves the subtype empty. Each would otherwise reach the
+    // wire as the literal `"undefined"` or as an empty media type.
+    const [rawType, rawSubtype] = (
       attachment.contentType || "application/octet-stream"
     ).split("/");
+    const type = rawType || "application";
+    const subtype = rawSubtype || "octet-stream";
     const filename = attachment.filename || "unnamed";
     // base64 length calculation without actually encoding
     const size = attachment.size ? Math.ceil(attachment.size / 3) * 4 : 0;

@@ -21,6 +21,7 @@ import {
   isUtilityFolder,
   utilityFolder,
   canonicalMailbox,
+  quoteString,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
   SENT_MESSAGES_FOLDER,
 } from "./util";
@@ -283,7 +284,7 @@ export async function statusMailbox(
       }
     });
 
-    write(`* STATUS "${mailbox}" (${statusItems.join(" ")})\r\n`);
+    write(`* STATUS ${quoteString(mailbox)} (${statusItems.join(" ")})\r\n`);
     write(`${tag} OK STATUS completed\r\n`);
   } catch (error) {
     logger.error("Error getting mailbox status", { component: "imap", mailbox }, error);
@@ -365,7 +366,7 @@ export async function listMailboxes(
     // An empty pattern is a special request for the hierarchy delimiter and the
     // root name of the reference (RFC 3501 §6.3.8); no mailboxes are returned.
     if (pattern === "") {
-      write(`* LIST (\\Noselect) "/" "${reference}"\r\n`);
+      write(`* LIST (\\Noselect) "/" ${quoteString(reference)}\r\n`);
       write(`${tag} OK LIST completed\r\n`);
       return;
     }
@@ -376,7 +377,7 @@ export async function listMailboxes(
         // Attributes are computed against the full set so \HasChildren stays
         // correct even when the child rows are filtered out of the response.
         const attrs = getMailboxAttributes(box, boxes);
-        write(`* LIST (${attrs}) "/" "${box}"\r\n`);
+        write(`* LIST (${attrs}) "/" ${quoteString(box)}\r\n`);
       });
     write(`${tag} OK LIST completed\r\n`);
   } catch (error) {
@@ -408,46 +409,16 @@ export async function listSubscribedMailboxes(
 ): Promise<void> {
   try {
     if (pattern === "") {
-      write(`* LSUB (\\Noselect) "/" "${reference}"\r\n`);
+      write(`* LSUB (\\Noselect) "/" ${quoteString(reference)}\r\n`);
       write(`${tag} OK LSUB completed\r\n`);
       return;
     }
-    const entries = await store.listMailboxEntries();
-    // Hierarchy is a property of the full listable set, not of the subscribed
-    // subset, so filtering a child out of the response cannot change what its
-    // parent reports.
-    const allBoxes = entries.map((entry) => entry.name);
-    const parentPaths = collectAncestors(allBoxes);
-
-    const promoteAncestors = (reference + pattern).includes("%");
-    const ancestorsOfSubscribed = promoteAncestors
-      ? collectAncestors(entries.filter((entry) => entry.subscribed).map((e) => e.name))
-      : new Set<string>();
-
-    // An ancestor need not exist as a mailbox of its own. Nothing here creates
-    // the superior names on CREATE (RFC 3501 §6.3.3 only says SHOULD), so
-    // `Projects/Work` can be subscribed with no `Projects` row at all — and
-    // §6.3.9's own example is precisely such a name, which is why the rule
-    // marks it \Noselect rather than assuming it is selectable.
-    const listed = new Set(allBoxes);
-    const synthesized: MailboxEntry[] = [...ancestorsOfSubscribed]
-      .filter((name) => !listed.has(name))
-      .sort()
-      .map((name) => ({ name, subscribed: false }));
-
-    [...entries, ...synthesized]
-      .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
-      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
-      .forEach((entry) => {
-        // An unsubscribed name is in this response only because it has a
-        // subscribed descendant, hence \HasChildren unconditionally.
-        const attrs = entry.subscribed
-          ? withHierarchyAttribute(
-              getMailboxAttributes(entry.name, allBoxes),
-              parentPaths.has(entry.name)
-            )
-          : "\\HasChildren \\Noselect";
-        write(`* LSUB (${attrs}) "/" "${entry.name}"\r\n`);
+    const boxes = await store.listMailboxes();
+    boxes
+      .filter((box) => matchesListPattern(reference, pattern, box))
+      .forEach((box) => {
+        const attrs = getMailboxAttributes(box, boxes);
+        write(`* LSUB (${attrs}) "/" ${quoteString(box)}\r\n`);
       });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {
