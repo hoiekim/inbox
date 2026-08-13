@@ -445,6 +445,59 @@ describe("buildFullMessage", () => {
     const lines = result.split("\r\n");
     expect(lines.length).toBeGreaterThan(1);
   });
+
+  // #826: the MIME framing this function emits is derived from stored values
+  // an external sender controls, so a hostile mail must not be able to steer
+  // it.
+  describe("stored values cannot steer the MIME framing (#826)", () => {
+    it("a subject carrying boundary=\"…\" does not become the boundary", () => {
+      // The boundary used to be recovered by matching `boundary="([^"]+)"`
+      // against the whole header block, and Subject is emitted ahead of
+      // Content-Type — so this subject won the match and the `--` delimiters
+      // stopped agreeing with the declared boundary.
+      const result = buildFullMessage(
+        {
+          subject: 'winter sale boundary="hijacked"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "doc-hijack"
+      );
+
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_doc-hijack"'
+      );
+      expect(result).toContain("--boundary_doc-hijack\r\n");
+      expect(result).toContain("--boundary_doc-hijack--");
+      expect(result).not.toContain("--hijacked");
+    });
+
+    it("an attachment filename cannot open a new parameter or header", () => {
+      const data = writeAttachment("att-inject", Buffer.from("DATA"));
+      const result = buildFullMessage(
+        {
+          text: "See attached",
+          attachments: [
+            {
+              content: { data: TEST_ID_PREFIX + "att-inject" },
+              contentType: "text/plain\r\nX-Evil: 1",
+              filename: 'safe.txt"; filename="payroll.pdf',
+              size: data.byteLength
+            }
+          ]
+        },
+        "doc-att-inject"
+      );
+
+      expect(result).toContain("Content-Type: text/plain X-Evil: 1\r\n");
+      expect(result).toContain(
+        'Content-Disposition: attachment; filename="safe.txt\\"; filename=\\"payroll.pdf"\r\n'
+      );
+      expect(result.split("\r\n").some((l) => l.startsWith("X-Evil:"))).toBe(
+        false
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -647,6 +700,27 @@ describe("getBodyPartHeaders", () => {
       'Content-Type: image/png\r\n' +
         'Content-Transfer-Encoding: base64\r\n' +
         'Content-Disposition: attachment; filename="photo.png"'
+    );
+  });
+
+  it("escapes a hostile attachment contentType / filename (#826)", () => {
+    // Same part headers as the segment builder emits, so both surfaces have
+    // to survive the same stored bytes.
+    const mail: Partial<MailType> = {
+      text: "Body",
+      attachments: [
+        {
+          content: { data: "att-file" },
+          contentType: "image/png\r\nX-Evil: 1",
+          filename: 'photo.png"; filename="payroll.pdf',
+          size: 200
+        }
+      ]
+    };
+    expect(getBodyPartHeaders(mail, "2")).toBe(
+      "Content-Type: image/png X-Evil: 1\r\n" +
+        "Content-Transfer-Encoding: base64\r\n" +
+        'Content-Disposition: attachment; filename="photo.png\\"; filename=\\"payroll.pdf"'
     );
   });
 

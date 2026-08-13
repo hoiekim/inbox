@@ -6,7 +6,12 @@
 import fs from "node:fs";
 import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from "./types";
-import { formatHeaders } from "./util";
+import {
+  boundaryToken,
+  formatHeaders,
+  headerFieldValue,
+  headerQuotedParam
+} from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
 import { pgTextChunks, pgByteChunks } from "server";
@@ -171,17 +176,19 @@ const resolveAttachmentRawSize = (dataId: string): number => {
 
 /**
  * The stable boundary strings a build for this mail would generate.
+ *
+ * Derived from the same `docId || messageId` the header block used, rather
+ * than recovered by matching `boundary="…"` against that block: the block also
+ * carries `Subject` and the address fields, so a stored subject of
+ * `sale boundary="--"` matched ahead of the real `Content-Type` line and the
+ * delimiters emitted below stopped agreeing with the declared boundary.
  */
 const boundariesFor = (
   mail: Partial<MailType>,
-  headers: string,
   docId?: string
 ): { boundary: string; altBoundary: string } => {
-  const boundaryMatch = headers.match(/boundary="([^"]+)"/);
-  const stableId = docId || mail.messageId || "default";
-  const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
-  const altBoundary = "alt_" + stableId.replace(/[^a-zA-Z0-9_]/g, "_");
-  return { boundary, altBoundary };
+  const token = boundaryToken(docId || mail.messageId || "default");
+  return { boundary: "boundary_" + token, altBoundary: "alt_" + token };
 };
 
 const rewriteContentType = (headers: string, replacement: string): string =>
@@ -316,7 +323,7 @@ export const buildMessageSegments = (
       messageId: mail.messageId
     });
   }
-  const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
+  const { boundary, altBoundary } = boundariesFor(mail, docId);
 
   /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
   const bodyPart = (
@@ -379,9 +386,11 @@ export const buildMessageSegments = (
 
   for (const att of mail.attachments!) {
     literal(`--${boundary}\r\n`);
-    literal(`Content-Type: ${att.contentType}\r\n`);
+    literal(`Content-Type: ${headerFieldValue(att.contentType)}\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n`);
-    literal(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
+    literal(
+      `Content-Disposition: attachment; filename=${headerQuotedParam(att.filename)}\r\n\r\n`
+    );
     segments.push({
       kind: "attachment",
       dataId: att.content.data,
@@ -1261,9 +1270,9 @@ export const getBodyPartHeaders = (
   ) {
     const att = mail.attachments[attachmentIndex];
     return (
-      `Content-Type: ${att.contentType}\r\n` +
+      `Content-Type: ${headerFieldValue(att.contentType)}\r\n` +
       `Content-Transfer-Encoding: base64\r\n` +
-      `Content-Disposition: attachment; filename="${att.filename}"`
+      `Content-Disposition: attachment; filename=${headerQuotedParam(att.filename)}`
     );
   }
 

@@ -1300,6 +1300,31 @@ describe("buildBodyResponsePart header terminators (inbox #645)", () => {
     expect(content.endsWith("\r\n\r\n\r\n")).toBe(false);
   });
 
+  it("BODY[HEADER.FIELDS (FROM)] returns only the genuine From (#826)", async () => {
+    // The end-to-end shape of the spoofing primitive: HEADER_FIELDS selects
+    // lines by the field name before the colon, so a stored subject that
+    // opened its own `From:` line would be handed to the client as the
+    // message's sender.
+    const spoofed: Partial<MailType> = {
+      ...mail,
+      subject: "Hello\r\nFrom: ceo@bank.example\r\nX-Evil: 1"
+    };
+    const part = await buildBodyResponsePart(
+      spoofed,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "HEADER_FIELDS", fields: ["From"], not: false }
+      },
+      docId,
+      mailbox
+    );
+    if (part!.type !== "literal") throw new Error("expected literal part");
+    const content = contentAsString(part!);
+
+    expect(content).toBe("From: alice@example.com\r\n\r\n");
+  });
+
   it("BODY[HEADER.FIELDS (no match)] is exactly a single blank line", async () => {
     const content = await contentOf({
       type: "BODY",
