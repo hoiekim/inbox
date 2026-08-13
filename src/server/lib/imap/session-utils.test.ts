@@ -472,6 +472,52 @@ describe("buildFullMessage", () => {
       expect(result).not.toContain("--hijacked");
     });
 
+    it("a subject carrying the text `Content-Type: ` is not rewritten", () => {
+      // `rewriteContentType`'s match used to be unanchored, and Subject is
+      // emitted ahead of Content-Type — so this subject won the replace and
+      // the user's real subject was overwritten on BODY[] / RFC822 while
+      // BODY[HEADER] (which goes through formatHeaders directly) still showed
+      // the true one. No CRLF required.
+      const result = buildFullMessage(
+        {
+          subject: 'Content-Type: text/plain; boundary="evil"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "docA"
+      );
+
+      expect(result).toContain(
+        'Subject: Content-Type: text/plain; boundary="evil"\r\n'
+      );
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_docA"\r\n'
+      );
+      expect(result).not.toContain("--evil");
+    });
+
+    it("an attachment with no contentType / filename still serializes", () => {
+      // `attachments` comes off the JSONB column with no model hydration, so
+      // a row written before a field existed arrives `undefined`. Sanitizing
+      // it directly would throw on `.replace` and fail the whole FETCH.
+      const data = writeAttachment("att-bare", Buffer.from("DATA"));
+      const bare = {
+        content: { data: TEST_ID_PREFIX + "att-bare" },
+        size: data.byteLength
+      } as unknown as MailType["attachments"][number];
+
+      const result = buildFullMessage(
+        { text: "hi", attachments: [bare] },
+        "docC"
+      );
+
+      // Defaults match formatBodyStructure's for the same part, so a client
+      // comparing BODYSTRUCTURE against the part headers sees one answer.
+      expect(result).toContain("Content-Type: application/octet-stream\r\n");
+      expect(result).toContain('filename="unnamed"\r\n');
+      expect(result).not.toContain("undefined");
+    });
+
     it("an attachment filename cannot open a new parameter or header", () => {
       const data = writeAttachment("att-inject", Buffer.from("DATA"));
       const result = buildFullMessage(
@@ -721,6 +767,18 @@ describe("getBodyPartHeaders", () => {
       "Content-Type: image/png X-Evil: 1\r\n" +
         "Content-Transfer-Encoding: base64\r\n" +
         'Content-Disposition: attachment; filename="photo.png\\"; filename=\\"payroll.pdf"'
+    );
+  });
+
+  it("defaults a missing contentType / filename instead of throwing", () => {
+    const bare = {
+      content: { data: "att-bare" },
+      size: 10
+    } as unknown as MailType["attachments"][number];
+    expect(getBodyPartHeaders({ text: "Body", attachments: [bare] }, "2")).toBe(
+      "Content-Type: application/octet-stream\r\n" +
+        "Content-Transfer-Encoding: base64\r\n" +
+        'Content-Disposition: attachment; filename="unnamed"'
     );
   });
 

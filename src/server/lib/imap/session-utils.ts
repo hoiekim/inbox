@@ -7,10 +7,9 @@ import fs from "node:fs";
 import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from "./types";
 import {
+  attachmentPartHeaderFields,
   boundaryToken,
-  formatHeaders,
-  headerFieldValue,
-  headerQuotedParam
+  formatHeaders
 } from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
@@ -191,8 +190,14 @@ const boundariesFor = (
   return { boundary: "boundary_" + token, altBoundary: "alt_" + token };
 };
 
+// Anchored to a line start: unanchored, the first `Content-Type: ` ANYWHERE in
+// the block won — and `Subject` is emitted ahead of `Content-Type`, so a stored
+// subject containing that literal text got rewritten instead, with no CRLF
+// needed. Same shape as the `boundary="…"` recovery removed from
+// `boundariesFor`. `headerFieldValue` now guarantees no stored value can start
+// a line, which is what makes the anchor sufficient rather than just narrower.
 const rewriteContentType = (headers: string, replacement: string): string =>
-  headers.replace(/Content-Type: [^\r\n]+/, replacement);
+  headers.replace(/^Content-Type: [^\r\n]*/m, replacement);
 
 /**
  * A mail argument that may carry either the materialized body strings
@@ -385,11 +390,12 @@ export const buildMessageSegments = (
   }
 
   for (const att of mail.attachments!) {
+    const { contentType, filenameParam } = attachmentPartHeaderFields(att);
     literal(`--${boundary}\r\n`);
-    literal(`Content-Type: ${headerFieldValue(att.contentType)}\r\n`);
+    literal(`Content-Type: ${contentType}\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n`);
     literal(
-      `Content-Disposition: attachment; filename=${headerQuotedParam(att.filename)}\r\n\r\n`
+      `Content-Disposition: attachment; filename=${filenameParam}\r\n\r\n`
     );
     segments.push({
       kind: "attachment",
@@ -1268,11 +1274,13 @@ export const getBodyPartHeaders = (
     attachmentIndex >= 0 &&
     attachmentIndex < mail.attachments.length
   ) {
-    const att = mail.attachments[attachmentIndex];
+    const { contentType, filenameParam } = attachmentPartHeaderFields(
+      mail.attachments[attachmentIndex]
+    );
     return (
-      `Content-Type: ${headerFieldValue(att.contentType)}\r\n` +
+      `Content-Type: ${contentType}\r\n` +
       `Content-Transfer-Encoding: base64\r\n` +
-      `Content-Disposition: attachment; filename=${headerQuotedParam(att.filename)}`
+      `Content-Disposition: attachment; filename=${filenameParam}`
     );
   }
 
