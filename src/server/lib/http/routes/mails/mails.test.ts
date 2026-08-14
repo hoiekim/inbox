@@ -14,9 +14,9 @@ const mockGetMailHeadersDelta = mock(async () => ({ as_of: "", headers: [], expu
 const mockGetAccounts = mock(async () => ({ received: [], sent: [] }));
 const mockGetMailBody = mock(async () => null as unknown);
 const mockDeleteMail = mock(async () => {});
-// `markRead` / `markSaved` report the outcome as a boolean — the repositories
-// catch their own errors and return false. Mock the real signature so a route
-// that ignores the result cannot pass.
+// `markRead` / `markSaved` report the outcome as a boolean — false means the
+// row did not match, and a DB fault throws instead (#747). Mock the real
+// signature so a route that ignores the result cannot pass.
 const mockMarkRead = mock(async () => true);
 const mockMarkSaved = mock(async () => true);
 const mockDecrementBadgeCount = mock(async () => {});
@@ -1065,5 +1065,72 @@ describe("getAttachmentRoute", () => {
     const req = makeReq({ params: { id: "att1" } });
     const result = await getAttachmentRoute.callback(req, makeRes(), noopStream);
     expect(result).toBe(fakeBuffer);
+  });
+});
+
+// ── DB fault is not reported as not-found (#747) ─────────────────────────────
+
+describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
+  // The mail repository used to catch its own errors and return the same
+  // falsy value it returns for a genuinely missing row. A transient DB fault
+  // therefore reached the user as "not found or you don't have permission" —
+  // an authorization verdict on a mail the user owns. The repository now lets
+  // the error propagate, so `Route.handler` logs it, fires the alarm and
+  // answers 500. These assert the callback rejects rather than resolving to a
+  // not-found body.
+  beforeEach(() => {
+    mockMarkSpam.mockClear();
+    mockMarkRead.mockClear();
+    mockMarkSaved.mockClear();
+    mockGetMailBody.mockClear();
+    mockDeleteMail.mockClear();
+  });
+
+  it("post-spam-mark propagates instead of answering not-found", async () => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    mockMarkSpam.mockRejectedValueOnce(new Error("connection terminated"));
+    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    await expect(
+      postMarkSpamMailRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("connection terminated");
+  });
+
+  it("post-mark read propagates instead of answering failed-to-mark", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+    mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
+    mockMarkRead.mockRejectedValueOnce(new Error("connection terminated"));
+    const req = makeReq({ body: { mail_id: "m1", read: true } });
+    await expect(
+      postMarkMailRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("connection terminated");
+  });
+
+  it("post-mark save propagates instead of answering failed-to-update", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+    mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
+    mockMarkSaved.mockRejectedValueOnce(new Error("connection terminated"));
+    const req = makeReq({ body: { mail_id: "m1", save: true } });
+    await expect(
+      postMarkMailRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("connection terminated");
+  });
+
+  it("get-body propagates instead of answering no-email-is-found", async () => {
+    const { getBodyRoute } = await import("./get-body");
+    mockGetMailBody.mockRejectedValueOnce(new Error("connection terminated"));
+    const req = makeReq({ params: { id: "m1" } });
+    await expect(
+      getBodyRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("connection terminated");
+  });
+
+  it("delete propagates instead of answering success for a delete that never landed", async () => {
+    const { deleteMailRoute } = await import("./delete");
+    mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
+    mockDeleteMail.mockRejectedValueOnce(new Error("connection terminated"));
+    const req = makeReq({ params: { id: "m1" } });
+    await expect(
+      deleteMailRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("connection terminated");
   });
 });

@@ -416,12 +416,7 @@ export const getMailById = async (
   user_id: string,
   mail_id: string
 ): Promise<MailModel | null> => {
-  try {
-    return await mailsTable.queryOne({ [MAIL_ID]: mail_id, [USER_ID]: user_id });
-  } catch (error) {
-    logger.error("Failed to get mail by ID", {}, error);
-    return null;
-  }
+  return mailsTable.queryOne({ [MAIL_ID]: mail_id, [USER_ID]: user_id });
 };
 
 /**
@@ -516,17 +511,12 @@ export const markMailRead = async (
   user_id: string,
   mail_id: string
 ): Promise<boolean> => {
-  try {
-    const rows = await mailsTable.updateWhere(
-      { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-      { read: true, updated: DB_NOW },
-      [MAIL_ID]
-    );
-    return rows.length > 0;
-  } catch (error) {
-    logger.error("Failed to mark mail as read", {}, error);
-    return false;
-  }
+  const rows = await mailsTable.updateWhere(
+    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
+    { read: true, updated: DB_NOW },
+    [MAIL_ID]
+  );
+  return rows.length > 0;
 };
 
 export const markMailSaved = async (
@@ -534,41 +524,31 @@ export const markMailSaved = async (
   mail_id: string,
   saved: boolean
 ): Promise<boolean> => {
-  try {
-    const rows = await mailsTable.updateWhere(
-      { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-      { saved, updated: DB_NOW },
-      [MAIL_ID]
-    );
-    if (rows.length === 0) return false;
-    // Mirror the flag into the `Starred` pivot so the IMAP utility view
-    // agrees with the web client (#725). If skipped, a "Save" from the web
-    // sets `mails.saved = true` and the `Starred` mailbox stays empty for
-    // that message — the two surfaces diverge on the same row. The IMAP
-    // STORE path syncs the pivot in `storeFlagsTyped`; this is the HTTP
-    // sibling. `syncMailboxPivot` is idempotent so a repeat mark is safe.
-    await syncMailboxPivot(user_id, "Starred", mail_id, saved);
-    return true;
-  } catch (error) {
-    logger.error("Failed to mark mail as saved", {}, error);
-    return false;
-  }
+  const rows = await mailsTable.updateWhere(
+    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
+    { saved, updated: DB_NOW },
+    [MAIL_ID]
+  );
+  if (rows.length === 0) return false;
+  // Mirror the flag into the `Starred` pivot so the IMAP utility view
+  // agrees with the web client (#725). If skipped, a "Save" from the web
+  // sets `mails.saved = true` and the `Starred` mailbox stays empty for
+  // that message — the two surfaces diverge on the same row. The IMAP
+  // STORE path syncs the pivot in `storeFlagsTyped`; this is the HTTP
+  // sibling. `syncMailboxPivot` is idempotent so a repeat mark is safe.
+  await syncMailboxPivot(user_id, "Starred", mail_id, saved);
+  return true;
 };
 
 export const deleteMail = async (
   user_id: string,
   mail_id: string
 ): Promise<boolean> => {
-  try {
-    const count = await mailsTable.deleteWhere({
-      [MAIL_ID]: mail_id,
-      [USER_ID]: user_id
-    });
-    return count > 0;
-  } catch (error) {
-    logger.error("Failed to delete mail", {}, error);
-    return false;
-  }
+  const count = await mailsTable.deleteWhere({
+    [MAIL_ID]: mail_id,
+    [USER_ID]: user_id
+  });
+  return count > 0;
 };
 
 /**
@@ -580,6 +560,8 @@ export const deleteMail = async (
  *
  * Distinguishing "no change" from "not found" lets the caller skip classifier
  * training on idempotent re-marks while still surfacing real auth failures.
+ * A DB fault is neither: it propagates so the route boundary answers 500
+ * rather than telling the owner of an existing mail it is not theirs (#747).
  *
  * The flip moves the mail in or out of IMAP's INBOX (see `isInboxTree`), so
  * it advances the mod-sequence the way every other membership change does. That
@@ -597,21 +579,16 @@ export const markMailSpam = async (
   mail_id: string,
   is_spam: boolean
 ): Promise<{ found: boolean; changed: boolean }> => {
-  try {
-    const result = await pool.query(
-      `UPDATE mails SET is_spam = $1, updated = NOW(), modseq = $4
-         WHERE mail_id = $2 AND user_id = $3 AND is_spam IS DISTINCT FROM $1
-         RETURNING mail_id`,
-      [is_spam, mail_id, user_id, await getNextModseq(user_id)]
-    );
-    if ((result.rowCount ?? 0) > 0) return { found: true, changed: true };
-    const exists = await pool.query(
-      `SELECT 1 FROM mails WHERE mail_id = $1 AND user_id = $2 LIMIT 1`,
-      [mail_id, user_id]
-    );
-    return { found: (exists.rowCount ?? 0) > 0, changed: false };
-  } catch (error) {
-    logger.error("Failed to mark mail as spam", {}, error);
-    return { found: false, changed: false };
-  }
+  const result = await pool.query(
+    `UPDATE mails SET is_spam = $1, updated = NOW(), modseq = $4
+       WHERE mail_id = $2 AND user_id = $3 AND is_spam IS DISTINCT FROM $1
+       RETURNING mail_id`,
+    [is_spam, mail_id, user_id, await getNextModseq(user_id)]
+  );
+  if ((result.rowCount ?? 0) > 0) return { found: true, changed: true };
+  const exists = await pool.query(
+    `SELECT 1 FROM mails WHERE mail_id = $1 AND user_id = $2 LIMIT 1`,
+    [mail_id, user_id]
+  );
+  return { found: (exists.rowCount ?? 0) > 0, changed: false };
 };

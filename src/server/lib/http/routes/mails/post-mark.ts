@@ -41,10 +41,11 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
       };
     }
 
-    // The repositories catch their own errors and report the outcome as a
-    // boolean, so an unreported failure here would answer success for a write
-    // that never landed — and, for `read`, would have already decremented the
-    // badge for a mail that stayed unread.
+    // A DB fault now propagates to the route boundary (500), so a `false` here
+    // means the row genuinely stopped matching between the check above and the
+    // write — report it rather than answering success for a write that never
+    // landed, or, for `read`, decrementing the badge for a mail that stayed
+    // unread.
     if (read === true) {
       if (!(await markRead(user.id, mail_id))) {
         return { status: "failed", message: "Failed to mark the mail read" };
