@@ -549,6 +549,12 @@ describe("IMAP util", () => {
       expect(headerFieldValue("a\r\nb\nc\rd\0e")).toBe("a b c d e");
     });
 
+    it("collapses U+2028 / U+2029 — line starts for a `/m` JS regex", () => {
+      // Not RFC 5322 line breaks, but ECMAScript `LineTerminator`s: left in,
+      // `rewriteContentType`'s `/^Content-Type: …/m` matches inside the value.
+      expect(headerFieldValue("a\u2028b\u2029c")).toBe("a b c");
+    });
+
     it("leaves a value with no line breaks byte-identical", () => {
       expect(headerFieldValue('Re: "quoted" \\ subject')).toBe(
         'Re: "quoted" \\ subject'

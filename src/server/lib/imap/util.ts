@@ -75,9 +75,16 @@ export const encodeText = (str: string) => {
  * Each run collapses to a single space rather than being dropped: the bytes
  * carry no header semantics, and a space keeps adjacent words apart in the
  * value a client renders. NUL goes with them — it is outside `VCHAR`.
+ *
+ * U+2028 / U+2029 are stripped for the same reason one step removed: they are
+ * not RFC 5322 line breaks, but they ARE ECMAScript `LineTerminator`s, so a
+ * `/^…/m` regex run over the emitted block — `rewriteContentType` in
+ * `session-utils.ts` is one — sees a line starting mid-value. Leaving them in
+ * would make "no stored value can start a line" true of the wire and false of
+ * every JS reader of the same bytes.
  */
 export const headerFieldValue = (value: string): string =>
-  value.replace(/[\r\n\0]+/g, " ");
+  value.replace(/[\r\n\0\u2028\u2029]+/g, " ");
 
 /**
  * A stored value on its way into an RFC 2045 §5.1 quoted `parameter` value
@@ -110,6 +117,13 @@ export const headerQuotedParam = (value: string): string =>
  * written before a field existed arrives `undefined` — which would throw on
  * `.replace` where the old raw interpolation merely emitted the literal
  * `undefined`.
+ *
+ * `Attachment`'s constructor (`common/models/mails/Mail.ts`) defaults the same
+ * two fields to `text/plain` / `unnamed_file` instead. Those lose because the
+ * constructor never runs on this path — `store.ts` casts the JSONB column
+ * straight to `AttachmentType[]` with no hydration — and because BODYSTRUCTURE
+ * is the value a client cross-checks against. If hydration is ever added to
+ * the read path, reconcile the two rather than letting the wire drift.
  */
 export const attachmentPartHeaderFields = (
   attachment: Pick<AttachmentType, "contentType" | "filename">

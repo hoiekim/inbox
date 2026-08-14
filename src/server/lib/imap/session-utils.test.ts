@@ -496,6 +496,30 @@ describe("buildFullMessage", () => {
       expect(result).not.toContain("--evil");
     });
 
+    it("a subject carrying U+2028 before `Content-Type: ` is not rewritten", () => {
+      // U+2028 / U+2029 are not RFC 5322 line breaks, but they ARE ECMAScript
+      // `LineTerminator`s, so `rewriteContentType`'s `/^…/m` treats what
+      // follows one as a line start — the anchor alone does not stop this.
+      // `headerFieldValue` collapsing them is what does.
+      const result = buildFullMessage(
+        {
+          subject: 'Hi\u2028Content-Type: text/plain; boundary="evil"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "docU"
+      );
+
+      expect(result).toContain(
+        'Subject: Hi Content-Type: text/plain; boundary="evil"\r\n'
+      );
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_docU"\r\n'
+      );
+      expect(result).not.toContain("\u2028");
+      expect(result).not.toContain("--evil");
+    });
+
     it("an attachment with no contentType / filename still serializes", () => {
       // `attachments` comes off the JSONB column with no model hydration, so
       // a row written before a field existed arrives `undefined`. Sanitizing

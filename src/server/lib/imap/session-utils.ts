@@ -195,7 +195,9 @@ const boundariesFor = (
 // subject containing that literal text got rewritten instead, with no CRLF
 // needed. Same shape as the `boundary="…"` recovery removed from
 // `boundariesFor`. `headerFieldValue` now guarantees no stored value can start
-// a line, which is what makes the anchor sufficient rather than just narrower.
+// a line — including U+2028 / U+2029, which `^` under `m` honours even though
+// RFC 5322 does not — which is what makes the anchor sufficient rather than
+// just narrower.
 const rewriteContentType = (headers: string, replacement: string): string =>
   headers.replace(/^Content-Type: [^\r\n]*/m, replacement);
 
