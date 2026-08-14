@@ -13,7 +13,9 @@ const mockGetMailHeaders = mock(async () => []);
 const mockGetMailHeadersDelta = mock(async () => ({ as_of: "", headers: [], expunged_ids: [] }));
 const mockGetAccounts = mock(async () => ({ received: [], sent: [] }));
 const mockGetMailBody = mock(async () => null as unknown);
-const mockDeleteMail = mock(async () => {});
+// Matches the real `deleteMail(): Promise<boolean>` — a stub resolving
+// `undefined` could never surface the true/false distinction the route reads.
+const mockDeleteMail = mock(async () => true);
 // `markRead` / `markSaved` report the outcome as a boolean — false means the
 // row did not match, and a DB fault throws instead (#747). Mock the real
 // signature so a route that ignores the result cannot pass.
@@ -103,6 +105,13 @@ mock.module("server/lib/spam/classifier", () => ({
 // ── Helper factories ──────────────────────────────────────────────────────────
 
 const makeUser = (username = "alice", id = "u1") => ({ id, username });
+
+// `mails.mail_id` is `UUID PRIMARY KEY DEFAULT gen_random_uuid()`, and the
+// routes now shape-check it before querying (#747), so fixtures have to use
+// ids that could actually exist.
+const MAIL_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+const MISSING_ID = "9c8b7a65-4d3e-42f1-8a09-1b2c3d4e5f60";
+const OTHER_ID = "5e4d3c2b-1a09-4f8e-b7d6-c5b4a3928170";
 
 const makeReq = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -341,7 +350,7 @@ describe("getBodyRoute", () => {
     const fakeMail = { id: "m1", html: "<p>Hello</p>" };
     mockGetMailBody.mockResolvedValueOnce(fakeMail);
 
-    const req = makeReq({ params: { id: "m1" } });
+    const req = makeReq({ params: { id: MAIL_ID } });
     const res = makeRes();
 
     const result = await getBodyRoute.callback(req, res, noopStream);
@@ -354,7 +363,7 @@ describe("getBodyRoute", () => {
 
     mockGetMailBody.mockResolvedValueOnce(null);
 
-    const req = makeReq({ params: { id: "missing" } });
+    const req = makeReq({ params: { id: MISSING_ID } });
     const res = makeRes();
 
     const result = await getBodyRoute.callback(req, res, noopStream);
@@ -376,12 +385,12 @@ describe("deleteMailRoute", () => {
 
     mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
 
-    const req = makeReq({ method: "DELETE", params: { id: "m1" } });
+    const req = makeReq({ method: "DELETE", params: { id: MAIL_ID } });
     const res = makeRes();
 
     const result = await deleteMailRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect(mockDeleteMail).toHaveBeenCalledWith("u1", "m1");
+    expect(mockDeleteMail).toHaveBeenCalledWith("u1", MAIL_ID);
   });
 
   it("returns failed when mail not found (or belongs to another user)", async () => {
@@ -389,7 +398,7 @@ describe("deleteMailRoute", () => {
 
     mockGetMailBody.mockResolvedValueOnce(null);
 
-    const req = makeReq({ method: "DELETE", params: { id: "other-m" } });
+    const req = makeReq({ method: "DELETE", params: { id: OTHER_ID } });
     const res = makeRes();
 
     const result = await deleteMailRoute.callback(req, res, noopStream);
@@ -415,13 +424,13 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1", read: true },
+      body: { mail_id: MAIL_ID, read: true },
     });
     const res = makeRes();
 
     const result = await postMarkMailRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect(mockMarkRead).toHaveBeenCalledWith("u1", "m1");
+    expect(mockMarkRead).toHaveBeenCalledWith("u1", MAIL_ID);
   });
 
   it("marks mail as saved when save=true", async () => {
@@ -431,13 +440,13 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1", save: true },
+      body: { mail_id: MAIL_ID, save: true },
     });
     const res = makeRes();
 
     const result = await postMarkMailRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect(mockMarkSaved).toHaveBeenCalledWith("u1", "m1", true);
+    expect(mockMarkSaved).toHaveBeenCalledWith("u1", MAIL_ID, true);
   });
 
   it("marks mail as unsaved when save=false", async () => {
@@ -447,13 +456,13 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1", save: false },
+      body: { mail_id: MAIL_ID, save: false },
     });
     const res = makeRes();
 
     const result = await postMarkMailRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect(mockMarkSaved).toHaveBeenCalledWith("u1", "m1", false);
+    expect(mockMarkSaved).toHaveBeenCalledWith("u1", MAIL_ID, false);
   });
 
   it("returns failed when mail not found", async () => {
@@ -463,7 +472,7 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "bad-id", read: true },
+      body: { mail_id: MISSING_ID, read: true },
     });
     const res = makeRes();
 
@@ -537,7 +546,7 @@ describe("postMarkMailRoute", () => {
     mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
     mockMarkRead.mockResolvedValueOnce(false);
 
-    const req = makeReq({ method: "POST", body: { mail_id: "m1", read: true } });
+    const req = makeReq({ method: "POST", body: { mail_id: MAIL_ID, read: true } });
     const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
 
     expect((result as ApiResponse<unknown>).status).toBe("failed");
@@ -551,7 +560,7 @@ describe("postMarkMailRoute", () => {
     mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
     mockMarkSaved.mockResolvedValueOnce(false);
 
-    const req = makeReq({ method: "POST", body: { mail_id: "m1", save: true } });
+    const req = makeReq({ method: "POST", body: { mail_id: MAIL_ID, save: true } });
     const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
 
     expect((result as ApiResponse<unknown>).status).toBe("failed");
@@ -562,7 +571,7 @@ describe("postMarkMailRoute", () => {
 
     mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
 
-    const req = makeReq({ method: "POST", body: { mail_id: "m1" } });
+    const req = makeReq({ method: "POST", body: { mail_id: MAIL_ID } });
     const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
 
     expect((result as ApiResponse<unknown>).status).toBe("success");
@@ -577,7 +586,7 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1" },
+      body: { mail_id: MAIL_ID },
     });
     const res = makeRes();
 
@@ -592,7 +601,7 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1", read: true },
+      body: { mail_id: MAIL_ID, read: true },
     });
 
     await postMarkMailRoute.callback(req, makeRes(), noopStream);
@@ -612,14 +621,14 @@ describe("postMarkMailRoute", () => {
 
     const req = makeReq({
       method: "POST",
-      body: { mail_id: "m1", read: true },
+      body: { mail_id: MAIL_ID, read: true },
     });
 
     const result = await postMarkMailRoute.callback(req, makeRes(), noopStream);
 
     // markRead still ran — the badge-decrement rejection is logged, not propagated.
     expect((result as ApiResponse<unknown>).status).toBe("success");
-    expect(mockMarkRead).toHaveBeenCalledWith("u1", "m1");
+    expect(mockMarkRead).toHaveBeenCalledWith("u1", MAIL_ID);
 
     // Give the .catch(logger.error) microtask a chance to run.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -866,7 +875,7 @@ describe("postMarkSpamMailRoute", () => {
 
   it("rejects when is_spam is not boolean", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
-    const req = makeReq({ body: { mail_id: "m1", is_spam: "yes" } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: "yes" } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/boolean/i);
@@ -876,13 +885,13 @@ describe("postMarkSpamMailRoute", () => {
   it("returns failed when mail not found or no permission (cross-user gate)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: false, changed: false });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/not found/i);
     // markSpam was reached with the session user_id — the ownership gate is at
     // the repo layer; assert it was passed.
-    expect(mockMarkSpam).toHaveBeenCalledWith("u1", "m1", true);
+    expect(mockMarkSpam).toHaveBeenCalledWith("u1", MAIL_ID, true);
     expect(mockGetMailById).not.toHaveBeenCalled();
     expect(mockTrainWithEmail).not.toHaveBeenCalled();
   });
@@ -896,13 +905,13 @@ describe("postMarkSpamMailRoute", () => {
       html: "<p>Click here</p>",
       from_address: [{ address: "spammer@evil.example" }],
     });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
     // Wait for the fire-and-forget training pipeline.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(mockGetMailById).toHaveBeenCalledWith("u1", "m1");
+    expect(mockGetMailById).toHaveBeenCalledWith("u1", MAIL_ID);
     expect(mockTrainWithEmail).toHaveBeenCalledTimes(1);
     expect(mockTrainWithEmail).toHaveBeenCalledWith(
       "u1",
@@ -923,7 +932,7 @@ describe("postMarkSpamMailRoute", () => {
       html: "<p>Updates</p>",
       from_address: [{ address: "news@legit.example" }],
     });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: false } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: false } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -938,7 +947,7 @@ describe("postMarkSpamMailRoute", () => {
   it("returns success but skips training when re-marking with the same value (#491)", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: true, changed: false });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -951,7 +960,7 @@ describe("postMarkSpamMailRoute", () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockResolvedValueOnce({ found: true, changed: true });
     mockGetMailById.mockResolvedValueOnce(null);
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -970,7 +979,7 @@ describe("postMarkSpamMailRoute", () => {
       from_address: [{ address: "a@b.example" }],
     });
     mockTrainWithEmail.mockRejectedValueOnce(new Error("classifier offline"));
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -988,7 +997,7 @@ describe("postMarkSpamMailRoute", () => {
       html: "<p>y</p>",
       from_address: null,
     });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -1010,7 +1019,7 @@ describe("postMarkSpamMailRoute", () => {
       html: "<p>y</p>",
       from_address: [],
     });
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     const result = await postMarkSpamMailRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
 
@@ -1089,7 +1098,7 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
   it("post-spam-mark propagates instead of answering not-found", async () => {
     const { postMarkSpamMailRoute } = await import("./post-spam-mark");
     mockMarkSpam.mockRejectedValueOnce(new Error("connection terminated"));
-    const req = makeReq({ body: { mail_id: "m1", is_spam: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, is_spam: true } });
     await expect(
       postMarkSpamMailRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("connection terminated");
@@ -1099,7 +1108,7 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
     const { postMarkMailRoute } = await import("./post-mark");
     mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
     mockMarkRead.mockRejectedValueOnce(new Error("connection terminated"));
-    const req = makeReq({ body: { mail_id: "m1", read: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, read: true } });
     await expect(
       postMarkMailRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("connection terminated");
@@ -1109,7 +1118,7 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
     const { postMarkMailRoute } = await import("./post-mark");
     mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
     mockMarkSaved.mockRejectedValueOnce(new Error("connection terminated"));
-    const req = makeReq({ body: { mail_id: "m1", save: true } });
+    const req = makeReq({ body: { mail_id: MAIL_ID, save: true } });
     await expect(
       postMarkMailRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("connection terminated");
@@ -1118,7 +1127,7 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
   it("get-body propagates instead of answering no-email-is-found", async () => {
     const { getBodyRoute } = await import("./get-body");
     mockGetMailBody.mockRejectedValueOnce(new Error("connection terminated"));
-    const req = makeReq({ params: { id: "m1" } });
+    const req = makeReq({ params: { id: MAIL_ID } });
     await expect(
       getBodyRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("connection terminated");
@@ -1128,9 +1137,78 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
     const { deleteMailRoute } = await import("./delete");
     mockGetMailBody.mockResolvedValueOnce({ text: "t", html: "h" });
     mockDeleteMail.mockRejectedValueOnce(new Error("connection terminated"));
-    const req = makeReq({ params: { id: "m1" } });
+    const req = makeReq({ params: { id: MAIL_ID } });
     await expect(
       deleteMailRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("connection terminated");
+  });
+});
+
+// ── malformed mail_id stays a rejection, not a 500 (#747) ────────────────────
+
+describe("mail routes reject a malformed mail_id before it reaches Postgres (#747)", () => {
+  // `mails.mail_id` is a uuid column, so Postgres answers a malformed value
+  // with a 22P02 error rather than an empty result. Once the repository stopped
+  // swallowing errors, an id of the wrong shape — a stale bookmark, an old
+  // client's cached id — would have become a 500 plus an alarm page. These pin
+  // that the shape check happens first and the repository is never called.
+  const BAD_IDS = ["not-a-uuid", "", "123", "'; DROP TABLE mails; --"];
+
+  beforeEach(() => {
+    mockGetMailBody.mockClear();
+    mockDeleteMail.mockClear();
+    mockMarkSpam.mockClear();
+    mockMarkRead.mockClear();
+  });
+
+  it.each(BAD_IDS)("get-body rejects %p without querying", async (id) => {
+    const { getBodyRoute } = await import("./get-body");
+    const result = await getBodyRoute.callback(makeReq({ params: { id } }), makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockGetMailBody).not.toHaveBeenCalled();
+  });
+
+  it.each(BAD_IDS)("delete rejects %p without querying", async (id) => {
+    const { deleteMailRoute } = await import("./delete");
+    const result = await deleteMailRoute.callback(
+      makeReq({ params: { id } }),
+      makeRes(),
+      noopStream
+    );
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockGetMailBody).not.toHaveBeenCalled();
+    expect(mockDeleteMail).not.toHaveBeenCalled();
+  });
+
+  it.each(BAD_IDS)("post-mark rejects %p without querying", async (id) => {
+    const { postMarkMailRoute } = await import("./post-mark");
+    const result = await postMarkMailRoute.callback(
+      makeReq({ body: { mail_id: id, read: true } }),
+      makeRes(),
+      noopStream
+    );
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockGetMailBody).not.toHaveBeenCalled();
+    expect(mockMarkRead).not.toHaveBeenCalled();
+  });
+
+  it.each(BAD_IDS)("post-spam-mark rejects %p without querying", async (id) => {
+    const { postMarkSpamMailRoute } = await import("./post-spam-mark");
+    const result = await postMarkSpamMailRoute.callback(
+      makeReq({ body: { mail_id: id, is_spam: true } }),
+      makeRes(),
+      noopStream
+    );
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockMarkSpam).not.toHaveBeenCalled();
+  });
+
+  it("a well-formed uuid still reaches the repository", async () => {
+    const { getBodyRoute } = await import("./get-body");
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    const id = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const result = await getBodyRoute.callback(makeReq({ params: { id } }), makeRes(), noopStream);
+    expect(mockGetMailBody).toHaveBeenCalledWith("u1", id);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
   });
 });

@@ -40,3 +40,22 @@ describe("core.ts does not report a DB fault as not-found (#747)", () => {
     expect(body).not.toContain("catch");
   });
 });
+
+describe("http.ts getMailHeaders does not render an empty mailbox on a DB fault", () => {
+  // This one swallowed into `return []`, which is the same lie with the widest
+  // blast radius in the family: GET /api/mails answered 200 with an empty list,
+  // so a DB fault presented as "you have no mail" rather than as an error.
+  let source: string;
+
+  beforeAll(async () => {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    source = await fs.readFile(path.join(import.meta.dir, "http.ts"), "utf8");
+  });
+
+  it("swallows no error", () => {
+    const body = source.match(/export const getMailHeaders = async \([\s\S]*?\n};/)?.[0];
+    expect(body).toBeDefined();
+    expect(body).not.toContain("catch");
+  });
+});

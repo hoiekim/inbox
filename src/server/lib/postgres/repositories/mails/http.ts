@@ -95,71 +95,66 @@ export const getMailHeaders = async (
   address: string,
   options: GetMailHeadersOptions
 ): Promise<MailHeaderResult[]> => {
-  try {
-    const addressJson = JSON.stringify([{ address }]);
-    const addressCondition = buildHeaderAddressCondition(options);
-    // Select only columns needed for mail headers — excludes html/text/attachments
-    // to avoid loading full email bodies into memory for every concurrent request.
-    const headerColumns = [
-      MAIL_ID, USER_ID, SUBJECT, DATE,
-      FROM_ADDRESS, FROM_TEXT,
-      TO_ADDRESS, TO_TEXT,
-      CC_ADDRESS, CC_TEXT,
-      BCC_ADDRESS, BCC_TEXT,
-      READ, SAVED, SENT, IS_SPAM, INSIGHT,
-    ].join(", ");
-    let sql = `
-      SELECT ${headerColumns} FROM mails 
-      WHERE user_id = $1 
-        AND ${addressCondition}
-        AND expunged = FALSE
-        AND draft = FALSE
-    `;
-    const values: ParamValue[] = [user_id, addressJson];
-    let paramIdx = 3;
+  const addressJson = JSON.stringify([{ address }]);
+  const addressCondition = buildHeaderAddressCondition(options);
+  // Select only columns needed for mail headers — excludes html/text/attachments
+  // to avoid loading full email bodies into memory for every concurrent request.
+  const headerColumns = [
+    MAIL_ID, USER_ID, SUBJECT, DATE,
+    FROM_ADDRESS, FROM_TEXT,
+    TO_ADDRESS, TO_TEXT,
+    CC_ADDRESS, CC_TEXT,
+    BCC_ADDRESS, BCC_TEXT,
+    READ, SAVED, SENT, IS_SPAM, INSIGHT,
+  ].join(", ");
+  let sql = `
+    SELECT ${headerColumns} FROM mails 
+    WHERE user_id = $1 
+      AND ${addressCondition}
+      AND expunged = FALSE
+      AND draft = FALSE
+  `;
+  const values: ParamValue[] = [user_id, addressJson];
+  let paramIdx = 3;
 
-    if (options.new) {
-      sql += ` AND read = FALSE`;
-    } else if (options.saved) {
-      sql += ` AND saved = TRUE`;
-    }
-
-    if (options.spam) {
-      // Spam mail is always received, never sent — matches the (sent = FALSE)
-      // guard the standalone spam query carried before spam became per-account.
-      sql += ` AND is_spam = TRUE AND sent = FALSE`;
-    } else {
-      // Every non-spam view (New / All / Saved / Sent) is the complement of the
-      // spam folder: a mail flagged spam — whether auto-classified on receipt or
-      // marked by the user via /spam/mark — belongs only in the spam folder, not
-      // here. Without this the "Mark as spam" action is cosmetic: the row would
-      // reappear on the next refetch because the inbox query still returned it.
-      sql += ` AND is_spam = FALSE`;
-    }
-
-    if (options.since !== undefined) {
-      sql += ` AND updated > $${paramIdx++}`;
-      values.push(options.since);
-    }
-
-    sql += ` ORDER BY date DESC`;
-
-    if (options.size !== undefined) {
-      sql += ` LIMIT $${paramIdx++}`;
-      values.push(options.size);
-    }
-
-    if (options.from !== undefined) {
-      sql += ` OFFSET $${paramIdx}`;
-      values.push(options.from);
-    }
-
-    const result = await pool.query(sql, values);
-    return result.rows as MailHeaderResult[];
-  } catch (error) {
-    logger.error("Failed to get mail headers", {}, error);
-    return [];
+  if (options.new) {
+    sql += ` AND read = FALSE`;
+  } else if (options.saved) {
+    sql += ` AND saved = TRUE`;
   }
+
+  if (options.spam) {
+    // Spam mail is always received, never sent — matches the (sent = FALSE)
+    // guard the standalone spam query carried before spam became per-account.
+    sql += ` AND is_spam = TRUE AND sent = FALSE`;
+  } else {
+    // Every non-spam view (New / All / Saved / Sent) is the complement of the
+    // spam folder: a mail flagged spam — whether auto-classified on receipt or
+    // marked by the user via /spam/mark — belongs only in the spam folder, not
+    // here. Without this the "Mark as spam" action is cosmetic: the row would
+    // reappear on the next refetch because the inbox query still returned it.
+    sql += ` AND is_spam = FALSE`;
+  }
+
+  if (options.since !== undefined) {
+    sql += ` AND updated > $${paramIdx++}`;
+    values.push(options.since);
+  }
+
+  sql += ` ORDER BY date DESC`;
+
+  if (options.size !== undefined) {
+    sql += ` LIMIT $${paramIdx++}`;
+    values.push(options.size);
+  }
+
+  if (options.from !== undefined) {
+    sql += ` OFFSET $${paramIdx}`;
+    values.push(options.from);
+  }
+
+  const result = await pool.query(sql, values);
+  return result.rows as MailHeaderResult[];
 };
 
 export interface MailHeadersDeltaResult {
