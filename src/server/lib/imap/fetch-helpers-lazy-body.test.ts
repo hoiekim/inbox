@@ -361,4 +361,111 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
       Math.ceil((64 * 1024) / PG_TEXT_CHUNK_BYTES)
     );
   });
+
+  // The test above only exercises `start: 0`, where "reads only its own
+  // slice" is trivially true — there is nothing before the window to skip,
+  // so a reader that drained from position 1 and discarded would pass it
+  // unchanged. The property that actually matters is that the cost of
+  // window k does NOT grow with k. This sweep drives the whole body as
+  // consecutive 64 KiB windows — the shape iOS Mail issues for a large
+  // message — and pins both the per-window bound and the total.
+  //
+  // Under a from-position-1-and-discard reader the per-window counts climb
+  // linearly (5, 9, 13, ... ) and the total is P·(W+1)/2 — ~33x a single
+  // full pass on a 4 MB body, i.e. minutes per body at the measured
+  // per-pass latency. `streamLazyTextPartial` seeks pgByteChunks to the
+  // 3-byte-aligned raw offset for the window instead, so each window costs
+  // O(len) and the total is O(body), not O(body²/window).
+  it("consecutive partial BODY[TEXT] windows cost O(window) each, not O(offset)", async () => {
+    columnStore.clear();
+    const html = "<p>" + "v".repeat(500 * 1024 - 8) + "</p>";
+    columnStore.set("mail-window-walk:html", html);
+
+    const mail = {
+      ...baseHeaders,
+      text_octets: 0,
+      html_octets: Buffer.byteLength(html, "utf8"),
+      mail_id: "mail-window-walk",
+      user_id: "user-1",
+    } as never;
+
+    const windowLength = 64 * 1024;
+    const readSection = async (
+      partial?: { start: number; length: number }
+    ): Promise<{ body: Buffer; pulls: number; declared: number }> => {
+      substringCalls.length = 0;
+      const part = await buildFetchResponsePart(
+        mail,
+        { type: "BODY", peek: true, section: { type: "TEXT" }, ...(partial ? { partial } : {}) },
+        "mail-window-walk",
+        "INBOX"
+      );
+      if (part === null || part.type !== "stream") throw new Error("expected stream");
+      const chunks: Buffer[] = [];
+      for await (const chunk of part.stream) chunks.push(chunk);
+      return {
+        body: Buffer.concat(chunks as unknown as Uint8Array[]),
+        pulls: substringCalls.length,
+        declared: part.length,
+      };
+    };
+
+    // Baseline: one unwindowed pass over the same section. Its trailing
+    // CRLF is IMAP framing appended after the section, not part of the
+    // octets a `<start.length>` range addresses — so compare against the
+    // body minus that trailer.
+    const full = await readSection();
+    const fullBody = full.body.subarray(0, full.body.byteLength - 2);
+    const fullPassPulls = full.pulls;
+    expect(fullPassPulls).toBeGreaterThan(0);
+
+    const windowCount = Math.ceil(fullBody.byteLength / windowLength);
+    // A 500 KB body at 64 KiB per window — enough windows that a linear
+    // per-window climb is unmistakable against a flat one.
+    expect(windowCount).toBeGreaterThanOrEqual(8);
+
+    const perWindowPulls: number[] = [];
+    const collected: Buffer[] = [];
+    for (let k = 0; k < windowCount; k++) {
+      const start = k * windowLength;
+      const { body, pulls, declared } = await readSection({ start, length: windowLength });
+      // Every window reads by BYTE offset — a regression to the
+      // code-point reader (`unit: "chars"`) would re-introduce #765's
+      // over-advance on astral characters as well as the cost climb.
+      expect(substringCalls.map((c) => c.unit)).toEqual(
+        substringCalls.map(() => "bytes")
+      );
+      expect(body.byteLength).toBe(declared);
+      expect(declared).toBe(Math.min(windowLength, fullBody.byteLength - start));
+      perWindowPulls.push(pulls);
+      collected.push(body);
+    }
+
+    // 1. Correctness first: the windows must reassemble into exactly the
+    //    unwindowed section. Byte-seeking past a base64 boundary is the
+    //    way this fix could be fast and WRONG, so cost assertions below
+    //    only mean anything with this one holding.
+    expect(Buffer.concat(collected as unknown as Uint8Array[]).equals(fullBody as unknown as Uint8Array)).toBe(true);
+
+    // 2. Per-window cost is bounded by the WINDOW, not the offset. The
+    //    `+ 1` is the at-most-one extra pull from aligning the seek down
+    //    to the 3-raw-byte / 4-base64-char grid; it is a constant, not a
+    //    function of k.
+    const windowBound = Math.ceil(windowLength / PG_TEXT_CHUNK_BYTES) + 1;
+    for (const pulls of perWindowPulls) {
+      expect(pulls).toBeLessThanOrEqual(windowBound);
+    }
+
+    // 3. The anti-quadratic assertion. The last window sits ~450 KB into
+    //    the column; if it cost anything like its offset it would dwarf
+    //    the first. Compare the tail window against the first — flat, not
+    //    climbing.
+    expect(perWindowPulls[windowCount - 1]).toBeLessThanOrEqual(perWindowPulls[0] + 1);
+
+    // 4. And in aggregate: walking the whole body in windows stays within
+    //    a small constant of a single full pass. The discard reader would
+    //    land at ~(windowCount+1)/2 times it.
+    const totalPulls = perWindowPulls.reduce((a, b) => a + b, 0);
+    expect(totalPulls).toBeLessThanOrEqual(fullPassPulls + windowCount + 1);
+  });
 });

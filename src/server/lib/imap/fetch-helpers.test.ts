@@ -248,19 +248,28 @@ describe("getRequestedFields", () => {
       });
     }
 
-    // `getBodyPartHeaders` decides part existence off `mail.text.trim()`
-    // and has no streaming counterpart, so these two keep the strings.
+    // `getBodyPartHeaders` needs only "does a text/html part exist",
+    // which `resolveBodyPresence` answers from the octet counts. Pulling
+    // the strings would make `UID FETCH 1:* (BODY.PEEK[1.MIME])` project
+    // every row's full body — #757's allocation shape — to compute two
+    // booleans.
     for (const sub of ["MIME", "HEADER"] as const) {
-      it(`BODY[1.${sub}] still projects text/html — getBodyPartHeaders needs them`, () => {
+      it(`BODY[1.${sub}] projects the octet counts, NOT text/html`, () => {
         const fields = bodyFetch({ type: "MIME_PART", partNumber: "1", subSection: sub });
-        expect(fields.has("text")).toBe(true);
-        expect(fields.has("html")).toBe(true);
+        expect(fields.has("text")).toBe(false);
+        expect(fields.has("html")).toBe(false);
+        for (const f of ["text_octets", "html_octets", "mail_id", "user_id"] as const) {
+          expect(fields.has(f as FetchRequestedField)).toBe(true);
+        }
       });
     }
 
-    // Union semantics: one FETCH asking for both shapes must still get
-    // the materialized columns, or the .MIME half silently drops.
-    it("BODY[TEXT] + BODY[1.MIME] in one FETCH projects text/html for the .MIME half", () => {
+    // Union semantics: the projection is a per-command union, so a single
+    // FETCH pairing the two shapes must stay lazy end to end. If `.MIME`
+    // re-added the strings, `wantsLazyBodies` would go false and the
+    // BODY[TEXT] half would materialize the whole body — giving back the
+    // entire win for that command.
+    it("BODY[TEXT] + BODY[1.MIME] in one FETCH stays lazy — no text/html in the union", () => {
       const fields = getRequestedFields([
         { type: "BODY", peek: true, section: { type: "TEXT" } },
         {
@@ -269,8 +278,11 @@ describe("getRequestedFields", () => {
           section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
         },
       ]);
-      expect(fields.has("text")).toBe(true);
-      expect(fields.has("html")).toBe(true);
+      expect(fields.has("text")).toBe(false);
+      expect(fields.has("html")).toBe(false);
+      for (const f of ["text_octets", "html_octets", "mail_id", "user_id"] as const) {
+        expect(fields.has(f as FetchRequestedField)).toBe(true);
+      }
     });
   });
 
@@ -1817,20 +1829,19 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
   // FETCH tuple with no diagnostic). Both now take the segment walker
   // and stream correctly — that is the fix, asserted positively below.
   //
-  // `.MIME` / `.HEADER` is the one sub-section with no streaming
-  // counterpart, so it still depends on the projection keeping
-  // `text`/`html`; its null-return on a lazy-only mail stays pinned as
-  // the guard for that dependency.
-  it("BODY[1.MIME] on lazy-only mail (text/html undefined) — silent null-return via short-circuit", async () => {
+  // `.MIME` / `.HEADER` has no streaming counterpart — it returns a few
+  // hundred bytes of static MIME header — but it no longer needs the
+  // materialized strings either: `getBodyPartHeaders` reads part
+  // existence through `resolveBodyPresence`, which prefers the octet
+  // counts. Previously this shape hit
+  // `mail.text && mail.text.trim().length > 0` with `text` undefined,
+  // short-circuited to falsy, and fired the early
+  // `!hasAttachments && !hasText && !hasHtml → return null` — a SILENT
+  // null-return that dropped the response part from the FETCH tuple with
+  // no diagnostic. Pinned positively now: the part is emitted, and it
+  // names the same part `BODY[1]` streams.
+  it("BODY[1.MIME] on lazy-only mail (text/html undefined) returns the part's MIME header", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
-    // `getBodyPartHeaders`'s predicate is
-    // `mail.text && mail.text.trim().length > 0` — undefined
-    // short-circuits before `.trim()`, `hasText`/`hasHtml` degrade to
-    // falsy, and the early `!hasAttachments && !hasText && !hasHtml
-    // → return null` fires. Silent null-return (NOT a throw) — the
-    // response part is dropped from the FETCH tuple with no
-    // diagnostic. That's the class of wrong-shape bug the projection
-    // guards against.
     const part = await buildBodyResponsePart(
       mail,
       {
@@ -1841,7 +1852,53 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
       "doc-prod-mime-lazy",
       "INBOX"
     );
-    expect(part).toBeNull();
+    expect(part).not.toBeNull();
+    expect(part!.type).toBe("literal");
+    if (part!.type !== "literal") throw new Error("expected literal");
+    // text_octets > 0 AND html_octets > 0 → multipart/alternative, so
+    // part 1 is the text/plain half. Same numbering `buildMessageSegments`
+    // assigns, which is the invariant `resolveBodyPresence` exists to hold.
+    expect(part.content).toContain("Content-Type: text/plain; charset=utf-8");
+  });
+
+  // The whitespace-only divergence `resolveBodyPresence` documents, made
+  // explicit: on the materialized path a `"   "` body is NOT a part; on
+  // the lazy path a non-zero octet count says it is. Both callers read
+  // the same helper, so `BODY[1.MIME]` and `BODY[1]` agree either way —
+  // which is the property that actually matters on the wire.
+  it("BODY[1.MIME] and BODY[1] agree on part numbering for a text-only lazy mail", async () => {
+    const mail = prodShapeMail({
+      text: undefined as unknown as string,
+      html: undefined as unknown as string,
+      html_octets: 0,
+    });
+    const mimePart = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "1", subSection: "MIME" },
+      },
+      "doc-prod-mime-text-only",
+      "INBOX"
+    );
+    expect(mimePart).not.toBeNull();
+    if (mimePart!.type !== "literal") throw new Error("expected literal");
+    // html_octets === 0 → single text/plain part at 1, not multipart.
+    expect(mimePart.content).toContain("Content-Type: text/plain; charset=utf-8");
+
+    // And part 2 does not exist in that structure.
+    const absent = await buildBodyResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section: { type: "MIME_PART", partNumber: "2", subSection: "MIME" },
+      },
+      "doc-prod-mime-text-only",
+      "INBOX"
+    );
+    expect(absent).toBeNull();
   });
 
   it("BODY[TEXT]<0.100> on lazy-only mail streams — no buildFullMessage, no throw", async () => {

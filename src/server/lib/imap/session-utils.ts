@@ -213,6 +213,33 @@ const wantsLazyBodies = (mail: FetchMailInput): boolean =>
   mail.html === undefined;
 
 /**
+ * Does this mail have a text / an html body part?
+ *
+ * Single source of truth for the predicate that decides the synthetic MIME
+ * structure — `buildMessageSegments` (which parts exist on the wire) and
+ * `getBodyPartHeaders` (which part number names which header block) MUST
+ * agree, or `BODY[1.MIME]` describes a different part than `BODY[1]` emits.
+ *
+ * In lazy mode it derives from `octet_length()` so neither caller has to
+ * project the multi-MB `text` / `html` columns just to compute two booleans.
+ * A non-zero octet count is treated as "has content" even if the content is
+ * whitespace-only; the materialized path keeps the stricter `.trim()` check.
+ * Whitespace-only bodies are pathological in real mail, and the two modes
+ * only ever disagree on that case.
+ */
+const resolveBodyPresence = (
+  mail: FetchMailInput
+): { hasText: boolean; hasHtml: boolean } => {
+  if (wantsLazyBodies(mail)) {
+    return { hasText: mail.text_octets! > 0, hasHtml: mail.html_octets! > 0 };
+  }
+  return {
+    hasText: !!mail.text && mail.text.trim().length > 0,
+    hasHtml: !!mail.html && mail.html.trim().length > 0,
+  };
+};
+
+/**
  * The RFC 822 serialization of `mail`, as an ordered segment list.
  *
  * Attachment bodies are referenced by id + resolved size, never read, so
@@ -230,18 +257,7 @@ export const buildMessageSegments = (
 ): MessageSegment[] => {
   const headers = formatHeaders(mail, docId);
   const isLazy = wantsLazyBodies(mail);
-  // In lazy mode, `hasText`/`hasHtml` derive from `octet_length()` — the
-  // materialized `.trim()` check isn't possible without loading the column.
-  // A non-zero octet count is treated as "has content" even if the content
-  // is whitespace-only. Whitespace-only bodies are pathological in real
-  // mail and callers that need the trim-check semantics stay on the
-  // materialized path (pass `mail.text` / `mail.html`).
-  const hasText = isLazy
-    ? mail.text_octets! > 0
-    : !!mail.text && mail.text.trim().length > 0;
-  const hasHtml = isLazy
-    ? mail.html_octets! > 0
-    : !!mail.html && mail.html.trim().length > 0;
+  const { hasText, hasHtml } = resolveBodyPresence(mail);
   const hasAttachments = !!mail.attachments && mail.attachments.length > 0;
 
   const segments: MessageSegment[] = [];
@@ -1038,11 +1054,15 @@ async function* streamOneSegment(
 /**
  * Build the complete RFC 822 message as a single string.
  *
- * Materializing consumer for `getBodyContent`'s TEXT section, which needs
- * `indexOf("\r\n\r\n") + substring` over the whole message. Prefer
- * `streamFromSegments` (paired with `sumSegmentBytes` on the same
- * `buildMessageSegments` result) for BODY[] / RFC822 — this function's
- * peak allocation is O(message), which is what #729 was about.
+ * **No production caller as of #757.** Its last one was `getBodyContent`'s
+ * FULL / TEXT sections; every body-bearing section now takes the segment-walk
+ * streaming path (`streamFromSegments` / `streamBodyFromSegments` paired with
+ * `sumSegmentBytes` / `sumBodyBytes` on the same `buildMessageSegments`
+ * result), so nothing materializes a whole message any more. Kept with its
+ * tests because it is still the reference semantics the streamers are
+ * asserted against; deletion is tracked separately since it also touches the
+ * `session.ts` / `models/common.ts` prose that names it. Do NOT reintroduce
+ * it on a fetch path — peak allocation is O(message), which is #729/#757.
  */
 export const buildFullMessage = (mail: FetchMailInput, docId?: string): string => {
   const parts: string[] = [];
@@ -1089,7 +1109,12 @@ export const buildFullMessage = (mail: FetchMailInput, docId?: string): string =
 };
 
 /**
- * Get specific body part from multipart message
+ * Get specific body part from multipart message.
+ *
+ * **No production caller as of #757**, for the same reason as
+ * `buildFullMessage`: `BODY[<part>]` (bare and `.TEXT`) streams via
+ * `selectPartBodySegments`. Its part-numbering remains the reference the
+ * streaming path and `getBodyPartHeaders` are asserted to agree with.
  */
 export const getBodyPart = (
   mail: Partial<MailType>,
@@ -1162,18 +1187,25 @@ export const getBodyPart = (
  * / `BODY[<part>.HEADER]`). Returns the part's `Content-Type` +
  * `Content-Transfer-Encoding` (+ `Content-Disposition` for attachments) fields
  * with no trailing CRLF — the caller appends the delimiting blank line. Mirrors
- * `getBodyPart`'s part-numbering exactly so `BODY[1.MIME]` names the same part
- * as `BODY[1]`.
+ * `buildMessageSegments`' part-numbering exactly (both derive part existence
+ * from `resolveBodyPresence`) so `BODY[1.MIME]` names the same part as
+ * `BODY[1]` emits.
+ *
+ * Reads the body columns only through `resolveBodyPresence`, which prefers
+ * `text_octets` / `html_octets` — every return below is a static
+ * `Content-Type:` block or an attachment header, so the content itself is
+ * never needed. That is what lets `addBodyFields` keep `text` / `html` out of
+ * the `.MIME` / `.HEADER` projection: `UID FETCH 1:* (BODY.PEEK[1.MIME])`
+ * would otherwise pull every row's full body into `fetchMailsForRange`'s Map.
  */
 export const getBodyPartHeaders = (
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   partNum: string
 ): string | null => {
   const parts = partNum.split(".");
   const mainPart = parseInt(parts[0], 10);
 
-  const hasText = mail.text && mail.text.trim().length > 0;
-  const hasHtml = mail.html && mail.html.trim().length > 0;
+  const { hasText, hasHtml } = resolveBodyPresence(mail);
   const hasAttachments = mail.attachments && mail.attachments.length > 0;
 
   if (!hasAttachments && !hasText && !hasHtml) {

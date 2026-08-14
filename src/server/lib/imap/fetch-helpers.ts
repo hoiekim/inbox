@@ -17,7 +17,6 @@ import {
 } from "./util";
 import {
   applyPartialFetch,
-  buildFullMessage,
   buildMessageSegments,
   computeFullMessageSize,
   streamFromSegments,
@@ -31,7 +30,6 @@ import {
   sumPartBodyBytes,
   MessageSegment,
   WIRE_TRAILER,
-  getBodyPart,
   getBodyPartHeaders,
   getBodySectionKey,
 } from "./session-utils";
@@ -84,24 +82,27 @@ export type FetchResponsePart =
 // Body content extraction
 // ---------------------------------------------------------------------------
 
+/**
+ * The materialized content of a HEADER-LIKE body section — `BODY[HEADER]`,
+ * `BODY[HEADER.FIELDS ...]`, and a MIME part's `.HEADER` / `.MIME`. Each
+ * returns a few hundred bytes of header text and includes its own delimiting
+ * blank line (see `isHeaderLikeSection`).
+ *
+ * Deliberately NOT a general body reader. Every body-bearing section (FULL,
+ * TEXT, bare/`.TEXT` MIME_PART — partial and non-partial alike) is served by
+ * the segment-walk streaming path in `buildBodyResponsePart` and returns
+ * before reaching the call site here, so a body branch on this function
+ * would be dead code that also reintroduces the O(body-length) allocation
+ * this path exists to avoid — and would throw outright on the lazy row shape
+ * `getMailsByRange` now projects, since there is no materialized `text` /
+ * `html` to read.
+ */
 export function getBodyContent(
-  mail: Partial<MailType>,
+  mail: FetchMailInput,
   section: BodySection,
   docId: string
 ): string | null {
   switch (section.type) {
-    case "FULL":
-      return buildFullMessage(mail, docId);
-
-    case "TEXT": {
-      const fullMessage = buildFullMessage(mail, docId);
-      const headerEndIndex = fullMessage.indexOf("\r\n\r\n");
-      if (headerEndIndex !== -1) {
-        return fullMessage.substring(headerEndIndex + 4);
-      }
-      return "";
-    }
-
     case "HEADER":
       // RFC 3501 §6.4.5: a HEADER fetch includes the RFC-2822 delimiting blank
       // line between the header block and the body. `formatHeaders` joins the
@@ -142,20 +143,15 @@ export function getBodyContent(
     }
 
     case "MIME_PART":
-      // RFC 3501 §6.4.5: `.HEADER`/`.MIME` return the part's MIME header fields;
-      // `.TEXT` (and a bare part number) return the part body without them. For
-      // this codebase's synthetic parts `getBodyPart` already yields the body
-      // sans MIME header, so `.TEXT` and no-subsection resolve identically.
-      switch (section.subSection) {
-        case "HEADER":
-        case "MIME": {
-          const headers = getBodyPartHeaders(mail, section.partNumber);
-          return headers === null ? null : headers + "\r\n\r\n";
-        }
-        case "TEXT":
-        default:
-          return getBodyPart(mail, section.partNumber);
+      // RFC 3501 §6.4.5: `.HEADER`/`.MIME` return the part's MIME header
+      // fields. `.TEXT` and a bare part number return the part BODY, which
+      // streams via `selectPartBodySegments` in `buildBodyResponsePart` and
+      // never arrives here.
+      if (section.subSection === "HEADER" || section.subSection === "MIME") {
+        const headers = getBodyPartHeaders(mail, section.partNumber);
+        return headers === null ? null : headers + "\r\n\r\n";
       }
+      return null;
 
     default:
       return null;
@@ -366,19 +362,16 @@ export function addBodyFields(
       // `selectPartBodySegments` — lazy synthetics only, same O(chunk)
       // bound as TEXT and FULL.
       //
-      // `.MIME` / `.HEADER` still fall through to `getBodyPartHeaders`,
-      // which decides part existence off `mail.text.trim()` and cannot
-      // drive the SUBSTRING reader, so those two keep the materialized
-      // strings. They return a part's MIME header block — a few hundred
-      // bytes — so the projection cost is bounded by the mail's body size
-      // only for a request shape no bulk client issues in a loop.
-      if (
-        bodyFetch.section.subSection === "HEADER" ||
-        bodyFetch.section.subSection === "MIME"
-      ) {
-        fields.add("text");
-        fields.add("html");
-      }
+      // `.MIME` / `.HEADER` fall through to `getBodyPartHeaders`, which
+      // needs only "does a text/html part exist" — `resolveBodyPresence`
+      // answers that from `text_octets` / `html_octets`, the same
+      // predicate `buildMessageSegments` uses. So this branch projects
+      // the synthetics only, like the rest: `UID FETCH 1:*
+      // (BODY.PEEK[1.MIME])` no longer pulls every row's body into
+      // `fetchMailsForRange`'s Map (#757's allocation shape), and
+      // `wantsLazyBodies` stays true when a single command pairs `.MIME`
+      // with `BODY[TEXT]` — the projection is a per-command union, so
+      // adding the strings here would have un-lazied that whole command.
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");
