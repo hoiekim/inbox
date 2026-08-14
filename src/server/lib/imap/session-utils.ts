@@ -1060,7 +1060,7 @@ async function* streamOneSegment(
  * `sumSegmentBytes` / `sumBodyBytes` on the same `buildMessageSegments`
  * result), so nothing materializes a whole message any more. Kept with its
  * tests because it is still the reference semantics the streamers are
- * asserted against; deletion is tracked separately since it also touches the
+ * asserted against; deletion is tracked in #834, which also covers the
  * `session.ts` / `models/common.ts` prose that names it. Do NOT reintroduce
  * it on a fetch path — peak allocation is O(message), which is #729/#757.
  */
@@ -1113,8 +1113,7 @@ export const buildFullMessage = (mail: FetchMailInput, docId?: string): string =
  *
  * **No production caller as of #757**, for the same reason as
  * `buildFullMessage`: `BODY[<part>]` (bare and `.TEXT`) streams via
- * `selectPartBodySegments`. Its part-numbering remains the reference the
- * streaming path and `getBodyPartHeaders` are asserted to agree with.
+ * `selectPartBodySegments`. Deletion tracked in #834.
  */
 export const getBodyPart = (
   mail: Partial<MailType>,
@@ -1186,10 +1185,15 @@ export const getBodyPart = (
  * MIME header block for a specific body part (RFC 3501 §6.4.5 `BODY[<part>.MIME]`
  * / `BODY[<part>.HEADER]`). Returns the part's `Content-Type` +
  * `Content-Transfer-Encoding` (+ `Content-Disposition` for attachments) fields
- * with no trailing CRLF — the caller appends the delimiting blank line. Mirrors
- * `buildMessageSegments`' part-numbering exactly (both derive part existence
- * from `resolveBodyPresence`) so `BODY[1.MIME]` names the same part as
- * `BODY[1]` emits.
+ * with no trailing CRLF — the caller appends the delimiting blank line.
+ *
+ * Shares `resolveBodyPresence` with `buildMessageSegments`, so the two agree
+ * on WHETHER a text / html part exists. They still disagree on attachment
+ * numbering when a mail has attachments but no text/html body: this function
+ * reserves slot 1 for body content unconditionally while
+ * `buildMessageSegments` does not, so the attachment stamped `partPath` `"1"`
+ * is described here as part 2. Pre-existing and tracked in #833 — do not
+ * assume the two are interchangeable for attachment parts.
  *
  * Reads the body columns only through `resolveBodyPresence`, which prefers
  * `text_octets` / `html_octets` — every return below is a static

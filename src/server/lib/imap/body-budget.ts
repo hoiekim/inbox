@@ -103,7 +103,8 @@ const release = (): void => {
  * instead. Kept as the promise-shaped entry point to the SAME semaphore
  * (`acquire` / `release` / `waitQueue` / the ledger), which is what
  * `body-budget.test.ts` exercises directly; a materializing caller added
- * later must go through the budget rather than around it.
+ * later must go through the budget rather than around it. Deletion — and
+ * the test port it requires — tracked in #834.
  */
 export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
   await acquire();
