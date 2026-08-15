@@ -71,12 +71,26 @@ const USER_ROW = {
 };
 
 const mockQuery = mock(async (sql: string) => {
+  const sqlStr = typeof sql === "string" ? sql : "";
   // getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails
-  if (typeof sql === "string" && sql.includes("next_uid")) {
+  if (sqlStr.includes("next_uid")) {
     return { rows: [{ next_uid: String(DOMAIN_UID) }], rowCount: 1 };
   }
-  // usersTable.queryOne(...) for getImapUidValidity
-  return { rows: [USER_ROW], rowCount: 1 };
+  // usersTable.queryOne(...) for getImapUidValidity — narrowed to queries
+  // that target the users table so an out-of-file leak (Bun's mock.module
+  // is process-global; whichever pg-mock wins the load-order race owns the
+  // pool for every subsequent test file — see
+  // `reference_bun_mock_module_global_hoisting.md`) doesn't answer
+  // `users.test.ts`'s "no row matches" SELECTs with a truthy USER_ROW. A
+  // truly bare `return { rows: [USER_ROW] }` default caused CD to fail on
+  // 0edf95c (see PR #835 write-up) with 16 users.test.ts failures.
+  if (/from\s+users\b/i.test(sqlStr)) {
+    return { rows: [USER_ROW], rowCount: 1 };
+  }
+  // Empty by default. Any SQL this file's tests need answered has to be
+  // matched explicitly above so an out-of-file caller can't accidentally
+  // get a non-empty result and drift silently.
+  return { rows: [] as unknown[], rowCount: 0 as number | null };
 });
 
 class FakePool {
