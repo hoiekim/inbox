@@ -28,7 +28,10 @@ const INTERESTING_DURATION_MS = 100;
 const INTERESTING_RESPONSE_BYTES = 4096;
 
 // A trailing `{N}` / `{N+}` is a literal declaration (RFC 3501 §4.3, RFC 7888).
-const LITERAL_DECLARATION = /\{(\d+)(\+?)\}\s*$/;
+// It has to stand as its own argument, so it is preceded by SP or begins the
+// line — without that anchor a password ending in `{5}` reads as a declaration
+// and the server answers a continuation to a command that already completed.
+const LITERAL_DECLARATION = /(?:^|\s)\{(\d+)(\+?)\}\s*$/;
 
 // Tag of a command line. RFC 3501 §7 requires a tagged completion for every
 // command, including one that failed to parse, so an unparseable line still
@@ -132,15 +135,23 @@ export class ImapRequestHandler {
     const session = new ImapSession(this, socket);
     this.session = session;
 
-    let buffer = "";
+    // A Buffer, not a string: `{N}` counts OCTETS, and a UTF-8 decode makes
+    // `length` a count of UTF-16 code units instead — so slicing a literal off
+    // a decoded string takes the wrong number of characters for any payload
+    // holding a multi-byte character. Decoding per TCP segment was also
+    // lossy in its own right: a multi-byte sequence split across two segments
+    // decoded to U+FFFD before the drain ever saw it.
+    let buffer = Buffer.alloc(0);
 
-    // Literal continuation state. `pendingCommand` holds the wire text of the
-    // command assembled so far — header line, CRLF, each consumed payload, and
-    // the text between payloads — in the exact byte order the parser re-reads.
-    // `literalBytesNeeded > 0` means octets are still outstanding; 0 alongside a
-    // non-null `pendingCommand` means the payload landed and the remainder of
-    // that line is still to come.
+    // Literal continuation state. `pendingCommand` is the command text
+    // assembled so far, holding the `{N}` markers but NOT the payloads;
+    // `pendingLiterals` carries the decoded payloads in wire order, and the two
+    // travel together into `parseCommand`. `awaitingLiteral` means octets are
+    // still outstanding; cleared alongside a non-null `pendingCommand` it means
+    // the payload landed and the remainder of that line is still to come.
     let pendingCommand: string | null = null;
+    let pendingLiterals: string[] = [];
+    let awaitingLiteral = false;
     let literalBytesNeeded = 0;
 
     // pendingSaslTag is stored on this (class property) so session can set it
@@ -148,9 +159,12 @@ export class ImapRequestHandler {
     // Parse and dispatch one complete command. `input` is the full wire text
     // including any literal payloads, so it can carry a plaintext password —
     // scrub it before it reaches the journal.
-    const executeCommand = async (input: string): Promise<void> => {
+    const executeCommand = async (
+      input: string,
+      literals?: string[]
+    ): Promise<void> => {
       try {
-        const parseResult = parseCommand(input);
+        const parseResult = parseCommand(input, literals);
         if (parseResult.success && parseResult.value) {
           const { tag, request } = parseResult.value;
           await this.handleRequest(tag, request);
@@ -198,9 +212,11 @@ export class ImapRequestHandler {
           // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
           // and hand the connection to the new generation's own loop.
           if (generation !== this.generation) {
-            buffer = "";
+            buffer = Buffer.alloc(0);
             pendingCommand = null;
+            pendingLiterals = [];
             literalBytesNeeded = 0;
+            awaitingLiteral = false;
             return;
           }
 
@@ -209,19 +225,39 @@ export class ImapRequestHandler {
           // otherwise splits into three "commands", so the username and the
           // plaintext password each land in the parse-failure log AND get
           // echoed back on the wire as `<credential> BAD Invalid command`.
-          if (pendingCommand !== null && literalBytesNeeded > 0) {
+          // `awaitingLiteral` rather than `literalBytesNeeded > 0`: a `{0}`
+          // literal is legal (an empty APPEND body, an empty mailbox name) and
+          // its payload is the empty string, which a count-based guard would
+          // skip — leaving the queue short by one and the parse failing.
+          if (pendingCommand !== null && awaitingLiteral) {
             if (buffer.length < literalBytesNeeded) return;
-            pendingCommand += buffer.substring(0, literalBytesNeeded);
-            buffer = buffer.substring(literalBytesNeeded);
+            pendingLiterals.push(
+              buffer.subarray(0, literalBytesNeeded).toString("utf8")
+            );
+            buffer = buffer.subarray(literalBytesNeeded);
             literalBytesNeeded = 0;
+            awaitingLiteral = false;
+            // A payload that consumed its own line terminator (the client
+            // counted the CRLF into `{N}`, or declared the last argument and
+            // sent nothing after it) leaves no tail to read. Dispatch now
+            // rather than blocking on a CRLF that is never coming — the
+            // pre-#805 APPEND path did the same, and waiting turns a
+            // non-conforming client into a wedged session.
+            if (buffer.length === 0) {
+              const input = pendingCommand;
+              const literals = pendingLiterals;
+              pendingCommand = null;
+              pendingLiterals = [];
+              await executeCommand(input, literals);
+            }
             continue;
           }
 
           const lineEnd = buffer.indexOf("\r\n");
           if (lineEnd === -1) return;
 
-          const line = buffer.substring(0, lineEnd);
-          buffer = buffer.substring(lineEnd + 2);
+          const line = buffer.subarray(0, lineEnd).toString("utf8");
+          buffer = buffer.subarray(lineEnd + 2);
 
           // Text following a consumed payload on the same line: either it
           // declares the next literal (LOGIN chains two — one per credential)
@@ -230,14 +266,17 @@ export class ImapRequestHandler {
           if (pendingCommand !== null) {
             const chained = LITERAL_DECLARATION.exec(line);
             if (chained) {
-              pendingCommand += line.trimEnd() + "\r\n";
+              pendingCommand += line.trimEnd();
               literalBytesNeeded = parseInt(chained[1], 10);
+              awaitingLiteral = true;
               if (!chained[2]) session.write("+ go ahead\r\n");
               continue;
             }
             const input = pendingCommand + line;
+            const literals = pendingLiterals;
             pendingCommand = null;
-            await executeCommand(input);
+            pendingLiterals = [];
+            await executeCommand(input, literals);
             continue;
           }
 
@@ -291,8 +330,10 @@ export class ImapRequestHandler {
           // the continuation. Accumulate for any command, not just APPEND.
           const literalMatch = LITERAL_DECLARATION.exec(line);
           if (literalMatch) {
-            pendingCommand = line.trimEnd() + "\r\n";
+            pendingCommand = line.trimEnd();
+            pendingLiterals = [];
             literalBytesNeeded = parseInt(literalMatch[1], 10);
+            awaitingLiteral = true;
             // Synchronizing literals {N} (without +) require a continuation
             // response before the client will send the literal data.
             // Non-synchronizing literals {N+} (LITERAL+) do not.
@@ -321,7 +362,10 @@ export class ImapRequestHandler {
       // handler synchronous — all async work belongs inside `drainCommands`
       // which owns the `draining` guard.
       try {
-        buffer += data.toString();
+        buffer =
+          buffer.length === 0
+            ? data
+            : Buffer.concat([buffer as Uint8Array, data as Uint8Array]);
       } catch (error) {
         logger.error("Error appending data to buffer", { component: "imap" }, error);
         if (!socket.destroyed) socket.destroy();

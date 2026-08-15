@@ -31,18 +31,20 @@ const parseId = (context: ParseContext): ParseResult<ImapRequest> => {
  * Parse a complete IMAP command line
  */
 export const parseCommand = (
-  line: string
+  line: string,
+  literals?: string[]
 ): ParseResult<{ tag: string; request: ImapRequest }> => {
-  // Leading whitespace and the terminating CRLF are framing; anything else is
-  // command text. A blanket `trim()` would also eat the tail of a literal
-  // payload — a password ending in a space is legal precisely because the
-  // client sent it as a literal — so strip only the framing.
-  const input = line.replace(/^\s+/, "").replace(/\r\n$/, "");
+  // Only leading whitespace is framing. A blanket `trim()` used to run here;
+  // it is wrong now that literal payloads travel out-of-band on `literals` —
+  // a payload ending in whitespace is legal precisely because the client sent
+  // it as a literal, and trimming the command text can only lose real tokens.
+  const input = line.replace(/^\s+/, "");
 
   const context: ParseContext = {
     input,
     position: 0,
-    length: input.length
+    length: input.length,
+    literals
   };
 
   try {
