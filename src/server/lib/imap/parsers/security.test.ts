@@ -11,6 +11,8 @@ import { describe, expect, it } from "bun:test";
 import { parseLogin, parseAuthenticate } from "./auth-parsers";
 import { parseAppend } from "./append-parser";
 import { parseSelect, parseCreate, parseDelete, parseRename, parseList, parseStatus } from "./mailbox-parsers";
+import { parseLiteral } from "./primitive-parsers";
+import { parseCommand } from "./command-parser";
 import { ParseContext } from "../types";
 
 const createContext = (input: string): ParseContext => ({
@@ -440,6 +442,104 @@ describe("mailbox-parsers", () => {
       const ctx = createContext("");
       const result = parseStatus(ctx);
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+describe("literals (RFC 3501 §4.3 / RFC 7888 LITERAL+)", () => {
+  describe("parseLiteral", () => {
+    it("reads exactly the declared octet count after the CRLF", () => {
+      const ctx = createContext("{5}\r\nadmin rest");
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(true);
+      expect(result.value).toBe("admin");
+      expect(ctx.input.substring(ctx.position)).toBe(" rest");
+    });
+
+    it("accepts the non-synchronizing {N+} form", () => {
+      const ctx = createContext("{5+}\r\nadmin");
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(true);
+      expect(result.value).toBe("admin");
+    });
+
+    it("keeps octets a quoted string could not carry", () => {
+      const ctx = createContext('{9}\r\np@ss "w\\d');
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(true);
+      expect(result.value).toBe('p@ss "w\\d');
+    });
+
+    it("rejects a truncated payload rather than returning a short value", () => {
+      const ctx = createContext("{9}\r\nadmin");
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("shorter than declared");
+      expect(result.value).toBeUndefined();
+    });
+
+    it("rejects a non-numeric size", () => {
+      const ctx = createContext("{5x}\r\nadmin");
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid literal size");
+    });
+
+    it("rejects an unterminated brace", () => {
+      const ctx = createContext("{5\r\nadmin");
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Unterminated literal");
+    });
+  });
+
+  describe("parseCommand on a reassembled literal command", () => {
+    it("parses LITERAL+ LOGIN with both credentials as literals", () => {
+      const result = parseCommand("A1 LOGIN {5+}\r\nadmin {8+}\r\npassword");
+      expect(result.success).toBe(true);
+      expect(result.value?.tag).toBe("A1");
+      expect(result.value?.request.type).toBe("LOGIN");
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.username).toBe("admin");
+      expect(result.value.request.data.password).toBe("password");
+    });
+
+    it("parses synchronizing LOGIN literals", () => {
+      const result = parseCommand("A1 LOGIN {5}\r\nadmin {8}\r\npassword");
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.username).toBe("admin");
+      expect(result.value.request.data.password).toBe("password");
+    });
+
+    it("preserves a password whose octets include a trailing space", () => {
+      const result = parseCommand("A1 LOGIN {5+}\r\nadmin {9+}\r\npassword ");
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.password).toBe("password ");
+    });
+
+    it("mixes a literal username with a quoted password", () => {
+      const result = parseCommand('A1 LOGIN {5+}\r\nadmin "p@ss word"');
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.username).toBe("admin");
+      expect(result.value.request.data.password).toBe("p@ss word");
+    });
+
+    it("accepts a literal mailbox name on SELECT", () => {
+      const result = parseCommand("A1 SELECT {5+}\r\nINBOX");
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "SELECT") throw new Error("Expected SELECT");
+      expect(result.value.request.data.mailbox).toBe("INBOX");
+    });
+
+    it("still parses APPEND, whose literal the handler assembles the same way", () => {
+      const result = parseCommand("a1 APPEND INBOX (\\Seen) {11}\r\nHello World");
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "APPEND") throw new Error("Expected APPEND");
+      expect(result.value.request.data.mailbox).toBe("INBOX");
+      expect(result.value.request.data.message).toBe("Hello World");
     });
   });
 });

@@ -6,7 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
-import { imapTrace } from "./trace";
+import { imapTrace, redactCredentials } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
@@ -26,6 +26,16 @@ import { logger } from "server";
 const INTERESTING_RSS_DELTA_MB = 1;
 const INTERESTING_DURATION_MS = 100;
 const INTERESTING_RESPONSE_BYTES = 4096;
+
+// A trailing `{N}` / `{N+}` is a literal declaration (RFC 3501 §4.3, RFC 7888).
+const LITERAL_DECLARATION = /\{(\d+)(\+?)\}\s*$/;
+
+// Tag of a command line. RFC 3501 §7 requires a tagged completion for every
+// command, including one that failed to parse, so an unparseable line still
+// needs its first token. Reads the first token of the FIRST line — a
+// literal-bearing command spans several.
+const commandTag = (input: string): string =>
+  /^\s*(\S+)/.exec(input)?.[1] || "BAD";
 
 // Short human-readable summary of a request for the per-command diagnostic
 // log. Never emits mail contents. Cap at ~200 chars so a runaway pipeline of
@@ -124,11 +134,40 @@ export class ImapRequestHandler {
 
     let buffer = "";
 
-    // State for APPEND literal accumulation
-    let pendingAppendLine: string | null = null;
+    // Literal continuation state. `pendingCommand` holds the wire text of the
+    // command assembled so far — header line, CRLF, each consumed payload, and
+    // the text between payloads — in the exact byte order the parser re-reads.
+    // `literalBytesNeeded > 0` means octets are still outstanding; 0 alongside a
+    // non-null `pendingCommand` means the payload landed and the remainder of
+    // that line is still to come.
+    let pendingCommand: string | null = null;
     let literalBytesNeeded = 0;
 
     // pendingSaslTag is stored on this (class property) so session can set it
+
+    // Parse and dispatch one complete command. `input` is the full wire text
+    // including any literal payloads, so it can carry a plaintext password —
+    // scrub it before it reaches the journal.
+    const executeCommand = async (input: string): Promise<void> => {
+      try {
+        const parseResult = parseCommand(input);
+        if (parseResult.success && parseResult.value) {
+          const { tag, request } = parseResult.value;
+          await this.handleRequest(tag, request);
+        } else {
+          logger.debug("Parse failed", {
+            component: "imap.parser",
+            input: redactCredentials(input),
+            error: parseResult.error
+          });
+          const errorMsg = parseResult.error || "Invalid command syntax";
+          session.write(`${commandTag(input)} BAD ${errorMsg}\r\n`);
+        }
+      } catch (error) {
+        logger.error("Error processing command", { component: "imap" }, error);
+        session.write(`${commandTag(input)} BAD Internal server error\r\n`);
+      }
+    };
 
     // Per-session serial drain guard. Node emits `data` events without
     // awaiting the async handler, so before this guard existed each TCP
@@ -150,52 +189,16 @@ export class ImapRequestHandler {
       draining = true;
       try {
         while (true) {
-          // RFC 2595 §2.1: a server MUST discard any knowledge obtained from
-          // the client before TLS that was not obtained from the TLS
-          // negotiation itself. `startTls` swaps the socket from inside this
-          // very loop, so without this check the rest of the cleartext segment
-          // — commands an attacker can pipeline into the same TCP write as
-          // `STARTTLS` — would keep being dispatched, and answered inside the
-          // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
-          // and hand the connection to the new generation's own loop.
-          if (generation !== this.generation) {
-            buffer = "";
-            pendingAppendLine = null;
-            literalBytesNeeded = 0;
-            return;
-          }
-
-          // If accumulating literal data for APPEND, consume raw bytes first
-          if (pendingAppendLine !== null) {
+          // Literal octets are payload, never commands. Consume them before the
+          // line splitter can reach them: `LOGIN {5+}\r\nadmin {8+}\r\npassword`
+          // otherwise splits into three "commands", so the username and the
+          // plaintext password each land in the parse-failure log AND get
+          // echoed back on the wire as `<credential> BAD Invalid command`.
+          if (pendingCommand !== null && literalBytesNeeded > 0) {
             if (buffer.length < literalBytesNeeded) return;
-            const literalData = buffer.substring(0, literalBytesNeeded);
+            pendingCommand += buffer.substring(0, literalBytesNeeded);
             buffer = buffer.substring(literalBytesNeeded);
-            // Skip optional \r\n after literal
-            if (buffer.startsWith("\r\n")) {
-              buffer = buffer.substring(2);
-            }
-
-            const fullInput = pendingAppendLine + "\r\n" + literalData;
-            pendingAppendLine = null;
             literalBytesNeeded = 0;
-
-            try {
-              const parseResult = parseCommand(fullInput.trim());
-              if (parseResult.success && parseResult.value) {
-                const { tag, request } = parseResult.value;
-                await this.handleRequest(tag, request);
-              } else {
-                logger.debug("Parse failed (APPEND literal)", {
-                  component: "imap.parser",
-                  error: parseResult.error
-                });
-                const tag = fullInput.trim().split(" ")[0] || "BAD";
-                session.write(`${tag} BAD ${parseResult.error || "Invalid APPEND command"}\r\n`);
-              }
-            } catch (error) {
-              logger.error("Error processing APPEND literal", { component: "imap" }, error);
-              session.write(`* BAD Internal server error\r\n`);
-            }
             continue;
           }
 
@@ -204,6 +207,24 @@ export class ImapRequestHandler {
 
           const line = buffer.substring(0, lineEnd);
           buffer = buffer.substring(lineEnd + 2);
+
+          // Text following a consumed payload on the same line: either it
+          // declares the next literal (LOGIN chains two — one per credential)
+          // or the command is complete. Handled ahead of the SASL/IDLE/blank
+          // checks below because a completing tail is usually the empty string.
+          if (pendingCommand !== null) {
+            const chained = LITERAL_DECLARATION.exec(line);
+            if (chained) {
+              pendingCommand += line.trimEnd() + "\r\n";
+              literalBytesNeeded = parseInt(chained[1], 10);
+              if (!chained[2]) session.write("+ go ahead\r\n");
+              continue;
+            }
+            const input = pendingCommand + line;
+            pendingCommand = null;
+            await executeCommand(input);
+            continue;
+          }
 
           // Handle SASL challenge response (client sends base64 after "+ " challenge)
           if (this._pendingSaslTag !== null) {
@@ -235,7 +256,7 @@ export class ImapRequestHandler {
 
           logger.debug("IMAP command received", {
             component: "imap",
-            command: line.trim(),
+            command: redactCredentials(line.trim()),
             mailbox: session.selectedMailbox
           });
           imapTrace("in", session.getSessionId(), line.trim());
@@ -247,56 +268,26 @@ export class ImapRequestHandler {
           // burst after LIST).
           await session.waitForCommandSlot();
 
-          // Detect APPEND command with a literal size indicator {N} or {N+}
-          // e.g. "a001 APPEND INBOX (\Seen) {512}"
-          // When found, switch to literal accumulation mode instead of parsing now.
-          const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
+          // A command line ending in `{N}` / `{N+}` declares a literal: the
+          // next N octets are payload, not a command. APPEND is the familiar
+          // case, but RFC 3501 permits a literal wherever an astring is legal —
+          // LOGIN, SELECT, CREATE — and RFC 7888 LITERAL+ (which this server
+          // advertises) lets a conforming client send it without waiting for
+          // the continuation. Accumulate for any command, not just APPEND.
+          const literalMatch = LITERAL_DECLARATION.exec(line);
           if (literalMatch) {
-            const upperLine = line.trim().toUpperCase();
-            // Only intercept APPEND literals here; other commands with literals
-            // (e.g. LOGIN with quoted strings) don't need this treatment.
-            const parts = upperLine.split(/\s+/);
-            const commandWord = parts[1] || parts[0];
-            if (commandWord === "APPEND") {
-              pendingAppendLine = line.trim();
-              literalBytesNeeded = parseInt(literalMatch[1], 10);
-              // Synchronizing literals {N} (without +) require a continuation
-              // response before the client will send the literal data.
-              // Non-synchronizing literals {N+} (LITERAL+) do not.
-              const isSynchronizing = !literalMatch[2];
-              if (isSynchronizing) {
-                session.write("+ go ahead\r\n");
-              }
-              continue;
+            pendingCommand = line.trimEnd() + "\r\n";
+            literalBytesNeeded = parseInt(literalMatch[1], 10);
+            // Synchronizing literals {N} (without +) require a continuation
+            // response before the client will send the literal data.
+            // Non-synchronizing literals {N+} (LITERAL+) do not.
+            if (!literalMatch[2]) {
+              session.write("+ go ahead\r\n");
             }
+            continue;
           }
 
-          try {
-            // Parse the command using the typed parser
-            const parseResult = parseCommand(line.trim());
-
-            if (parseResult.success && parseResult.value) {
-              const { tag, request } = parseResult.value;
-              await this.handleRequest(tag, request);
-            } else {
-              // If parsing failed, send error response only if socket is writable
-              logger.debug("Parse failed", {
-                component: "imap.parser",
-                input: line.trim(),
-                error: parseResult.error
-              });
-              const parts = line.trim().split(" ");
-              const tag = parts[0] || "BAD";
-              const errorMsg = parseResult.error || "Invalid command syntax";
-              session.write(`${tag} BAD ${errorMsg}\r\n`);
-            }
-          } catch (error) {
-            logger.error("Error processing command", { component: "imap" }, error);
-            // Only send error response if socket is still writable
-            const parts = line.trim().split(" ");
-            const tag = parts[0] || "BAD";
-            session.write(`${tag} BAD Internal server error\r\n`);
-          }
+          await executeCommand(line);
         }
       } catch (error) {
         logger.error("Error processing data", { component: "imap" }, error);
