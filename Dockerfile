@@ -20,11 +20,6 @@ FROM node:22-slim
 
 WORKDIR /app
 
-# Read at runtime by src/server/lib/env.ts. Set on the image so a plain
-# `docker run` of this artifact gets the production posture (JSON logs, HSTS,
-# secure cookies, trust proxy); a deployment can still override it.
-ENV NODE_ENV=production
-
 COPY --from=builder /app/build ./build
 COPY healthcheck.js ./healthcheck.js
 
