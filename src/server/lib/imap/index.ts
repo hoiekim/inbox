@@ -2,8 +2,9 @@ import { createServer, Socket } from "net";
 import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "fs";
 import { logger } from "server";
+import { getTlsCredentials } from "../tls";
 
 export { idleManager } from "./idle-manager";
 
@@ -37,26 +38,24 @@ export const initializeImap = async () => {
   });
   servers.push(imapServer);
 
-  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-  const sslConfigured = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
-  const sslFilesExist = sslConfigured && existsSync(SSL_CERTIFICATE_KEY) && existsSync(SSL_CERTIFICATE);
+  const credentials = getTlsCredentials();
 
-  if (sslConfigured && !sslFilesExist) {
+  if (credentials.state === "missing-files") {
     logger.warn("IMAP: SSL certificate files not found — TLS server not started", {
       component: "imap",
-      cert: SSL_CERTIFICATE,
-      key: SSL_CERTIFICATE_KEY,
+      cert: credentials.cert,
+      key: credentials.key,
     });
   }
 
-  if (sslFilesExist) {
+  if (credentials.state === "available") {
     const imapTlsServer = await new Promise<import("net").Server>((res) => {
       const port = getImapTlsPort();
       const imapListener = getImapListener(true);
 
       const tlsOptions = {
-        key: readFileSync(SSL_CERTIFICATE_KEY),
-        cert: readFileSync(SSL_CERTIFICATE)
+        key: readFileSync(credentials.key),
+        cert: readFileSync(credentials.cert)
       };
 
       const server = createTLSServer(tlsOptions, imapListener);
@@ -67,7 +66,7 @@ export const initializeImap = async () => {
       });
     });
     servers.push(imapTlsServer);
-  } else if (!sslConfigured) {
+  } else if (credentials.state === "unconfigured") {
     logger.warn("IMAP: SSL certificate not configured, TLS server not started", { component: "imap" });
   }
 

@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { createConnection } from "net";
 import { connect as tlsConnect } from "tls";
-import { existsSync } from "fs";
 import { pool } from "../../postgres/client";
+import { isTlsAvailable } from "../../tls";
 
 const healthRouter = Router();
 
@@ -45,14 +45,6 @@ const checkTlsPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
     });
   });
 
-// Mirrors the SSL gate used in smtp.ts and imap/index.ts. When SSL is not
-// configured, those servers don't start TLS listeners — so health must not
-// probe-and-fail them; report `not_configured` instead.
-const isSslConfigured = (): boolean => {
-  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-  if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) return false;
-  return existsSync(SSL_CERTIFICATE) && existsSync(SSL_CERTIFICATE_KEY);
-};
 
 type CheckStatus = "ok" | "unhealthy" | "not_configured";
 
@@ -93,7 +85,10 @@ healthRouter.get("/", async (_req, res) => {
   const smtpsPort = process.env.SMTPS_PORT ? parseInt(process.env.SMTPS_PORT, 10) : 465;
   const smtpSubmissionPort = process.env.SMTP_SUBMISSION_PORT ? parseInt(process.env.SMTP_SUBMISSION_PORT, 10) : 587;
   const imapTlsPort = process.env.IMAP_TLS_PORT ? parseInt(process.env.IMAP_TLS_PORT, 10) : 993;
-  const sslConfigured = isSslConfigured();
+  // Shares the SSL gate with smtp.ts and imap/index.ts. When SSL is not
+  // available, those servers don't start TLS listeners — so health must not
+  // probe-and-fail them; report `not_configured` instead.
+  const sslConfigured = isTlsAvailable();
 
   if (sslConfigured) {
     const smtpTlsOk = await checkTlsPort(smtpsPort);

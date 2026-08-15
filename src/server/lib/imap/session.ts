@@ -21,6 +21,7 @@ import {
   SOCKET_TIMEOUT_MS,
 } from "./idle-manager";
 import { getCapabilities } from "./capabilities";
+import { getTlsCredentials } from "../tls";
 import { ImapRequestHandler } from "./handler";
 import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
 import { imapTrace } from "./trace";
@@ -656,13 +657,21 @@ export class ImapSession {
   // ---------------------------------------------------------------------------
 
   startTls = async (tag: string) => {
-    const { SSL_CERTIFICATE = "", SSL_CERTIFICATE_KEY = "" } = process.env;
+    const credentials = getTlsCredentials();
+    // CAPABILITY no longer offers STARTTLS without a usable certificate, so
+    // reaching here means the client asked for an extension it was not
+    // offered. Answer it rather than letting readFileSync throw an ENOENT the
+    // handler can only report as `BAD Internal server error`.
+    if (credentials.state !== "available") {
+      this.write(`${tag} NO STARTTLS is not available\r\n`);
+      return;
+    }
 
     const secureSocket = await new Promise<Socket>((resolve, reject) => {
       const s = new TLSSocket(this.socket, {
         isServer: true,
-        key: readFileSync(SSL_CERTIFICATE_KEY),
-        cert: readFileSync(SSL_CERTIFICATE),
+        key: readFileSync(credentials.key),
+        cert: readFileSync(credentials.cert),
       });
       s.once("secure", () => resolve(s));
       s.once("error", reject);
