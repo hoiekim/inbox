@@ -1,8 +1,13 @@
 /**
- * Source-level guards for decisions in `core.ts` that every consumer mocks
- * away. The repository is stubbed at the barrel in each route/service test, so
- * these read the file and pin the shape at the source — the same technique the
- * mod-sequence guards in `imap.test.ts` use.
+ * Source-level guards for error propagation in the mail repository (#747).
+ *
+ * Every consumer mocks these functions away — the repository is stubbed at the
+ * barrel in each route/service test — so no behavioral test can observe whether
+ * they swallow a DB fault. These read the source and pin the shape, the same
+ * technique the mod-sequence guards in `imap.test.ts` use.
+ *
+ * Named for the invariant rather than the file, so it does not collide with the
+ * unrelated `core-decisions.test.ts` (pivot-gating logic, #725).
  */
 import { describe, it, expect, beforeAll } from "bun:test";
 
