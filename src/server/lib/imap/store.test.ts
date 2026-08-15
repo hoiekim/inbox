@@ -145,7 +145,14 @@ describe("Store.storeMail — what the destination box decides (#725)", () => {
       { name: "Archive", special_use: null, address: null, subscribed: false },
     ] as never);
     const store = new Store(makeUser());
-    expect(await store.listMailboxes()).toEqual(["INBOX", "Drafts", "Junk", "Archive"]);
+    expect(await store.listMailboxes()).toEqual([
+      "INBOX",
+      "Drafts",
+      "Junk",
+      "Starred",
+      "Trash",
+      "Archive",
+    ]);
   });
 });
 
