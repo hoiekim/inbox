@@ -53,8 +53,9 @@ mock.module("tls", () => ({ connect: mockTlsConnect }));
 
 // fs.accessSync is consulted by the shared TLS gate (`lib/tls.ts`). When the
 // test sets SSL_CERTIFICATE/_KEY env vars, the mock lets the access check pass
-// so the SSL gate opens. `existsSync` is kept in the mock for any other caller
-// that still uses it.
+// so the SSL gate opens. Only `accessSync` is overridden: the gate stopped
+// reading `existsSync`, and leaving a stub on it would hand a wrong answer to
+// any future named `import { existsSync }` in a file that links after this one.
 //
 // The real module is spread back in rather than replaced wholesale. bun's
 // `mock.module` is process-global, so a bare `{ accessSync }` factory leaves
@@ -69,7 +70,6 @@ let sslFilesReadable = true;
 mock.module("fs", () => ({
   ...realFs,
   default: realFs,
-  existsSync: () => sslFilesReadable,
   accessSync: (path: Parameters<typeof realFs.accessSync>[0]) => {
     if (!sslFilesReadable) throw new Error(`ENOENT: no such file or directory, access '${String(path)}'`);
   },
