@@ -289,8 +289,11 @@ describe("appendMessage — target mailbox (#695)", () => {
     expect(response).toContain("A101 OK [APPENDUID");
     expect(store.appended).toHaveLength(1);
     expect(store.appended[0].mail.sent).toBe(true);
-    // Domain-scoped: storeMail takes no per-mailbox arg for INBOX / Sent.
-    expect(store.appended[0].mailbox).toBeUndefined();
+    // appendMessage hands storeMail the canonical target box; storeMail is
+    // what drops it for a domain-scoped destination when it builds the
+    // mapping row (`!isDomainScoped(destination) ? destination : undefined`).
+    // Asserting `undefined` here would pin the wrong layer.
+    expect(store.appended[0].mailbox).toBe("Sent Messages");
     // Both UID lanes are reserved on the sent side of the counter. Pinned
     // per-reservation: `every(r => r.sent) === false` would be satisfied by
     // the domain half alone and would miss an inverted account lane.

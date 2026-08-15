@@ -1163,9 +1163,7 @@ export async function appendMessage(
     // (false), skipping onAppended (the sequence-mapping rebuild) and
     // leaving the next seq-numbered FETCH for the appended message
     // returning wrong/missing data.
-    const targetMailbox = isInbox(appendRequest.mailbox)
-      ? "INBOX"
-      : appendRequest.mailbox;
+    const targetMailbox = canonicalMailbox(appendRequest.mailbox);
 
     // RFC 3501 §6.3.11: the target must exist. The server MUST NOT create
     // it, and answers NO [TRYCREATE] so the client can CREATE and retry.
@@ -1223,14 +1221,6 @@ export async function appendMessage(
     }
 
     const user = store.getUser();
-    // RFC 3501 §5.1: INBOX is case-insensitive. SELECT canonicalizes
-    // selectedMailbox to "INBOX"; APPEND must canonicalize the target to
-    // match — otherwise a SELECT inbox + APPEND inbox sequence reads
-    // `selectedMailbox === appendRequest.mailbox` as `"INBOX" === "inbox"`
-    // (false), skipping onAppended (the sequence-mapping rebuild) and
-    // leaving the next seq-numbered FETCH for the appended message
-    // returning wrong/missing data.
-    const targetMailbox = canonicalMailbox(appendRequest.mailbox);
     const account = boxToAccount(user.username, targetMailbox);
     // `sent` is what separates the two domain-scoped views — INBOX and the
     // unified Sent folder share `uid_domain` and are told apart by this
