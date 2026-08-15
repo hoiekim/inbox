@@ -134,10 +134,17 @@ const seqStateFor = (uids: number[]): SequenceState => {
   return { seqToUid: uids, uidToSeq };
 };
 
+// getUser is included so the #725 pivot-sync path in storeFlagsTyped (which
+// reads `store.getUser().id`) doesn't throw when the STORE touches
+// `\Flagged` / `\Deleted`.
 const fakeStore = (
   updated: { uid: number; read: boolean; modseq: number }[],
   failed: number[]
-): Store => ({ setFlags: async () => ({ updated, failed }) }) as unknown as Store;
+): Store =>
+  ({
+    setFlags: async () => ({ updated, failed }),
+    getUser: () => ({ id: "user-123", username: "admin" }),
+  }) as unknown as Store;
 
 const runStore = async (opts: {
   updated?: { uid: number; read: boolean; modseq: number }[];
