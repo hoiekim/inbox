@@ -40,8 +40,8 @@ export const initializeImap = async () => {
 
   const credentials = getTlsCredentials();
 
-  if (credentials.state === "missing-files") {
-    logger.warn("IMAP: SSL certificate files not found — TLS server not started", {
+  if (credentials.state === "unreadable") {
+    logger.warn("IMAP: SSL certificate files not readable — TLS server not started", {
       component: "imap",
       cert: credentials.cert,
       key: credentials.key,

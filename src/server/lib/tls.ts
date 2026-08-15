@@ -1,15 +1,25 @@
-import { existsSync } from "fs";
+import { accessSync, constants } from "fs";
+
+const isReadable = (path: string): boolean => {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * TLS credential state, resolved from `SSL_CERTIFICATE` / `SSL_CERTIFICATE_KEY`.
  *
- * `unconfigured` and `missing-files` are kept apart because the callers warn
+ * `unconfigured` and `unreadable` are kept apart because the callers warn
  * differently: an unset pair is a deliberate plaintext deployment, a set pair
- * pointing at absent files is a misconfiguration worth naming the paths for.
+ * pointing at files this process cannot read is a misconfiguration worth
+ * naming the paths for.
  */
 export type TlsCredentials =
   | { state: "unconfigured" }
-  | { state: "missing-files"; cert: string; key: string }
+  | { state: "unreadable"; cert: string; key: string }
   | { state: "available"; cert: string; key: string };
 
 /**
@@ -17,14 +27,20 @@ export type TlsCredentials =
  * listeners, the STARTTLS upgrade, the CAPABILITY response, the SMTP listeners
  * and the health route. Read per call rather than cached at import: certificates
  * are renewed under a running process, and every caller is on a per-connection
- * or per-request path where two `stat` syscalls are free.
+ * or per-request path where two `access` syscalls are free.
+ *
+ * Readability, not mere existence, is the test every caller actually needs —
+ * each one follows this with `readFileSync`. A Let's Encrypt `privkey.pem` left
+ * at `0640 root:root` exists for a non-root app user and then throws `EACCES`,
+ * which is the same class of failure as the missing file this module was
+ * written for.
  */
 export const getTlsCredentials = (): TlsCredentials => {
   const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
   if (!SSL_CERTIFICATE || !SSL_CERTIFICATE_KEY) return { state: "unconfigured" };
   const cert = SSL_CERTIFICATE;
   const key = SSL_CERTIFICATE_KEY;
-  if (!existsSync(cert) || !existsSync(key)) return { state: "missing-files", cert, key };
+  if (!isReadable(cert) || !isReadable(key)) return { state: "unreadable", cert, key };
   return { state: "available", cert, key };
 };
 

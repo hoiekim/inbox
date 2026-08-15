@@ -32,22 +32,22 @@ describe("getTlsCredentials", () => {
     expect(isTlsAvailable()).toBe(false);
   });
 
-  it("reports `missing-files` with both paths when the certificate is absent", () => {
+  it("reports `unreadable` with both paths when the certificate is absent", () => {
     const absentCert = ssl.absentPath("absent-cert.pem");
     ssl.use(absentCert, ssl.keyPath);
     expect(getTlsCredentials()).toEqual({
-      state: "missing-files",
+      state: "unreadable",
       cert: absentCert,
       key: ssl.keyPath
     });
     expect(isTlsAvailable()).toBe(false);
   });
 
-  it("reports `missing-files` when the key is absent", () => {
+  it("reports `unreadable` when the key is absent", () => {
     const absentKey = ssl.absentPath("absent-key.pem");
     ssl.use(ssl.certPath, absentKey);
     expect(getTlsCredentials()).toEqual({
-      state: "missing-files",
+      state: "unreadable",
       cert: ssl.certPath,
       key: absentKey
     });
@@ -62,6 +62,24 @@ describe("getTlsCredentials", () => {
       key: ssl.keyPath
     });
     expect(isTlsAvailable()).toBe(true);
+  });
+
+  it("reports `unreadable` for a file that exists but the process cannot read", () => {
+    // The shape a Let's Encrypt `privkey.pem` at 0640 root:root takes for a
+    // non-root app user: `existsSync` says yes, `readFileSync` throws EACCES.
+    // root bypasses the permission bits entirely, so there is nothing to assert
+    // when the suite runs as root (some CI containers do).
+    if (process.getuid?.() === 0) return;
+    const lockedKey = ssl.absentPath("locked-key.pem");
+    writeFileSync(lockedKey, "key", { mode: 0o000 });
+    ssl.use(ssl.certPath, lockedKey);
+    expect(getTlsCredentials()).toEqual({
+      state: "unreadable",
+      cert: ssl.certPath,
+      key: lockedKey
+    });
+    expect(isTlsAvailable()).toBe(false);
+    rmSync(lockedKey);
   });
 
   it("re-reads the filesystem on every call so a renewed certificate is picked up", () => {

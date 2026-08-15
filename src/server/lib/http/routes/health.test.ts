@@ -51,10 +51,26 @@ const mockTlsConnect = mock((_opts: unknown, cb: () => void) => {
 mock.module("net", () => ({ createConnection: mockCreateConnection }));
 mock.module("tls", () => ({ connect: mockTlsConnect }));
 
-// fs.existsSync is consulted by isSslConfigured(). When the test sets
-// SSL_CERTIFICATE/_KEY env vars, the mock returns true so the SSL gate opens.
+// fs.accessSync is consulted by the shared TLS gate (`lib/tls.ts`). When the
+// test sets SSL_CERTIFICATE/_KEY env vars, the mock lets the access check pass
+// so the SSL gate opens.
+//
+// The real module is spread back in rather than replaced wholesale: bun's
+// `mock.module` is process-global, so a bare `{ accessSync }` factory makes
+// every OTHER export of `node:fs` vanish for any file that links after this one
+// — including `scripts/test-helpers.ts`, which every suite imports. That fails
+// at link time with `SyntaxError: Export named 'rmSync' not found`, not at
+// assertion time, and the ordering that hides it is just Bun's path walk.
+import * as realFs from "fs";
 let existsSyncResult = true;
-mock.module("fs", () => ({ existsSync: () => existsSyncResult }));
+mock.module("fs", () => ({
+  ...realFs,
+  default: realFs,
+  existsSync: () => existsSyncResult,
+  accessSync: (path: Parameters<typeof realFs.accessSync>[0]) => {
+    if (!existsSyncResult) throw new Error(`ENOENT: no such file or directory, access '${String(path)}'`);
+  },
+}));
 
 const mockPoolQuery = mock(async () => [{ "?column?": 1 }]);
 mock.module("../../postgres/client", () => ({ pool: { query: mockPoolQuery } }));

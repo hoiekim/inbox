@@ -203,8 +203,8 @@ export const initializeSmtp = async () => {
   const credentials = getTlsCredentials();
   const isSslAvailable = credentials.state === "available";
 
-  if (credentials.state === "missing-files") {
-    logger.warn("SMTP: SSL certificate files not found — starting without TLS", {
+  if (credentials.state === "unreadable") {
+    logger.warn("SMTP: SSL certificate files not readable — starting without TLS", {
       cert: credentials.cert,
       key: credentials.key,
     });

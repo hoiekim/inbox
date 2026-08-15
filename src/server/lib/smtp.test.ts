@@ -704,7 +704,7 @@ describe("initializeSmtp configuration", () => {
     expect(warnings.some((m) => m.includes("not configured"))).toBe(true);
   });
 
-  it("warns and falls back to plaintext when SSL files are missing", async () => {
+  it("warns and falls back to plaintext when SSL files are unreadable", async () => {
     process.env.SSL_CERTIFICATE = "/nonexistent/cert.pem";
     process.env.SSL_CERTIFICATE_KEY = "/nonexistent/key.pem";
     const initializeSmtp = await loadInitializeSmtp();
@@ -712,7 +712,7 @@ describe("initializeSmtp configuration", () => {
 
     expect(servers.length).toBe(1);
     const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.some((m) => m.includes("SSL certificate files not found"))).toBe(true);
+    expect(warnings.some((m) => m.includes("SSL certificate files not readable"))).toBe(true);
   });
 
   it("starts three servers (SMTP + SMTPS + submission) when SSL files exist", async () => {

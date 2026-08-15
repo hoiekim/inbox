@@ -657,6 +657,21 @@ export class ImapSession {
   // ---------------------------------------------------------------------------
 
   startTls = async (tag: string) => {
+    // RFC 3501 §6.2.1 / RFC 2595 §3: STARTTLS is only valid on a cleartext
+    // connection in the not-authenticated state. Both rejections matter in
+    // practice, not just on paper: wrapping an already-encrypted socket waits
+    // on a `secure` event no client inside TLS will ever trigger, and the
+    // per-session serial command drain would stall behind it until the socket
+    // times out.
+    if (this.handler.isTls) {
+      this.write(`${tag} BAD STARTTLS not permitted on a TLS connection\r\n`);
+      return;
+    }
+    if (this.authenticated) {
+      this.write(`${tag} BAD STARTTLS not permitted after authentication\r\n`);
+      return;
+    }
+
     const credentials = getTlsCredentials();
     // CAPABILITY no longer offers STARTTLS without a usable certificate, so
     // reaching here means the client asked for an extension it was not
