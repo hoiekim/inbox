@@ -563,6 +563,156 @@ export async function storeFlagsTyped(
 }
 
 // ---------------------------------------------------------------------------
+// COPY / MOVE shared helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * The set of destination-mailbox facts every COPY / MOVE code path needs:
+ * UID space, address-routing rule, sent axis, mapped-utility branch. Both
+ * `copyMessageTyped` and `moveMessageTyped`'s copy-phase read all five,
+ * always in the same shape; resolving them here means the two callers can't
+ * disagree about what a destination like `Starred` looks like.
+ */
+export type DestContext = {
+  destAccount: string;
+  destIsSent: boolean;
+  destIsDomainScoped: boolean;
+  destIsMappedUtility: boolean;
+  destPreservesRecipient: boolean;
+};
+
+/**
+ * Compute a `DestContext` for `destMailbox`. Docstring for the individual
+ * axes lives on the fields above — the three-axis split is what the #725
+ * mapped-utility work introduced (previously `isDomainScoped` was
+ * overloaded to mean both 'address-free filtering' AND 'domain UID space',
+ * which is why `Starred`/`Trash` couldn't exist).
+ */
+export const resolveDestContext = (
+  username: string,
+  destMailbox: string
+): DestContext => {
+  const destAccount = boxToAccount(username, destMailbox);
+  const destIsDomainScoped = isDomainScoped(destMailbox);
+  const destIsMappedUtility = isMappedUtilityFolder(destMailbox);
+  const destPreservesRecipient = destIsDomainScoped || destIsMappedUtility;
+  const destIsSent = isSentBox(destMailbox);
+  return {
+    destAccount,
+    destIsSent,
+    destIsDomainScoped,
+    destIsMappedUtility,
+    destPreservesRecipient,
+  };
+};
+
+/**
+ * Clone `sourceMail` into `destMailbox`, reserve fresh UIDs in the
+ * destination's UID space, and persist via `storeMail`. Returns the
+ * (source UID, destination UID) pair the caller pushes into its COPYUID
+ * source-set / dest-set, or `null` when storeMail failed (the caller
+ * emits the appropriate tagged NO).
+ *
+ * Shared between `copyMessageTyped` (RFC 3501 §6.4.7) and
+ * `moveMessageTyped`'s copy phase (RFC 6851 §3.2) — the two operations
+ * differ ONLY in the follow-up expunge, so the per-mail clone is exactly
+ * the same shape:
+ *
+ * - Flags carry over per §6.4.7. `cloneFields` at the caller has to name
+ *   `read` / `saved` / `deleted` / `draft` / `answered` for these to be
+ *   populated; missing any of them would silently reset the flag on the
+ *   copy.
+ * - Address routing: `destPreservesRecipient` keeps the source's
+ *   `to`/`envelope_to` unchanged (domain-scoped + mapped-utility
+ *   destinations select rows without an address term). Otherwise the
+ *   copy re-anchors `to`/`envelope_to`/`cc`/`bcc` value JSONB to the
+ *   destination account so the copy surfaces in the destination and does
+ *   NOT stay surfaced in the source's view (`envelope_to`/`cc`/`bcc`
+ *   JSONB containment would otherwise re-match).
+ * - UID reservation: `newAccountUid` comes from the per-mailbox counter
+ *   for a mapped-utility destination (`getMailboxUidNext`, no sent axis)
+ *   and from the per-account counter otherwise (`getAccountUidNext`,
+ *   sent-scoped). The domain UID is always reserved so the receive path's
+ *   per-account counter stays contiguous.
+ * - Returned `destUid` is `uid.domain` for a domain-scoped destination
+ *   (INBOX / unified `Sent Messages` / `Drafts`/`Junk`) and `uid.account`
+ *   otherwise (both per-account boxes AND the mapped-utility Starred/Trash
+ *   pair, whose storeMail branch writes into `mail_mailbox_uid` keyed on
+ *   the mailbox name).
+ */
+export const cloneMailToDestination = async (
+  store: Store,
+  sourceMail: Partial<MailType>,
+  srcUid: number,
+  destMailbox: string,
+  ctx: DestContext
+): Promise<{ srcUid: number; destUid: number } | null> => {
+  const Mail = (await import("common")).Mail;
+  const newMail = new Mail({
+    subject: sourceMail.subject,
+    date: sourceMail.date,
+    html: sourceMail.html,
+    text: sourceMail.text,
+    from: sourceMail.from,
+    cc: sourceMail.cc,
+    bcc: sourceMail.bcc,
+    replyTo: sourceMail.replyTo,
+    envelopeFrom: sourceMail.envelopeFrom,
+    attachments: sourceMail.attachments,
+    // Derived from source Message-ID + destination mailbox — see
+    // `deriveCopyMessageId` docstring for retry-safety rationale (#721).
+    messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
+    insight: sourceMail.insight,
+    read: sourceMail.read,
+    saved: sourceMail.saved,
+    deleted: sourceMail.deleted,
+    draft: sourceMail.draft,
+    answered: sourceMail.answered,
+  });
+
+  if (ctx.destPreservesRecipient) {
+    newMail.to = sourceMail.to;
+    newMail.envelopeTo = sourceMail.envelopeTo ?? [];
+  } else {
+    const destAddr = { address: ctx.destAccount, name: "" };
+    newMail.to = {
+      value: [destAddr],
+      text: sourceMail.to?.text || ctx.destAccount,
+    };
+    // Re-anchor envelope_to so the OR-clause doesn't re-surface the copy
+    // in the source mailbox.
+    newMail.envelopeTo = [destAddr];
+    // Clear routing JSONB but preserve display text — `cc_text`/`bcc_text`
+    // drive the FETCH BODY[HEADER] render on the destination while the
+    // empty value arrays keep the copy from re-matching the source
+    // mailbox's `addressCondition`.
+    newMail.cc = sourceMail.cc
+      ? { value: [], text: sourceMail.cc.text }
+      : undefined;
+    newMail.bcc = sourceMail.bcc
+      ? { value: [], text: sourceMail.bcc.text }
+      : undefined;
+  }
+  newMail.sent = ctx.destIsSent;
+
+  const user = store.getUser();
+  const newDomainUid = await getDomainUidNext(user.id, ctx.destIsSent);
+  const newAccountUid = ctx.destIsMappedUtility
+    ? await getMailboxUidNext(user.id, destMailbox)
+    : await getAccountUidNext(user.id, ctx.destAccount, ctx.destIsSent);
+  newMail.uid.domain = newDomainUid;
+  newMail.uid.account = newAccountUid;
+
+  const ok = await store.storeMail(newMail, destMailbox);
+  if (!ok) return null;
+
+  const destUid = ctx.destIsDomainScoped
+    ? newMail.uid.domain
+    : newMail.uid.account;
+  return { srcUid, destUid };
+};
+
+// ---------------------------------------------------------------------------
 // COPY (RFC 3501 §6.4.7 + RFC 4315 COPYUID)
 // ---------------------------------------------------------------------------
 
@@ -691,31 +841,8 @@ export async function copyMessageTyped(
     }
 
     const user = store.getUser();
-    // The destination's address routing. For INBOX, `accountName` is null
-    // in `resolveBox` (the mail's existing to_address keeps it in INBOX
-    // anyway). For accounts/<name>, "Sent Messages/accounts/<name>", and
-    // user-created mailboxes (e.g. "Archive"), `boxToAccount` returns the
-    // synthetic address that drives the destination-mailbox query
-    // (e.g. "Archive@<domain>").
-    const destAccount = boxToAccount(user.username, destMailbox);
-    // Two overlapping axes on the destination:
-    // - `destIsDomainScoped` — UID space for the COPYUID response.
-    //   INBOX / unified `Sent Messages` / domain-scoped utility folders
-    //   (`Drafts`, `Junk`) emit `uid.domain`.
-    // - `destIsMappedUtility` — the `Starred` / `Trash` remainder of #725.
-    //   Same shape as a per-account mapped destination (writes a
-    //   `mail_mailbox_uid` row and emits `uid.account` in COPYUID), but the
-    //   counter is per-mailbox rather than per-account. `getMailboxUidNext`
-    //   handles the difference — see `buildMailboxUidQuery`'s docstring for
-    //   the sent-axis rationale.
-    // - `destPreservesRecipient` — row-selection is address-free (scope for
-    //   the domain views, flag for utility folders), so the copy keeps the
-    //   source's `to`/`envelope_to` unchanged. Only per-account and
-    //   user-created boxes need the re-anchor to `destAccount`.
-    const destIsDomainScoped = isDomainScoped(destMailbox);
-    const destIsMappedUtility = isMappedUtilityFolder(destMailbox);
-    const destPreservesRecipient = destIsDomainScoped || destIsMappedUtility;
-    const destIsSent = isSentBox(destMailbox);
+    // Destination facts shared with the MOVE path — see `resolveDestContext`.
+    const dest = resolveDestContext(user.username, destMailbox);
 
     // Source-side UID extraction for the COPYUID response — domain-scoped for
     // INBOX and the unified Sent folder (both keyed on uid.domain).
@@ -754,8 +881,6 @@ export async function copyMessageTyped(
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
-    const Mail = (await import("common")).Mail;
-
     // Per-mail loop is sequential; a mid-loop failure (e.g.
     // writeMailboxUid throw) leaves the already-committed iterations in
     // the destination. On client retry the destination Message-IDs are
@@ -765,110 +890,19 @@ export async function copyMessageTyped(
     // fires → each iteration converges to the first-attempt row. See
     // #721.
     for (const sourceMail of uniqueSourceMails) {
-      const newMail = new Mail({
-        subject: sourceMail.subject,
-        date: sourceMail.date,
-        html: sourceMail.html,
-        text: sourceMail.text,
-        from: sourceMail.from,
-        cc: sourceMail.cc,
-        bcc: sourceMail.bcc,
-        replyTo: sourceMail.replyTo,
-        envelopeFrom: sourceMail.envelopeFrom,
-        attachments: sourceMail.attachments,
-        // Derived from source Message-ID + destination mailbox — see
-        // `deriveCopyMessageId` docstring for retry-safety rationale.
-        messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
-        insight: sourceMail.insight,
-        // Flags carry over per RFC 3501 §6.4.7.
-        read: sourceMail.read,
-        saved: sourceMail.saved,
-        deleted: sourceMail.deleted,
-        draft: sourceMail.draft,
-        answered: sourceMail.answered,
-      });
-
-      // Routing: a mail surfaces in the destination's mailbox view via
-      // `addressCondition`'s OR of `to_address` + `cc_address` +
-      // `bcc_address` + `envelope_to` JSONB containment (see
-      // `repositories/mails/http.ts`). For per-account / user-created
-      // destinations the copy must address ALL of these to the
-      // destination account so it surfaces in the destination AND does
-      // not stay surfaced in the source (the source's envelope_to / cc
-      // / bcc would re-anchor it). `to_text` is preserved so the client's
-      // FETCH BODY[HEADER] still shows the original recipient header — the
-      // override only affects routing.
-      //
-      // A destination that selects rows without an address term (INBOX,
-      // the unified Sent folder, a domain-scoped utility folder, or a
-      // mapped-utility folder — `Starred`/`Trash`) keeps the real recipient.
-      // `boxToAccount` would otherwise name the folder itself
-      // (`Junk@<domain>`, `Starred@<domain>`) — that overwrites the
-      // recipient, makes `getAccountStats` report a per-account mailbox by
-      // that name, and (for the mapped-utility case) would keep the source
-      // and the copy from surfacing correctly in their intended boxes.
-      if (destPreservesRecipient) {
-        newMail.to = sourceMail.to;
-        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
-      } else {
-        const destAddr = { address: destAccount, name: "" };
-        newMail.to = {
-          value: [destAddr],
-          text: sourceMail.to?.text || destAccount,
-        };
-        // Re-anchor envelope_to so the OR-clause doesn't re-surface the
-        // copy in the source mailbox.
-        newMail.envelopeTo = [destAddr];
-        // cc / bcc participate in `addressCondition` via JSONB
-        // containment (`cc_address @> $2`) AND in FETCH BODY[HEADER]
-        // render via `cc_text` / `bcc_text` (util.ts:54). Clear the
-        // routing JSONB to empty (so `[] @> [{address:'foo'}]` is false
-        // and the copy doesn't re-surface in the source mailbox) but
-        // keep `text` so the destination's header render still shows
-        // `Cc:` / `Bcc:` lines.
-        newMail.cc = sourceMail.cc
-          ? { value: [], text: sourceMail.cc.text }
-          : undefined;
-        newMail.bcc = sourceMail.bcc
-          ? { value: [], text: sourceMail.bcc.text }
-          : undefined;
-      }
-      newMail.sent = destIsSent;
-
-      // Fresh UIDs in the destination's UID space. Three cases collapse
-      // into `newDomainUid` + `newAccountUid`:
-      // - Domain-scoped destination: `newDomainUid` is the wire UID; the
-      //   `getAccountUidNext` reservation still runs so the receive path's
-      //   per-account counter stays contiguous (a domain-scoped COPY that
-      //   skipped it would let a later receive collide on `uid_mailbox`).
-      // - Per-account / user-created destination: `newAccountUid` is the
-      //   wire UID and comes from the `(user, account, sent)` counter.
-      // - Mapped-utility destination (`Starred`/`Trash`): `newAccountUid`
-      //   is the wire UID and comes from the per-mailbox counter, which
-      //   does NOT key on `sent` — see `buildMailboxUidQuery`.
-      // All three reservations are atomic (counter upsert), so concurrent
-      // COPYs to the same destination don't race to the same UID. A
-      // reservation failure throws and is caught below as a tagged NO —
-      // never a fabricated UID.
-      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
-      const newAccountUid = destIsMappedUtility
-        ? await getMailboxUidNext(user.id, destMailbox)
-        : await getAccountUidNext(user.id, destAccount, destIsSent);
-      newMail.uid.domain = newDomainUid;
-      newMail.uid.account = newAccountUid;
-
-      // storeMail derives the rest from the destination: the
-      // `mail_mailbox_uid` mapping for a mapped box (per-account or
-      // mapped-utility, both keyed off `destMailbox`), and the membership
-      // flag for a utility folder.
-      const ok = await store.storeMail(newMail, destMailbox);
-      if (!ok) {
+      const result = await cloneMailToDestination(
+        store,
+        sourceMail,
+        srcUidOf(sourceMail),
+        destMailbox,
+        dest
+      );
+      if (!result) {
         write(`${tag} NO [SERVERBUG] COPY partially failed\r\n`);
         return;
       }
-
-      sourceUids.push(srcUidOf(sourceMail));
-      destUids.push(destIsDomainScoped ? newMail.uid.domain : newMail.uid.account);
+      sourceUids.push(result.srcUid);
+      destUids.push(result.destUid);
     }
 
     // RFC 4315 §2: untagged or tagged OK with [COPYUID uidvalidity
@@ -1020,14 +1054,9 @@ export async function moveMessageTyped(
     }
 
     const user = store.getUser();
-    const destAccount = boxToAccount(user.username, destMailbox);
-    // Same three-axis split as copyMessageTyped — see the docblock there
-    // for the domain-scoped / mapped-utility / preserves-recipient
-    // rationale. The MOVE path drives all three the same way COPY does.
-    const destIsDomainScoped = isDomainScoped(destMailbox);
-    const destIsMappedUtility = isMappedUtilityFolder(destMailbox);
-    const destPreservesRecipient = destIsDomainScoped || destIsMappedUtility;
-    const destIsSent = isSentBox(destMailbox);
+    // Destination facts shared with COPY — see `resolveDestContext`. MOVE =
+    // COPY + expunge so the copy phase is byte-for-byte the COPY path.
+    const dest = resolveDestContext(user.username, destMailbox);
     const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
     const srcUidOf = (mail: Partial<MailType>): number =>
       sourceIsDomainScoped ? mail.uid!.domain : mail.uid!.account;
@@ -1055,79 +1084,23 @@ export async function moveMessageTyped(
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
-    const Mail = (await import("common")).Mail;
-
-    // === COPY phase (mirrors copyMessageTyped's fixed shape) ===
+    // === COPY phase — same helper the COPY handler uses. ===
     for (const sourceMail of uniqueSourceMails) {
-      const newMail = new Mail({
-        subject: sourceMail.subject,
-        date: sourceMail.date,
-        html: sourceMail.html,
-        text: sourceMail.text,
-        from: sourceMail.from,
-        cc: sourceMail.cc,
-        bcc: sourceMail.bcc,
-        replyTo: sourceMail.replyTo,
-        envelopeFrom: sourceMail.envelopeFrom,
-        attachments: sourceMail.attachments,
-        // Derived from source Message-ID + destination mailbox for retry
-        // idempotency — see `deriveCopyMessageId` in imap/util.ts and #721.
-        messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
-        insight: sourceMail.insight,
-        read: sourceMail.read,
-        saved: sourceMail.saved,
-        deleted: sourceMail.deleted,
-        draft: sourceMail.draft,
-        answered: sourceMail.answered,
-      });
-
-      if (destPreservesRecipient) {
-        // Same rule as COPY — a destination that selects rows without an
-        // address term (INBOX, unified Sent, a domain-scoped OR
-        // mapped-utility folder) keeps the real recipient. There is
-        // nothing to re-anchor: the source's view reads through an INNER
-        // JOIN on `mail_mailbox_uid` (`repositories/mails/imap.ts`) that
-        // this clone is not on the source side of, so the clone cannot
-        // surface in the source view no matter what its address fields
-        // say.
-        newMail.to = sourceMail.to;
-        newMail.envelopeTo = sourceMail.envelopeTo ?? [];
-      } else {
-        const destAddr = { address: destAccount, name: "" };
-        newMail.to = {
-          value: [destAddr],
-          text: sourceMail.to?.text || destAccount,
-        };
-        newMail.envelopeTo = [destAddr];
-        // Clear routing JSONB but preserve display text (cc_text /
-        // bcc_text drive the FETCH BODY[HEADER] render).
-        newMail.cc = sourceMail.cc
-          ? { value: [], text: sourceMail.cc.text }
-          : undefined;
-        newMail.bcc = sourceMail.bcc
-          ? { value: [], text: sourceMail.bcc.text }
-          : undefined;
-      }
-      newMail.sent = destIsSent;
-
-      const newDomainUid = await getDomainUidNext(user.id, destIsSent);
-      const newAccountUid = destIsMappedUtility
-        ? await getMailboxUidNext(user.id, destMailbox)
-        : await getAccountUidNext(user.id, destAccount, destIsSent);
-      newMail.uid.domain = newDomainUid;
-      newMail.uid.account = newAccountUid;
-
-      // Same destination handling as COPY — see there.
-      const ok = await store.storeMail(newMail, destMailbox);
-      if (!ok) {
+      const result = await cloneMailToDestination(
+        store,
+        sourceMail,
+        srcUidOf(sourceMail),
+        destMailbox,
+        dest
+      );
+      if (!result) {
         // Pre-deletion failure: copies already stored in the destination
         // linger; the source is untouched. Client can re-issue MOVE.
         write(`${tag} NO [SERVERBUG] MOVE partially failed during copy phase\r\n`);
         return;
       }
-
-      sourceUids.push(srcUidOf(sourceMail));
-      destUids.push(destIsDomainScoped ? newMail.uid.domain : newMail.uid.account);
+      sourceUids.push(result.srcUid);
+      destUids.push(result.destUid);
     }
 
     // === EXPUNGE phase ===
