@@ -33,3 +33,13 @@ const realWebPush = require("web-push");
   ...realWebPush,
   default: realWebPush.default ?? realWebPush,
 };
+
+// The `server` barrel is captured here too so files that
+// `mock.module("server", ...)` (currently `smtp.test.ts`) can restore
+// it in `afterAll`. Bun's `mock.module` replaces the export graph-wide,
+// so `smtp.test.ts`'s server stub was leaking `getUser: mockGetUser`
+// into `users.test.ts`'s direct-from-`./users` import too — the CD
+// break for #830. The restore closes that leak once smtp.test.ts's
+// tests are done.
+const realServer = require("server");
+(globalThis as Record<string, unknown>).__REAL_SERVER = { ...realServer };
