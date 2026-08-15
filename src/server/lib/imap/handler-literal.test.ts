@@ -165,6 +165,97 @@ describe("IMAP literal continuation", () => {
     expect(dispatched[0].request.data.message).toBe("Hello World");
   });
 
+  it("counts a literal in OCTETS, not UTF-16 code units", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // "pässword" is 8 code units and 9 OCTETS. A code-unit count takes 8
+    // characters — the password loses its last letter and swallows the CR —
+    // and the pipelined A2 never gets answered.
+    const payload = Buffer.from("pässword", "utf8");
+    expect(payload.length).toBe(9);
+    socket.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from("A1 LOGIN {5+}\r\nadmin {9+}\r\n"),
+        payload,
+        Buffer.from("\r\nA2 NOOP\r\n"),
+      ])
+    );
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1", "A2"]);
+    expect(dispatched[0].request).toEqual({
+      type: "LOGIN",
+      data: { username: "admin", password: "pässword" }
+    });
+  });
+
+  it("reassembles a multi-byte character split across TCP segments", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    const payload = Buffer.from("café", "utf8"); // 5 octets, 4 code units
+    socket.emit("data", Buffer.from("A1 SELECT {5+}\r\n"));
+    // Split mid-sequence: the trailing byte of "é" arrives separately. A
+    // per-segment toString() would decode the halves to U+FFFD.
+    socket.emit("data", payload.subarray(0, 4));
+    socket.emit("data", Buffer.concat([payload.subarray(4), Buffer.from("\r\n")]));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "SELECT") throw new Error("Expected SELECT");
+    expect(dispatched[0].request.data.mailbox).toBe("café");
+  });
+
+  it("carries an APPEND payload through byte-for-byte, trailing CRLF included", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    const message = "Subject: x\r\n\r\nbody\r\n";
+    socket.emit("data", Buffer.from(`a1 APPEND INBOX {${Buffer.byteLength(message)}+}\r\n`));
+    socket.emit("data", Buffer.concat([Buffer.from(message), Buffer.from("\r\n")]));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.message).toBe(message);
+  });
+
+  it("dispatches when the payload consumed its own terminator instead of wedging", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // The client counted the CRLF into {N} and sent nothing after it. Not
+    // conforming, but it must not hold the session open with no tagged
+    // completion until the socket timeout.
+    socket.emit("data", Buffer.from("a1 APPEND INBOX {13+}\r\nHello World\r\n"));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.message).toBe("Hello World\r\n");
+  });
+
+  it("accepts a zero-length literal", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    socket.emit("data", Buffer.from("a1 APPEND INBOX {0+}\r\n\r\n"));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.message).toBe("");
+  });
+
+  it("does not read a trailing {N} inside an argument as a literal declaration", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // `p@ss{5}` is a password that happens to end in brace-digits. Treating it
+    // as a declaration emits a continuation and eats the pipelined A2 NOOP.
+    socket.emit("data", Buffer.from("A1 LOGIN admin p@ss{5}\r\nA2 NOOP\r\n"));
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1", "A2"]);
+    expect(socket.writes).toEqual([]);
+  });
+
   it("processes a command pipelined behind a literal command", async () => {
     const { socket, dispatched } = makeHarness();
 
@@ -211,6 +302,23 @@ describe("IMAP credential logging", () => {
       const logged = journal(debugSpy);
       expect(logged).not.toContain("hunter2");
       expect(logged).toContain("A1 LOGIN [REDACTED]");
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
+
+  it("redacts an untagged LOGIN, which only ever reaches the failure log", async () => {
+    const debugSpy = spyOn(logger, "debug");
+    try {
+      const { socket } = makeHarness();
+      debugSpy.mockClear();
+
+      socket.emit("data", Buffer.from("LOGIN admin hunter2\r\n"));
+      await settle();
+
+      const logged = journal(debugSpy);
+      expect(logged).not.toContain("hunter2");
+      expect(logged).toContain("LOGIN [REDACTED]");
     } finally {
       debugSpy.mockRestore();
     }

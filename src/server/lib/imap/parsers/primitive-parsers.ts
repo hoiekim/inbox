@@ -114,13 +114,15 @@ export const parseFlag = (context: ParseContext): ParseResult<string> => {
 
 /**
  * Parse an RFC 3501 §4.3 literal — `{N}` (synchronizing) or RFC 7888 `{N+}`
- * (LITERAL+, non-synchronizing) followed by CRLF and exactly N octets.
+ * (LITERAL+, non-synchronizing).
  *
- * The handler reassembles a literal-bearing command into a single string in
- * wire order before parsing, so the octets sit inline immediately after the
- * CRLF. A declared size that overruns the input is a truncated command, not a
- * short one: returning the bytes that happen to be present would hand the
- * caller a silently-wrong credential or mailbox name.
+ * `N` counts OCTETS. `input` is a UTF-16 string, where one octet is not one
+ * code unit, so the payload is NOT sliced out of `input` here: the handler has
+ * already taken exactly N bytes off the socket buffer, decoded them, and
+ * queued the result on `context.literals`. This consumes the marker and shifts
+ * the matching payload. A marker with no queued payload means the caller built
+ * the context by hand rather than through the handler — a bug, not a
+ * recoverable input.
  */
 export const parseLiteral = (context: ParseContext): ParseResult<string> => {
   const start = context.position;
@@ -138,21 +140,15 @@ export const parseLiteral = (context: ParseContext): ParseResult<string> => {
   if (!/^\d+\+?$/.test(sizeToken)) {
     return { success: false, error: "Invalid literal size", consumed: 0 };
   }
-  const size = parseInt(sizeToken, 10);
 
-  let dataStart = closing + 1;
-  if (context.input.substring(dataStart, dataStart + 2) === "\r\n") {
-    dataStart += 2;
+  if (!context.literals?.length) {
+    return { success: false, error: "Missing literal payload", consumed: 0 };
   }
 
-  if (dataStart + size > context.length) {
-    return { success: false, error: "Literal shorter than declared", consumed: 0 };
-  }
-
-  context.position = dataStart + size;
+  context.position = closing + 1;
   return {
     success: true,
-    value: context.input.substring(dataStart, dataStart + size),
+    value: context.literals.shift(),
     consumed: context.position - start
   };
 };

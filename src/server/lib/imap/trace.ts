@@ -17,11 +17,12 @@ const INBOUND_COMMAND = /^[A-Za-z0-9]+\s+[A-Z]+\b/;
 // log in the handler.
 export const redactCredentials = (line: string): string =>
   line
-    // `[\s\S]*` rather than `.*`: the handler assembles a literal-bearing
-    // command into one multi-line string, and the payload holding the password
-    // sits after a CRLF that `.` would not cross.
-    .replace(/^(\S+\s+LOGIN\s+)[\s\S]*$/i, "$1[REDACTED]")
-    .replace(/^(\S+\s+AUTHENTICATE\s+\S+)\s+[\s\S]*$/i, "$1 [REDACTED]");
+    // The tag is optional in the anchor. A conforming client always sends one,
+    // but an untagged `LOGIN admin hunter2` still reaches the parse-failure log
+    // — and a redactor that only covers well-formed input is not a redactor.
+    // `[\s\S]*` rather than `.*` so a payload sitting after a CRLF is covered.
+    .replace(/^((?:\S+\s+)?LOGIN\s+)[\s\S]*$/i, "$1[REDACTED]")
+    .replace(/^((?:\S+\s+)?AUTHENTICATE\s+\S+)\s+[\s\S]*$/i, "$1 [REDACTED]");
 
 // Outbound allowlist. The plain `write()` path also carries FETCH response
 // atoms — HEADER.FIELDS literal payload, ENVELOPE strings, BODY[HEADER] data —

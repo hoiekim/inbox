@@ -524,6 +524,14 @@ export interface ParseContext {
   input: string;
   position: number;
   length: number;
+  /**
+   * Decoded literal payloads (RFC 3501 §4.3), in wire order. A literal's `{N}`
+   * is a count of OCTETS, which no offset into a UTF-16 `input` can express —
+   * so the handler consumes each payload off the byte buffer, decodes it, and
+   * queues it here. `input` keeps only the `{N}` marker, and `parseLiteral`
+   * shifts the matching payload off the front.
+   */
+  literals?: string[];
 }
 
 export interface ParseResult<T> {
