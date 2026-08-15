@@ -114,8 +114,15 @@ const mountWriter = async () => {
     // Re-rendering the same element tree from the root is exactly what the old
     // bare-statement registration reacted to.
     rerender: render,
-    teardown: async () => {
-      await act(async () => root.unmount());
+    // `probe` runs in the same synchronous turn as `root.unmount()`, before
+    // tiptap's `scheduleDestroy` (a `setTimeout(..., 1)`) can interleave and
+    // replace `callbacks` wholesale. Reading the callback list after `teardown`
+    // resolves would race that timer.
+    teardown: async (probe?: () => void) => {
+      await act(async () => {
+        root.unmount();
+        probe?.();
+      });
       container.remove();
     },
   };
@@ -166,6 +173,7 @@ describe("Writer tiptap update listener", () => {
 
     let editor!: TiptapEditor;
     let whileMounted!: number;
+    let afterUnmount: number | undefined;
 
     try {
       editor = findEditor()!;
@@ -177,16 +185,17 @@ describe("Writer tiptap update listener", () => {
       });
       expect(window.localStorage.getItem("initialContent")).toContain("hello");
     } finally {
-      await teardown();
+      // Read the count inside the unmount turn — see `teardown`. Capturing the
+      // array reference beforehand would not work either: `EventEmitter.off`
+      // filters into a new array rather than splicing in place.
+      await teardown(() => {
+        afterUnmount = editor.callbacks.update.length;
+      });
     }
 
     // tiptap registers its own internal `update` callbacks, so the absolute
     // count is not zero after teardown — what matters is that the component's
-    // handler is gone. Assert `callbacks.update` still exists rather than
-    // defaulting a missing one to 0: unmount races tiptap's `scheduleDestroy`,
-    // which replaces `callbacks` wholesale, and a default would make this pass
-    // whether or not the effect cleanup ever ran.
-    expect(editor.callbacks.update).toBeDefined();
-    expect(editor.callbacks.update.length).toBe(whileMounted - 1);
+    // handler is gone.
+    expect(afterUnmount).toBe(whileMounted - 1);
   });
 });
