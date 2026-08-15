@@ -711,8 +711,10 @@ describe("initializeSmtp configuration", () => {
     const servers = await initializeSmtp();
 
     expect(servers.length).toBe(1);
-    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.some((m) => m.includes("SSL certificate files not readable"))).toBe(true);
+    // Configured-but-unusable TLS logs at ERROR (and alarms), not WARN: the
+    // process keeps serving cleartext, so nothing else pages for it.
+    const errors = mockLogger.error.mock.calls.map((c) => String(c[0]));
+    expect(errors.some((m) => m.includes("SSL certificate files not readable"))).toBe(true);
   });
 
   it("starts three servers (SMTP + SMTPS + submission) when SSL files exist", async () => {

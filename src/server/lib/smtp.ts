@@ -204,10 +204,18 @@ export const initializeSmtp = async () => {
   const isSslAvailable = credentials.state === "available";
 
   if (credentials.state === "unreadable") {
-    logger.warn("SMTP: SSL certificate files not readable — starting without TLS", {
+    // Same reasoning as the IMAP listener: TLS was configured and cannot be
+    // served, so this is an operator error that has to page rather than sit in
+    // a warn line while the server accepts plaintext auth.
+    logger.error("SMTP: SSL certificate files not readable — starting without TLS", {
       cert: credentials.cert,
       key: credentials.key,
     });
+    sendAlarm(
+      "TLS certificate not readable",
+      `SMTP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
+      "tls-cert-unreadable"
+    ).catch(() => undefined);
   }
 
   if (credentials.state === "available") {

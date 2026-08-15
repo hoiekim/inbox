@@ -283,7 +283,7 @@ This means mailbox paths use `/` as the hierarchy separator with no prefix, matc
 | `UNSELECT` | RFC 3691 | Deselects current mailbox without expunging |
 | `GETQUOTAROOT` | RFC 2087 | Returns `NO Quota not supported` |
 
-Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN` (plus `STARTTLS` on port 143, and only when `SSL_CERTIFICATE` / `SSL_CERTIFICATE_KEY` point at files that exist).
+Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN` (plus `STARTTLS` on port 143, and only when `SSL_CERTIFICATE` / `SSL_CERTIFICATE_KEY` point at files this process can read).
 
 ### Sent Mail Detection
 

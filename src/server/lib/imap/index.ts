@@ -5,6 +5,7 @@ import { getCapabilities } from "./capabilities";
 import { readFileSync } from "fs";
 import { logger } from "server";
 import { getTlsCredentials } from "../tls";
+import { sendAlarm } from "../alarm";
 
 export { idleManager } from "./idle-manager";
 
@@ -41,11 +42,20 @@ export const initializeImap = async () => {
   const credentials = getTlsCredentials();
 
   if (credentials.state === "unreadable") {
-    logger.warn("IMAP: SSL certificate files not readable — TLS server not started", {
+    // Loud, not a warn line: TLS was explicitly configured and cannot be
+    // served, so the deployment is about to run cleartext-only while believing
+    // it is encrypted. `/health` reports the TLS ports as `not_configured` and
+    // stays 200, so nothing else pages for this.
+    logger.error("IMAP: SSL certificate files not readable — TLS server not started", {
       component: "imap",
       cert: credentials.cert,
       key: credentials.key,
     });
+    sendAlarm(
+      "TLS certificate not readable",
+      `IMAP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
+      "tls-cert-unreadable"
+    ).catch(() => undefined);
   }
 
   if (credentials.state === "available") {

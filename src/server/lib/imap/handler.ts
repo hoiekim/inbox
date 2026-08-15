@@ -495,7 +495,7 @@ export class ImapRequestHandler {
           break;
 
         case "STARTTLS":
-          await session.startTls(tag);
+          session.startTls(tag);
           break;
 
         case "NAMESPACE":

@@ -65,10 +65,10 @@ export const restoreLeaves = (): void => {
  * availability gate (`src/server/lib/tls.ts`) reads.
  *
  * The staged files hold junk rather than a real key pair on purpose: the gate
- * only stats them, so presence is the whole contract, and no test in the repo
- * should carry a PEM private key. A consumer that hands them to OpenSSL — the
- * STARTTLS upgrade path — gets a parse failure, which is what those tests
- * assert against.
+ * only checks readability, so `access(R_OK)` is the whole contract, and no test
+ * in the repo should carry a PEM private key. A consumer that hands them to
+ * OpenSSL — the STARTTLS upgrade path — gets a parse failure, which is what
+ * those tests assert against.
  */
 export const createTlsEnvFixture = () => {
   const dir = mkdtempSync(join(tmpdir(), "tls-fixture-"));

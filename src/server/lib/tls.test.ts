@@ -64,12 +64,15 @@ describe("getTlsCredentials", () => {
     expect(isTlsAvailable()).toBe(true);
   });
 
-  it("reports `unreadable` for a file that exists but the process cannot read", () => {
+  // root bypasses the permission bits entirely, so there is nothing to assert
+  // when the suite runs as root — which the CD builder does. Skip rather than
+  // early-return, so a root run reports as skipped instead of as a pass with
+  // zero assertions.
+  it.skipIf(process.getuid?.() === 0)(
+    "reports `unreadable` for a file that exists but the process cannot read",
+    () => {
     // The shape a Let's Encrypt `privkey.pem` at 0640 root:root takes for a
     // non-root app user: `existsSync` says yes, `readFileSync` throws EACCES.
-    // root bypasses the permission bits entirely, so there is nothing to assert
-    // when the suite runs as root (some CI containers do).
-    if (process.getuid?.() === 0) return;
     const lockedKey = ssl.absentPath("locked-key.pem");
     writeFileSync(lockedKey, "key", { mode: 0o000 });
     ssl.use(ssl.certPath, lockedKey);
@@ -80,7 +83,8 @@ describe("getTlsCredentials", () => {
     });
     expect(isTlsAvailable()).toBe(false);
     rmSync(lockedKey);
-  });
+  }
+  );
 
   it("re-reads the filesystem on every call so a renewed certificate is picked up", () => {
     const laterCert = ssl.absentPath("later-cert.pem");

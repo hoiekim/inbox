@@ -1,6 +1,6 @@
 /* eslint-disable no-case-declarations */
 import { Socket } from "net";
-import { TLSSocket } from "tls";
+import { TLSSocket, createSecureContext } from "tls";
 import { readFileSync } from "fs";
 import crypto from "crypto";
 import { Throttler } from "common";
@@ -656,7 +656,7 @@ export class ImapSession {
   // STARTTLS
   // ---------------------------------------------------------------------------
 
-  startTls = async (tag: string) => {
+  startTls = (tag: string) => {
     // RFC 3501 §6.2.1 / RFC 2595 §3: STARTTLS is only valid on a cleartext
     // connection in the not-authenticated state. Both rejections matter in
     // practice, not just on paper: wrapping an already-encrypted socket waits
@@ -682,18 +682,49 @@ export class ImapSession {
       return;
     }
 
-    const secureSocket = await new Promise<Socket>((resolve, reject) => {
-      const s = new TLSSocket(this.socket, {
-        isServer: true,
+    // Build the context before answering: a present-but-unparseable key pair is
+    // the last failure that can still be reported as a clean tagged NO, because
+    // nothing on the connection has changed yet.
+    let secureContext;
+    try {
+      secureContext = createSecureContext({
         key: readFileSync(credentials.key),
         cert: readFileSync(credentials.cert),
       });
-      s.once("secure", () => resolve(s));
-      s.once("error", reject);
-    });
+    } catch (error) {
+      logger.error("IMAP STARTTLS could not be prepared", { component: "imap", tag }, error);
+      this.write(`${tag} NO STARTTLS is not available\r\n`);
+      return;
+    }
 
+    // The rest of the sequence is load-bearing three times over:
+    //
+    // 1. The cleartext reader comes off the raw socket first. `TLSSocket` reads
+    //    through that socket's handle, so a `data` listener still attached to
+    //    it consumes the ClientHello and the handshake never starts.
+    // 2. The tagged OK goes out in CLEARTEXT and BEFORE the wrap (RFC 3501
+    //    §6.2.1 — negotiation begins immediately after its CRLF). A conformant
+    //    client holds its ClientHello until it reads this line, so wrapping and
+    //    awaiting `secure` first deadlocks both ends; and once wrapped, this
+    //    line would go out encrypted to a client that is not yet in TLS.
+    // 3. Only then is the socket wrapped and handed back to the handler, which
+    //    re-attaches the reader — now on the plaintext side of TLS.
+    const plainSocket = this.socket;
+    plainSocket.removeAllListeners("data");
+    plainSocket.removeAllListeners("close");
+    plainSocket.removeAllListeners("error");
+    plainSocket.removeAllListeners("timeout");
+
+    this.write(`${tag} OK Begin TLS negotiation now\r\n`);
+
+    const secureSocket = new TLSSocket(plainSocket, { isServer: true, secureContext });
+
+    // RFC 2595 §3.1: the session restarts clean after the upgrade, and the new
+    // one must no longer offer STARTTLS. `setSocket` also installs the socket
+    // error handler on the TLS socket, so a handshake that fails from here on
+    // closes the connection rather than answering an already-answered tag.
+    this.handler.isTls = true;
     this.socket = secureSocket;
     this.handler.setSocket(secureSocket);
-    this.write(`${tag} OK Begin TLS negotiation now\r\n`);
   };
 }
