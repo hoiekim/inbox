@@ -113,14 +113,62 @@ export const parseFlag = (context: ParseContext): ParseResult<string> => {
 };
 
 /**
- * Parse a string (quoted or literal)
+ * Parse an RFC 3501 §4.3 literal — `{N}` (synchronizing) or RFC 7888 `{N+}`
+ * (LITERAL+, non-synchronizing) followed by CRLF and exactly N octets.
+ *
+ * The handler reassembles a literal-bearing command into a single string in
+ * wire order before parsing, so the octets sit inline immediately after the
+ * CRLF. A declared size that overruns the input is a truncated command, not a
+ * short one: returning the bytes that happen to be present would hand the
+ * caller a silently-wrong credential or mailbox name.
+ */
+export const parseLiteral = (context: ParseContext): ParseResult<string> => {
+  const start = context.position;
+
+  if (peek(context) !== "{") {
+    return { success: false, error: "Expected literal", consumed: 0 };
+  }
+
+  const closing = context.input.indexOf("}", start + 1);
+  if (closing === -1) {
+    return { success: false, error: "Unterminated literal", consumed: 0 };
+  }
+
+  const sizeToken = context.input.substring(start + 1, closing);
+  if (!/^\d+\+?$/.test(sizeToken)) {
+    return { success: false, error: "Invalid literal size", consumed: 0 };
+  }
+  const size = parseInt(sizeToken, 10);
+
+  let dataStart = closing + 1;
+  if (context.input.substring(dataStart, dataStart + 2) === "\r\n") {
+    dataStart += 2;
+  }
+
+  if (dataStart + size > context.length) {
+    return { success: false, error: "Literal shorter than declared", consumed: 0 };
+  }
+
+  context.position = dataStart + size;
+  return {
+    success: true,
+    value: context.input.substring(dataStart, dataStart + size),
+    consumed: context.position - start
+  };
+};
+
+/**
+ * Parse a string (quoted, literal, or atom)
  */
 export const parseString = (context: ParseContext): ParseResult<string> => {
   if (peek(context) === '"') {
     return parseQuotedString(context);
   }
 
-  // For now, just parse as atom if not quoted
+  if (peek(context) === "{") {
+    return parseLiteral(context);
+  }
+
   return parseAtom(context);
 };
 
