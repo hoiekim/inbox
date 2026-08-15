@@ -90,6 +90,14 @@ export function describeImapCommand(request: ImapRequest): string {
 export class ImapRequestHandler {
   private session: ImapSession | null = null;
   private _pendingSaslTag: string | null = null;
+  /**
+   * Bumped on every `setSocket`. A STARTTLS upgrade swaps the socket while the
+   * previous socket's `drainCommands` loop is still on the stack, and that loop
+   * closes over its own cleartext `buffer` — so it has to be able to tell that
+   * it is no longer the current connection and stop. See the RFC 2595 §2.1 note
+   * in `drainCommands`.
+   */
+  private generation = 0;
 
   constructor(public isTls = false) {}
 
@@ -104,6 +112,12 @@ export class ImapRequestHandler {
       this.session.socket.removeAllListeners("error");
       this.session.socket.removeAllListeners("timeout");
     }
+
+    // Nothing learned before the swap carries across it — a half-finished SASL
+    // exchange from the cleartext phase would otherwise consume the first
+    // command of the encrypted one as its base64 response.
+    this._pendingSaslTag = null;
+    const generation = ++this.generation;
 
     const session = new ImapSession(this, socket);
     this.session = session;
@@ -136,6 +150,21 @@ export class ImapRequestHandler {
       draining = true;
       try {
         while (true) {
+          // RFC 2595 §2.1: a server MUST discard any knowledge obtained from
+          // the client before TLS that was not obtained from the TLS
+          // negotiation itself. `startTls` swaps the socket from inside this
+          // very loop, so without this check the rest of the cleartext segment
+          // — commands an attacker can pipeline into the same TCP write as
+          // `STARTTLS` — would keep being dispatched, and answered inside the
+          // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
+          // and hand the connection to the new generation's own loop.
+          if (generation !== this.generation) {
+            buffer = "";
+            pendingAppendLine = null;
+            literalBytesNeeded = 0;
+            return;
+          }
+
           // If accumulating literal data for APPEND, consume raw bytes first
           if (pendingAppendLine !== null) {
             if (buffer.length < literalBytesNeeded) return;

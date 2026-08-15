@@ -8,6 +8,8 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { createTlsEnvFixture } from "test-helpers";
 import { ImapSession } from "./session";
 
@@ -109,5 +111,36 @@ describe("IMAP STARTTLS without usable credentials", () => {
     expect(writes.join("")).toBe("A1 NO STARTTLS is not available\r\n");
     expect(upgrades).toHaveLength(0);
     expect(handler.isTls).toBe(false);
+  });
+});
+
+/**
+ * Source-order assertions for the two steps of the upgrade a fake socket cannot
+ * observe. Both failure modes are hangs rather than errors — the client waits
+ * for a line that is never sent in the clear, or sends a ClientHello that the
+ * cleartext reader eats — so nothing in the behavioural suite goes red when the
+ * order is wrong. Pinning the source is the only check that does not require a
+ * live key pair, and no PEM private key belongs in this repo's tests.
+ */
+describe("IMAP STARTTLS upgrade ordering (source scan)", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "session.ts"),
+    "utf8"
+  );
+  const startTls = source.slice(source.indexOf("startTls = "));
+
+  it("writes the tagged OK before wrapping the socket (RFC 3501 §6.2.1)", () => {
+    const ok = startTls.indexOf("OK Begin TLS negotiation now");
+    const wrap = startTls.indexOf("new TLSSocket(");
+    expect(ok).toBeGreaterThan(-1);
+    expect(wrap).toBeGreaterThan(-1);
+    expect(ok).toBeLessThan(wrap);
+  });
+
+  it("detaches the cleartext data listener before wrapping the socket", () => {
+    const detach = startTls.indexOf('removeAllListeners("data")');
+    const wrap = startTls.indexOf("new TLSSocket(");
+    expect(detach).toBeGreaterThan(-1);
+    expect(detach).toBeLessThan(wrap);
   });
 });

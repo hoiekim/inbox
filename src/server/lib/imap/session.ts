@@ -723,8 +723,12 @@ export class ImapSession {
     // one must no longer offer STARTTLS. `setSocket` also installs the socket
     // error handler on the TLS socket, so a handshake that fails from here on
     // closes the connection rather than answering an already-answered tag.
+    // `this.socket` is deliberately NOT repointed at the TLS socket: this
+    // session is finished, and `setSocket` detaches listeners from
+    // `this.session.socket` — which would strip node's own `close`/`error`
+    // handlers off the fresh TLSSocket (no `_destroySSL` on close) if the old
+    // session were already pointing at it.
     this.handler.isTls = true;
-    this.socket = secureSocket;
     this.handler.setSocket(secureSocket);
   };
 }

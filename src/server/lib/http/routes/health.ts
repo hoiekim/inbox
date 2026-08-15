@@ -45,7 +45,6 @@ const checkTlsPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
     });
   });
 
-
 type CheckStatus = "ok" | "unhealthy" | "not_configured";
 
 healthRouter.get("/", async (_req, res) => {

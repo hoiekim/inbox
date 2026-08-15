@@ -214,7 +214,7 @@ export const initializeSmtp = async () => {
     sendAlarm(
       "TLS certificate not readable",
       `SMTP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
-      "tls-cert-unreadable"
+      "tls-cert-unreadable-smtp"
     ).catch(() => undefined);
   }
 

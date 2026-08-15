@@ -54,7 +54,7 @@ export const initializeImap = async () => {
     sendAlarm(
       "TLS certificate not readable",
       `IMAP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
-      "tls-cert-unreadable"
+      "tls-cert-unreadable-imap"
     ).catch(() => undefined);
   }
 
