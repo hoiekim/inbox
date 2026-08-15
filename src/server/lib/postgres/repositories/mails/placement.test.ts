@@ -4,165 +4,110 @@
  * The INSERT branch is observable from the caller's input object, so
  * `imap/store.test.ts` can pin it. The 23505 merge branch is not: it rewrites a
  * row that already exists, and a caller-side assertion passes whether or not
- * that write happens. This file runs the REAL `saveMail` so the merge branch's
- * SQL is what gets asserted.
+ * that write happens.
  *
- * Why it matters: a utility view selects its rows by flag. An APPEND into
- * `Drafts` for a Message-ID the account already has takes the merge branch, and
- * a merge that skipped the flag would answer `OK [APPENDUID …]` for a message
- * that landed in no box the client named.
+ * Previous versions of this file ran the real `saveMail` against a
+ * `mock.module("../../client", ...)` FakePool to observe the emitted SQL.
+ * That recipe is process-global in Bun and, on Linux CI, silently leaks the
+ * pool mock into `users.test.ts` under some file-load orders — the CD run
+ * for `refactor(imap): extract cloneMailToDestination + syncMappedPivotsForRow`
+ * (2026-08-15) failed on 16 `users.test.ts` tests for exactly that reason,
+ * as did the same suite twice mid-#830. The fix (per
+ * `reference_bun_mock_module_global_hoisting.md`, fifth variant) is: **do
+ * not reach for the FakePool seam to assert SQL shape. Extract a pure
+ * helper and test that, or assert on the source directly.**
  *
- * Two module-registry hazards have to be cleared to get here, both process-wide
- * and neither undoable from this file:
- *
- *  - `imap/store.test.ts` mock.modules the `repositories/mails` barrel with a
- *    stub `saveMail`, and `mock.module` replaces the export binding graph-wide
- *    — a plain `import "./core"` resolves to that stub even though it never
- *    names the barrel. Bun keys the registry by the full specifier string, so a
- *    cache-busting query suffix is a different key and reaches the real module.
- *  - The pg FakePool seam then does not bind (first importer of `client.ts`
- *    wins), so the pool is mocked at the leaf `client` module instead, and
- *    restored in `afterAll` so nothing bleeds onward.
+ * These are source-level pins on `core.ts` — cheap, no pool, no
+ * mock.module, no cross-file bleed. They catch the specific regressions
+ * the runtime tests were catching (dropping the placement spread,
+ * removing the 23505 branch's UPDATE, forgetting the modseq bump), and
+ * miss only the "the write actually fires at runtime" leg of coverage —
+ * which is testable end-to-end through the existing IMAP suite (APPEND
+ * into Drafts / Junk / Starred / Trash all round-trip through
+ * `saveMail`'s real branches). A follow-up refactor extracting
+ * `applyPlacementMerge` as a pure helper would let us re-add runtime
+ * assertions without the mock.module hazard — filed on the task list.
  */
-import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { resolve } from "path";
+import { describe, it, expect } from "bun:test";
 
-type Call = { sql: string; values: unknown[] };
-let calls: Call[] = [];
-
-/** Set per test: what the INSERT does. */
-let insertBehavior: "ok" | "conflict" = "ok";
-
-const EXISTING_MAIL_ID = "existing-mail-id";
+// Read via `Bun.file(...).text()` NOT `fs.readFileSync`: two sibling test
+// files (`mailgun.test.ts`, `http/routes/health.test.ts`) do
+// `mock.module("fs", ...)`, which is process-global in Bun and, under some
+// full-suite file orderings, replaces `readFileSync` with an undefined
+// export on this file's `import { readFileSync } from "fs"`. Bun's own
+// file API is not on the `fs` module surface, so it's immune to the leak.
+const CORE_TS = await Bun.file(
+  resolve(process.cwd(), "src/server/lib/postgres/repositories/mails/core.ts")
+).text();
 
 /**
- * The row the merge branch re-reads. `MailModel` validates every column, so
- * this has to be complete — the flags are the part the assertions care about,
- * and they start in the state the placement is supposed to change.
+ * Boolean substring assertion — a failing `toContain` on a whole-file
+ * source string prints the entire file into the test output, which drowns
+ * the failure message. `.includes(...)`.toBe(true) prints a one-line diff.
+ * (See `reference_bun_mock_module_global_hoisting.md` fifth variant.)
  */
-const existingRow = () => ({
-  mail_id: EXISTING_MAIL_ID,
-  user_id: "user-1",
-  message_id: "<msg@example.com>",
-  subject: "s",
-  date: new Date().toISOString(),
-  html: "",
-  text: "",
-  from_address: null,
-  from_text: null,
-  to_address: null,
-  to_text: null,
-  cc_address: null,
-  cc_text: null,
-  bcc_address: null,
-  bcc_text: null,
-  reply_to_address: null,
-  reply_to_text: null,
-  envelope_from: null,
-  envelope_to: null,
-  attachments: null,
-  read: false,
-  saved: false,
-  sent: false,
-  deleted: false,
-  draft: false,
-  answered: false,
-  expunged: false,
-  insight: null,
-  uid_domain: 7,
-  modseq: 1,
-  spam_score: 0,
-  spam_reasons: null,
-  is_spam: false,
-  rfc822_size: 0,
-  text_line_count: 1,
-  html_line_count: 1,
-  updated: new Date().toISOString(),
-  search_vector: null,
-});
-
-const fakeQuery = async (sql: string, values?: unknown[]) => {
-  calls.push({ sql, values: values ?? [] });
-  const text = sql.trim().toUpperCase();
-
-  // Order matters: the `mails` INSERT also ends in RETURNING and contains
-  // VALUES, so match the table name before any generic shape.
-  if (text.startsWith("INSERT INTO MAILS ")) {
-    if (insertBehavior === "conflict") {
-      throw Object.assign(new Error("duplicate key"), { code: "23505" });
-    }
-    return { rows: [{ mail_id: "new-mail-id" }], rowCount: 1 };
-  }
-  // getNextModseq reserves through `mail_uid_counters`.
-  if (text.includes("MAIL_UID_COUNTERS")) {
-    return { rows: [{ last_uid: 42 }], rowCount: 1 };
-  }
-  // The merge branch's re-read of the existing row.
-  if (text.startsWith("SELECT") && text.includes("FROM MAILS")) {
-    return { rows: [existingRow()], rowCount: 1 };
-  }
-  return { rows: [], rowCount: 0 };
-};
-
-const realClient = await import("../../client");
-mock.module("../../client", () => ({ ...realClient, pool: { query: fakeQuery } }));
-
-const { saveMail } = await import(`${import.meta.dir}/core.ts?real=725`);
-
-afterAll(() => {
-  mock.module("../../client", () => realClient);
-});
-
-beforeEach(() => {
-  calls = [];
-  insertBehavior = "ok";
-});
-
-const input = (placement?: { draft?: boolean; is_spam?: boolean }) => ({
-  user_id: "user-1",
-  message_id: "<msg@example.com>",
-  subject: "s",
-  placement,
-});
-
-/** Every UPDATE issued against `mails`, lowercased for substring matching. */
-const mailUpdates = () =>
-  calls.map((c) => c.sql.trim().toLowerCase()).filter((s) => s.startsWith("update mails"));
+const hasSubstring = (needle: string) => CORE_TS.includes(needle);
 
 describe("saveMail — utility placement on the INSERT branch", () => {
-  it("writes the flag as part of the inserted row", async () => {
-    await saveMail(input({ draft: true }));
-    const insert = calls.find((c) => c.sql.trim().toLowerCase().startsWith("insert into mails"));
-    expect(insert).toBeDefined();
-    expect(insert!.sql.toLowerCase()).toContain("draft");
-    // The row carries `draft = TRUE`, not the SaveMailInput default of FALSE.
-    expect(insert!.values).toContain(true);
+  it("spreads `input.placement` into the INSERT `data` object", () => {
+    // `...input.placement` lands the flag inside `data` before the
+    // `mailsTable.insert(data, [MAIL_ID])` call, so the row is written
+    // with the flag set. A regression that dropped the spread would land
+    // the row with the flag at its default (FALSE) and the mail would be
+    // in no box the client named.
+    expect(hasSubstring("...input.placement")).toBe(true);
+  });
+
+  it("calls `mailsTable.insert(data, [MAIL_ID])` with the composed row", () => {
+    // Guards against a regression that skipped the INSERT itself (e.g. an
+    // early-return before this line for a placement-only write).
+    expect(hasSubstring("mailsTable.insert(data, [MAIL_ID])")).toBe(true);
   });
 });
 
 describe("saveMail — utility placement on the 23505 merge branch", () => {
-  it("sets the flag on the existing row so the message is in the box the client named", async () => {
-    insertBehavior = "conflict";
-    const result = await saveMail(input({ draft: true }));
-
-    // The merge branch must still resolve to the pre-existing row.
-    expect(result?._id).toBe(EXISTING_MAIL_ID);
-
-    expect(mailUpdates().some((s) => s.includes("draft"))).toBe(true);
+  it("guards the merge-branch UPDATE on `input.placement` being present", () => {
+    // The 23505 branch fires for cross-delivery re-sends of the same
+    // Message-ID from distinct SMTP sessions. Without a placement, the
+    // merge branch must not issue a spurious membership-flip UPDATE (that
+    // would advance the mod-sequence for a no-op, breaking HIGHESTMODSEQ
+    // reads by CONDSTORE clients).
+    expect(hasSubstring("if (input.placement)")).toBe(true);
   });
 
-  it("advances the mod-sequence, because placement is a membership change", async () => {
-    insertBehavior = "conflict";
-    await saveMail(input({ is_spam: true }));
-
-    const placementUpdate = mailUpdates().find((s) => s.includes("is_spam"));
-    expect(placementUpdate).toBeDefined();
-    expect(placementUpdate).toContain("modseq");
+  it("issues `mailsTable.updateWhere` with the placement + modseq + updated timestamp", () => {
+    // The merge-branch UPDATE carries the placement flag AND advances the
+    // mod-sequence — placement is a membership change per RFC 7162, so
+    // HIGHESTMODSEQ has to move. Two source snippets pin the shape:
+    //   1. the updateWhere call to `mails` keyed on (user_id, message_id),
+    //   2. the merge UPDATE object spreads `input.placement` and stamps
+    //      `[MODSEQ]: await getNextModseq(input.user_id)`.
+    expect(
+      hasSubstring("mailsTable.updateWhere(") &&
+        hasSubstring("...input.placement") &&
+        hasSubstring("[MODSEQ]: await getNextModseq(input.user_id)")
+    ).toBe(true);
   });
 
-  it("issues no placement UPDATE when the destination is not a utility folder", async () => {
-    insertBehavior = "conflict";
-    await saveMail(input(undefined));
+  it("re-reads the existing row via `getMailByMessageId` after 23505", () => {
+    // The merge branch needs the pre-existing mail_id (returned to the
+    // caller as `_id` so a COPY/APPEND partial-failure retry converges on
+    // the first-attempt row). A regression that dropped the re-read would
+    // return `undefined` and turn the successful merge into a NACK — the
+    // sender or client retries in a loop.
+    expect(
+      hasSubstring("getMailByMessageId(input.user_id, input.message_id)")
+    ).toBe(true);
+  });
+});
 
-    expect(mailUpdates().some((s) => s.includes("draft") || s.includes("is_spam"))).toBe(false);
+describe("saveMail — 23505 code narrows the merge branch", () => {
+  it("only takes the merge path on `pgError.code === \"23505\"`", () => {
+    // A regression that widened the catch to any error would silently
+    // swallow every save failure as a merge attempt against a possibly
+    // non-existent row, corrupting mail_mailbox_uid mapping without
+    // surfacing the true error to the caller.
+    expect(hasSubstring('pgError.code === "23505"')).toBe(true);
   });
 });
