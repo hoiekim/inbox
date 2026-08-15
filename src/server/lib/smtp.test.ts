@@ -72,6 +72,19 @@ afterAll(() => {
   mockIsAuthRateLimited.mockRestore();
   mockRecordAuthFailure.mockRestore();
   mockResetAuthFailures.mockRestore();
+  // Restore the "server" barrel — the `mock.module("server", ...)` at the
+  // top of this file replaces the export graph-wide, so `getUser` leaks
+  // into any file that imports it (even `users.test.ts`'s direct import
+  // from "./users", per Bun's fourth-variant hoisting behavior in
+  // `reference_bun_mock_module_global_hoisting.md`). Under Linux CI file
+  // orders where smtp.test.ts runs before users.test.ts, the leaked
+  // `mockGetUser` returns smtp.test.ts's last `mockResolvedValue(...)`
+  // (usually `{ password, getSigned: () => ({username}) }`), and
+  // users.test.ts's `getUser({})` reads THAT — 16 users tests fail.
+  // Preload captures the real server barrel onto `__REAL_SERVER`; this
+  // afterAll re-mocks it back before the next file runs.
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
+  if (realServer) mock.module("server", () => realServer);
 });
 
 describe("onAuth handler", () => {
