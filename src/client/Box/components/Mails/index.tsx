@@ -631,20 +631,23 @@ const RenderedMails = ({ page }: { page: number }) => {
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
 
-      const newData = { ...oldData };
       const key =
         selectedCategory === Category.SentMails
           ? "sent"
           : selectedCategory === Category.SpamMails
           ? "spam"
           : "received";
-      newData[key].find((account, i) => {
-        const found = account.key === selectedAccount;
-        if (found) newData[key].splice(i, 1);
-        return found;
-      });
 
-      return newData;
+      // Replace the array rather than splicing it. A shallow spread leaves
+      // `newData[key]` pointing at `oldData[key]`, so an in-place splice edits
+      // both — react-query's structural sharing then keeps the previous
+      // `data` reference, and every effect keyed on it (including the
+      // re-anchor in <Accounts>) never re-runs. That is why evicting the last
+      // account healed only on reload (#786).
+      return {
+        ...oldData,
+        [key]: oldData[key].filter((account) => account.key !== selectedAccount)
+      };
     });
   };
 
