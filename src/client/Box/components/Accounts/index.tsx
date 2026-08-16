@@ -42,6 +42,7 @@ import {
 } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
+import { isSelectableAccount } from "./selectableAccounts";
 
 import "./index.scss";
 
@@ -162,6 +163,19 @@ const Accounts = ({
     if (searchInputDom && isAccountsOpen && !isWriterOpen)
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
+
+  // Drop a stored selectedAccount that names no account the server returned.
+  // Outside Search the value is an account key, so a name absent from the
+  // selectable set is unreachable state, not a selection: a search term left
+  // behind by a reload out of Search mode, or an account whose last mail was
+  // deleted. Either way the app renders the dead name as a header with an
+  // empty pane, and no affordance recovers it (#786). Clearing it hands over
+  // to the auto-select below, or to GettingStarted when nothing is left.
+  useEffect(() => {
+    if (!selectedAccount || selectedCategory === Category.Search) return;
+    if (!query.isSuccess || !query.data) return;
+    if (!isSelectableAccount(selectedAccount, query.data)) setSelectedAccount("");
+  }, [selectedAccount, selectedCategory, query.isSuccess, query.data]);
 
   // Auto-select the first received account on fresh login when no account is
   // stored in localStorage (e.g., first visit or cleared storage). Skipped in

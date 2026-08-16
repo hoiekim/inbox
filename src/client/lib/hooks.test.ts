@@ -133,10 +133,11 @@ describe("useLocalStorage", () => {
     }
   });
 
-  it("heals storage when `sanitize` rewrote the value on read, so state and storage diverge", async () => {
-    // `sanitize` normalizes at read time only — storage keeps the raw value.
-    // Comparing the incoming value against React state would treat the very
-    // first set as a no-op and strand the un-sanitized value in storage.
+  it("does not re-write a value the read-time `sanitize` already persisted", async () => {
+    // The read persists what `sanitize` returned, so the first set matches
+    // storage and must be skipped. Comparing against React state instead
+    // would be indistinguishable here and wrong in the cleared-underneath
+    // case below.
     storage.store.set("category", '"Search"');
     const { useLocalStorage } = await import("./hooks");
 
@@ -256,5 +257,83 @@ describe("useLocalStorage", () => {
     } finally {
       await teardown();
     }
+  });
+
+  describe("sanitize", () => {
+    const rejectSearch = (value: string) =>
+      value === "Search" ? "All Mails" : value;
+
+    const mount = async <T>(
+      key: string,
+      initialValue: T,
+      sanitize?: (value: T) => T
+    ) => {
+      const { useLocalStorage } = await import("./hooks");
+
+      let seen!: T;
+      const { teardown } = await render(() => {
+        const [value] = useLocalStorage(key, initialValue, sanitize);
+        seen = value;
+        return null;
+      });
+      await teardown();
+      return seen;
+    };
+
+    it("writes the sanitized value back to storage on read, not just to state", async () => {
+      storage.store.set("selectedCategory", JSON.stringify("Search"));
+
+      const seen = await mount("selectedCategory", "All Mails", rejectSearch);
+
+      expect(seen).toBe("All Mails");
+      // Asserting state alone is what let a reset effect ship unreachable: the
+      // state read "All Mails" while storage still read "Search", so any effect
+      // testing for Search never fired, and the next reload resurrected it.
+      expect(storage.store.get("selectedCategory")).toBe(
+        JSON.stringify("All Mails")
+      );
+      expect(storage.writes).toEqual([
+        ["selectedCategory", JSON.stringify("All Mails")]
+      ]);
+    });
+
+    it("leaves storage untouched when sanitize accepts the stored value", async () => {
+      storage.store.set("selectedCategory", JSON.stringify("Saved"));
+
+      const seen = await mount("selectedCategory", "All Mails", rejectSearch);
+
+      expect(seen).toBe("Saved");
+      // The absence of the write is the assertion: rewriting the same string
+      // is invisible to a value check but is a real write on every mount.
+      expect(storage.writes).toEqual([]);
+    });
+
+    it("does not create a key that was never stored, even when sanitize rewrites the initial value", async () => {
+      // The initial value is itself something sanitize rejects, so the
+      // rewrite test is true on the absent-key path. Without the guard this
+      // writes a key the user never set, making "never visited"
+      // indistinguishable from "explicitly chose the default".
+      const seen = await mount("selectedCategory", "Search", rejectSearch);
+
+      expect(seen).toBe("All Mails");
+      expect(storage.store.has("selectedCategory")).toBe(false);
+    });
+
+    it("is a no-op without a sanitize callback", async () => {
+      storage.store.set("isWriterOpen", JSON.stringify(true));
+
+      const seen = await mount("isWriterOpen", false);
+
+      expect(seen).toBe(true);
+      expect(storage.writes).toEqual([]);
+    });
+
+    it("falls back to the initial value when the stored JSON is corrupt", async () => {
+      storage.store.set("selectedCategory", "{not json");
+
+      const seen = await mount("selectedCategory", "All Mails", rejectSearch);
+
+      expect(seen).toBe("All Mails");
+    });
   });
 });

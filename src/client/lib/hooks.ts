@@ -9,7 +9,17 @@ export const useLocalStorage = <T>(
     try {
       const item = window.localStorage.getItem(key);
       const parsed: T = item ? JSON.parse(item) : initialValue;
-      return sanitize ? sanitize(parsed) : parsed;
+      if (!sanitize) return parsed;
+      const sanitized = sanitize(parsed);
+      // Persist the sanitized value, not just the state. Leaving storage on
+      // the rejected value makes every later reader of the raw key — and any
+      // effect that tests the state against it — disagree with what the hook
+      // returned, which is how the reset effect for a reloaded search became
+      // unreachable (#786).
+      if (item !== null && sanitized !== parsed) {
+        window.localStorage.setItem(key, JSON.stringify(sanitized));
+      }
+      return sanitized;
     } catch (error) {
       console.error(error);
       return initialValue;
