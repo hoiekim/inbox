@@ -42,7 +42,7 @@ import {
 } from "client";
 import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
-import { isSelectableAccount } from "./selectableAccounts";
+import { accountsForCategory } from "./selectableAccounts";
 
 import "./index.scss";
 
@@ -164,17 +164,25 @@ const Accounts = ({
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
-  // Drop a stored selectedAccount that names no account the server returned.
-  // Outside Search the value is an account key, so a name absent from the
-  // selectable set is unreachable state, not a selection: a search term left
-  // behind by a reload out of Search mode, or an account whose last mail was
-  // deleted. Either way the app renders the dead name as a header with an
-  // empty pane, and no affordance recovers it (#786). Clearing it hands over
-  // to the auto-select below, or to GettingStarted when nothing is left.
+  // Re-anchor a stored selectedAccount that the current category does not
+  // list. Outside Search the value is an account key, so a name the rendered
+  // list does not contain is unreachable state, not a selection: a search term
+  // left behind by a reload out of Search mode, or an account whose last mail
+  // was deleted. Either way no row highlights, the pane has nothing to render,
+  // and no affordance recovers it (#786).
+  //
+  // Falling back to the category's own first account — rather than clearing —
+  // is what `onClickCategory` already does, and it is also what keeps this
+  // loop-free: clearing would hand a Sent/Spam selection to the auto-select
+  // effect below, which always picks `received[0]` and would be re-rejected
+  // here on the next pass. Clearing is correct only when the category lists
+  // nothing at all, where auto-select has nothing to offer either.
   useEffect(() => {
     if (!selectedAccount || selectedCategory === Category.Search) return;
     if (!query.isSuccess || !query.data) return;
-    if (!isSelectableAccount(selectedAccount, query.data)) setSelectedAccount("");
+    const listed = accountsForCategory(selectedCategory, query.data);
+    if (listed.some((a) => a.key === selectedAccount)) return;
+    setSelectedAccount(listed.length ? listed[0].key : "");
   }, [selectedAccount, selectedCategory, query.isSuccess, query.data]);
 
   // Auto-select the first received account on fresh login when no account is
@@ -352,12 +360,9 @@ const Accounts = ({
             ? preSearchAccount.current
             : selectedAccount;
 
-        let targetAccounts: Account[];
-        if (e === Category.SentMails) targetAccounts = sent;
-        else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
-        else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
-        else if (e === Category.SpamMails) targetAccounts = spam;
-        else targetAccounts = received;
+        // The destination category's account list — used to fall back to its
+        // first account when the candidate isn't present in it.
+        const targetAccounts = accountsForCategory(e, { received, sent, spam });
 
         setSelectedCategory(e);
         if (candidate && targetAccounts.some((a) => a.key === candidate)) {
