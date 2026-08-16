@@ -44,7 +44,12 @@ export const parseCommand = (
     input,
     position: 0,
     length: input.length,
-    literals
+    // Copy: `parseLiteral` dequeues with `shift()`, so handing the caller's own
+    // array to the context would drain it. That makes parsing a side effect on
+    // a caller-owned value, and it is what would silently break any speculative
+    // parse — the handler asks "does this command parse yet?" before committing
+    // to dispatch it, and must be able to ask twice.
+    literals: literals && [...literals]
   };
 
   try {
