@@ -69,6 +69,18 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
 };
 
+/**
+ * One real turn of the event loop, for use BETWEEN `emit`s in a segmentation
+ * test. Without it the test does not segment anything: `drainCommands` sets
+ * `draining = true` and suspends at its first `await`, so every subsequent
+ * synchronous `emit` only appends to `buffer` and returns — the buffer is whole
+ * again before the drain resumes, and the test passes for the same reason a
+ * single `emit` of the entire string would. Cheaper than `settle()` (which is
+ * 10 timer hops) because a per-segment `settle()` would put seconds on a test
+ * that emits byte by byte.
+ */
+const tick = () => new Promise((r) => setTimeout(r, 1));
+
 describe("IMAP literal continuation", () => {
   it("reassembles a LITERAL+ LOGIN instead of parsing its credentials as commands", async () => {
     const { socket, dispatched } = makeHarness();
@@ -112,6 +124,7 @@ describe("IMAP literal continuation", () => {
 
     for (const chunk of "A1 LOGIN {5+}\r\nadmin {8+}\r\npassword\r\n".split("")) {
       socket.emit("data", Buffer.from(chunk));
+      await tick();
     }
     await settle();
 
@@ -195,9 +208,11 @@ describe("IMAP literal continuation", () => {
 
     const payload = Buffer.from("café", "utf8"); // 5 octets, 4 code units
     socket.emit("data", Buffer.from("A1 SELECT {5+}\r\n"));
+    await tick();
     // Split mid-sequence: the trailing byte of "é" arrives separately. A
     // per-segment toString() would decode the halves to U+FFFD.
     socket.emit("data", payload.subarray(0, 4));
+    await tick();
     socket.emit("data", Buffer.concat([payload.subarray(4), Buffer.from("\r\n")]));
     await settle();
 
@@ -211,6 +226,7 @@ describe("IMAP literal continuation", () => {
 
     const message = "Subject: x\r\n\r\nbody\r\n";
     socket.emit("data", Buffer.from(`a1 APPEND INBOX {${Buffer.byteLength(message)}+}\r\n`));
+    await tick();
     socket.emit("data", Buffer.concat([Buffer.from(message), Buffer.from("\r\n")]));
     await settle();
 
@@ -254,6 +270,105 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched.map((d) => d.tag)).toEqual(["A1", "A2"]);
     expect(socket.writes).toEqual([]);
+  });
+
+  it("waits for the rest of the line when a non-final payload is flushed on its own", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // The payload arrives in its own segment — what any client that issues a
+    // separate write() for it produces, and what any payload ending on an MSS
+    // boundary produces regardless of client. An empty buffer here means "no
+    // more octets have arrived YET", not "the command is done": `admin` is not
+    // the last argument, so the tail is still in flight. Dispatching on the
+    // empty buffer answers A1 short and then reads ` "hunter2"` as a fresh
+    // command line — which is #805 verbatim, in the fix for #805.
+    socket.emit("data", Buffer.from("A1 LOGIN {5+}\r\n"));
+    await tick();
+    socket.emit("data", Buffer.from("admin"));
+    await tick();
+    expect(dispatched).toEqual([]);
+    socket.emit("data", Buffer.from(' "hunter2"\r\n'));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].request).toEqual({
+      type: "LOGIN",
+      data: { username: "admin", password: "hunter2" }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("reassembles two literals when the first payload is flushed on its own", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    for (const chunk of ["A1 LOGIN {5+}\r\n", "admin", " {8+}\r\n", "password\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].request).toEqual({
+      type: "LOGIN",
+      data: { username: "admin", password: "password" }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("emits exactly one continuation per synchronizing declaration, never on a {n} tag", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // A short dispatch here is worse on the wire than in the LITERAL+ case: the
+    // server answers A1 and then emits a SECOND `+ go ahead` for what it thinks
+    // is a new command, desynchronizing the client's response stream.
+    for (const chunk of ["A1 LOGIN {5}\r\n", "admin", " {8}\r\n", "password\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(socket.writes).toEqual(["+ go ahead\r\n", "+ go ahead\r\n"]);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].tag).toBe("A1");
+  });
+
+  it("reassembles a two-literal RENAME whose first payload is flushed on its own", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // Not a LOGIN-only shape: every command whose literal is not the final
+    // argument is affected — RENAME, STATUS, SEARCH CHARSET, APPEND with a
+    // literal mailbox.
+    for (const chunk of ["A1 RENAME {5+}\r\n", "Oldie", " {5+}\r\n", "Newie\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].request).toEqual({
+      type: "RENAME",
+      data: { oldName: "Oldie", newName: "Newie" }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("keeps a final APPEND payload dispatching when its trailing CRLF arrives separately", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // The one shape that was accidentally safe before the gate — a final
+    // literal whose payload lands alone. Keep it that way: the tail CRLF
+    // completes the command on the next segment.
+    const message = "Subject: x\r\n\r\nbody";
+    socket.emit("data", Buffer.from(`a1 APPEND INBOX {${Buffer.byteLength(message)}+}\r\n`));
+    await tick();
+    socket.emit("data", Buffer.from(message));
+    await tick();
+    socket.emit("data", Buffer.from("\r\n"));
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.message).toBe(message);
   });
 
   it("processes a command pipelined behind a literal command", async () => {

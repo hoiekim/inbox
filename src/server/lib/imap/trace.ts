@@ -20,9 +20,12 @@ export const redactCredentials = (line: string): string =>
     // The tag is optional in the anchor. A conforming client always sends one,
     // but an untagged `LOGIN admin hunter2` still reaches the parse-failure log
     // — and a redactor that only covers well-formed input is not a redactor.
+    // Leading whitespace is skipped for the same reason: `executeCommand`
+    // redacts the raw assembled input, which is not pre-trimmed, so a malformed
+    // ` LOGIN admin hunter2` would otherwise walk straight past both anchors.
     // `[\s\S]*` rather than `.*` so a payload sitting after a CRLF is covered.
-    .replace(/^((?:\S+\s+)?LOGIN\s+)[\s\S]*$/i, "$1[REDACTED]")
-    .replace(/^((?:\S+\s+)?AUTHENTICATE\s+\S+)\s+[\s\S]*$/i, "$1 [REDACTED]");
+    .replace(/^(\s*(?:\S+\s+)?LOGIN\s+)[\s\S]*$/i, "$1[REDACTED]")
+    .replace(/^(\s*(?:\S+\s+)?AUTHENTICATE\s+\S+)\s+[\s\S]*$/i, "$1 [REDACTED]");
 
 // Outbound allowlist. The plain `write()` path also carries FETCH response
 // atoms — HEADER.FIELDS literal payload, ENVELOPE strings, BODY[HEADER] data —

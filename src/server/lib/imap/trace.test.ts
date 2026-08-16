@@ -128,6 +128,25 @@ describe("imapTrace", () => {
     expect(line).toMatch(/…\[\+\d+\]$/);
   });
 
+  it("redacts a LOGIN and an AUTHENTICATE the caller did not pre-trim", async () => {
+    // `imapTrace` splits on CRLF and its own allow-shape rejects a leading
+    // space, so this path is not reachable through the trace — but
+    // `executeCommand` calls `redactCredentials` on the raw assembled command
+    // text, which is NOT trimmed. An anchor that cannot skip leading
+    // whitespace would hand a malformed LOGIN straight to the parse-failure
+    // log with the password intact.
+    const { redactCredentials } = await importTrace();
+    expect(redactCredentials("  A1 LOGIN admin hunter2")).toBe(
+      "  A1 LOGIN [REDACTED]"
+    );
+    expect(redactCredentials("\r\n LOGIN admin hunter2")).toBe(
+      "\r\n LOGIN [REDACTED]"
+    );
+    expect(redactCredentials("  A1 AUTHENTICATE PLAIN AGFkbWluAGh1bnRlcjI=")).toBe(
+      "  A1 AUTHENTICATE PLAIN [REDACTED]"
+    );
+  });
+
   it("emits a one-time enable notice at module load when IMAP_TRACE=1", async () => {
     process.env.IMAP_TRACE = "1";
     await importTrace();
