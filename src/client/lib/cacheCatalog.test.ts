@@ -1,6 +1,10 @@
 import { describe, it, expect } from "bun:test";
 import { MailHeaderData } from "common";
-import { matchCacheCatalog, cacheCatalog } from "./cacheCatalog";
+import {
+  matchCacheCatalog,
+  cacheCatalog,
+  revalidateOnMountPolicy,
+} from "./cacheCatalog";
 
 describe("cacheCatalog", () => {
   it("matches the mail-headers list endpoints (all category variants)", () => {
@@ -16,6 +20,9 @@ describe("cacheCatalog", () => {
     expect(
       matchCacheCatalog("/api/mails/headers/me@hoie.kim?saved=1")?.id
     ).toBe("mail-headers");
+    expect(matchCacheCatalog("/api/mails/headers/me@hoie.kim?spam=1")?.id).toBe(
+      "mail-headers"
+    );
   });
 
   it("does not match volatile or unrelated endpoints", () => {
@@ -58,5 +65,39 @@ describe("cacheCatalog", () => {
     for (const entry of cacheCatalog) {
       expect(entry.maxAgeMs).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("revalidateOnMountPolicy", () => {
+  it("forces a mount refetch for every seeded header list, including spam", () => {
+    const seeded = [
+      "/api/mails/headers/me@hoie.kim",
+      "/api/mails/headers/me@hoie.kim?sent=1",
+      "/api/mails/headers/me@hoie.kim?new=1",
+      "/api/mails/headers/me@hoie.kim?saved=1",
+      "/api/mails/headers/me@hoie.kim?spam=1",
+    ];
+    expect(seeded.map(revalidateOnMountPolicy)).toEqual([
+      "always",
+      "always",
+      "always",
+      "always",
+      "always",
+    ]);
+  });
+
+  it("leaves un-seeded keys on the client-wide refetchOnMount: false", () => {
+    const unseeded = [
+      "/api/mails/search/me@hoie.kim",
+      "/api/mails/body/abc",
+      "/api/mails/accounts",
+      "/api/users/login",
+    ];
+    expect(unseeded.map(revalidateOnMountPolicy)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
   });
 });

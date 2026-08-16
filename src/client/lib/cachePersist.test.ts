@@ -9,6 +9,7 @@ import {
   startCachePersistence,
 } from "./cachePersist";
 import { idbGetAllQueries, idbPutQuery, idbClearQueries } from "./idbStore";
+import { QueryCache } from "./cache";
 
 const HEADERS_KEY = "/api/mails/headers/me@hoie.kim";
 const flush = () => new Promise((r) => setTimeout(r, 10));
@@ -118,6 +119,47 @@ describe("startCachePersistence", () => {
     ]);
     await flush();
     expect(await idbGetAllQueries()).toHaveLength(0);
+    unsubscribe();
+  });
+
+  it("re-persists a seed at its original fetch time, so an over-age entry still expires", async () => {
+    // Bootstrap order: startCachePersistence() runs before login, so the
+    // hydrate-time setQueryData fires this subscription. Stamping `now` here
+    // would re-date the seed on every login and re-arm its maxAge forever.
+    const sixDaysAgo = Date.now() - 6 * 24 * 60 * 60 * 1000;
+    await idbPutQuery({
+      key: HEADERS_KEY,
+      payload: [{ id: "m1", subject: "hi" }],
+      userId: "u1",
+      lastFetchedAt: sixDaysAgo,
+    });
+    setCacheUser("u1");
+    const unsubscribe = startCachePersistence();
+    await hydrateQueryCache("u1");
+    await flush();
+    const [stored] = await idbGetAllQueries();
+    expect(stored.lastFetchedAt).toBe(sixDaysAgo);
+    unsubscribe();
+  });
+
+  it("carries the fetch time through an optimistic write, so a local edit is not a refresh", async () => {
+    setCacheUser("u1");
+    const unsubscribe = startCachePersistence();
+    await queryClient.fetchQuery(HEADERS_KEY, async () => [
+      new MailHeaderData({ id: "m1", subject: "hi", read: false }),
+    ]);
+    await flush();
+    const fetchedAt = (await idbGetAllQueries())[0].lastFetchedAt;
+
+    await new Promise((r) => setTimeout(r, 20));
+    new QueryCache<MailHeaderData[]>(HEADERS_KEY).set((old) =>
+      old?.map((m) => new MailHeaderData({ ...m, read: true }))
+    );
+    await flush();
+
+    const [stored] = await idbGetAllQueries();
+    expect((stored.payload as MailHeaderData[])[0].read).toBe(true);
+    expect(stored.lastFetchedAt).toBe(fetchedAt);
     unsubscribe();
   });
 });

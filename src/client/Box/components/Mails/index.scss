@@ -38,6 +38,15 @@
     padding-top: 0.5rem;
   }
 
+  .mails_stale_notice {
+    margin-bottom: 0.5rem;
+    padding: 0.35rem 0.6rem;
+    border-left: 3px solid $color-point;
+    background-color: color.adjust($color-dark, $lightness: 6%);
+    color: $color-midium;
+    font-size: 0.8rem;
+  }
+
   .content {
     margin: 0;
   }
