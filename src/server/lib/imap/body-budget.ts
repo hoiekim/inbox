@@ -97,6 +97,14 @@ const release = (): void => {
  * even if `fn` throws. When the caller is inside a
  * `runInBodyBudgetContext` scope, the wait time (0 if the acquire was
  * immediate) is added to that scope's ledger.
+ *
+ * **No production caller as of #757** — every fetch path that used to
+ * materialize a body now streams, so `withBodyBudgetStream` holds the slot
+ * instead. Kept as the promise-shaped entry point to the SAME semaphore
+ * (`acquire` / `release` / `waitQueue` / the ledger), which is what
+ * `body-budget.test.ts` exercises directly; a materializing caller added
+ * later must go through the budget rather than around it. Deletion — and
+ * the test port it requires — tracked in #834.
  */
 export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
   await acquire();
