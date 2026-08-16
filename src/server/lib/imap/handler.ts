@@ -231,10 +231,22 @@ export class ImapRequestHandler {
           // skip — leaving the queue short by one and the parse failing.
           if (pendingCommand !== null && awaitingLiteral) {
             if (buffer.length < literalBytesNeeded) return;
-            pendingLiterals.push(
-              buffer.subarray(0, literalBytesNeeded).toString("utf8")
-            );
-            buffer = buffer.subarray(literalBytesNeeded);
+            const payload = buffer
+              .subarray(0, literalBytesNeeded)
+              .toString("utf8");
+            pendingLiterals.push(payload);
+            // COPY the residual rather than viewing it. `subarray` returns a
+            // view that keeps the whole parent allocation alive, so after a
+            // multi-MB APPEND the session would sit on the full message for as
+            // long as it stays idle — per connection, against a 256 MiB
+            // container ceiling. The residual here is a command tail (bytes,
+            // not megabytes), so the copy is free; the line splitter below
+            // then views that small copy instead of the big one. `concat`
+            // rather than `subarray` because concat always allocates its own
+            // exactly-sized backing store, empty residual included.
+            buffer = Buffer.concat([
+              buffer.subarray(literalBytesNeeded) as Uint8Array
+            ]);
             literalBytesNeeded = 0;
             awaitingLiteral = false;
             // A payload that consumed its own line terminator (the client
@@ -243,7 +255,17 @@ export class ImapRequestHandler {
             // rather than blocking on a CRLF that is never coming — the
             // pre-#805 APPEND path did the same, and waiting turns a
             // non-conforming client into a wedged session.
-            if (buffer.length === 0) {
+            //
+            // `buffer.length === 0` alone is NOT that condition: it means "no
+            // further octets have arrived from the OS yet", which is also true
+            // whenever the client flushed the payload in its own `write()` or
+            // the payload happened to end on an MSS boundary. Dispatching
+            // there answers the tag while the rest of the command is still in
+            // flight, and the remainder is then read as a fresh command line —
+            // putting the credential back in the journal and back on the wire,
+            // i.e. #805 verbatim. The terminator the comment names has to be
+            // in the payload itself.
+            if (buffer.length === 0 && payload.endsWith("\r\n")) {
               const input = pendingCommand;
               const literals = pendingLiterals;
               pendingCommand = null;
