@@ -521,6 +521,35 @@ describe("literals (RFC 3501 §4.3 / RFC 7888 LITERAL+)", () => {
       expect(result.value.request.data.password).toBe("password");
     });
 
+    it("does not drain the caller's literal array", () => {
+      // `parseLiteral` dequeues with `shift()`. Handing the caller's own array
+      // to the parse context would empty it as a side effect, so asking the
+      // same question twice would give two different answers — and the handler
+      // asks exactly that: "does this command parse yet?" before it commits to
+      // dispatching, then parses again for real.
+      const literals = ["admin", "password"];
+      const first = parseCommand("A1 LOGIN {5+} {8+}", literals);
+      expect(first.success).toBe(true);
+      expect(literals).toEqual(["admin", "password"]);
+
+      const second = parseCommand("A1 LOGIN {5+} {8+}", literals);
+      expect(second.success).toBe(true);
+      if (second.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(second.value.request.data.password).toBe("password");
+    });
+
+    it("reports an incomplete command as unparsed until its last argument lands", () => {
+      // What the handler's early-dispatch gate rides on: a literal that is not
+      // the final argument must not look like a finished command.
+      expect(parseCommand("A1 LOGIN {7+}", ["admin\r\n"]).success).toBe(false);
+      expect(parseCommand("A1 RENAME {7+}", ["Oldie\r\n"]).success).toBe(false);
+      expect(parseCommand("A1 STATUS {5+}", ["INBOX"]).success).toBe(false);
+      // …while a final literal completes it, CRLF-carrying payload included.
+      expect(parseCommand("a1 APPEND INBOX {13+}", ["Hello World\r\n"]).success).toBe(true);
+      expect(parseCommand("A1 SELECT {5+}", ["café"]).success).toBe(true);
+      expect(parseCommand("A1 LOGIN {5+} {8+}", ["admin", "password"]).success).toBe(true);
+    });
+
     it("preserves a password whose octets include a trailing space", () => {
       const result = parseCommand("A1 LOGIN {5+} {9+}", ["admin", "password "]);
       if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");

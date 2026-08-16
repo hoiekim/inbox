@@ -371,6 +371,86 @@ describe("IMAP literal continuation", () => {
     expect(dispatched[0].request.data.message).toBe(message);
   });
 
+  it("waits for the tail when a non-final payload's own octets end in CRLF", async () => {
+    const debugSpy = spyOn(logger, "debug");
+    try {
+      const { socket, dispatched } = makeHarness();
+      debugSpy.mockClear();
+
+      // A literal exists to carry octets a quoted string cannot — CRLF
+      // included — so "the payload ends in CRLF" is not the same question as
+      // "the client counted the command's terminator into {N}". Gating on the
+      // payload's bytes rather than on whether the command parses lets this
+      // 7-octet username end the command early, and the password behind it is
+      // then read as a command line of its own.
+      socket.emit("data", Buffer.from("A1 LOGIN {7+}\r\n"));
+      await tick();
+      socket.emit("data", Buffer.from("admin\r\n"));
+      await tick();
+      expect(dispatched).toEqual([]);
+      socket.emit("data", Buffer.from(' "hunter2"\r\n'));
+      await settle();
+
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0].request).toEqual({
+        type: "LOGIN",
+        data: { username: "admin\r\n", password: "hunter2" }
+      });
+      expect(socket.writes).toEqual([]);
+      expect(JSON.stringify(debugSpy.mock.calls)).not.toContain("hunter2");
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
+
+  it("emits no extra continuation for a CRLF-ending payload in the synchronizing form", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // Answering the tag early here also emits a SECOND `+ go ahead` for what
+    // the server thinks is a new command, desynchronizing the response stream.
+    for (const chunk of ["A1 LOGIN {7}\r\n", "admin\r\n", " {8}\r\n", "password\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(socket.writes).toEqual(["+ go ahead\r\n", "+ go ahead\r\n"]);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].tag).toBe("A1");
+  });
+
+  it("waits for the tail of a RENAME whose first payload ends in CRLF", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    for (const chunk of ["A1 RENAME {7+}\r\n", "Oldie\r\n", " {5+}\r\n", "Newie\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].request).toEqual({
+      type: "RENAME",
+      data: { oldName: "Oldie\r\n", newName: "Newie" }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("answers a command pipelined behind a payload that consumed its own terminator", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // RFC 3501 §7 requires a tagged completion for every command. Appending
+    // this line to the command text instead made `parseAppend` succeed and
+    // drop it, so `a2` was never answered at all — not even a BAD.
+    socket.emit("data", Buffer.from("a1 APPEND INBOX {13+}\r\nHello World\r\na2 NOOP\r\n"));
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["a1", "a2"]);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.message).toBe("Hello World\r\n");
+    expect(dispatched[1].request.type).toBe("NOOP");
+  });
+
   it("processes a command pipelined behind a literal command", async () => {
     const { socket, dispatched } = makeHarness();
 

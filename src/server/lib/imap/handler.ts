@@ -246,9 +246,20 @@ export class ImapRequestHandler {
             // there answers the tag while the rest of the command is still in
             // flight, and the remainder is then read as a fresh command line —
             // putting the credential back in the journal and back on the wire,
-            // i.e. #805 verbatim. The terminator the comment names has to be
-            // in the payload itself.
-            if (buffer.length === 0 && payload.endsWith("\r\n")) {
+            // i.e. #805 verbatim.
+            //
+            // Whether the command is complete is a question about STRUCTURE,
+            // so ask the parser rather than inspecting the payload's bytes. A
+            // literal exists precisely to carry octets an astring cannot —
+            // CRLF included — so "the payload ends in CRLF" does not mean "the
+            // client counted the command's terminator into {N}". The parser
+            // knows whether the declared literal was the last argument:
+            // `A1 LOGIN {7+}` + ["admin\r\n"] fails (keep waiting), while
+            // `a1 APPEND INBOX {13+}` + ["Hello World\r\n"] succeeds.
+            if (
+              buffer.length === 0 &&
+              parseCommand(pendingCommand, pendingLiterals).success
+            ) {
               const input = pendingCommand;
               const literals = pendingLiterals;
               pendingCommand = null;
@@ -277,12 +288,21 @@ export class ImapRequestHandler {
               if (!chained[2]) session.write("+ go ahead\r\n");
               continue;
             }
-            const input = pendingCommand + line;
+            // If the command already parses without this line, the payload
+            // carried its own terminator and `line` is not its tail — it is the
+            // NEXT command, pipelined behind it. Concatenating regardless
+            // appended it to the command text, where `parseAppend` succeeded
+            // and silently dropped it: `a1 APPEND INBOX {13+}` + `a2 NOOP`
+            // answered a1 and left a2 with no tagged completion at all, which
+            // RFC 3501 §7 does not allow. Dispatch what is complete, then fall
+            // through and read `line` as the fresh command it is.
             const literals = pendingLiterals;
+            const complete = parseCommand(pendingCommand, literals).success;
+            const input = complete ? pendingCommand : pendingCommand + line;
             pendingCommand = null;
             pendingLiterals = [];
             await executeCommand(input, literals);
-            continue;
+            if (!complete) continue;
           }
 
           // Handle SASL challenge response (client sends base64 after "+ " challenge)
