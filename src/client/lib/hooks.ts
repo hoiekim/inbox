@@ -18,16 +18,28 @@ export const useLocalStorage = <T>(
 
   const setValue = useCallback(
     (value: T | ((val: T) => T)) => {
-      try {
-        setStoredValue((oldValue) => {
-          const valueToStore =
-            value instanceof Function ? value(oldValue) : value;
-          window.localStorage.setItem(key, JSON.stringify(valueToStore));
-          return valueToStore;
-        });
-      } catch (error) {
-        console.error(error);
-      }
+      setStoredValue((oldValue) => {
+        const valueToStore =
+          value instanceof Function ? value(oldValue) : value;
+        // Contain persistence failures here, not around `setStoredValue`:
+        // React re-throws an updater's error during the render phase, so a
+        // catch out there never sees a full-quota `setItem` — it only sees
+        // React's own "Maximum update depth exceeded", which should crash
+        // loudly rather than wedge the app silently.
+        try {
+          const serialized = JSON.stringify(valueToStore);
+          // Compare against storage rather than against `oldValue`: the two
+          // drift (another tab, a `clear()`, the `sanitize` above rewriting
+          // the value on read), and skipping on state equality would strand
+          // the stale stored value permanently.
+          if (serialized !== window.localStorage.getItem(key)) {
+            window.localStorage.setItem(key, serialized);
+          }
+        } catch (error) {
+          console.error(error);
+        }
+        return valueToStore;
+      });
     },
     [key, setStoredValue]
   );
