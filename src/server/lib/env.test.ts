@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach, afterAll } from "bun:test";
-import { $ } from "bun";
 import path from "path";
 
 import { isProduction, nodeEnv } from "./env";
@@ -56,8 +55,12 @@ describe("server source", () => {
   // full-suite orderings. The `Bun.*` namespace is not on the `fs` module
   // surface, so it cannot be swapped out — the convention `placement.test.ts`
   // states verbatim.
+  //
+  // `dot: true` because the walk this replaced was directory-visibility blind,
+  // and so is `Bun.build` — it follows imports, so a dot-read under a
+  // `.generated/` directory would ship folded past a guard that skipped it.
   const sourceFiles = (dir: string): string[] =>
-    [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: dir, absolute: true })].filter(
+    [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: dir, absolute: true, dot: true })].filter(
       (file) => !/\.test\.tsx?$/.test(file)
     );
 
@@ -92,11 +95,14 @@ describe("server source", () => {
 describe("bundled env module", () => {
   // Under the gitignored `build/`, not `os.tmpdir()`, so the throwaway bundle
   // is created and removed without an `fs` import (see the note above).
-  const outdir = path.resolve(import.meta.dir, "../../../build/test-env-bundle");
+  // Suffixed with the pid to keep the per-process uniqueness `mkdtempSync`
+  // used to give: a second `bun test` on the same checkout would otherwise
+  // `rm -rf` this directory while the first is still writing into it.
+  const outdir = path.resolve(import.meta.dir, `../../../build/test-env-bundle-${process.pid}`);
 
   afterEach(restoreNodeEnv);
   afterAll(async () => {
-    await $`rm -rf ${outdir}`.quiet();
+    await Bun.$`rm -rf ${outdir}`.quiet();
   });
 
   // The server ships as a Bun bundle, so the checks above passing against the
