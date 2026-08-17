@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach, afterAll } from "bun:test";
-import fs from "fs";
-import os from "os";
+import { $ } from "bun";
 import path from "path";
 
 import { isProduction, nodeEnv } from "./env";
@@ -50,34 +49,55 @@ describe("isProduction", () => {
 });
 
 describe("server source", () => {
-  const walk = (dir: string): string[] =>
-    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) return walk(full);
-      return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [full] : [];
-    });
+  // `Bun.Glob` rather than `fs.readdirSync`, and `Bun.file` rather than
+  // `fs.readFileSync`: two sibling test files (`mails/mailgun.test.ts`,
+  // `http/routes/health.test.ts`) do `mock.module("fs", …)`, which is
+  // process-global in Bun and can replace this file's `fs` bindings under some
+  // full-suite orderings. The `Bun.*` namespace is not on the `fs` module
+  // surface, so it cannot be swapped out — the convention `placement.test.ts`
+  // states verbatim.
+  const sourceFiles = (dir: string): string[] =>
+    [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: dir, absolute: true })].filter(
+      (file) => !/\.test\.tsx?$/.test(file)
+    );
 
   // The bundling guard below only covers env.ts. A dot-access read written
   // anywhere else folds to a literal in the artifact while every test that
   // exercises the source still passes, which is how these branches went
   // unnoticed. config.ts destructures, so it does not match.
-  it("reads NODE_ENV only through env.ts", () => {
-    const serverDir = path.resolve(import.meta.dir, "..");
+  //
+  // `src/common` is walked alongside `src/server` because it is bundled into
+  // the same artifact — `pack.ts` entrypoints `start.ts` with no `external`,
+  // and 20+ server modules import `common`, so a fold there ships in
+  // `bundle.js` exactly like a server-side one. `src/client` is deliberately
+  // out of scope: that is a vite bundle where the replacement is intended.
+  it("reads NODE_ENV only through env.ts", async () => {
+    const srcDir = path.resolve(import.meta.dir, "../..");
     const envModule = path.resolve(import.meta.dir, "env.ts");
-    const offenders = walk(serverDir)
-      .filter((file) => file !== envModule)
-      .filter((file) => /process\.env\.NODE_ENV/.test(fs.readFileSync(file, "utf8")))
-      .map((file) => path.relative(serverDir, file));
+    const candidates = [
+      ...sourceFiles(path.join(srcDir, "server")),
+      ...sourceFiles(path.join(srcDir, "common"))
+    ].filter((file) => file !== envModule);
+
+    const offenders: string[] = [];
+    for (const file of candidates) {
+      const source = await Bun.file(file).text();
+      if (/process\.env\.NODE_ENV/.test(source)) offenders.push(path.relative(srcDir, file));
+    }
 
     expect(offenders).toEqual([]);
   });
 });
 
 describe("bundled env module", () => {
-  const outdir = fs.mkdtempSync(path.join(os.tmpdir(), "inbox-env-bundle-"));
+  // Under the gitignored `build/`, not `os.tmpdir()`, so the throwaway bundle
+  // is created and removed without an `fs` import (see the note above).
+  const outdir = path.resolve(import.meta.dir, "../../../build/test-env-bundle");
 
   afterEach(restoreNodeEnv);
-  afterAll(() => fs.rmSync(outdir, { recursive: true, force: true }));
+  afterAll(async () => {
+    await $`rm -rf ${outdir}`.quiet();
+  });
 
   // The server ships as a Bun bundle, so the checks above passing against the
   // source proves nothing about the artifact: Bun constant-folds
