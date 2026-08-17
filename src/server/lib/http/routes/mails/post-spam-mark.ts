@@ -1,3 +1,4 @@
+import { isUuid } from "common";
 import { markSpam } from "server";
 import { getMailById } from "server/lib/postgres/repositories/mails";
 import { trainWithEmail } from "server/lib/spam/classifier";
@@ -31,6 +32,16 @@ export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
 
     if (typeof is_spam !== "boolean") {
       return { status: "failed", message: "is_spam must be a boolean" };
+    }
+
+    // `mail_id` reaches a uuid column unchecked here. A malformed value raises
+    // 22P02 rather than matching no row, and the repository no longer swallows
+    // that, so screen the shape before the query (#747).
+    if (!isUuid(mail_id)) {
+      return {
+        status: "failed",
+        message: "Mail not found or you don't have permission"
+      };
     }
 
     const { found, changed } = await markSpam(user.id, mail_id, is_spam);

@@ -1,3 +1,4 @@
+import { isUuid } from "common";
 import {
   push,
   getMailBody,
@@ -28,8 +29,11 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
 
     const { mail_id, read, save } = body as Record<string, unknown>;
 
-    if (typeof mail_id !== "string" || !mail_id) {
-      return { status: "failed", message: "mail_id must be a non-empty string" };
+    // Shape-check rather than just non-empty: `mail_id` is a uuid column, so a
+    // malformed value raises 22P02 instead of matching no row, and the
+    // repository no longer swallows that (#747).
+    if (!isUuid(mail_id)) {
+      return { status: "failed", message: "mail_id must be a valid id" };
     }
 
     const mail = await getMailBody(user.id, mail_id);
@@ -41,10 +45,11 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
       };
     }
 
-    // The repositories catch their own errors and report the outcome as a
-    // boolean, so an unreported failure here would answer success for a write
-    // that never landed — and, for `read`, would have already decremented the
-    // badge for a mail that stayed unread.
+    // A DB fault now propagates to the route boundary (500), so a `false` here
+    // means the row genuinely stopped matching between the check above and the
+    // write — report it rather than answering success for a write that never
+    // landed, or, for `read`, decrementing the badge for a mail that stayed
+    // unread.
     if (read === true) {
       if (!(await markRead(user.id, mail_id))) {
         return { status: "failed", message: "Failed to mark the mail read" };
