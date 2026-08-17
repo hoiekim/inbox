@@ -1,7 +1,10 @@
 import {
+  boundaryToken,
   encodeText,
   formatAddressList,
   formatHeaders,
+  headerFieldValue,
+  headerQuotedParam,
   formatEnvelope,
   formatBodyStructure,
   formatFlags,
@@ -436,6 +439,155 @@ describe("IMAP util", () => {
       const result = formatHeaders(mail);
       expect(result).toContain("\r\n");
       expect(result).not.toMatch(/[^\r]\n/); // No bare LF
+    });
+  });
+
+  // #826: an external sender picks the bytes in `subject`, `message_id` and
+  // the `*.text` address blobs — `receive.ts` stores them verbatim and
+  // mailparser decodes `=?utf-8?B?…?=`, so a CRLF reaches the column. Emitted
+  // raw into the RFC 5322 block, it opens a header field of the sender's
+  // choosing.
+  describe("formatHeaders — header injection (#826)", () => {
+    /** The block's field names, in order, one entry per emitted line. */
+    const fieldsOf = (block: string): string[] =>
+      block.split("\r\n").map((line) => line.slice(0, line.indexOf(":")));
+
+    const HOSTILE = "Hello\r\nFrom: ceo@bank.example\r\nX-Evil: 1";
+
+    it("a CRLF-bearing subject emits one Subject line and no new field", () => {
+      const block = formatHeaders(
+        {
+          messageId: "<x@y>",
+          from: { text: "real@sender.example", value: [] } as MailType["from"],
+          subject: HOSTILE,
+          text: "body"
+        },
+        "doc1"
+      );
+
+      expect(fieldsOf(block)).toEqual([
+        "Message-ID",
+        "From",
+        "Subject",
+        "MIME-Version",
+        "Content-Type",
+        "Content-Transfer-Encoding"
+      ]);
+      expect(block).toContain("Subject: Hello From: ceo@bank.example X-Evil: 1");
+      expect(block).toContain("From: real@sender.example\r\n");
+    });
+
+    // Every stored string named in #826's acceptance criteria, each carrying
+    // the same payload. Asserting the mapped result per field (rather than
+    // `.every(...)`) so one leaking field can't hide behind the others.
+    const CARRIERS = [
+      ["messageId", (v: string) => ({ messageId: v })],
+      ["subject", (v: string) => ({ subject: v })],
+      ["from", (v: string) => ({ from: { text: v, value: [] } })],
+      ["to", (v: string) => ({ to: { text: v, value: [] } })],
+      ["cc", (v: string) => ({ cc: { text: v, value: [] } })],
+      ["bcc", (v: string) => ({ bcc: { text: v, value: [] } })],
+      ["replyTo", (v: string) => ({ replyTo: { text: v, value: [] } })]
+    ] as const;
+
+    it("no stored field can open a header line", () => {
+      const injected = CARRIERS.map(([name, build]) => {
+        const block = formatHeaders(
+          build(HOSTILE) as Partial<MailType>,
+          "doc1"
+        );
+        // The payload survives as text inside its own field — what must not
+        // happen is a LINE of it, which is what the client selects on.
+        const opened = block
+          .split("\r\n")
+          .some((line) => line.startsWith("From: ceo@bank.example"));
+        return [name, opened] as const;
+      });
+
+      expect(injected).toEqual(
+        CARRIERS.map(([name]) => [name, false] as const)
+      );
+    });
+
+    it("no stored field can terminate the header block early", () => {
+      // CRLF CRLF is the RFC 5322 §2.1 body delimiter — a value carrying it
+      // would push its own tail out of the header block and into the body,
+      // which `BODY[TEXT]` then serves as message content.
+      const split = CARRIERS.map(([name, build]) => {
+        const block = formatHeaders(
+          build("start\r\n\r\nbody-goes-here") as Partial<MailType>,
+          "doc1"
+        );
+        return [name, block.includes("\r\n\r\n")] as const;
+      });
+
+      expect(split).toEqual(CARRIERS.map(([name]) => [name, false] as const));
+    });
+
+    it("a hostile Message-ID cannot escape the multipart boundary", () => {
+      // No docId → the boundary falls back to the stored Message-ID, so the
+      // sender's bytes land inside `boundary="…"` and in every `--<boundary>`
+      // delimiter downstream.
+      const block = formatHeaders({
+        messageId: '<a@b>\r\nX-Evil: 1"',
+        text: "hi",
+        html: "<p>hi</p>"
+      });
+      const boundary = block.match(/boundary="([^"\r\n]*)"/)?.[1];
+
+      expect(boundary).toBe("boundary__a_b___X-Evil__1_");
+      expect(fieldsOf(block)).toEqual([
+        "Message-ID",
+        "MIME-Version",
+        "Content-Type"
+      ]);
+    });
+  });
+
+  describe("headerFieldValue", () => {
+    it("collapses each CR / LF / NUL run to a single space", () => {
+      expect(headerFieldValue("a\r\nb\nc\rd\0e")).toBe("a b c d e");
+    });
+
+    it("collapses U+2028 / U+2029 — line starts for a `/m` JS regex", () => {
+      // Not RFC 5322 line breaks, but ECMAScript `LineTerminator`s: left in,
+      // `rewriteContentType`'s `/^Content-Type: …/m` matches inside the value.
+      expect(headerFieldValue("a\u2028b\u2029c")).toBe("a b c");
+    });
+
+    it("leaves a value with no line breaks byte-identical", () => {
+      expect(headerFieldValue('Re: "quoted" \\ subject')).toBe(
+        'Re: "quoted" \\ subject'
+      );
+    });
+  });
+
+  describe("headerQuotedParam", () => {
+    it("escapes the quote that would close the parameter early", () => {
+      // Unescaped, `evil.txt"; filename="wanted.pdf` renames the attachment.
+      expect(headerQuotedParam('evil.txt"; filename="wanted.pdf')).toBe(
+        '"evil.txt\\"; filename=\\"wanted.pdf"'
+      );
+    });
+
+    it("escapes a trailing backslash so the string still terminates", () => {
+      expect(headerQuotedParam("report\\")).toBe('"report\\\\"');
+    });
+
+    it("strips line breaks before quoting", () => {
+      expect(headerQuotedParam("a\r\nb")).toBe('"a b"');
+    });
+  });
+
+  describe("boundaryToken", () => {
+    it("passes through the RFC 2046 bcharsnospace subset unchanged", () => {
+      expect(boundaryToken("test-doc.id_1")).toBe("test-doc.id_1");
+    });
+
+    it("substitutes character-for-character, so the length is stable", () => {
+      const hostile = '<a@b>\r\n"';
+      expect(boundaryToken(hostile)).toBe("_a_b____");
+      expect(boundaryToken(hostile).length).toBe(hostile.length);
     });
   });
 

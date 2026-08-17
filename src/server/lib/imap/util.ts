@@ -48,6 +48,111 @@ export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");
 };
 
+/**
+ * A stored value on its way into an RFC 5322 header field body.
+ *
+ * ```
+ * unstructured    = *([FWS] VCHAR) *WSP
+ * FWS             = ([*WSP CRLF] 1*WSP)
+ * ```
+ *
+ * A line break is legal in a field body only as folding — CRLF followed by
+ * WSP — and mailparser hands us already-unfolded values, so a CR or LF in a
+ * stored string is never something to preserve. Emitted raw it terminates the
+ * current header line and everything after it becomes a NEW header field:
+ * a subject of `Hello\r\nFrom: ceo@bank.example` puts a second, sender-chosen
+ * `From:` into the block, and `BODY[HEADER.FIELDS (FROM)]` hands it to the
+ * client as the message's sender. A CRLF CRLF ends the header block outright
+ * and the remainder of the value renders as body.
+ *
+ * The inputs are attacker-controlled — `receive.ts` stores `subject`,
+ * `message_id` and the `*.text` address blobs verbatim from the inbound
+ * message, and mailparser decodes encoded-words, so `=?utf-8?B?…?=` carries
+ * arbitrary bytes into the column. Route every stored value through here
+ * rather than checking at the call site; partial escaping at four sites is
+ * what produced #762 and #767 on the neighbouring RFC 3501 grammar.
+ *
+ * Each run collapses to a single space rather than being dropped: the bytes
+ * carry no header semantics, and a space keeps adjacent words apart in the
+ * value a client renders. NUL goes with them — it is outside `VCHAR`.
+ *
+ * U+2028 / U+2029 are stripped for the same reason one step removed: they are
+ * not RFC 5322 line breaks, but they ARE ECMAScript `LineTerminator`s, so a
+ * `/^…/m` regex run over the emitted block — `rewriteContentType` in
+ * `session-utils.ts` is one — sees a line starting mid-value. Leaving them in
+ * would make "no stored value can start a line" true of the wire and false of
+ * every JS reader of the same bytes.
+ */
+export const headerFieldValue = (value: string): string =>
+  value.replace(/[\r\n\0\u2028\u2029]+/g, " ");
+
+/**
+ * A stored value on its way into an RFC 2045 §5.1 quoted `parameter` value
+ * (`filename="…"`, `name="…"`). Beyond the line-break rule above, an
+ * unescaped `"` closes the parameter early, so the rest of the value is read
+ * as further parameters — `evil.txt"; filename="wanted.pdf` renames the
+ * attachment on the client. `quoted-string` escapes `"` and `\` with a
+ * backslash, and both must be escaped: escaping only `"` turns a value ending
+ * in a backslash into an unterminated string.
+ *
+ * Sibling of `quoteString` (RFC 3501 §9, added by #824 for the IMAP wire
+ * grammar). The two expand to the same expression today and are still
+ * deliberately separate: they encode different grammars for different
+ * consumers, so a future divergence — RFC 2045's parameter-length limit, or
+ * RFC 2231 continuations for non-ASCII filenames — belongs in one of them and
+ * not the other. Keep the cross-reference if you touch either.
+ */
+export const headerQuotedParam = (value: string): string =>
+  `"${headerFieldValue(value).replace(/[\\"]/g, "\\$&")}"`;
+
+/**
+ * The `Content-Type` value and quoted `filename` parameter for one attachment
+ * part header.
+ *
+ * The fallbacks mirror `formatBodyStructure`'s (`application/octet-stream` /
+ * `unnamed`) deliberately: BODYSTRUCTURE and the emitted part headers describe
+ * the same part, and a client comparing them must not be told two different
+ * things. They are `||` fallbacks rather than assertions because `attachments`
+ * reaches here straight off the JSONB column with no model hydration, so a row
+ * written before a field existed arrives `undefined` — which would throw on
+ * `.replace` where the old raw interpolation merely emitted the literal
+ * `undefined`.
+ *
+ * `Attachment`'s constructor (`common/models/mails/Mail.ts`) defaults the same
+ * two fields to `text/plain` / `unnamed_file` instead. Those lose because the
+ * constructor never runs on this path — `store.ts` casts the JSONB column
+ * straight to `AttachmentType[]` with no hydration — and because BODYSTRUCTURE
+ * is the value a client cross-checks against. If hydration is ever added to
+ * the read path, reconcile the two rather than letting the wire drift.
+ */
+export const attachmentPartHeaderFields = (
+  attachment: Pick<AttachmentType, "contentType" | "filename">
+): { contentType: string; filenameParam: string } => ({
+  contentType: headerFieldValue(
+    attachment.contentType || "application/octet-stream"
+  ),
+  filenameParam: headerQuotedParam(attachment.filename || "unnamed")
+});
+
+/**
+ * The MIME multipart boundary token derived from a mail's stable id.
+ *
+ * The id falls back to `mail.messageId` when no `docId` is passed, which puts
+ * an attacker-controlled string inside `Content-Type: …; boundary="…"` and
+ * inside every `--<boundary>` delimiter. RFC 2046 §5.1.1 `bcharsnospace`
+ * admits far less than an arbitrary Message-ID, so map anything outside it to
+ * `_`.
+ *
+ * Character-for-character, so the boundary's CODE-UNIT count never changes.
+ * That is not the same as its byte count, and `segmentByteLength` measures
+ * bytes: a non-ASCII id shrinks (`café` 5 bytes → 4, `a😀b` 6 → 4). Harmless
+ * for a size computed from the same build — `RFC822.SIZE` and the `{N}`
+ * literal both derive from one `buildMessageSegments` call — but see the
+ * PR body for the persisted `mails.rfc822_size` rows this invalidates.
+ */
+export const boundaryToken = (stableId: string): string =>
+  stableId.replace(/[^A-Za-z0-9_.-]/g, "_");
+
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
   if (!value || value.length === 0) return "NIL";
 
@@ -94,7 +199,7 @@ export const formatHeaders = (
 
   // Add standard headers in proper order
   if (mail.messageId) {
-    headers.push(`Message-ID: ${mail.messageId}`);
+    headers.push(`Message-ID: ${headerFieldValue(mail.messageId)}`);
   }
 
   if (mail.date) {
@@ -103,27 +208,27 @@ export const formatHeaders = (
   }
 
   if (mail.from?.text) {
-    headers.push(`From: ${mail.from.text}`);
+    headers.push(`From: ${headerFieldValue(mail.from.text)}`);
   }
 
   if (mail.to?.text) {
-    headers.push(`To: ${mail.to.text}`);
+    headers.push(`To: ${headerFieldValue(mail.to.text)}`);
   }
 
   if (mail.cc?.text) {
-    headers.push(`Cc: ${mail.cc.text}`);
+    headers.push(`Cc: ${headerFieldValue(mail.cc.text)}`);
   }
 
   if (mail.bcc?.text) {
-    headers.push(`Bcc: ${mail.bcc.text}`);
+    headers.push(`Bcc: ${headerFieldValue(mail.bcc.text)}`);
   }
 
   if (mail.replyTo?.text) {
-    headers.push(`Reply-To: ${mail.replyTo.text}`);
+    headers.push(`Reply-To: ${headerFieldValue(mail.replyTo.text)}`);
   }
 
   if (mail.subject) {
-    headers.push(`Subject: ${mail.subject}`);
+    headers.push(`Subject: ${headerFieldValue(mail.subject)}`);
   }
 
   // Add MIME headers
@@ -145,11 +250,11 @@ export const formatHeaders = (
   // Determine Content-Type based on message structure
   if (hasAttachments) {
     // multipart/mixed for messages with attachments
-    const boundary = "boundary_" + stableId;
+    const boundary = "boundary_" + boundaryToken(stableId);
     headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
   } else if (hasText && hasHtml) {
     // multipart/alternative for messages with both text and HTML
-    const boundary = "boundary_" + stableId;
+    const boundary = "boundary_" + boundaryToken(stableId);
     headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
   } else if (hasHtml) {
     headers.push("Content-Type: text/html; charset=utf-8");

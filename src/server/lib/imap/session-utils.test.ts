@@ -445,6 +445,129 @@ describe("buildFullMessage", () => {
     const lines = result.split("\r\n");
     expect(lines.length).toBeGreaterThan(1);
   });
+
+  // #826: the MIME framing this function emits is derived from stored values
+  // an external sender controls, so a hostile mail must not be able to steer
+  // it.
+  describe("stored values cannot steer the MIME framing (#826)", () => {
+    it("a subject carrying boundary=\"…\" does not become the boundary", () => {
+      // The boundary used to be recovered by matching `boundary="([^"]+)"`
+      // against the whole header block, and Subject is emitted ahead of
+      // Content-Type — so this subject won the match and the `--` delimiters
+      // stopped agreeing with the declared boundary.
+      const result = buildFullMessage(
+        {
+          subject: 'winter sale boundary="hijacked"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "doc-hijack"
+      );
+
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_doc-hijack"'
+      );
+      expect(result).toContain("--boundary_doc-hijack\r\n");
+      expect(result).toContain("--boundary_doc-hijack--");
+      expect(result).not.toContain("--hijacked");
+    });
+
+    it("a subject carrying the text `Content-Type: ` is not rewritten", () => {
+      // `rewriteContentType`'s match used to be unanchored, and Subject is
+      // emitted ahead of Content-Type — so this subject won the replace and
+      // the user's real subject was overwritten on BODY[] / RFC822 while
+      // BODY[HEADER] (which goes through formatHeaders directly) still showed
+      // the true one. No CRLF required.
+      const result = buildFullMessage(
+        {
+          subject: 'Content-Type: text/plain; boundary="evil"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "docA"
+      );
+
+      expect(result).toContain(
+        'Subject: Content-Type: text/plain; boundary="evil"\r\n'
+      );
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_docA"\r\n'
+      );
+      expect(result).not.toContain("--evil");
+    });
+
+    it("a subject carrying U+2028 before `Content-Type: ` is not rewritten", () => {
+      // U+2028 / U+2029 are not RFC 5322 line breaks, but they ARE ECMAScript
+      // `LineTerminator`s, so `rewriteContentType`'s `/^…/m` treats what
+      // follows one as a line start — the anchor alone does not stop this.
+      // `headerFieldValue` collapsing them is what does.
+      const result = buildFullMessage(
+        {
+          subject: 'Hi\u2028Content-Type: text/plain; boundary="evil"',
+          text: "Hello",
+          html: "<p>Hello</p>"
+        },
+        "docU"
+      );
+
+      expect(result).toContain(
+        'Subject: Hi Content-Type: text/plain; boundary="evil"\r\n'
+      );
+      expect(result).toContain(
+        'Content-Type: multipart/alternative; boundary="boundary_docU"\r\n'
+      );
+      expect(result).not.toContain("\u2028");
+      expect(result).not.toContain("--evil");
+    });
+
+    it("an attachment with no contentType / filename still serializes", () => {
+      // `attachments` comes off the JSONB column with no model hydration, so
+      // a row written before a field existed arrives `undefined`. Sanitizing
+      // it directly would throw on `.replace` and fail the whole FETCH.
+      const data = writeAttachment("att-bare", Buffer.from("DATA"));
+      const bare = {
+        content: { data: TEST_ID_PREFIX + "att-bare" },
+        size: data.byteLength
+      } as unknown as MailType["attachments"][number];
+
+      const result = buildFullMessage(
+        { text: "hi", attachments: [bare] },
+        "docC"
+      );
+
+      // Defaults match formatBodyStructure's for the same part, so a client
+      // comparing BODYSTRUCTURE against the part headers sees one answer.
+      expect(result).toContain("Content-Type: application/octet-stream\r\n");
+      expect(result).toContain('filename="unnamed"\r\n');
+      expect(result).not.toContain("undefined");
+    });
+
+    it("an attachment filename cannot open a new parameter or header", () => {
+      const data = writeAttachment("att-inject", Buffer.from("DATA"));
+      const result = buildFullMessage(
+        {
+          text: "See attached",
+          attachments: [
+            {
+              content: { data: TEST_ID_PREFIX + "att-inject" },
+              contentType: "text/plain\r\nX-Evil: 1",
+              filename: 'safe.txt"; filename="payroll.pdf',
+              size: data.byteLength
+            }
+          ]
+        },
+        "doc-att-inject"
+      );
+
+      expect(result).toContain("Content-Type: text/plain X-Evil: 1\r\n");
+      expect(result).toContain(
+        'Content-Disposition: attachment; filename="safe.txt\\"; filename=\\"payroll.pdf"\r\n'
+      );
+      expect(result.split("\r\n").some((l) => l.startsWith("X-Evil:"))).toBe(
+        false
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -647,6 +770,39 @@ describe("getBodyPartHeaders", () => {
       'Content-Type: image/png\r\n' +
         'Content-Transfer-Encoding: base64\r\n' +
         'Content-Disposition: attachment; filename="photo.png"'
+    );
+  });
+
+  it("escapes a hostile attachment contentType / filename (#826)", () => {
+    // Same part headers as the segment builder emits, so both surfaces have
+    // to survive the same stored bytes.
+    const mail: Partial<MailType> = {
+      text: "Body",
+      attachments: [
+        {
+          content: { data: "att-file" },
+          contentType: "image/png\r\nX-Evil: 1",
+          filename: 'photo.png"; filename="payroll.pdf',
+          size: 200
+        }
+      ]
+    };
+    expect(getBodyPartHeaders(mail, "2")).toBe(
+      "Content-Type: image/png X-Evil: 1\r\n" +
+        "Content-Transfer-Encoding: base64\r\n" +
+        'Content-Disposition: attachment; filename="photo.png\\"; filename=\\"payroll.pdf"'
+    );
+  });
+
+  it("defaults a missing contentType / filename instead of throwing", () => {
+    const bare = {
+      content: { data: "att-bare" },
+      size: 10
+    } as unknown as MailType["attachments"][number];
+    expect(getBodyPartHeaders({ text: "Body", attachments: [bare] }, "2")).toBe(
+      "Content-Type: application/octet-stream\r\n" +
+        "Content-Transfer-Encoding: base64\r\n" +
+        'Content-Disposition: attachment; filename="unnamed"'
     );
   });
 

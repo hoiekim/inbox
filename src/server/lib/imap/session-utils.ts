@@ -6,7 +6,11 @@
 import fs from "node:fs";
 import { MailType } from "common";
 import { PartialRange, BodySection, FetchDataItem, HeaderFieldsSection } from "./types";
-import { formatHeaders } from "./util";
+import {
+  attachmentPartHeaderFields,
+  boundaryToken,
+  formatHeaders
+} from "./util";
 import { getAttachment, getAttachmentFilePath } from "server";
 import { logger } from "server";
 import { pgTextChunks, pgByteChunks } from "server";
@@ -171,21 +175,31 @@ const resolveAttachmentRawSize = (dataId: string): number => {
 
 /**
  * The stable boundary strings a build for this mail would generate.
+ *
+ * Derived from the same `docId || messageId` the header block used, rather
+ * than recovered by matching `boundary="…"` against that block: the block also
+ * carries `Subject` and the address fields, so a stored subject of
+ * `sale boundary="--"` matched ahead of the real `Content-Type` line and the
+ * delimiters emitted below stopped agreeing with the declared boundary.
  */
 const boundariesFor = (
   mail: Partial<MailType>,
-  headers: string,
   docId?: string
 ): { boundary: string; altBoundary: string } => {
-  const boundaryMatch = headers.match(/boundary="([^"]+)"/);
-  const stableId = docId || mail.messageId || "default";
-  const boundary = boundaryMatch ? boundaryMatch[1] : "boundary_" + stableId;
-  const altBoundary = "alt_" + stableId.replace(/[^a-zA-Z0-9_]/g, "_");
-  return { boundary, altBoundary };
+  const token = boundaryToken(docId || mail.messageId || "default");
+  return { boundary: "boundary_" + token, altBoundary: "alt_" + token };
 };
 
+// Anchored to a line start: unanchored, the first `Content-Type: ` ANYWHERE in
+// the block won — and `Subject` is emitted ahead of `Content-Type`, so a stored
+// subject containing that literal text got rewritten instead, with no CRLF
+// needed. Same shape as the `boundary="…"` recovery removed from
+// `boundariesFor`. `headerFieldValue` now guarantees no stored value can start
+// a line — including U+2028 / U+2029, which `^` under `m` honours even though
+// RFC 5322 does not — which is what makes the anchor sufficient rather than
+// just narrower.
 const rewriteContentType = (headers: string, replacement: string): string =>
-  headers.replace(/Content-Type: [^\r\n]+/, replacement);
+  headers.replace(/^Content-Type: [^\r\n]*/m, replacement);
 
 /**
  * A mail argument that may carry either the materialized body strings
@@ -316,7 +330,7 @@ export const buildMessageSegments = (
       messageId: mail.messageId
     });
   }
-  const { boundary, altBoundary } = boundariesFor(mail, headers, docId);
+  const { boundary, altBoundary } = boundariesFor(mail, docId);
 
   /** One base64 body part: boundary, part headers, encoded payload, CRLF. */
   const bodyPart = (
@@ -378,10 +392,13 @@ export const buildMessageSegments = (
   }
 
   for (const att of mail.attachments!) {
+    const { contentType, filenameParam } = attachmentPartHeaderFields(att);
     literal(`--${boundary}\r\n`);
-    literal(`Content-Type: ${att.contentType}\r\n`);
+    literal(`Content-Type: ${contentType}\r\n`);
     literal(`Content-Transfer-Encoding: base64\r\n`);
-    literal(`Content-Disposition: attachment; filename="${att.filename}"\r\n\r\n`);
+    literal(
+      `Content-Disposition: attachment; filename=${filenameParam}\r\n\r\n`
+    );
     segments.push({
       kind: "attachment",
       dataId: att.content.data,
@@ -1259,11 +1276,13 @@ export const getBodyPartHeaders = (
     attachmentIndex >= 0 &&
     attachmentIndex < mail.attachments.length
   ) {
-    const att = mail.attachments[attachmentIndex];
+    const { contentType, filenameParam } = attachmentPartHeaderFields(
+      mail.attachments[attachmentIndex]
+    );
     return (
-      `Content-Type: ${att.contentType}\r\n` +
+      `Content-Type: ${contentType}\r\n` +
       `Content-Transfer-Encoding: base64\r\n` +
-      `Content-Disposition: attachment; filename="${att.filename}"`
+      `Content-Disposition: attachment; filename=${filenameParam}`
     );
   }
 
