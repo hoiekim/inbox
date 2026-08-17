@@ -44,6 +44,7 @@ import type { SequenceState } from "./sequence-resolver";
 
 const STORED_UIDVALIDITY = 1716512400;
 const DOMAIN_UID = 100;
+const ACCOUNT_UID = 42;
 
 // pg-FakePool pattern (see users.test.ts): mock `pg` so the lazy pool in
 // postgres/client.ts is a FakePool, then run the REAL imap code. The functions
@@ -70,11 +71,28 @@ const USER_ROW = {
   imap_uid_validity: STORED_UIDVALIDITY,
 };
 
-const mockQuery = mock(async (sql: string) => {
+// Every UID reservation this run made, in call order. `buildReserveUidQuery`
+// binds [user_id, kind, scope, sent, …], so the tuple is enough to tell the
+// INBOX lane from the Sent lane.
+type UidReservation = { kind: string; scope: string; sent: boolean };
+const uidReservations: UidReservation[] = [];
+
+const mockQuery = mock(async (sql: string, values?: unknown[]) => {
   const sqlStr = typeof sql === "string" ? sql : "";
   // getDomainUidNext / getAccountUidNext both SELECT ... AS next_uid FROM mails
   if (sqlStr.includes("next_uid")) {
-    return { rows: [{ next_uid: String(DOMAIN_UID) }], rowCount: 1 };
+    const kind = String(values?.[1]);
+    uidReservations.push({
+      kind,
+      scope: String(values?.[2]),
+      sent: values?.[3] === true,
+    });
+    // Distinct per lane. Returning one constant for both would let APPENDUID
+    // report either UID and still pass, which is exactly the selection the
+    // response has to get right (RFC 4315 §3 wants the destination
+    // mailbox's UID).
+    const next_uid = kind === "account" ? ACCOUNT_UID : DOMAIN_UID;
+    return { rows: [{ next_uid: String(next_uid) }], rowCount: 1 };
   }
   // usersTable.queryOne(...) for getImapUidValidity — narrowed to queries
   // that target the users table so an out-of-file leak (Bun's mock.module
@@ -117,6 +135,9 @@ const {
   cloneMailToDestination,
 } = await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
+// Dynamic, like the imports above: a hoisted `import … from "server"` would
+// pull the barrel (and postgres/client) before the pg double is registered.
+const { getUserDomain } = await import("server");
 
 beforeAll(() => {
   mock.module("pg", pgMock);
@@ -130,31 +151,61 @@ afterAll(() => {
 
 beforeEach(() => {
   mockQuery.mockClear();
+  uidReservations.length = 0;
 });
 
 // ---------------------------------------------------------------------------
 // appendMessage — APPENDUID (#544) + flag defaults (#548)
 // ---------------------------------------------------------------------------
 
+type AppendedMail = { sent: boolean };
+
 type FakeStore = {
   getUser: () => { id: string; username: string };
-  storeMail: (mail: unknown) => Promise<unknown>;
+  mailboxExists: (box: string) => Promise<boolean>;
+  storeMail: (mail: AppendedMail, mailbox?: string) => Promise<unknown>;
+  /** Every (mail, mailbox) pair storeMail received, in call order. */
+  appended: Array<{ mail: AppendedMail; mailbox?: string }>;
 };
 
-const makeAppendStore = (storeResult: unknown = { _id: "stored" }): FakeStore => ({
-  getUser: () => ({ id: "user-123", username: "admin" }),
-  storeMail: async () => storeResult,
-});
+// The listable set a Store would report for user "admin": INBOX, the unified
+// Sent folder, and one per-account box in each lane. The received per-account
+// path is `INBOX/accounts/<local>` (ACCOUNTS_FOLDER in util.ts), not
+// `accounts/<local>` — `accountToBox` builds it from that prefix.
+const EXISTING_MAILBOXES = [
+  "INBOX",
+  "Sent Messages",
+  "INBOX/accounts/admin",
+  "Sent Messages/accounts/admin",
+  "Archive",
+];
+
+const makeAppendStore = (
+  storeResult: unknown = { _id: "stored" },
+  mailboxes: string[] = EXISTING_MAILBOXES
+): FakeStore => {
+  const appended: FakeStore["appended"] = [];
+  return {
+    getUser: () => ({ id: "user-123", username: "admin" }),
+    mailboxExists: async (box: string) => mailboxes.includes(box),
+    storeMail: async (mail: AppendedMail, mailbox?: string) => {
+      appended.push({ mail, mailbox });
+      return storeResult;
+    },
+    appended,
+  };
+};
 
 const runAppend = async (
   tag: string,
   store: FakeStore,
-  selectedMailbox: string | null = null
+  selectedMailbox: string | null = null,
+  mailbox = "INBOX"
 ) => {
   const writes: string[] = [];
   await appendMessage(
     tag,
-    { mailbox: "INBOX", message: "Subject: test\r\n\r\nHello" },
+    { mailbox, message: "Subject: test\r\n\r\nHello" },
     store as never,
     selectedMailbox,
     (data: string) => {
@@ -189,6 +240,135 @@ describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
     const response = await runAppend("A004", makeAppendStore(null));
     expect(response).toContain("A004 NO APPEND failed to store message");
     expect(response).not.toContain("APPENDUID");
+  });
+
+  it("reports the destination mailbox's own UID, per lane", async () => {
+    // RFC 4315 §3: APPENDUID carries the UID the message got *in the mailbox
+    // it was appended to*. Only INBOX and the unified Sent folder are served
+    // out of the domain lane (isDomainScoped); every other box — including
+    // Archive, which is neither INBOX nor account-named — is read back through
+    // mail_mailbox_uid, so reporting the domain UID there would send the
+    // client's follow-up `UID FETCH` to a UID that box does not hold.
+    const targets = [
+      "INBOX",
+      "Sent Messages",
+      "Archive",
+      "INBOX/accounts/admin",
+      "Sent Messages/accounts/admin",
+    ];
+    const reported: Array<number | null> = [];
+    for (const [i, mailbox] of targets.entries()) {
+      const response = await runAppend(
+        `A20${i}`,
+        makeAppendStore(),
+        null,
+        mailbox
+      );
+      const match = response.match(/\[APPENDUID \d+ (\d+)\]/);
+      reported.push(match ? Number(match[1]) : null);
+    }
+    expect(reported).toEqual([
+      DOMAIN_UID,
+      DOMAIN_UID,
+      ACCOUNT_UID,
+      ACCOUNT_UID,
+      ACCOUNT_UID,
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendMessage — target mailbox (#695)
+// ---------------------------------------------------------------------------
+
+describe("appendMessage — target mailbox (#695)", () => {
+  it("files an APPEND to the unified Sent folder as sent mail", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A101", store, null, "Sent Messages");
+
+    expect(response).toContain("A101 OK [APPENDUID");
+    expect(store.appended).toHaveLength(1);
+    expect(store.appended[0].mail.sent).toBe(true);
+    // appendMessage hands storeMail the canonical target box; storeMail is
+    // what drops it for a domain-scoped destination when it builds the
+    // mapping row (`!isDomainScoped(destination) ? destination : undefined`).
+    // Asserting `undefined` here would pin the wrong layer.
+    expect(store.appended[0].mailbox).toBe("Sent Messages");
+    // Both UID lanes are reserved on the sent side of the counter. Pinned
+    // per-reservation: `every(r => r.sent) === false` would be satisfied by
+    // the domain half alone and would miss an inverted account lane.
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations.map((r) => r.sent)).toEqual([true, true]);
+  });
+
+  it("files an APPEND to INBOX as received mail", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A102", store, null, "INBOX");
+
+    expect(response).toContain("A102 OK [APPENDUID");
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
+  });
+
+  it("files an APPEND to a per-account Sent box as sent mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A103", store, null, "Sent Messages/accounts/admin");
+
+    expect(store.appended[0].mail.sent).toBe(true);
+    // Account-scoped: the box path reaches the mail_mailbox_uid dual-write.
+    expect(store.appended[0].mailbox).toBe("Sent Messages/accounts/admin");
+    // Domain reservation is unscoped; the account one is keyed on the box's
+    // address, which `getUserDomain` derives from the username.
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations.map((r) => r.sent)).toEqual([true, true]);
+    expect(uidReservations[1].scope).toBe(`admin@${getUserDomain("admin")}`);
+  });
+
+  it("files an APPEND to a per-account received box as received mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A106", store, null, "INBOX/accounts/admin");
+
+    // The received lane is the mirror of A103 — without this the suite would
+    // pass a regression that made `sent` unconditionally true for every
+    // account-scoped target.
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(store.appended[0].mailbox).toBe("INBOX/accounts/admin");
+    expect(uidReservations.map((r) => r.kind)).toEqual(["domain", "account"]);
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
+    expect(uidReservations[1].scope).toBe(`admin@${getUserDomain("admin")}`);
+  });
+
+  it("files an APPEND to a user-created box as received mail scoped to that box", async () => {
+    const store = makeAppendStore();
+    await runAppend("A107", store, null, "Archive");
+
+    // A user-created box is neither sent nor domain-scoped, so it takes the
+    // received lane and the box path. Note this does NOT remove the message
+    // from INBOX: INBOX's read path filters on `sent` with no mailbox join,
+    // so a received-lane message is in both views. Same for COPY/MOVE.
+    expect(store.appended[0].mail.sent).toBe(false);
+    expect(store.appended[0].mailbox).toBe("Archive");
+    expect(uidReservations.map((r) => r.sent)).toEqual([false, false]);
+    expect(uidReservations[1].scope).toBe(`Archive@${getUserDomain("admin")}`);
+  });
+
+  it("answers NO [TRYCREATE] for a mailbox that does not exist and stores nothing", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A104", store, null, "ZzNoSuchMailbox");
+
+    expect(response).toBe("A104 NO [TRYCREATE] Mailbox does not exist\r\n");
+    expect(response).not.toContain("APPENDUID");
+    expect(store.appended).toHaveLength(0);
+    // Nothing is reserved for a rejected APPEND — no UID burned.
+    expect(uidReservations).toHaveLength(0);
+  });
+
+  it("still accepts a lowercase inbox target (RFC 3501 §5.1)", async () => {
+    const store = makeAppendStore();
+    const response = await runAppend("A105", store, null, "inbox");
+
+    expect(response).toContain("A105 OK [APPENDUID");
+    expect(store.appended[0].mail.sent).toBe(false);
   });
 });
 
@@ -448,6 +628,7 @@ async function appendAndCapture(flags?: string[]): Promise<MailType> {
   let captured: MailType | undefined;
   const store = {
     getUser: () => ({ id: 1, username: "admin" }),
+    mailboxExists: async () => true,
     storeMail: async (mail: MailType) => {
       captured = mail;
       return true;
