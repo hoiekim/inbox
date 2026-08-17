@@ -51,10 +51,29 @@ const mockTlsConnect = mock((_opts: unknown, cb: () => void) => {
 mock.module("net", () => ({ createConnection: mockCreateConnection }));
 mock.module("tls", () => ({ connect: mockTlsConnect }));
 
-// fs.existsSync is consulted by isSslConfigured(). When the test sets
-// SSL_CERTIFICATE/_KEY env vars, the mock returns true so the SSL gate opens.
-let existsSyncResult = true;
-mock.module("fs", () => ({ existsSync: () => existsSyncResult }));
+// fs.accessSync is consulted by the shared TLS gate (`lib/tls.ts`). When the
+// test sets SSL_CERTIFICATE/_KEY env vars, the mock lets the access check pass
+// so the SSL gate opens. Only `accessSync` is overridden: the gate stopped
+// reading `existsSync`, and leaving a stub on it would hand a wrong answer to
+// any future named `import { existsSync }` in a file that links after this one.
+//
+// The real module is spread back in rather than replaced wholesale. bun's
+// `mock.module` is process-global, so a bare `{ accessSync }` factory leaves
+// every OTHER export of `node:fs` undefined for any file that links after this
+// one — including `scripts/test-helpers.ts`, which now imports mkdtempSync /
+// writeFileSync / rmSync for the TLS fixture. Reverting the spread does not
+// reproduce a failure on this tree (checked: still 1682 pass), so this is a
+// guard against an order-dependent break rather than a fix for a live one —
+// but a shared helper should not depend on which file bun links first.
+import * as realFs from "fs";
+let sslFilesReadable = true;
+mock.module("fs", () => ({
+  ...realFs,
+  default: realFs,
+  accessSync: (path: Parameters<typeof realFs.accessSync>[0]) => {
+    if (!sslFilesReadable) throw new Error(`ENOENT: no such file or directory, access '${String(path)}'`);
+  },
+}));
 
 const mockPoolQuery = mock(async () => [{ "?column?": 1 }]);
 mock.module("../../postgres/client", () => ({ pool: { query: mockPoolQuery } }));
@@ -125,7 +144,7 @@ describe("healthRouter GET /", () => {
     mockTlsConnect.mockClear();
     netBehavior = "connect";
     tlsBehavior = "connect";
-    existsSyncResult = true;
+    sslFilesReadable = true;
     // Default: SSL configured so existing assertions about TLS ports apply.
     process.env.SSL_CERTIFICATE = "/fake/cert.pem";
     process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
@@ -226,10 +245,10 @@ describe("healthRouter GET /", () => {
     expect(mockTlsConnect).not.toHaveBeenCalled();
   });
 
-  it("returns 200 and marks TLS ports 'not_configured' when cert files are missing", async () => {
+  it("returns 200 and marks TLS ports 'not_configured' when the cert files are unreadable", async () => {
     process.env.SSL_CERTIFICATE = "/fake/cert.pem";
     process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
-    existsSyncResult = false;
+    sslFilesReadable = false;
 
     const { default: healthRouter } = await import("./health");
     const res = await invokeHealthGet(healthRouter);

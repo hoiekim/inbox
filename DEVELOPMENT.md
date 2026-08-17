@@ -283,7 +283,7 @@ This means mailbox paths use `/` as the hierarchy separator with no prefix, matc
 | `UNSELECT` | RFC 3691 | Deselects current mailbox without expunging |
 | `GETQUOTAROOT` | RFC 2087 | Returns `NO Quota not supported` |
 
-Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN` (plus `STARTTLS` on port 143).
+Base capabilities advertised: `IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS ID ENABLE IDLE AUTH=PLAIN` (plus `STARTTLS` on port 143, and only when `SSL_CERTIFICATE` / `SSL_CERTIFICATE_KEY` point at files this process can read).
 
 ### Sent Mail Detection
 
@@ -382,7 +382,7 @@ The IMAP server targets compatibility with standard mail clients (Apple Mail, iO
 
 - **BODYSTRUCTURE must match BODY[] encoding**: If BODYSTRUCTURE declares `base64`, the corresponding `BODY[n]` fetch must return base64-encoded content (not raw UTF-8)
 - **RFC822.SIZE must account for encoding**: Size should reflect the encoded (wire-format) message size
-- **CAPABILITY response must match TLS mode**: Implicit-TLS connections must NOT advertise STARTTLS; plain connections must advertise it. (`getCapabilities(isTls)` in `src/server/lib/imap/capabilities.ts`.)
+- **CAPABILITY response must match TLS mode and cert availability**: Implicit-TLS connections must NOT advertise STARTTLS; plain connections advertise it only when a certificate is actually readable, since a client that honours the advertisement would otherwise drive the upgrade into an ENOENT (RFC 2595 §3 — do not advertise what the server cannot honour). (`getCapabilities(isTls)` in `src/server/lib/imap/capabilities.ts`, gated on `isTlsAvailable()` from `src/server/lib/tls.ts`.)
 - **AUTHENTICATE PLAIN**: Support both inline initial response and challenge-response flow (some clients omit the initial response)
 - **Supported extensions**: NAMESPACE (RFC 2342), ENABLE (RFC 5161), UNSELECT (RFC 3691); GETQUOTAROOT returns NO (not supported)
 - **Flags on sub-mailboxes**: Per-account mailboxes should NOT have `\Noselect` — clients need to be able to select them

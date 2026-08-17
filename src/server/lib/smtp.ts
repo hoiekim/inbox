@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "fs";
 import {
   SMTPServer,
   SMTPServerOptions,
@@ -12,6 +12,7 @@ import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
+import { getTlsCredentials } from "./tls";
 
 const registerListeners = (
   server: SMTPServer,
@@ -199,27 +200,33 @@ export const initializeSmtp = async () => {
 
   const options: SMTPServerOptions = { authOptional: true, onAuth, onData, maxClients: SMTP_MAX_CLIENTS };
 
-  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-  const sslConfigured = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
-  const sslFilesExist = sslConfigured && existsSync(SSL_CERTIFICATE_KEY) && existsSync(SSL_CERTIFICATE);
-  const isSslAvailable = sslFilesExist;
+  const credentials = getTlsCredentials();
+  const isSslAvailable = credentials.state === "available";
 
-  if (sslConfigured && !sslFilesExist) {
-    logger.warn("SMTP: SSL certificate files not found — starting without TLS", {
-      cert: SSL_CERTIFICATE,
-      key: SSL_CERTIFICATE_KEY,
+  if (credentials.state === "unreadable") {
+    // Same reasoning as the IMAP listener: TLS was configured and cannot be
+    // served, so this is an operator error that has to page rather than sit in
+    // a warn line while the server accepts plaintext auth.
+    logger.error("SMTP: SSL certificate files not readable — starting without TLS", {
+      cert: credentials.cert,
+      key: credentials.key,
     });
+    sendAlarm(
+      "TLS certificate not readable",
+      `SMTP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
+      "tls-cert-unreadable-smtp"
+    ).catch(() => undefined);
   }
 
-  if (isSslAvailable) {
-    options.key = readFileSync(SSL_CERTIFICATE_KEY);
-    options.cert = readFileSync(SSL_CERTIFICATE);
+  if (credentials.state === "available") {
+    options.key = readFileSync(credentials.key);
+    options.cert = readFileSync(credentials.cert);
     // Broaden TLS compatibility for external MTAs (e.g. Postfix, Exchange) that
     // may offer cipher suites excluded from OpenSSL 3's stricter defaults.
     // TLSv1.2 minimum is maintained; known-weak ciphers remain disabled.
     options.minVersion = "TLSv1.2";
     options.ciphers = "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
-  } else if (!sslConfigured) {
+  } else if (credentials.state === "unconfigured") {
     logger.warn("SMTP: SSL certificate not configured.");
   }
 

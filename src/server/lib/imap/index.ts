@@ -2,8 +2,10 @@ import { createServer, Socket } from "net";
 import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "fs";
 import { logger } from "server";
+import { getTlsCredentials } from "../tls";
+import { sendAlarm } from "../alarm";
 
 export { idleManager } from "./idle-manager";
 
@@ -37,26 +39,33 @@ export const initializeImap = async () => {
   });
   servers.push(imapServer);
 
-  const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;
-  const sslConfigured = SSL_CERTIFICATE && SSL_CERTIFICATE_KEY;
-  const sslFilesExist = sslConfigured && existsSync(SSL_CERTIFICATE_KEY) && existsSync(SSL_CERTIFICATE);
+  const credentials = getTlsCredentials();
 
-  if (sslConfigured && !sslFilesExist) {
-    logger.warn("IMAP: SSL certificate files not found — TLS server not started", {
+  if (credentials.state === "unreadable") {
+    // Loud, not a warn line: TLS was explicitly configured and cannot be
+    // served, so the deployment is about to run cleartext-only while believing
+    // it is encrypted. `/health` reports the TLS ports as `not_configured` and
+    // stays 200, so nothing else pages for this.
+    logger.error("IMAP: SSL certificate files not readable — TLS server not started", {
       component: "imap",
-      cert: SSL_CERTIFICATE,
-      key: SSL_CERTIFICATE_KEY,
+      cert: credentials.cert,
+      key: credentials.key,
     });
+    sendAlarm(
+      "TLS certificate not readable",
+      `IMAP is configured for TLS but cannot read its certificate, and is serving cleartext only.\n**cert:** ${credentials.cert}\n**key:** ${credentials.key}`,
+      "tls-cert-unreadable-imap"
+    ).catch(() => undefined);
   }
 
-  if (sslFilesExist) {
+  if (credentials.state === "available") {
     const imapTlsServer = await new Promise<import("net").Server>((res) => {
       const port = getImapTlsPort();
       const imapListener = getImapListener(true);
 
       const tlsOptions = {
-        key: readFileSync(SSL_CERTIFICATE_KEY),
-        cert: readFileSync(SSL_CERTIFICATE)
+        key: readFileSync(credentials.key),
+        cert: readFileSync(credentials.cert)
       };
 
       const server = createTLSServer(tlsOptions, imapListener);
@@ -67,7 +76,7 @@ export const initializeImap = async () => {
       });
     });
     servers.push(imapTlsServer);
-  } else if (!sslConfigured) {
+  } else if (credentials.state === "unconfigured") {
     logger.warn("IMAP: SSL certificate not configured, TLS server not started", { component: "imap" });
   }
 

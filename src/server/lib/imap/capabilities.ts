@@ -1,3 +1,5 @@
+import { isTlsAvailable } from "../tls";
+
 export const getCapabilities = (isTls = false) => {
   const capabilities = [
     "IMAP4rev1",
@@ -17,9 +19,13 @@ export const getCapabilities = (isTls = false) => {
     "AUTH=PLAIN"
   ];
 
-  if (!isTls) {
-    // Plain port: advertise STARTTLS so clients can upgrade.
-    // TLS-wrapped port already has an encrypted channel, so it's omitted there.
+  // Plain port: advertise STARTTLS so clients can upgrade — but only when the
+  // certificate the upgrade reads is one this process can actually read.
+  // RFC 2595 §3: a server must not advertise a capability it cannot honour,
+  // and a client that honours this one drives `startTls` into an ENOENT or an
+  // EACCES on the cert file.
+  // TLS-wrapped port already has an encrypted channel, so it's omitted there.
+  if (!isTls && isTlsAvailable()) {
     capabilities.push("STARTTLS");
   }
 

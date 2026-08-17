@@ -1,18 +1,65 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createTlsEnvFixture } from "test-helpers";
 import { getCapabilities } from "./capabilities";
 import { getImapPort, getImapTlsPort } from "./index";
 
+// STARTTLS is now gated on the certificate actually being readable (#763), so
+// every case that expects it advertised has to stage real files on disk.
 describe("IMAP capabilities", () => {
-  it("advertises STARTTLS on the plain port", () => {
+  let ssl: ReturnType<typeof createTlsEnvFixture>;
+
+  beforeAll(() => {
+    ssl = createTlsEnvFixture();
+  });
+
+  afterEach(() => ssl.restore());
+
+  afterAll(() => ssl.cleanup());
+
+  it("advertises STARTTLS on the plain port when the certificate exists", () => {
+    ssl.use(ssl.certPath, ssl.keyPath);
     expect(getCapabilities(false).split(" ")).toContain("STARTTLS");
   });
 
   it("does not advertise STARTTLS on the TLS-wrapped port", () => {
+    ssl.use(ssl.certPath, ssl.keyPath);
     expect(getCapabilities(true).split(" ")).not.toContain("STARTTLS");
   });
 
   it("defaults to plain (advertises STARTTLS) when called with no args", () => {
+    ssl.use(ssl.certPath, ssl.keyPath);
     expect(getCapabilities().split(" ")).toContain("STARTTLS");
+  });
+
+  it("does not advertise STARTTLS when no certificate is configured", () => {
+    ssl.use(undefined, undefined);
+    expect(getCapabilities(false).split(" ")).not.toContain("STARTTLS");
+  });
+
+  it("does not advertise STARTTLS when the configured certificate files are absent", () => {
+    ssl.use(ssl.absentPath("absent-cert.pem"), ssl.absentPath("absent-key.pem"));
+    expect(getCapabilities(false).split(" ")).not.toContain("STARTTLS");
+  });
+
+  it("does not advertise STARTTLS when only the key file is absent", () => {
+    ssl.use(ssl.certPath, ssl.absentPath("absent-key.pem"));
+    expect(getCapabilities(false).split(" ")).not.toContain("STARTTLS");
+  });
+
+  it("keeps every other capability when STARTTLS is withheld", () => {
+    ssl.use(undefined, undefined);
+    expect(getCapabilities(false).split(" ")).toEqual([
+      "IMAP4rev1",
+      "LITERAL+",
+      "SASL-IR",
+      "LOGIN-REFERRALS",
+      "ID",
+      "ENABLE",
+      "IDLE",
+      "MOVE",
+      "CONDSTORE",
+      "AUTH=PLAIN"
+    ]);
   });
 
   it("does not advertise SPECIAL-USE", () => {
