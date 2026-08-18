@@ -329,11 +329,10 @@ describe("CONDSTORE — FETCH MODSEQ emission", () => {
 // ---------------------------------------------------------------------------
 
 const makeFlagStore = (
-  result: { uid: number; read: boolean; modseq: number }[],
-  failed: number[] = []
+  result: { uid: number; read: boolean; modseq: number }[]
 ): Store =>
   ({
-    setFlags: async () => ({ updated: result, failed }),
+    setFlags: async () => ({ updated: result, failed: [] }),
   }) as unknown as Store;
 
 const seqStateFor = (uids: number[]): SequenceState => {

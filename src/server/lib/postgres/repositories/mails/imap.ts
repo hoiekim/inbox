@@ -17,9 +17,9 @@ import {
   UID,
 } from "../../models";
 import { getNextModseq } from "./counters";
+import { buildSetMailFlagsQueries } from "./set-flags-query";
 import { singleFlight } from "./inflight";
 import {
-  filtersMembership,
   membershipCondition,
   membershipExpression,
   membershipFilter,
@@ -565,94 +565,16 @@ export const setMailFlags = async (
     // exactly the RFC's "UNCHANGEDSINCE 0 always fails" rule, for free.
     const conditional = unchangedSince !== undefined;
 
-    // Two flavors of query — domain-scoped stays on `mails.uid_domain`,
-    // per-mailbox joins `mail_mailbox_uid`. RETURNING clauses select
-    // the appropriate UID and the shared flag/modseq columns.
-    let selectSql: string;
-    let updateSql: string;
-    let baseValues: ParamValue[];
-
-    // A STORE addresses messages *in the selected mailbox*, so it has to see
-    // the same set the reads do — otherwise `UID STORE 1:* +FLAGS (\Deleted)`
-    // on INBOX would flag quarantined spam the client was never shown, and the
-    // following EXPUNGE would destroy it.
-    const membership = membershipCondition(mailbox, sent);
-
-    if (usesDomainUidSpace(mailbox)) {
-      const returningCols = `${MAIL_ID}, ${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
-      if (useUid) {
-        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
-        selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
-        updateSql = `UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
-          WHERE ${whereClause}${conditional ? ` AND ${MODSEQ} <= $6` : ""}
-          RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, start, end];
-      } else {
-        const whereClause = `mail_id IN (
-          SELECT mail_id FROM mails
-          WHERE user_id = $1 AND sent = $2${membership}
-          ORDER BY ${UID_DOMAIN} ASC
-          OFFSET $3 LIMIT 1
-        )`;
-        selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
-        updateSql = `UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
-          WHERE ${whereClause}${conditional ? ` AND ${MODSEQ} <= $5` : ""}
-          RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, start];
-      }
-    } else {
-      const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
-      if (useUid) {
-        const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
-          AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
-          AND x.${UID} >= $4 AND x.${UID} <= $5${membershipCondition(mailbox, sent, "m.")}`;
-        selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
-        // UPDATE ... FROM syntax joins the mapping to the target mails
-        // rows. Postgres semantics: rows matching the join get updated
-        // once. RETURNING refers to columns from either side.
-        updateSql = `UPDATE mails m
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
-          FROM ${MAIL_MAILBOX_UID} x
-          WHERE ${whereClause}${conditional ? ` AND m.${MODSEQ} <= $7` : ""}
-          RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, mailbox, start, end];
-      } else {
-        // Sequence-number path: match a single row at the OFFSETth
-        // position in the mailbox's UID-ordered list.
-        // A sequence number counts only the messages the mailbox shows, so this
-        // OFFSET has to walk the same list `getAllUids` builds — which means
-        // `sent` and `expunged` too, not just the membership rule: mapping rows
-        // outlive the expunge that hid their mail, so a mapping-only scan
-        // counts messages the seq map does not and shifts every position after
-        // them. The join is emitted only for a box that filters; every other
-        // box keeps the mapping-only scan it had.
-        const membershipJoin = filtersMembership(mailbox, sent)
-          ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
-             AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
-             AND ${membershipExpression(mailbox, sent, "z.")}`
-          : "";
-        const targetSubquery = `(
-          SELECT y.${MAIL_ID} FROM ${MAIL_MAILBOX_UID} y
-          ${membershipJoin}
-          WHERE y.${USER_ID} = $1 AND y.${MAILBOX} = $3
-          ORDER BY y.${UID} ASC
-          OFFSET $4 LIMIT 1
-        )`;
-        const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
-          AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
-          AND m.${MAIL_ID} IN ${targetSubquery}`;
-        selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
-        updateSql = `UPDATE mails m
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
-          FROM ${MAIL_MAILBOX_UID} x
-          WHERE ${whereClause}${conditional ? ` AND m.${MODSEQ} <= $6` : ""}
-          RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, mailbox, start];
-      }
-    }
-
+    const { selectSql, matchedUidSql, updateSql, baseValues } = buildSetMailFlagsQueries(
+      user_id,
+      mailbox,
+      sent,
+      start,
+      end,
+      useUid,
+      setClause,
+      conditional
+    );
     // No recognized flag change (empty `+FLAGS ()` / `-FLAGS ()` or unknown-only
     // keywords): RFC 3501 §6.4.6 makes this a legal no-op. Return the matched
     // rows' CURRENT flags without an UPDATE — a no-op must not bump `updated`
@@ -687,7 +609,7 @@ export const setMailFlags = async (
     // apply the guarded UPDATE; the difference is the failed set. Two round
     // trips only when the client asked for UNCHANGEDSINCE — the unconditional
     // STORE above still costs one.
-    const matched = await pool.query(selectSql, baseValues);
+    const matched = await pool.query(matchedUidSql, baseValues);
     const result = await pool.query(updateSql, [...baseValues, modseq, unchangedSince]);
     const updated = result.rows.map(toUpdatedMailFlags);
     const updatedUids = new Set(updated.map((row) => row.uid));

@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, ImapRequest, FetchDataItem, BodyFetch, BodyStructureFetch, BodySection, PartialRange } from '../types';
-import { parseSequenceSet, skipWhitespace, peek, parseAtom, parseNumber } from './primitive-parsers';
+import { parseSequenceSet, skipWhitespace, peek, parseAtom, parseModifierGroup } from './primitive-parsers';
 
 /**
  * Parse FETCH command
@@ -23,9 +23,9 @@ export const parseFetch = (context: ParseContext): ParseResult<ImapRequest> => {
 
   // RFC 4551 §3.3.1: an optional trailing `(CHANGEDSINCE <modseq>)` FETCH
   // modifier group follows the data-item spec. Absent → normal FETCH.
-  const modifiers = parseFetchModifiers(context);
-  if (!modifiers.success) {
-    return { success: false, error: modifiers.error, consumed: 0 };
+  const changedSince = parseModifierGroup(context, 'FETCH', 'CHANGEDSINCE');
+  if (!changedSince.success) {
+    return { success: false, error: changedSince.error, consumed: 0 };
   }
 
   return {
@@ -35,54 +35,13 @@ export const parseFetch = (context: ParseContext): ParseResult<ImapRequest> => {
       data: {
         sequenceSet: sequenceSet.value!,
         dataItems: dataItems.value!,
-        changedSince: modifiers.value!.changedSince
+        changedSince: changedSince.value
       }
     },
     consumed: context.position
   };
 };
 
-/**
- * Parse the optional trailing FETCH modifier group (RFC 4551 §3.3.1):
- *   fetch-mod       = "(" fetch-mod-param *(SP fetch-mod-param) ")"
- *   fetch-mod-param = "CHANGEDSINCE" SP mod-sequence-value
- * CONDSTORE defines only CHANGEDSINCE; an unknown modifier is a client error
- * (BAD). No modifier group at all is the normal case (returns undefined).
- */
-const parseFetchModifiers = (
-  context: ParseContext
-): ParseResult<{ changedSince?: number }> => {
-  skipWhitespace(context);
-  if (peek(context) !== '(') {
-    return { success: true, value: {}, consumed: context.position };
-  }
-  context.position++; // consume '('
-
-  let changedSince: number | undefined;
-  while (context.position < context.length) {
-    skipWhitespace(context);
-    if (peek(context) === ')') {
-      context.position++; // consume ')'
-      return { success: true, value: { changedSince }, consumed: context.position };
-    }
-
-    const name = parseAtom(context);
-    if (!name.success) {
-      return { success: false, error: 'Invalid FETCH modifier', consumed: 0 };
-    }
-    if (name.value!.toUpperCase() !== 'CHANGEDSINCE') {
-      return { success: false, error: `Unknown FETCH modifier: ${name.value}`, consumed: 0 };
-    }
-    skipWhitespace(context);
-    const modseq = parseNumber(context);
-    if (!modseq.success) {
-      return { success: false, error: 'CHANGEDSINCE requires a mod-sequence value', consumed: 0 };
-    }
-    changedSince = modseq.value!;
-  }
-
-  return { success: false, error: 'Unterminated FETCH modifier group', consumed: 0 };
-};
 
 /**
  * Expand a bare FETCH macro name (RFC 3501 §6.4.5) into its data-item list.

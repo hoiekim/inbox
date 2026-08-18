@@ -134,21 +134,32 @@ const seqStateFor = (uids: number[]): SequenceState => {
   return { seqToUid: uids, uidToSeq };
 };
 
+interface FlagResult {
+  updated: { uid: number; read: boolean; modseq: number }[];
+  failed: number[];
+}
+
+// One entry per setFlags call, in order — a sequence set with two ranges
+// drives two calls and each has to be able to answer differently, which is
+// what the cross-range accumulation depends on. The last entry repeats so a
+// single-range case can pass one result.
+//
 // getUser is included so the #725 pivot-sync path in storeFlagsTyped (which
 // reads `store.getUser().id`) doesn't throw when the STORE touches
 // `\Flagged` / `\Deleted`.
-const fakeStore = (
-  updated: { uid: number; read: boolean; modseq: number }[],
-  failed: number[]
-): Store =>
-  ({
-    setFlags: async () => ({ updated, failed }),
+const fakeStore = (results: FlagResult[]): Store => {
+  let call = 0;
+  return {
+    setFlags: async () => results[Math.min(call++, results.length - 1)],
     getUser: () => ({ id: "user-123", username: "admin" }),
-  }) as unknown as Store;
+  } as unknown as Store;
+};
 
 const runStore = async (opts: {
   updated?: { uid: number; read: boolean; modseq: number }[];
   failed?: number[];
+  /** Per-call results, for a sequence set that drives more than one range. */
+  results?: FlagResult[];
   uids?: number[];
   isUidStore?: boolean;
   request?: Partial<StoreRequest>;
@@ -170,7 +181,14 @@ const runStore = async (opts: {
     "d105",
     request,
     isUidStore,
-    fakeStore(opts.updated ?? [{ uid: 5, read: true, modseq: 320162350 }], opts.failed ?? [7, 9]),
+    fakeStore(
+      opts.results ?? [
+        {
+          updated: opts.updated ?? [{ uid: 5, read: true, modseq: 320162350 }],
+          failed: opts.failed ?? [7, 9],
+        },
+      ]
+    ),
     "INBOX",
     false,
     seqStateFor(uids),
@@ -206,22 +224,35 @@ describe("CONDSTORE phase 4 — MODIFIED rides on the tagged response", () => {
   });
 
   // RFC 7162 §3.1.3 Example 11 uses `7,3:9` — a sequence set may legally name
-  // the same message twice. The first pass applies the change to UID 7 and
+  // the same message twice. The first range applies the change to UID 7 and
   // stamps it with this STORE's own mod-sequence, which is above the client's
-  // ceiling by construction, so the second pass re-matches it and the guarded
+  // ceiling by construction, so the second range re-matches it and the guarded
   // UPDATE skips it. It must NOT be reported as MODIFIED: the write landed.
+  //
+  // The two ranges are what makes this real. One `setFlags` call can never
+  // return a UID in both halves — `failed` is matched-minus-updated, disjoint
+  // from `updated` by construction — so the accumulation being pinned here
+  // only exists ACROSS calls.
+  const exampleEleven = { ranges: [{ start: 7, end: 7 }, { start: 3, end: 9 }] };
+
   it("does not report a message that succeeded in an earlier pass over the set", async () => {
     const lines = await runStore({
-      updated: [{ uid: 7, read: true, modseq: 320162350 }],
-      failed: [7],
+      request: { sequenceSet: { type: "uid", ...exampleEleven } },
+      results: [
+        { updated: [{ uid: 7, read: true, modseq: 320162350 }], failed: [] },
+        { updated: [], failed: [7] },
+      ],
     });
     expect(lines.at(-1)).toBe("d105 OK STORE completed\r\n");
   });
 
   it("still reports the genuinely-conflicted siblings of a repeated message", async () => {
     const lines = await runStore({
-      updated: [{ uid: 7, read: true, modseq: 320162350 }],
-      failed: [7, 9],
+      request: { sequenceSet: { type: "uid", ...exampleEleven } },
+      results: [
+        { updated: [{ uid: 7, read: true, modseq: 320162350 }], failed: [] },
+        { updated: [], failed: [7, 9] },
+      ],
     });
     expect(lines.at(-1)).toBe("d105 OK [MODIFIED 9] Conditional STORE failed\r\n");
   });
@@ -300,10 +331,9 @@ const makeSession = () => {
   // Minimum viable authenticated, mailbox-selected session — storeFlagsTyped
   // returns early otherwise and the flag would never be reached.
   (session as unknown as { authenticated: boolean }).authenticated = true;
-  (session as unknown as { store: Store }).store = fakeStore(
-    [{ uid: 5, read: true, modseq: 320162350 }],
-    []
-  );
+  (session as unknown as { store: Store }).store = fakeStore([
+    { updated: [{ uid: 5, read: true, modseq: 320162350 }], failed: [] },
+  ]);
   session.selectedMailbox = "INBOX";
   (session as unknown as { seqState: SequenceState }).seqState = seqStateFor([5]);
   return { session, writes };

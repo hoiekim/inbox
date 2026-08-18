@@ -1019,24 +1019,32 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     // `getAllUids` (the seq→UID map) against an unfiltered `countMessages`
     // makes EXISTS exceed the addressable sequence range.
     let source: string;
+    let setFlagsSource: string;
 
     beforeAll(async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
       source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
+      setFlagsSource = await fs.readFile(
+        path.join(import.meta.dir, "set-flags-query.ts"),
+        "utf8"
+      );
     });
 
-    // [public name, symbol that actually builds the SQL] — getMailsByRange is a
-    // single-flight wrapper whose query lives in the uncoalesced impl.
-    const fns: [string, string][] = [
-      ["countMessages", "countMessages"],
-      ["getMailsByRange", "getMailsByRangeUncoalesced"],
-      ["setMailFlags", "setMailFlags"],
-      ["searchMailsByUid", "searchMailsByUid"],
-      ["getAllUids", "getAllUids"],
-      ["getFirstUnseenUid", "getFirstUnseenUid"],
-      ["expungeDeletedMails", "expungeDeletedMails"],
-      ["expungeMailsByUid", "expungeMailsByUid"],
+    const sourceOf = (file: string) => (file === "imap.ts" ? source : setFlagsSource);
+
+    // [public name, symbol that actually builds the SQL, file] —
+    // getMailsByRange is a single-flight wrapper whose query lives in the
+    // uncoalesced impl, and setMailFlags builds none of its own SQL.
+    const fns: [string, string, string][] = [
+      ["countMessages", "countMessages", "imap.ts"],
+      ["getMailsByRange", "getMailsByRangeUncoalesced", "imap.ts"],
+      ["setMailFlags", "buildSetMailFlagsQueries", "set-flags-query.ts"],
+      ["searchMailsByUid", "searchMailsByUid", "imap.ts"],
+      ["getAllUids", "getAllUids", "imap.ts"],
+      ["getFirstUnseenUid", "getFirstUnseenUid", "imap.ts"],
+      ["expungeDeletedMails", "expungeDeletedMails", "imap.ts"],
+      ["expungeMailsByUid", "expungeMailsByUid", "imap.ts"],
     ];
 
     // Applications per function — one per SQL-bearing branch. Counting helper
@@ -1054,7 +1062,7 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     const applications: Record<string, number> = {
       countMessages: 4, // total + unread FILTER, in each of the two branches
       getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch
-      setMailFlags: 4, // two domain WHERE clauses, plus the mapping branch's pair
+      buildSetMailFlagsQueries: 4, // two domain WHERE clauses, plus the mapping branch's pair
       searchMailsByUid: 1, // one conditions list serves both branches
       getAllUids: 2, // one per branch
       getFirstUnseenUid: 2,
@@ -1097,8 +1105,8 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       return direct + uses;
     };
 
-    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol) => {
-      const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
+    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol, file) => {
+      const body = sourceOf(file).match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
       expect(body, `body not found for ${symbol}`).not.toBeNull();
       expect(applicationSites(body![0])).toBeGreaterThanOrEqual(
         applications[symbol]
@@ -1139,7 +1147,9 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       // subquery has to filter `sent` and `expunged` exactly as getAllUids
       // does — membership alone leaves every position after an expunged row
       // off by one.
-      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      const body = setFlagsSource.match(
+        /export const buildSetMailFlagsQueries[\s\S]*?\n};/
+      )![0];
       const join = body.match(/const membershipJoin[\s\S]*?: "";/)![0];
       expect(join).toContain("z.${SENT} = $2");
       expect(join).toContain("z.${EXPUNGED} = FALSE");

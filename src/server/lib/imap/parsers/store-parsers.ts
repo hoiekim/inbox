@@ -14,7 +14,7 @@ import {
   parseString,
   parseAtom,
   parseFlag,
-  parseNumber,
+  parseModifierGroup,
   peek
 } from "./primitive-parsers";
 
@@ -33,58 +33,6 @@ const isStoreOperation = (value: string): value is StoreOperation => {
   return validOperations.includes(value as StoreOperation);
 };
 
-/**
- * Parse the optional STORE modifier group (RFC 7162 §3.1.3):
- *   store-modifier = "UNCHANGEDSINCE" SP mod-sequence-valzer
- * It sits between the sequence set and the item name — `STORE 7,5,9
- * (UNCHANGEDSINCE 320162338) +FLAGS.SILENT (\Deleted)`. Unambiguous to detect:
- * an item name is an atom and never starts with "(". CONDSTORE defines only
- * UNCHANGEDSINCE, so any other modifier is a client error (BAD) rather than
- * something to ignore — silently dropping it would apply an unconditional
- * STORE where the client asked for a conditional one.
- */
-const parseStoreModifiers = (
-  context: ParseContext
-): ParseResult<{ unchangedSince?: number }> => {
-  skipWhitespace(context);
-  if (peek(context) !== "(") {
-    return { success: true, value: {}, consumed: context.position };
-  }
-  context.position++; // consume '('
-
-  let unchangedSince: number | undefined;
-  while (context.position < context.length) {
-    skipWhitespace(context);
-    if (peek(context) === ")") {
-      context.position++; // consume ')'
-      return { success: true, value: { unchangedSince }, consumed: context.position };
-    }
-
-    const name = parseAtom(context);
-    if (!name.success) {
-      return { success: false, error: "Invalid STORE modifier", consumed: 0 };
-    }
-    if (name.value!.toUpperCase() !== "UNCHANGEDSINCE") {
-      return {
-        success: false,
-        error: `Unknown STORE modifier: ${name.value}`,
-        consumed: 0
-      };
-    }
-    skipWhitespace(context);
-    const modseq = parseNumber(context);
-    if (!modseq.success) {
-      return {
-        success: false,
-        error: "Invalid UNCHANGEDSINCE mod-sequence",
-        consumed: 0
-      };
-    }
-    unchangedSince = modseq.value!;
-  }
-
-  return { success: false, error: "Unterminated STORE modifier group", consumed: 0 };
-};
 
 /**
  * Parse STORE command
@@ -99,9 +47,12 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
     };
   }
 
-  const modifiers = parseStoreModifiers(context);
-  if (!modifiers.success) {
-    return { success: false, error: modifiers.error, consumed: 0 };
+  // RFC 7162 §3.1.3: an optional `(UNCHANGEDSINCE <modseq>)` group sits
+  // between the sequence set and the item name. Unambiguous to detect — an
+  // item name is an atom and never starts with "(".
+  const unchangedSince = parseModifierGroup(context, "STORE", "UNCHANGEDSINCE");
+  if (!unchangedSince.success) {
+    return { success: false, error: unchangedSince.error, consumed: 0 };
   }
 
   skipWhitespace(context);
@@ -166,7 +117,7 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
         operation: operation,
         flags,
         silent,
-        unchangedSince: modifiers.value!.unchangedSince
+        unchangedSince: unchangedSince.value
       }
     },
     consumed: context.position
