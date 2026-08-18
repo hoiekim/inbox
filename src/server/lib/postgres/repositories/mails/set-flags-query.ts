@@ -97,10 +97,9 @@ export const buildSetMailFlagsQueries = (
       baseValues = [user_id, sent, start];
     }
   } else {
-    // Per-mailbox: JOIN `mail_mailbox_uid` for both membership and
-    // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees)
-    // — the mapping table is the sole per-mailbox UID source after
-    // #702 PR 3 dropped `mails.uid_account`.
+    // Per-mailbox: JOIN `mail_mailbox_uid` for both membership and UID.
+    // RETURNING `x.uid` — the mailbox-specific UID the client sees, and the
+    // mapping table is its sole source.
     const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
     const uidCol = `x.${UID} as uid`;
     if (useUid) {

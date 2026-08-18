@@ -1,5 +1,5 @@
 /**
- * Tests for IMAP CONDSTORE phase 4 (RFC 7162 §3.1.3) — inbox #610.
+ * Tests for IMAP CONDSTORE phase 4 (RFC 7162 §3.1.3).
  *
  * The conflict-detection layer: `STORE <set> (UNCHANGEDSINCE <n>) <op> <flags>`
  * applies the flag change only to messages whose mod-sequence is ≤ n, and names
@@ -144,8 +144,8 @@ interface FlagResult {
 // what the cross-range accumulation depends on. The last entry repeats so a
 // single-range case can pass one result.
 //
-// getUser is included so the #725 pivot-sync path in storeFlagsTyped (which
-// reads `store.getUser().id`) doesn't throw when the STORE touches
+// getUser is included so the mapped-utility pivot sync in storeFlagsTyped
+// (which reads `store.getUser().id`) doesn't throw when the STORE touches
 // `\Flagged` / `\Deleted`.
 const fakeStore = (results: FlagResult[]): Store => {
   let call = 0;
