@@ -537,6 +537,52 @@ describe("onData handler", () => {
     expect((mailData as { senderFullName: string }).senderFullName).toBe("Admin");
   });
 
+  it("leaves a To recipient of the user's domain addressed", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<addressed@example.com>",
+        from: {
+          text: "Admin <admin@test.com>",
+          value: [{ address: "admin@test.com", name: "Admin" }]
+        },
+        to: {
+          text: "bob@test.com, friend@other.com",
+          value: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+        },
+        subject: "Hello",
+        html: "<p>body</p>",
+        text: "body",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    const mailData = mockSendMail.mock.calls[0][1] as {
+      sender: string;
+      to: string;
+    };
+    expect(mailData.sender).toBe("admin");
+    expect(mailData.to).toBe("bob@test.com,friend@other.com");
+  });
+
   it("maps attachments through the parsed attachment array", async () => {
     mockSimpleParser.mockImplementation(() =>
       Promise.resolve({
@@ -822,8 +868,9 @@ describe("initializeSmtp configuration", () => {
 describe("resolveOutgoingSender", () => {
   const resolve = (
     from: { header?: string; envelope?: string },
-    recipients: string[]
-  ) => resolveOutgoingSender("admin", "test.com", from, recipients);
+    recipients: string[],
+    addressedTo: string[] = []
+  ) => resolveOutgoingSender("admin", "test.com", from, recipients, addressedTo);
 
   it("promotes the first same-domain recipient to sender and drops it", () => {
     expect(
@@ -873,13 +920,72 @@ describe("resolveOutgoingSender", () => {
 
   it("matches the domain case-insensitively and normalizes the account", () => {
     expect(
-      resolve({ envelope: "Admin@TEST.com" }, ["Sales@Test.com"])
-    ).toEqual({ sender: "sales", recipients: [] });
+      resolve({ envelope: "Admin@TEST.com" }, [
+        "Sales@Test.com",
+        "outside@other.com"
+      ])
+    ).toEqual({ sender: "sales", recipients: ["outside@other.com"] });
   });
 
   it("ignores a From header outside the user domain and falls back to the envelope", () => {
     expect(
       resolve({ header: "spoofed@evil.com", envelope: "admin@test.com" }, [
+        "outside@other.com"
+      ])
+    ).toEqual({ sender: "admin", recipients: ["outside@other.com"] });
+  });
+
+  it("never lets a From header outside the user domain supply the sender", () => {
+    expect(resolve({ header: "ceo@irs.gov" }, ["victim@other.com"])).toEqual({
+      sender: "admin",
+      recipients: ["victim@other.com"]
+    });
+    expect(
+      resolve({ header: "ceo@irs.gov", envelope: "@test.com" }, [
+        "victim@other.com"
+      ])
+    ).toEqual({ sender: "admin", recipients: ["victim@other.com"] });
+  });
+
+  it("lowercases a sender taken from the envelope", () => {
+    expect(
+      resolve({ envelope: "Bob@Test.com" }, ["outside@other.com"])
+    ).toEqual({ sender: "bob", recipients: ["outside@other.com"] });
+  });
+
+  it("leaves a To recipient of the user's domain addressed, not promoted", () => {
+    expect(
+      resolve(
+        { envelope: "admin@test.com" },
+        ["bob@test.com", "friend@other.com"],
+        ["bob@test.com", "friend@other.com"]
+      )
+    ).toEqual({
+      sender: "admin",
+      recipients: ["bob@test.com", "friend@other.com"]
+    });
+  });
+
+  it("promotes a Cc account while a To account of the same domain stays addressed", () => {
+    expect(
+      resolve(
+        { envelope: "admin@test.com" },
+        ["bob@test.com", "sales@test.com"],
+        ["bob@test.com"]
+      )
+    ).toEqual({ sender: "sales", recipients: ["bob@test.com"] });
+  });
+
+  it("keeps a lone same-domain recipient rather than emptying the recipient list", () => {
+    expect(resolve({ envelope: "admin@test.com" }, ["sales@test.com"])).toEqual({
+      sender: "admin",
+      recipients: ["sales@test.com"]
+    });
+  });
+
+  it("does not read a local part out of a two-at address", () => {
+    expect(
+      resolve({ header: "sales@evil.com@test.com", envelope: "admin@test.com" }, [
         "outside@other.com"
       ])
     ).toEqual({ sender: "admin", recipients: ["outside@other.com"] });
@@ -892,13 +998,14 @@ describe("resolveOutgoingSender", () => {
     });
   });
 
-  it("resolves against the user's own subdomain for a non-admin user", () => {
+  it("scopes selection to the caller's own domain, not the bare mail domain", () => {
     expect(
       resolveOutgoingSender(
         "alice",
         "alice.test.com",
         { envelope: "alice@alice.test.com" },
-        ["outside@other.com", "team@alice.test.com", "admin@test.com"]
+        ["outside@other.com", "team@alice.test.com", "admin@test.com"],
+        []
       )
     ).toEqual({
       sender: "team",

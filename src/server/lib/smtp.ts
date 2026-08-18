@@ -6,7 +6,7 @@ import {
   SMTPServerSession,
   SMTPServerDataStream
 } from "smtp-server";
-import { simpleParser } from "mailparser";
+import { simpleParser, AddressObject } from "mailparser";
 import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
@@ -162,7 +162,18 @@ const splitAddress = (address: string) => {
   if (at === -1) return undefined;
   const local = address.slice(0, at);
   const domain = address.slice(at + 1);
-  return local && domain ? { local, domain } : undefined;
+  if (!local || !domain || local.includes("@")) return undefined;
+  return { local, domain };
+};
+
+const addressList = (
+  header: AddressObject | AddressObject[] | undefined
+): string[] => {
+  if (!header) return [];
+  const objects = Array.isArray(header) ? header : [header];
+  return objects.flatMap((object) =>
+    object.value.map((address) => address.address ?? "")
+  );
 };
 
 interface OutgoingSender {
@@ -174,19 +185,29 @@ interface OutgoingSender {
  * Resolves which of the user's accounts an SMTP submission is sent as.
  *
  * Mail clients can only be configured with the one identity they log in as, so
- * a submission from `admin` selects a different account by naming it among the
- * recipients: the first recipient inside the user's own domain becomes the
+ * a submission from that identity selects a different account by naming it in
+ * Cc or Bcc: the first such recipient inside the user's own domain becomes the
  * sender and drops out of the recipient list. A submission whose From already
  * names another account of the domain is sent as that account untouched.
+ *
+ * `addressedTo` carries the parsed `To:` header, which is the one recipient
+ * field a client always leaves in the message. Excluding it keeps a mail
+ * addressed to another account of the domain deliverable, and a lone recipient
+ * is never consumed for the same reason — there would be nothing left to send.
+ * Bcc is not separable from Cc here: clients strip `Bcc:` before DATA and carry
+ * those addresses only in the envelope.
  */
 export const resolveOutgoingSender = (
   username: string,
   userDomain: string,
   from: { header?: string; envelope?: string },
-  recipients: string[]
+  recipients: string[],
+  addressedTo: string[]
 ): OutgoingSender => {
+  const normalize = (address: string | undefined) =>
+    address?.trim().toLowerCase();
   const accountOf = (address: string | undefined) => {
-    const parts = address && splitAddress(address.trim().toLowerCase());
+    const parts = splitAddress(normalize(address) ?? "");
     if (!parts || parts.domain !== userDomain.toLowerCase()) return undefined;
     return parts.local;
   };
@@ -196,14 +217,18 @@ export const resolveOutgoingSender = (
     return { sender: fromAccount, recipients };
   }
 
+  const addressed = new Set(addressedTo.map(normalize));
   const selected = recipients.findIndex((address) => {
     const account = accountOf(address);
-    return !!account && account !== username;
+    return (
+      !!account && account !== username && !addressed.has(normalize(address))
+    );
   });
-  if (selected === -1) {
-    const declared = (from.envelope || from.header || "").trim();
+
+  if (selected === -1 || recipients.length === 1) {
+    const envelopeAccount = splitAddress(normalize(from.envelope) ?? "")?.local;
     return {
-      sender: fromAccount || splitAddress(declared)?.local || username,
+      sender: fromAccount || envelopeAccount || username,
       recipients
     };
   }
@@ -236,7 +261,8 @@ const onDataOutgoing = async (
       username,
       getUserDomain(username),
       { header: parsed.from?.value?.[0]?.address, envelope: envelopeFrom },
-      session.envelope.rcptTo.map((addr) => addr.address)
+      session.envelope.rcptTo.map((addr) => addr.address),
+      addressList(parsed.to)
     );
 
     const mailData = new MailDataToSend({
