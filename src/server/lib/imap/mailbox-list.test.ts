@@ -91,3 +91,57 @@ describe("listMailboxes filtering (#596)", () => {
     expect(lines.filter((l) => l.startsWith("* LIST")).length).toBe(1);
   });
 });
+
+describe("listMailboxes hierarchy attributes (RFC 5258 §3)", () => {
+  const attributesFor = async (boxes: string[]): Promise<Map<string, string>> => {
+    const rows = new Map<string, string>();
+    await listMailboxes("A1", "", "*", fakeStore(boxes), (data: string) => {
+      const match = data.match(/^\* LIST \((.*)\) "\/" "(.*)"\r\n$/);
+      if (match) rows.set(match[2], match[1]);
+      return true;
+    });
+    return rows;
+  };
+
+  it("reports a user-created parent \\HasChildren", async () => {
+    const rows = await attributesFor(["INBOX", "Projects", "Projects/Work"]);
+    expect(rows.get("Projects")).toBe("\\HasChildren");
+    expect(rows.get("Projects/Work")).toBe("\\HasNoChildren");
+  });
+
+  it("reports INBOX \\HasChildren once the accounts tree exists", async () => {
+    const rows = await attributesFor(TREE);
+    expect(rows.get("INBOX")).toBe("\\HasChildren");
+    expect(rows.get("INBOX/accounts")).toBe("\\HasChildren \\Noselect");
+    expect(rows.get("INBOX/accounts/work")).toBe("\\HasNoChildren");
+    expect(rows.get("Archive")).toBe("\\HasNoChildren");
+  });
+
+  it("keeps a parent \\HasChildren when the pattern filters its children out", async () => {
+    const rows = new Map<string, string>();
+    await listMailboxes("A1", "", "%", fakeStore(TREE), (data: string) => {
+      const match = data.match(/^\* LIST \((.*)\) "\/" "(.*)"\r\n$/);
+      if (match) rows.set(match[2], match[1]);
+      return true;
+    });
+    expect([...rows.keys()].sort()).toEqual(["Archive", "INBOX", "Sent Messages"]);
+    expect(rows.get("INBOX")).toBe("\\HasChildren");
+  });
+
+  it("does not treat a mere string prefix as a parent", async () => {
+    const rows = await attributesFor(["INBOX", "Project", "Projects/Work"]);
+    expect(rows.get("Project")).toBe("\\HasNoChildren");
+  });
+
+  it("derives 'Sent Messages' from its own child, not from a hardcoded name", async () => {
+    const withAccounts = await attributesFor([
+      "INBOX",
+      "Sent Messages",
+      "Sent Messages/accounts",
+      "Sent Messages/accounts/work"
+    ]);
+    expect(withAccounts.get("Sent Messages")).toBe("\\HasChildren");
+    const bare = await attributesFor(["INBOX", "Sent Messages"]);
+    expect(bare.get("Sent Messages")).toBe("\\HasNoChildren");
+  });
+});
