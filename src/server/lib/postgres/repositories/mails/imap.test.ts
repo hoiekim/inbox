@@ -1146,10 +1146,13 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       expect(join).toContain("z.${SENT} = $2");
       expect(join).toContain("z.${EXPUNGED} = FALSE");
       expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
-      // Assigned straight from a template literal: anything between the `=`
-      // and the backtick is a gate, and the positive assertions above still
-      // pass when the filters sit inside one branch of it.
+      // Both halves of "unconditional": nothing gates the assignment, and
+      // nothing gates a filter from inside the template. The positive
+      // assertions above pass either way — a ternary branch still contains
+      // the text they look for. Optional chains are stripped first so the
+      // conditional test is about conditionals only.
       expect(join).toMatch(/^const membershipJoin = `/);
+      expect(join.replace(/\?\./g, "")).not.toContain("?");
     });
 
     it("addresses no expunged mail in any branch", () => {
