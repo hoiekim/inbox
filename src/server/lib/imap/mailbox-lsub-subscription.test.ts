@@ -218,3 +218,25 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     expect(lines).toContainEqual('* LSUB (\\HasChildren \\Noselect) "/" "Projects/Work"\r\n');
   });
 });
+
+describe("LSUB — the attribute and the expansion agree", () => {
+  // Same rule LIST follows: a parent marked \HasChildren whose expansion
+  // returns nothing is the state RFC 5258 §3 exists to rule out, so the
+  // pattern has to be matched against the spelling ancestry uses.
+  const boxes: MailboxEntry[] = [
+    { name: "INBOX", subscribed: true },
+    { name: "inbox/foo", subscribed: true },
+  ];
+
+  it("reports INBOX \\HasChildren for a child subscribed under the lowercase spelling", async () => {
+    expect(await emit(listSubscribedMailboxes, "", "%", boxes)).toContainEqual(
+      '* LSUB (\\HasChildren) "/" "INBOX"\r\n'
+    );
+  });
+
+  it("returns that child when the client expands the parent it was given", async () => {
+    expect(namesOf(await emit(listSubscribedMailboxes, "", "INBOX/%", boxes))).toEqual([
+      "inbox/foo",
+    ]);
+  });
+});

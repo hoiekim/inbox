@@ -295,25 +295,34 @@ export async function statusMailbox(
 // ---------------------------------------------------------------------------
 
 /**
+/**
+ * A mailbox path under the spelling LIST/LSUB reason about, as opposed to the
+ * one they emit. `canonicalMailbox` folds only whole names, so apply it to the
+ * leading segment: CREATE accepts `inbox/foo`, the listable set carries that
+ * verbatim, and the row it descends from is listed as `INBOX`. Every path
+ * comparison — ancestry, the \HasChildren lookup, and the reference+pattern
+ * match — has to agree on one spelling or the response contradicts itself.
+ */
+const canonicalPath = (box: string): string => {
+  const delimiter = box.indexOf("/");
+  if (delimiter === -1) return canonicalMailbox(box);
+  return canonicalMailbox(box.slice(0, delimiter)) + box.slice(delimiter);
+};
+
+/**
  * Every proper ancestor path of the given names — `Projects/Work/Q3`
  * contributes `Projects` and `Projects/Work`. Built in one pass
  * (O(names × depth)) rather than re-scanning the set per candidate, which
  * would be quadratic on an account with thousands of per-address boxes, and
  * keyed on path segments so a `Project` that is merely a string prefix of
  * `Projects/Work` is not treated as its parent.
- *
- * Each path is canonicalized because CREATE accepts `inbox/foo` and the
- * listable set carries it verbatim, while the row it parents is listed as
- * `INBOX`. `canonicalMailbox` passes multi-segment paths through untouched,
- * so this only folds the depth-1 segment where the case-insensitive names
- * live.
  */
 export const collectAncestors = (names: string[]): Set<string> => {
   const ancestors = new Set<string>();
   names.forEach((name) => {
-    const parts = name.split("/");
+    const parts = canonicalPath(name).split("/");
     for (let i = 1; i < parts.length; i++) {
-      ancestors.add(canonicalMailbox(parts.slice(0, i).join("/")));
+      ancestors.add(parts.slice(0, i).join("/"));
     }
   });
   return ancestors;
@@ -333,7 +342,7 @@ export const collectAncestors = (names: string[]): Set<string> => {
 export function getMailboxAttributes(box: string, parentPaths: ReadonlySet<string>): string {
   // RFC 5258 §3: \HasChildren / \HasNoChildren is what a client keys its
   // expand affordance off, so it has to follow the names actually listed.
-  const hierarchy = parentPaths.has(box) ? "\\HasChildren" : "\\HasNoChildren";
+  const hierarchy = parentPaths.has(canonicalPath(box)) ? "\\HasChildren" : "\\HasNoChildren";
   // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
   // in a plain LIST response, which is how a client maps a role to a box name
   // without guessing at the name.
@@ -399,7 +408,7 @@ export async function listMailboxes(
     // still makes its parent \HasChildren.
     const parentPaths = collectAncestors(boxes);
     boxes
-      .filter((box) => matchesListPattern(reference, pattern, box))
+      .filter((box) => matchesListPattern(reference, pattern, canonicalPath(box)))
       .forEach((box) => {
         const attrs = getMailboxAttributes(box, parentPaths);
         write(`* LIST (${attrs}) "/" "${box}"\r\n`);
@@ -449,7 +458,7 @@ export async function listSubscribedMailboxes(
 
     [...entries, ...synthesized]
       .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
-      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
+      .filter((entry) => matchesListPattern(reference, pattern, canonicalPath(entry.name)))
       .forEach((entry) => {
         // An unsubscribed name is in this response only because it has a
         // subscribed descendant, hence \HasChildren unconditionally.
