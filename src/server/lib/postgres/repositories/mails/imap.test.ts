@@ -1063,7 +1063,7 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     };
 
     const HELPERS =
-      "(?:membershipCondition|membershipExpression|membershipFilter|filtersMembership)";
+      "(?:membershipCondition|membershipExpression|membershipFilter)";
 
     const applicationSites = (rawBody: string) => {
       // Comments mention the rule by name constantly; counting them would let a
@@ -1138,29 +1138,25 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       // Mapping rows outlive the expunge that hid their mail, so the OFFSET
       // subquery has to filter `sent` and `expunged` exactly as getAllUids
       // does — membership alone leaves every position after an expunged row
-      // off by one. The join is UNCONDITIONAL (#741): gating it on
-      // `filtersMembership` left every box that shows spam — Archive, the Sent
-      // tree, every user-created box — on a mapping-only scan that filters
-      // neither `sent` nor `expunged`.
+      // off by one. `membershipExpression` renders `TRUE` on a box that shows
+      // spam, so a join gated on the membership rule drops those filters for
+      // exactly the boxes that still need them.
       const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
       const join = body.match(/const membershipJoin =[\s\S]*?`;/)![0];
       expect(join).toContain("z.${SENT} = $2");
       expect(join).toContain("z.${EXPUNGED} = FALSE");
       expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
-      // A ternary here is the regression: it is how the filter went missing
-      // for the boxes `membershipExpression` renders as `TRUE`.
-      expect(join).not.toContain("filtersMembership");
-      expect(join).not.toContain("?");
+      // Assigned straight from a template literal: anything between the `=`
+      // and the backtick is a gate, and the positive assertions above still
+      // pass when the filters sit inside one branch of it.
+      expect(join).toMatch(/^const membershipJoin = `/);
     });
 
-    it("addresses no expunged mail in any branch (#741)", () => {
-      // `getAllUids` builds the seq->UID map every read path uses, and it
-      // filters `expunged = FALSE`. setMailFlags filtered it in none of its
-      // four branches, so the two lists disagreed by the expunged count:
-      // `STORE 5 +FLAGS (\Deleted)` flagged whatever sat at position 5 of the
-      // LONGER list, and the EXPUNGE behind it destroyed that message. The UID
-      // branches are the same defect without the shift — `UID STORE` reached a
-      // message that is gone, bumping its modseq and `updated`.
+    it("addresses no expunged mail in any branch", () => {
+      // A STORE that reaches an expunged mail bumps a modseq no client can
+      // resolve, and on the sequence-number branches it shifts every position
+      // after the expunged row — so the EXPUNGE behind a `\Deleted` store
+      // destroys the wrong message.
       const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
       // Each branch closes by binding its own parameter list, so the text
       // before each `baseValues =` is exactly one branch's SQL construction.
@@ -1171,6 +1167,20 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       for (const branch of branches) {
         expect(branch).toContain("${EXPUNGED} = FALSE");
       }
+    });
+
+    it("indexes the sequence-number branches 1-based and honours the range end", () => {
+      // IMAP sequence numbers are 1-based while OFFSET is 0-based, and a
+      // `STORE 2:5` has to reach four messages, not one.
+      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      const seqBindings = [...body.matchAll(/baseValues = \[([^\]]*)\];/g)]
+        .map((m) => m[1])
+        .filter((binding) => binding.includes("start - 1"));
+      expect(seqBindings).toHaveLength(2);
+      for (const binding of seqBindings) {
+        expect(binding).toContain("end - start + 1");
+      }
+      expect(body).not.toMatch(/OFFSET \$\d+ LIMIT 1/);
     });
   });
 });

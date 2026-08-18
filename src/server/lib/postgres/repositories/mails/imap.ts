@@ -556,10 +556,7 @@ export const setMailFlags = async (
     // A STORE addresses messages *in the selected mailbox*, so it has to see
     // the same set the reads do — otherwise `UID STORE 1:* +FLAGS (\Deleted)`
     // on INBOX would flag quarantined spam the client was never shown, and the
-    // following EXPUNGE would destroy it. `expunged = FALSE` is half of that
-    // set and is spelled out at every branch below: an expunged mail is gone
-    // from the mailbox for good, so it is neither addressable by UID nor
-    // countable by a sequence number.
+    // following EXPUNGE would destroy it.
     const membership = membershipCondition(mailbox, sent);
 
     if (usesDomainUidSpace(mailbox)) {
@@ -578,14 +575,14 @@ export const setMailFlags = async (
           SELECT mail_id FROM mails
           WHERE user_id = $1 AND sent = $2 AND ${EXPUNGED} = FALSE${membership}
           ORDER BY ${UID_DOMAIN} ASC
-          OFFSET $3 LIMIT 1
+          OFFSET $3 LIMIT $4
         )`;
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
           WHERE ${whereClause}
           RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, start];
+        baseValues = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
       const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
@@ -605,16 +602,13 @@ export const setMailFlags = async (
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, mailbox, start, end];
       } else {
-        // Sequence-number path: match a single row at the OFFSETth
-        // position in the mailbox's UID-ordered list.
-        // A sequence number counts only the messages the mailbox shows, so this
-        // OFFSET has to walk the same list `getAllUids` builds — which means
-        // `sent` and `expunged` too, not just the membership rule: mapping rows
-        // outlive the expunge that hid their mail, so a mapping-only scan
-        // counts messages the seq map does not and shifts every position after
-        // them. The join is unconditional for that reason: `membershipExpression`
-        // is `TRUE` on a box that shows spam, but `expunged` and `sent` still
-        // have to be filtered there, and a mapping-only scan filters neither.
+        // Sequence-number path: slice the mailbox's UID-ordered list by
+        // position. That list is the one `getAllUids` builds, so the walk
+        // filters `sent` and `expunged` too, not just membership — mapping
+        // rows outlive the expunge that hid their mail, so a mapping-only
+        // scan counts messages the sequence map does not. The join carries
+        // those filters unconditionally: `membershipExpression` is `TRUE` on
+        // a box that shows spam, where a gated join would drop them.
         const membershipJoin = `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
              AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
              AND ${membershipExpression(mailbox, sent, "z.")}`;
@@ -623,18 +617,18 @@ export const setMailFlags = async (
           ${membershipJoin}
           WHERE y.${USER_ID} = $1 AND y.${MAILBOX} = $3
           ORDER BY y.${UID} ASC
-          OFFSET $4 LIMIT 1
+          OFFSET $4 LIMIT $5
         )`;
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
           AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
           AND m.${MAIL_ID} IN ${targetSubquery}`;
         selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
         updateSql = `UPDATE mails m
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
           FROM ${MAIL_MAILBOX_UID} x
           WHERE ${whereClause}
           RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, mailbox, start];
+        baseValues = [user_id, sent, mailbox, start - 1, end - start + 1];
       }
     }
 
