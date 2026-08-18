@@ -10,6 +10,7 @@ import { simpleParser } from "mailparser";
 import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
+import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
@@ -156,6 +157,63 @@ const onDataIncoming = (
     });
 };
 
+const splitAddress = (address: string) => {
+  const at = address.lastIndexOf("@");
+  if (at === -1) return undefined;
+  const local = address.slice(0, at);
+  const domain = address.slice(at + 1);
+  return local && domain ? { local, domain } : undefined;
+};
+
+interface OutgoingSender {
+  sender: string;
+  recipients: string[];
+}
+
+/**
+ * Resolves which of the user's accounts an SMTP submission is sent as.
+ *
+ * Mail clients can only be configured with the one identity they log in as, so
+ * a submission from `admin` selects a different account by naming it among the
+ * recipients: the first recipient inside the user's own domain becomes the
+ * sender and drops out of the recipient list. A submission whose From already
+ * names another account of the domain is sent as that account untouched.
+ */
+export const resolveOutgoingSender = (
+  username: string,
+  userDomain: string,
+  from: { header?: string; envelope?: string },
+  recipients: string[]
+): OutgoingSender => {
+  const accountOf = (address: string | undefined) => {
+    const parts = address && splitAddress(address.trim().toLowerCase());
+    if (!parts || parts.domain !== userDomain.toLowerCase()) return undefined;
+    return parts.local;
+  };
+
+  const fromAccount = accountOf(from.header) || accountOf(from.envelope);
+  if (fromAccount && fromAccount !== username) {
+    return { sender: fromAccount, recipients };
+  }
+
+  const selected = recipients.findIndex((address) => {
+    const account = accountOf(address);
+    return !!account && account !== username;
+  });
+  if (selected === -1) {
+    const declared = (from.envelope || from.header || "").trim();
+    return {
+      sender: fromAccount || splitAddress(declared)?.local || username,
+      recipients
+    };
+  }
+
+  return {
+    sender: accountOf(recipients[selected])!,
+    recipients: recipients.filter((_, index) => index !== selected)
+  };
+};
+
 const onDataOutgoing = async (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -171,19 +229,22 @@ const onDataOutgoing = async (
     }
 
     const parsed = await simpleParser(stream);
-    const fromAddress = session.envelope.mailFrom;
-    const sender =
-      (fromAddress && typeof fromAddress !== "boolean"
-        ? fromAddress.address
-        : ""
-      )?.split("@")[0] || "admin";
+    const mailFrom = session.envelope.mailFrom;
+    const envelopeFrom =
+      mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
+    const { sender, recipients } = resolveOutgoingSender(
+      username,
+      getUserDomain(username),
+      { header: parsed.from?.value?.[0]?.address, envelope: envelopeFrom },
+      session.envelope.rcptTo.map((addr) => addr.address)
+    );
 
     const mailData = new MailDataToSend({
-      to: session.envelope.rcptTo.map((addr) => addr.address).join(","),
+      to: recipients.join(","),
       subject: parsed.subject || "",
       html: parsed.html || parsed.text || "",
       sender,
-      senderFullName: parsed.from?.text || sender
+      senderFullName: parsed.from?.value?.[0]?.name || sender
     });
 
     await sendMail(signedUser, mailData);
