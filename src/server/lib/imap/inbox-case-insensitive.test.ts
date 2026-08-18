@@ -1,22 +1,3 @@
-/**
- * Tests for case-insensitive INBOX matching (#600).
- *
- * RFC 3501 §5.1 mandates that the special name INBOX is matched in a
- * case-insensitive fashion. Pre-fix, every `=== "INBOX"` site in the layer
- * treated the comparison as case-sensitive, so a client sending `inbox`,
- * `Inbox`, etc. fell through to the per-account-mailbox path (treating
- * `inbox@<domain>` as a real account name — almost never existing). After
- * the layer added a mailbox-existence gate (#595), this surfaced as
- * `NO Mailbox does not exist` on a perfectly valid `SELECT inbox`.
- *
- * Coverage:
- *   - `isInbox()` util — every casing variant.
- *   - `Store.mailboxExists` — accepts every casing.
- *   - `selectMailbox` / `statusMailbox` — case-insensitive resolution AND
- *     canonical-name echoing in untagged responses (per the issue's fix
- *     sketch: "canonicalize the selected-mailbox string to INBOX so
- *     downstream responses echo the canonical name").
- */
 
 import { describe, it, expect } from "bun:test";
 import { isInbox } from "./util";

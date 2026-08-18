@@ -1,21 +1,3 @@
-/**
- * Tests for transient-error propagation in mailboxExists (#601).
- *
- * `Store.mailboxExists` (added in #599) was implemented as
- * `listMailboxes().includes(box)`. `listMailboxes` swallows backend errors
- * and falls back to `["INBOX"]` (acceptable for LIST resilience). For the
- * existence gate that's wrong: a transient DB hiccup on the stats/list
- * queries turns into `NO Mailbox does not exist` — a permanent signal — for
- * a mailbox the client just successfully `LIST`ed.
- *
- * After this fix, `mailboxExists` uses `listMailboxesOrThrow` (no fallback),
- * so transient errors propagate up. The SELECT/STATUS handlers' existing
- * try-catch then writes `NO SELECT failed` / `NO STATUS failed` (transient,
- * retry-friendly) instead of `NO Mailbox does not exist` (permanent).
- *
- * `listMailboxes` (the LIST-facing path) keeps the fallback so LIST stays
- * usable when the DB hiccups.
- */
 
 import { describe, it, expect } from "bun:test";
 import { Store } from "./store";
@@ -81,9 +63,6 @@ describe("Store.mailboxExists propagates transient errors (#601)", () => {
 
   it("THROWS on transient backend failure (does not fall back to ['INBOX'])", async () => {
     const store = buildStore({ throwInListOrThrow: true });
-    // The whole point of #601: the existence check must distinguish
-    // "couldn't determine the list" from "you're not on it." Throwing
-    // is how that distinction reaches the SELECT/STATUS handler.
     await expect(store.mailboxExists("Archive")).rejects.toThrow(
       "simulated DB hiccup on listMailboxesOrThrow"
     );

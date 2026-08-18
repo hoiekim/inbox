@@ -1,7 +1,3 @@
-/**
- * Tests for fetch-parsers.ts (IMAP FETCH command parsing)
- * Covers FETCH data items for inbox #340
- */
 
 import { describe, it, expect } from "bun:test";
 import { parseCommand } from "./index";
@@ -214,10 +210,6 @@ describe("fetch-parsers > real-world FETCH patterns", () => {
     expect(types).toContain("FLAGS");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Macros — ALL / FAST / FULL (RFC 3501 §6.4.5), inbox #650
-// ---------------------------------------------------------------------------
 
 describe("fetch-parsers > macros", () => {
   it("should expand FAST to (FLAGS INTERNALDATE RFC822.SIZE)", () => {

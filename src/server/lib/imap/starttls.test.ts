@@ -1,11 +1,3 @@
-/**
- * STARTTLS refusal path (inbox #763).
- *
- * CAPABILITY no longer offers STARTTLS without a readable certificate, so the
- * only way into `startTls` on a cert-less deployment is a client sending the
- * command unprompted. That must answer with a tagged NO instead of throwing an
- * ENOENT the handler can only report as `BAD Internal server error`.
- */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { readFileSync } from "fs";

@@ -1,11 +1,3 @@
-/**
- * Tests for LIST/LSUB reference + pattern handling (#596).
- *
- * Before the fix, listMailboxes ignored both arguments and emitted the entire
- * mailbox tree for every query. These cases pin the RFC 3501 §6.3.8 wildcard
- * semantics ("*" crosses the "/" delimiter, "%" stays within one level) and the
- * handler's filtering of the box set against reference + pattern.
- */
 
 import { describe, it, expect } from "bun:test";
 import { matchesListPattern, listMailboxes } from "./mailbox-ops";

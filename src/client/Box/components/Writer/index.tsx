@@ -65,13 +65,6 @@ const Writer = () => {
     "initialContent",
     ""
   );
-  // Persist only the mail identifier + small labels. The quoted HTML
-  // stays in-memory (see `originalMessageHtml` below) — it's re-fetched
-  // on mount from `/api/mails/body/{id}` if a reply was in progress
-  // when the tab closed. This is the resolution of #668: the previous
-  // fix stopped persisting `originalMessage` altogether (so a close-
-  // reopen dropped the reply target too); now the id survives while
-  // the payload stays off localStorage.
   const [originalMessageMeta, setOriginalMessageMeta] =
     useLocalStorage<OriginalMessageMeta>(
       "originalMessageMeta",
@@ -99,9 +92,6 @@ const Writer = () => {
   const [attachments, setAttachments] = useState<Record<string, File>>({});
   const [editorKey, setEditorKey] = useState(1);
 
-  // Reclaim quota for browsers that already have a large stale value stored
-  // under `originalMessage` from before the payload moved off localStorage
-  // (#668). The new `originalMessageMeta` key holds only small strings.
   useEffect(() => {
     localStorage.removeItem("originalMessage");
   }, []);
@@ -120,9 +110,6 @@ const Writer = () => {
     call
       .get<BodyGetResponse>(`/api/mails/body/${id}`)
       .then((r) => {
-        // Drop a stale resolve: the user may have switched to a different reply
-        // or cleared the form while this fetch was in flight — applying this
-        // body over another reply's meta/prefix would mismatch the quote.
         if (latestMetaId.current !== id) return;
         if (r.status === "success" && r.body?.html) {
           setOriginalMessageHtml(wrapQuoteHtml(r.body.html));

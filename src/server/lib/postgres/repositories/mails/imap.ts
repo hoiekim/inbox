@@ -82,18 +82,6 @@ export async function* pgTextChunks(
   }, chunkChars);
 }
 
-/**
- * The paging loop behind `pgTextChunks`, over any 1-indexed
- * character-addressed source. Split out from the SQL so the offset
- * arithmetic — the part that was wrong in #765 — is testable without a
- * process-global `pg` double; the server suite has a dozen files
- * installing their own pool mock and the first importer of `client.ts`
- * binds it for the whole run, so a mock-based test here is not reliable.
- *
- * `readChunk(offset, take)` must have Postgres `SUBSTRING` semantics:
- * 1-indexed, counting CHARACTERS, returning "" once `offset` is past the
- * end (the terminator).
- */
 export async function* pageByCodePoints(
   readChunk: (offset: number, take: number) => Promise<string>,
   chunkChars: number
@@ -103,18 +91,6 @@ export async function* pageByCodePoints(
     const chunk = await readChunk(offset, chunkChars);
     if (chunk.length === 0) return;
     yield chunk;
-    // `offset` is a Postgres SUBSTRING offset, so it counts CHARACTERS —
-    // one per code point. `chunk.length` counts UTF-16 code units, which
-    // is two for every non-BMP character (emoji, rarer CJK). Advancing by
-    // the code-unit count overshoots by exactly the number of astral
-    // characters in the chunk, silently SKIPPING that many characters at
-    // every chunk boundary. The stream then emits fewer octets than
-    // `octet_length()` measured, which is the value `segmentByteLength`
-    // already advertised in the `{N}` literal — so a strict client reads
-    // the response trailer as body and the connection desynchronizes
-    // (#765). The same count decides termination: a final chunk of
-    // 11_999 characters that includes one astral char has `.length`
-    // 12_000 and would not look short.
     const codePoints = countCodePoints(chunk);
     if (codePoints < chunkChars) return;
     offset += codePoints;
@@ -233,23 +209,9 @@ export const countMessages = async (
     let sql: string;
     let values: ParamValue[];
 
-    // `total` / `unread` describe what the mailbox contains, so they honour the
-    // membership rule. `max_uid` deliberately does not: it backs UIDNEXT
-    // (mailbox-ops emits `max_uid + 1`), which RFC 3501 §2.3.1.1 requires to
-    // exceed every UID assigned in the mailbox. Filtering it would drop UIDNEXT
-    // the moment the highest-UID mail got spam-marked, handing a later arrival
-    // a UID the client had been promised was unused.
-    //
-    // This keeps membership from moving UIDNEXT; it does not make UIDNEXT
-    // monotonic in general. `max_uid` is still a MAX over live rows, so an
-    // EXPUNGE or a hard delete of the highest-UID mail lowers it — a
-    // pre-existing gap that wants UIDNEXT sourced from `mail_uid_counters`
-    // instead. Tracked in #743.
     const membership = membershipExpression(mailbox, sent);
 
     if (usesDomainUidSpace(mailbox)) {
-      // Domain-wide count (INBOX / unified Sent Messages) — still keyed on
-      // uid_domain, unchanged by #702's per-mailbox mapping migration.
       sql = `
         SELECT
           COUNT(*) FILTER (WHERE ${membership}) as total,
@@ -260,14 +222,6 @@ export const countMessages = async (
       `;
       values = [user_id, sent];
     } else {
-      // Per-mailbox view — the `mail_mailbox_uid` mapping is the
-      // authoritative membership + UID source. INNER JOIN encodes both:
-      // a row exists iff the mail is in this mailbox, and its `uid`
-      // column is the per-mailbox UID the client sees. Legacy mails
-      // that predate the write-side dual-write (pre-#615) and never got
-      // backfilled — e.g. the 140 rows the one-shot script skipped over
-      // duplicate-UID collisions from a #617-era race — have no mapping
-      // row and are intentionally invisible to reads.
       const joinMembership = membershipExpression(mailbox, sent, "m.");
       sql = `
         SELECT
@@ -631,10 +585,6 @@ export const setMailFlags = async (
         baseValues = [user_id, sent, start];
       }
     } else {
-      // Per-mailbox: JOIN `mail_mailbox_uid` for both membership and
-      // UID. RETURNING `x.uid` (the mailbox-specific UID the client sees)
-      // — the mapping table is the sole per-mailbox UID source after
-      // #702 PR 3 dropped `mails.uid_account`.
       const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
@@ -730,17 +680,6 @@ const toUpdatedMailFlags = (row: Record<string, unknown>): UpdatedMailFlags => (
  */
 export const MATCH_NONE = "FALSE";
 
-/**
- * Builds the SQL boolean fragment for a single IMAP SEARCH criterion, pushing any
- * bound parameters onto `values` (1-indexed `$N` placeholders track `values.length`).
- * Three-valued: returns a constraint string, `null` for criteria that impose no
- * constraint (match-all: ALL, UNKEYWORD, unsupported combinator operands), or the
- * `MATCH_NONE` sentinel for criteria that can match nothing (KEYWORD, and any key
- * the backend can't express — failing closed per #672). NOT/OR recurse so negation
- * and disjunction compose the three values correctly instead of falling through and
- * matching every message. The caller drops `null` fragments and keeps `MATCH_NONE`
- * (a valid SQL boolean) so the enclosing AND collapses to the empty set.
- */
 export const buildCriterionClause = (
   criterion: { type: string; value?: unknown },
   uidField: string,
@@ -870,19 +809,11 @@ export const buildCriterionClause = (
       else if (fieldLower === "from") column = "from_text";
       else if (fieldLower === "to") column = "to_text";
       else if (fieldLower === "message-id") column = "message_id";
-      // Unsupported header field — skip to avoid incorrect results
-      // Only subject/from/to/message-id are stored as searchable columns.
-      // An arbitrary header field can't be evaluated → fail closed (match-none)
-      // rather than dropping the criterion and matching every message (#672).
       if (column === null) return MATCH_NONE;
       values.push(`%${text}%`);
       return `${column} ILIKE $${values.length}`;
     }
 
-    // Custom keyword flags. The server stores only the system flag set and no
-    // custom keywords, so KEYWORD <x> can never match (match-none) and
-    // UNKEYWORD <x> always matches (match-all). Both are exact evaluations, not
-    // fail-closed guesses (#672).
     case "KEYWORD":
       return MATCH_NONE;
     case "UNKEYWORD":
@@ -917,19 +848,10 @@ export const buildCriterionClause = (
       values.push(criterion.value as Date);
       return `date >= $${values.length}`;
 
-    // Size criteria: RFC822.SIZE is not persisted per-row, so the octet count
-    // can't be evaluated. Fail closed (match-none) rather than dropping the
-    // criterion — a dropped LARGER/SMALLER matches every message (fail-open),
-    // the dangerous direction. Exact evaluation needs an rfc822_size column
-    // (follow-up #665); until then match-none is the safe interim (#672).
     case "LARGER":
     case "SMALLER":
       return MATCH_NONE;
 
-    // A UID sequence-set: its ranges are alternatives, so OR them among
-    // themselves (a message matches if it falls in ANY range) while the whole
-    // set still ANDs against sibling keys. An empty set imposes no constraint
-    // (caller skips it). See #659.
     case "UID_SET": {
       const ranges = criterion.value as { start: number; end?: number }[];
       const parts = ranges.map((range) => {
@@ -944,8 +866,6 @@ export const buildCriterionClause = (
       return parts.length === 1 ? parts[0] : `(${parts.join(" OR ")})`;
     }
 
-    // Unsupported criterion — can't be evaluated, so fail closed (match-none)
-    // rather than imposing no constraint and matching every message (#672).
     default:
       return MATCH_NONE;
   }

@@ -48,17 +48,6 @@ describe("isProduction", () => {
 });
 
 describe("server source", () => {
-  // `Bun.Glob` rather than `fs.readdirSync`, and `Bun.file` rather than
-  // `fs.readFileSync`: two sibling test files (`mails/mailgun.test.ts`,
-  // `http/routes/health.test.ts`) do `mock.module("fs", …)`, which is
-  // process-global in Bun and can replace this file's `fs` bindings under some
-  // full-suite orderings. The `Bun.*` namespace is not on the `fs` module
-  // surface, so it cannot be swapped out — the convention `placement.test.ts`
-  // states verbatim.
-  //
-  // `dot: true` because the walk this replaced was directory-visibility blind,
-  // and so is `Bun.build` — it follows imports, so a dot-read under a
-  // `.generated/` directory would ship folded past a guard that skipped it.
   const sourceFiles = (dir: string): string[] =>
     [...new Bun.Glob("**/*.{ts,tsx}").scanSync({ cwd: dir, absolute: true, dot: true })].filter(
       (file) => !/\.test\.tsx?$/.test(file)

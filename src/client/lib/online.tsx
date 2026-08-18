@@ -11,21 +11,6 @@ import {
 import { queryClient } from "./queryClient";
 import { matchCacheCatalog } from "./cacheCatalog";
 
-/**
- * Phase 2 (#458) offline-read UX. Tracks whether the app can currently reach
- * the server and exposes that as a single shared signal so the offline banner —
- * and, in a later #458 slice, every mutating control — read one source of truth
- * instead of each running its own `navigator.onLine` check + heartbeat.
- *
- * Two signals feed the state, in increasing order of trust:
- *   1. `navigator.onLine` window events — instant but unreliable (stays `true`
- *      on captive-portal Wi-Fi where no request actually completes).
- *   2. A `GET /api/ping` heartbeat while the tab is visible — the ground truth,
- *      used to correct `navigator.onLine`'s false positives. Deliberately the
- *      cheap liveness route, not `/api/health` (whose DB + socket probes would
- *      multiply by open-tab count).
- */
-
 export interface OnlineState {
   isOnline: boolean;
   /** ms-epoch of the last moment the server was reachable, or null if never. */

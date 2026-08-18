@@ -44,21 +44,6 @@ export const sendMail = async (
   const { id: userId, username } = user;
   try {
     const response = await sendMailgunMail(username, mailToSend, files);
-    // Everything below runs AFTER mailgun has committed the delivery. A
-    // throw here (getSentMail's UID reserve / attachment fs write, or
-    // saveMail's mails INSERT / mail_mailbox_uid mapping write) means
-    // the recipient already got the message but we couldn't build/store
-    // the local Sent record — telling the user "retry" would send a
-    // duplicate. Swallow into an alarm keyed by the mailgun message-id
-    // and return the mailgun response so the send is reported successful.
-    // Ops recovers from ./error/&lt;ts&gt; (written by receive.ts saveMail's
-    // catch on the saveMail-throw path).
-    //
-    // Split the try so each incident produces exactly one alarm:
-    //   - saveMail throw → receive.ts wrapper's catch already fired
-    //     `Mail Send Save Failed`; the inner catch here just logs.
-    //   - getSentMail throw → no receive.ts catch fired; the outer
-    //     catch here fires `Mail Send Save Failed` itself.
     const messageId = response?.id || randomUUID();
     let sentMail;
     try {

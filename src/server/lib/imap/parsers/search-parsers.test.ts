@@ -307,9 +307,6 @@ describe("parseSearchCriteria", () => {
     });
   });
 
-  // #649: a bare sequence-set is the SEQ search key (message sequence numbers),
-  // distinct from the explicit UID keyword. It must not be labeled UID (which
-  // the non-UID SEARCH handler rejects and which would match the wrong axis).
   describe("bare sequence-set (SEQ) key (#649)", () => {
     it("parses a bare range as SEQ, not UID", () => {
       const result = parseSearchCriteria(ctx("1:3"));
@@ -383,10 +380,6 @@ describe("parseSearchCriteria", () => {
       }
     });
 
-    // Regression: an operator followed by MORE top-level keys used to be
-    // rejected because NOT/OR recursed into the unbounded criteria parser,
-    // which greedily consumed every remaining key into the operand and then
-    // failed the operand-length guard (#637).
     it("parses NOT SEEN followed by another ANDed key", () => {
       const c = ctx("NOT SEEN SINCE 1-Jan-2026");
       const result = parseSearchCriteria(c);

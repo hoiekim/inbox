@@ -55,19 +55,6 @@ import {
 // FetchResponsePart types (local to the fetch subsystem)
 // ---------------------------------------------------------------------------
 
-// `content` is a string for small parts (headers, simple attributes) and a
-// Buffer for the residual materialized paths (header-like sections only).
-// All body-bearing paths (FULL, TEXT, MIME_PART — partial included) emit
-// via `type: "stream"` — see stream-mutex.ts + #755 for the per-key mutex
-// that serializes concurrent same-key streams.
-//
-// **stream** variant: BODY[] / RFC822 for a fetch that streams its bytes
-// directly to the socket via `streamFromSegments`, never materializing
-// the full body in memory. `length` is pre-computed by `sumSegmentBytes`
-// on the SAME segment list (pure math on stored attachment sizes — no
-// disk I/O) so the writer can advertise `{N}` before the first chunk
-// yields. Sum of yielded chunk byte-lengths equals `length` by
-// construction (both derive from the same segment list).
 export type FetchResponsePart =
   | { type: "simple"; content: string }
   | { type: "literal"; content: string | Buffer; header: string; length: number }
@@ -201,15 +188,6 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
         fields.add("answered");
         break;
 
-      // BODYSTRUCTURE (RFC 3501 §7.4.2) needs the `size` + `lines` count for
-      // each text/html part. Instead of projecting the multi-MB text/html
-      // columns and computing per-fetch (the last materialization gap after
-      // #731 / #739 — spiked RSS on bare `UID FETCH X BODYSTRUCTURE` batches),
-      // project the pre-measured `octet_length()` synthetics + persisted
-      // line-count columns. Cache miss (pre-migration NULL row) falls
-      // through to a targeted per-row `SELECT text, html` load in the
-      // BODYSTRUCTURE handler — see buildFetchResponsePart. Post-backfill
-      // this branch stops firing entirely.
       case "BODYSTRUCTURE":
         fields.add("text_octets");
         fields.add("html_octets");
@@ -228,14 +206,6 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
         fields.add("date");
         break;
 
-      // RFC822.SIZE is derived from the full-message serializer (it must equal
-      // len(BODY[]) per §2.3.4), so it needs every column that serializer
-      // reads — headers included, not just the body parts. Request the same
-      // columns a FULL body fetch does. Also request `rfc822_size` (nullable
-      // cached column) so the fetch handler can short-circuit — a hit skips
-      // buildFullMessage entirely, saving the ~100MB attachment materialization
-      // per request (see #729 K836 spike). The body columns stay in the
-      // projection for the fallback path (first observation of a mail).
       case "RFC822.SIZE":
         addBodyFields({ type: "BODY", peek: true, section: { type: "FULL" } }, fields);
         fields.add("rfc822_size" as keyof MailType);
@@ -357,21 +327,6 @@ export function addBodyFields(
     }
 
     case "MIME_PART":
-      // BODY[<part>]: bare / `.TEXT` stream via
-      // `streamPartBodyFromSegments` / `streamPartialSubset` over
-      // `selectPartBodySegments` — lazy synthetics only, same O(chunk)
-      // bound as TEXT and FULL.
-      //
-      // `.MIME` / `.HEADER` fall through to `getBodyPartHeaders`, which
-      // needs only "does a text/html part exist" — `resolveBodyPresence`
-      // answers that from `text_octets` / `html_octets`, the same
-      // predicate `buildMessageSegments` uses. So this branch projects
-      // the synthetics only, like the rest: `UID FETCH 1:*
-      // (BODY.PEEK[1.MIME])` no longer pulls every row's body into
-      // `fetchMailsForRange`'s Map (#757's allocation shape), and
-      // `wantsLazyBodies` stays true when a single command pairs `.MIME`
-      // with `BODY[TEXT]` — the projection is a per-command union, so
-      // adding the strings here would have un-lazied that whole command.
       fields.add("text_octets");
       fields.add("html_octets");
       fields.add("mail_id");
@@ -480,58 +435,7 @@ export async function buildBodyResponsePart(
   // label the response part with the item the client requested.
   const sectionKey = keyOverride ?? getBodySectionKey(section);
 
-  // EVERY non-header-like body section (FULL, TEXT, bare/`.TEXT`
-  // MIME_PART — partial and non-partial alike) takes the segment-walk
-  // streaming path: `buildMessageSegments` builds the ordered segment
-  // list once, `sumSegmentBytes` / `sumBodyBytes` / `sumPartBodyBytes`
-  // measure the exact wire byte count (one `stat` per attachment, no
-  // reads) so `{N}` is pinned before the first chunk yields, and the
-  // appropriate `stream*Segments` generator yields chunk-bounded Buffers
-  // to the socket.
-  //
-  // Both the SOURCE and the output side are now O(chunk) for all of
-  // them: `getRequestedFields` projects only the lazy synthetics for
-  // these shapes, so `buildMessageSegments` emits `lazy-text` segments
-  // that pull the column in chunked pg SUBSTRING reads at emit time.
-  // Before this, TEXT and MIME_PART projected the materialized
-  // `mail.text` / `mail.html`, so each command held
-  // O(sizeof(text) + sizeof(html)) in V8's heap for its duration — the
-  // per-command allocation that survived a same-socket pipelined burst
-  // long enough to stack up under GC lag (#757).
-  //
-  // Cache is deleted (was `body-buffer.ts`): streaming makes it
-  // unnecessary. Retention shapes the pre-cache-deletion code returned:
-  //  - `getBodyContent` → null: the whole part is dropped from the FETCH
-  //    response (e.g. `BODY[99]` on a 2-part message) → still returned
-  //    as `null` from `buildBodyResponsePart` for the MIME_PART branch
-  //    when `sumPartBodyBytes === 0`.
-  //  - `getBodyContent` → "":   emit `<sectionKey> NIL` (e.g.
-  //    `BODY[TEXT]` on a mail with no text/html/attachments) → still
-  //    returned as a simple NIL when `sumBodyBytes === 0`.
-  //  - non-empty: emit a `{N}\r\n<octets>` stream (was: cached literal).
-  //
-  // Instead, `withStreamMutex(key, ...)` serializes SAME-KEY streams:
-  // one iOS-pipelined `UID FETCH X (UID BODY)` on the same UID runs to
-  // completion before the next fresh stream for that UID starts. Cuts
-  // duplicate PG round-trips + duplicate in-flight chunk buffers under
-  // the retry-storm shape without materializing.
-  //
-  // Still inside the body budget: this is the largest fetch shape, so leaving
-  // it uncapped would let K concurrent sockets each stream a distinct large
-  // body while the budget covered only the cheaper paths. The slot is held for
-  // the stream's whole lifetime and released even if the consumer abandons it.
   if (!isHeaderLikeSection(section) && section.type === "FULL") {
-    // Build the segment list ONCE — reproducing it inside the stream
-    // would `stat` attachment files a second time, and a file whose size
-    // changed between calls (upload-in-progress, mid-write race, etc.)
-    // would make `{N}` disagree with the emitted octets — the exact
-    // #733 reviewoie HIGH ("declared 1833, emitted 67165"). Sharing one
-    // segment list between the size measurement and the stream is what
-    // makes `{N}` byte-exact by construction.
-    //
-    // The wire response ends with a CRLF after the body serialization,
-    // which `sumSegmentBytes` counts (via WIRE_TRAILER), so the stream
-    // must emit it too.
     const segments = buildMessageSegments(mail, docId);
     // `sumSegmentBytes` includes the 2-byte wire trailer (`\r\n`) that the
     // non-partial FULL branch appends after streaming the segments. RFC
@@ -772,22 +676,6 @@ export async function buildFetchResponsePart(
     }
 
     case "RFC822.SIZE": {
-      // RFC 3501 §2.3.4: RFC822.SIZE is the octet count of the message in RFC
-      // 2822 format — i.e. it must equal the number of octets BODY[] / RFC822
-      // returns for the same message.
-      //
-      // Three-path resolution:
-      //  1. **Cached column hit** — `mails.rfc822_size` is a nullable BIGINT
-      //     stamped on first observation (#731). When present, return it
-      //     verbatim: zero work.
-      //  2. **Compute + persist** — for mails that haven't been observed
-      //     yet, derive via `computeFullMessageSize` (pure math on stored
-      //     attachment sizes — no disk read, no body materialization). The
-      //     value equals `Buffer.byteLength(streamFromSegments output)`
-      //     by construction so it agrees with what BODY[] would emit.
-      //     Fire-and-forget UPDATE persists the value for next time.
-      //     Derived without materializing the body, which is the point: a
-      //     BODY[] build just to read its length is a multi-MB allocation.
       if (typeof mail.rfc822_size === "number") {
         return { type: "simple", content: `RFC822.SIZE ${mail.rfc822_size}` };
       }
@@ -815,24 +703,6 @@ export async function buildFetchResponsePart(
     }
 
     case "BODYSTRUCTURE": {
-      // extensible=false is the bare `BODY` data item: non-extensible structure
-      // labelled `BODY` (RFC 3501 §6.4.5). extensible=true is full BODYSTRUCTURE.
-      //
-      // Two-path resolution (mirrors RFC822.SIZE / #731):
-      //  1. **Cached hit** — the projection carries `text_octets` +
-      //     `html_octets` (from `octet_length()`) + persisted
-      //     `text_line_count` + `html_line_count` (populated at INSERT
-      //     time by saveMail, or by a bulk backfill). formatBodyStructure
-      //     derives `size` + `lines` from these with no string in memory:
-      //     BODYSTRUCTURE becomes a metadata-only fetch, closing the last
-      //     text/html materialization gap after #731 / #739.
-      //  2. **Cache-miss fallback** — a pre-migration row's line counts
-      //     sit NULL. Fetch just the text/html columns for THIS row
-      //     (`getMailBody` — one row, two TEXT columns, no attachments) so
-      //     formatBodyStructure has strings to base64+split. Fire-and-
-      //     forget persist backfills the row so its NEXT BODYSTRUCTURE
-      //     hits cache. Bounded per-row overhead during the transition;
-      //     after the bulk backfill this branch effectively stops firing.
       const wantsPart = (
         octets: number | undefined,
         lineCount: number | null | undefined

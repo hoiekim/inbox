@@ -1,15 +1,3 @@
-/**
- * Service-worker lifecycle for the IndexedDB-cache rollout (Phase 2, #458).
- *
- * `public/service-worker.js` precaches the SPA shell, serves hashed `/assets/*`
- * cache-first, and falls back to the cached shell for offline navigations.
- * Until now it was registered only as a side effect of opting in to push
- * (`Notifier.subscribe`, which bails unless notification permission is granted),
- * so users who never enabled notifications got none of the offline/asset-cache
- * benefit. Register it for every authenticated session instead, and tear it
- * down on logout so a shared browser never serves the previous user's cached
- * shell.
- */
 
 const SW_URL = "/service-worker.js";
 

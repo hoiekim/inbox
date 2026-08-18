@@ -67,10 +67,6 @@ describe("IMAP handler per-session drain serialization", () => {
     const socket = makeMockSocket();
     handler.setSocket(socket as never);
 
-    // 25 commands, each in its own `data` event. Under the pre-fix
-    // async handler this would spawn 25 concurrent processing loops
-    // racing on the shared buffer; under the fix each fires drainCommands
-    // which self-serializes via the `draining` guard.
     const n = 25;
     for (let i = 1; i <= n; i++) {
       socket.emit("data", Buffer.from(`t${i} NOOP\r\n`));

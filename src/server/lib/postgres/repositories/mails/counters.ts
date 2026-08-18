@@ -17,25 +17,6 @@ import {
 } from "../../models";
 import { usesDomainUidSpace } from "./views";
 
-/**
- * Build the atomic UID-reservation upsert.
- *
- * The counter row in `mail_uid_counters` holds the most recently assigned UID.
- * The INSERT seeds it once from the current `MAX(uid)` in `mails` (via `seedSql`,
- * which reuses $1=user_id and $4=sent), so a deployment with existing mail keeps
- * its sequence continuous — no UID renumbering, no UIDVALIDITY churn. Every call
- * after the first conflicts on the composite key and takes the row lock through
- * `DO UPDATE`, returning a strictly larger value.
- *
- * This is what closes the receive-path race (#617): a bare `MAX(uid)+1` read in
- * `convertMail` followed by a later INSERT is a TOCTOU — two concurrent receipts
- * read the same max and write the same UID. Funneling assignment through this
- * single atomic statement removes the window for every write path (receive, send,
- * IMAP APPEND), since they all assign through the two functions below.
- *
- * Pure (no DB) so the SQL shape is unit-testable without intercepting the pool.
- * `seedParams` supply any extra placeholders `seedSql` references ($5…).
- */
 const buildReserveUidQuery = (
   user_id: string,
   kind: string,
@@ -66,28 +47,6 @@ export const buildDomainUidQuery = (
   return buildReserveUidQuery(user_id, "domain", "", sent, seedSql, []);
 };
 
-/**
- * Per-account UID-reservation query (kind="account", scope=address).
- *
- * The seed on first-ever reservation for a (user, address, sent) tuple
- * sources from `mail_mailbox_uid.uid` — the authoritative per-mailbox UID
- * store after #702 PR 3 dropped `mails.uid_account`. The tuple predicate
- * matches any of the mailbox paths that the write side derives from
- * (address, sent): the per-account paths `INBOX/accounts/<local>` and
- * `Sent Messages/accounts/<local>`, plus the raw local part for
- * user-created mailboxes (`Archive` etc., where `boxToAccount` returns
- * `<name>@<domain>` and the write side stores the box name unchanged).
- * All three shapes coexist inside `mail_mailbox_uid.mailbox`; the
- * OR-union covers each with one indexed lookup.
- *
- * In practice this seed fires only on the very first reservation for a
- * (user, address, sent) triple — every subsequent call takes the DO
- * UPDATE branch and doesn't re-evaluate the seed. Existing deployments
- * already have counter rows for every mailbox that has ever received a
- * mail, so the seed's specific value only matters for the exact
- * new-mailbox-with-pre-existing-rows edge (nonexistent under any real
- * write path but defended against for hostile-data safety).
- */
 export const buildAccountUidQuery = (
   user_id: string,
   account: string,
@@ -108,27 +67,6 @@ export const buildAccountUidQuery = (
   ]);
 };
 
-/**
- * Per-mailbox UID-reservation query (kind="mailbox", scope=mailbox path).
- *
- * Distinct from `buildAccountUidQuery` in ONE axis: this counter row is NOT
- * keyed on `sent`. That axis matters for per-account boxes because
- * `INBOX/accounts/<local>` and `Sent Messages/accounts/<local>` are two
- * different mailboxes — different UID spaces, ok to reuse UID values across
- * the pair. It does NOT match for the mapped-utility folders (`Starred`,
- * `Trash`, #725), whose membership spans both directions: a single mailbox
- * that has to enumerate one strictly monotonic UID sequence covering starred
- * received mail AND starred sent mail. Two `sent`-keyed counters handing out
- * `1, 2, 3, …` to sent-starred and `1, 2, 3, …` to received-starred would
- * collide on `mail_mailbox_uid_user_id_mailbox_uid_key` at INSERT time.
- * Hardcoded `sent=false` here is just a placeholder to occupy the
- * composite-key column — one counter row per (user_id, mailbox).
- *
- * Seed on first-ever reservation: `MAX(uid) + 1` in `mail_mailbox_uid` for
- * the same (user_id, mailbox). Idempotent — if a backfill script pre-seeded
- * rows without touching the counter, the first live reservation catches up
- * to `MAX + 1` and every reservation after is `DO UPDATE + 1`.
- */
 export const buildMailboxUidQuery = (
   user_id: string,
   mailbox: string
@@ -198,40 +136,6 @@ export const getMailboxUidNext = async (
   }
 };
 
-/**
- * Record a UID assignment in the per-(user, mailbox, mail) mapping.
- * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or
- * the pre-existing one when a row for `(user, mailbox, mail_id)` already
- * exists (COPY-twice / partial-failure retry). Callers that need to
- * report the destination UID over the wire (COPY's COPYUID, MOVE's
- * COPYUID response) MUST use this returned value, not the caller's
- * freshly-reserved `uid` param — otherwise the response advertises UIDs
- * that don't exist in the mapping (client `UID FETCH`es on those UIDs
- * come back empty).
- *
- * SQL uses `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` as
- * a no-op update: Postgres's `INSERT ... ON CONFLICT DO NOTHING RETURNING`
- * returns nothing for the conflict path, but `DO UPDATE ... RETURNING`
- * always returns the row's current value. See #721 / #722.
- *
- * ABORTS ON FAILURE. `mail_mailbox_uid` is now the sole per-mailbox UID
- * source (#702 PR 3 dropped `mails.uid_account`), so a transient DB
- * fault at this write path means the mail is invisible in the
- * destination mailbox — every account-scoped SELECT / STATUS / FETCH /
- * SEARCH / STORE / EXPUNGE / MOVE joins this mapping and misses. The
- * mail row itself already landed on `mails` at the point saveMail calls
- * here, so `mails.uid_domain` still surfaces the message via INBOX /
- * unified Sent Messages — but any per-account view is silent-drop.
- *
- * Throw → propagates through pgSaveMail's outer catch (non-23505 branch
- * now re-throws, per #720) → receive.ts saveMail's catch (alarm + error
- * dump, then re-throws) → saveMailHandler's Promise.all rejects →
- * smtp.ts's .catch(cb) → SMTP 5xx → mailgun retries. IMAP APPEND / COPY /
- * MOVE take the parallel path via storeMail (converts undefined-or-throw
- * → false → tagged NO → client retries). Send-path swallows the throw
- * back to a mailgun-response-return (mail already sent; a "retry" would
- * duplicate delivery — the ops-side error dump preserves recovery info).
- */
 /**
  * Drop a `mail_mailbox_uid` mapping row. Used by the mapped-utility flag hook
  * (see `syncMailboxPivot`): a STORE that clears `\Flagged` on a starred mail
@@ -325,22 +229,6 @@ export const writeMailboxUid = async (
   }
 };
 
-/**
- * Per-user mod-sequence reservation query (CONDSTORE, RFC 7162 §3.1).
- *
- * Reuses the same atomic `mail_uid_counters` upsert as UID assignment — a single
- * counter row keyed by kind="modseq" (scope="", sent=false, both unused for this
- * kind). RFC 7162 permits one mod-sequence namespace shared across a user's
- * mailboxes: any single mailbox still sees a strictly-increasing subsequence,
- * which is all the RFC requires. Using the atomic INSERT … ON CONFLICT … DO
- * UPDATE (rather than a bare `MAX(modseq)+1` read) makes concurrent flag/receipt
- * mutations race-free, exactly as it does for UIDs (#617).
- *
- * The counter seeds once from the live `MAX(modseq)` across all the user's mail,
- * so a deployment where the DEFAULT-1 backfill already set every existing row to
- * modseq=1 gets its first reservation at 2 — strictly greater than the initial
- * HIGHESTMODSEQ of 1. Pure (no DB) so the SQL shape is unit-testable.
- */
 export const buildModseqQuery = (
   user_id: string
 ): { sql: string; values: ParamValue[] } => {
@@ -363,25 +251,6 @@ export const getNextModseq = async (user_id: string): Promise<number> => {
   }
 };
 
-/**
- * HIGHESTMODSEQ for a mailbox (RFC 7162 §3.1.2.1) — the largest mod-sequence of
- * any message routed to it. Computed on demand as `MAX(modseq)`; the
- * per-mailbox variant JOINs `mail_mailbox_uid`, matching the read cutover
- * from #702 PR 2b-2.
- *
- * Expunged rows are INTENTIONALLY included: an EXPUNGE bumps a message's modseq
- * before it vanishes, and HIGHESTMODSEQ must reflect that so a resyncing client
- * (QRESYNC, later phases) detects the removal. Returns 1 for an empty mailbox
- * (the DEFAULT-1 floor), never 0 — a 0 HIGHESTMODSEQ signals "no persistent
- * mod-sequences", which this store does support.
- *
- * Membership is deliberately NOT applied: the value only has to be an upper
- * bound the client can compare against, and a bound that ignores the filter
- * still moves whenever a message enters or leaves the box (both are stamped
- * writes). Filtering it would let the value fall — a mail leaving `Drafts`
- * would take the maximum with it — and a HIGHESTMODSEQ that decreases makes a
- * CONDSTORE client conclude nothing changed.
- */
 export const getHighestModseq = async (
   user_id: string,
   mailbox: string | null,

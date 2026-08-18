@@ -83,10 +83,6 @@ describe("IMAP parsers", () => {
     }
     const searchRequest = searchCommand.request;
     const criterion = searchRequest.data.criteria[0];
-    // #649: a BARE sequence-set is the SEQ key, not the explicit UID keyword —
-    // even inside a `UID SEARCH` command (the command prefix, not the key,
-    // decides the axis; the handler resolves SEQ against UIDs here). Contrast
-    // with the next test, where the explicit `UID 5091:*` keyword stays UID.
     expect(criterion.type).toBe("SEQ");
     if (criterion.type !== "SEQ") {
       throw new Error("Expected SEQ criterion type");

@@ -217,10 +217,6 @@ describe("buildFlagSetClause — empty/unknown-only STORE is a no-op (#671)", ()
 });
 
 describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #671)", () => {
-  // Static source check (robust against module-mock interactions in the full
-  // suite — see the #456 block above for the rationale): the no-op branch must
-  // read current flags via SELECT without bumping `updated` or reserving a
-  // mod-sequence, and the old colliding sentinel must be gone.
   let fnSource: string;
 
   beforeAll(async () => {
@@ -247,12 +243,6 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
   });
 
   it("no-op branch runs the SELECT variant and never touches the UPDATE variant", () => {
-    // The `!setClause` block calls `selectSql`; the UPDATE variant lives
-    // in `updateSql` and is only reachable after the branch. #702 PR 2b-2
-    // split the two SQL strings apart (needed distinct query shapes for
-    // the account-scoped JOIN vs domain-scoped table access), so the
-    // no-op invariant is now "the no-op block references selectSql, not
-    // updateSql".
     const noopBlock = fnSource.match(/if\s*\(!setClause\)\s*\{[\s\S]*?\n {4}\}/);
     expect(noopBlock).not.toBeNull();
     expect(noopBlock![0]).toContain("selectSql");
@@ -321,13 +311,6 @@ describe("account-scoped reads use the raw mailbox path (#702 PR 2b-2)", () => {
 });
 
 describe("getMailsByRange — text_octets / html_octets synthetic projection", () => {
-  // The IMAP BODY[] stream path pre-measures the `{N}` literal via
-  // `octet_length(text)` / `octet_length(html)` so it can advertise the
-  // exact wire size without loading the (potentially multi-MB) body into
-  // Node's heap. Static source check: the projection helper must emit the
-  // `octet_length(...) AS *_octets` alias for each requested synthetic
-  // field, prefix-qualified in the JOIN branch. A future refactor that
-  // silently drops either projection would revert the streaming save.
   let source: string;
   beforeAll(async () => {
     const fs = await import("fs/promises");
@@ -353,7 +336,6 @@ describe("getMailsByRange — text_octets / html_octets synthetic projection", (
     // The JOIN branch calls `octetProjections("m.")` so the alias refers to
     // the mails table under its `m` alias, not the mapping table.
     expect(source).toContain('octetProjections("m.")');
-    // The domain-scoped branch has no join, so no prefix.
     expect(source).toContain('octetProjections("")');
   });
 });
@@ -391,20 +373,11 @@ describe("getMailsByRange — CHANGEDSINCE modseq filter (CONDSTORE phase 3, #60
   });
 
   it("only appends the predicate when changedSince is provided", () => {
-    // The clause is gated on `changedSince !== undefined` so existing callers
-    // (no modifier) issue the identical pre-#609 query.
     expect(mailsSource).toMatch(/changedSince !== undefined/);
   });
 });
 
 describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
-  // Static source check: the expunge write paths must go through
-  // mailsTable.updateWhere with `updated: DB_NOW` in the data bag so the
-  // framework bumps `updated` from the DB clock (CURRENT_TIMESTAMP), not the
-  // app clock — one timeline for the delta cursor (#614). Source-text scanning
-  // is robust against module-mock interactions in the full suite — the
-  // alternative (mock pool.query) fails when other tests load the mails
-  // repository first.
   let mailsSource: string;
   let fnSource: string;
 
@@ -426,9 +399,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
   });
 
   it("does not contain any raw `SET expunged` UPDATE statement", () => {
-    // Regression for #456: every write to `expunged` must go through the
-    // framework so `updated` is bumped via the data bag. Raw SQL UPDATEs are
-    // forbidden in this function.
     expect(fnSource).not.toMatch(/SET\s+expunged/);
   });
 
@@ -436,9 +406,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     // The `account === null` branch must use updateWhere with equality filters.
     expect(fnSource).toContain("mailsTable.updateWhere(");
     expect(fnSource).toMatch(/\[EXPUNGED\]:\s*true/);
-    // #614: `updated` is stamped from the DB clock via the DB_NOW sentinel,
-    // never the app clock (`new Date()`), so it stays on the delta cursor's
-    // timeline.
     expect(fnSource).toMatch(/updated:\s*DB_NOW/);
     expect(fnSource).not.toMatch(/updated:\s*new Date\(\)/);
   });
@@ -455,23 +422,12 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
   });
 
   it("no mutation path in mails.ts stamps `updated` from the app clock", () => {
-    // #614 acceptance, whole-file: not just expunge — markMailRead,
-    // markMailSaved, and the MOVE-path expungeMailsByUid must all use the
-    // DB_NOW sentinel too, so every `updated` write is on the DB clock. This
-    // guards against any future `updateWhere({ updated: new Date() })` sneaking
-    // back in.
     expect(mailsSource).not.toMatch(/updated:\s*new Date\(\)/);
     // And the sentinel is actually the shape in use.
     expect(mailsSource).toMatch(/updated:\s*DB_NOW/);
   });
 
   it("saveMail envelope_to merge (23505 conflict) stamps DB-clock `updated`", () => {
-    // #614: the unique-violation merge branch mutates envelope_to, which feeds
-    // the received per-account address expansion in getMailHeadersDelta — so it
-    // is a delta-synced mutation. Without bumping `updated` the merge never
-    // advances the delta cursor: a client already holding the mail never
-    // re-fetches the newly-merged sub-address, so the mail silently misses that
-    // account's received view until a full resync.
     const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
     if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
     const saveSource = saveMatch[0];
@@ -480,10 +436,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     expect(saveSource).toMatch(/updated:\s*DB_NOW/);
   });
 
-  // #702 PR-2a — dual-write shape assertions. `saveMail` mirrors the
-  // reserved account UID into `mail_mailbox_uid` at insert time AND on
-  // the 23505 (duplicate message_id) merge path. Guards against the fix
-  // regressing when future edits reshape the insert/merge branches.
   it("saveMail dual-writes to mail_mailbox_uid on the INSERT branch", () => {
     const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
     if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
@@ -499,12 +451,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     expect(writeMailboxUidCount).toBe(2);
   });
 
-  // #720 (PR 3) reviewoie HIGH-2: the outer catch's non-23505 branch must
-  // throw (not return undefined). Silent-return here was the mail-loss
-  // channel — mail_mailbox_uid is now the sole per-mailbox UID source, so a
-  // writeMailboxUid throw that got swallowed dropped the mail from every
-  // account-scoped view. Static-scan guard against a future edit
-  // regressing back to `return undefined`.
   it("saveMail's outer catch rethrows on non-23505 errors so SMTP replies 5xx", () => {
     const saveMatch = mailsSource.match(/export const saveMail[\s\S]*?\n};/);
     if (!saveMatch) throw new Error("saveMail not found in mails/*.ts");
@@ -520,16 +466,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
     expect(outerCatchTail).not.toBeNull();
   });
 
-  // #722 reviewoie HIGH: on a 23505-merge (partial-failure retry of a
-  // multi-mail COPY/MOVE, or intentional dup-COPY to the same dest),
-  // the caller (message-ops.ts COPY/MOVE loop → storeMail) needs the
-  // ACTUAL persisted mapping UID to include in the COPYUID response.
-  // `writeMailboxUid` returns the persisted UID via `ON CONFLICT ...
-  // DO UPDATE SET uid = mail_mailbox_uid.uid RETURNING uid` (the
-  // no-op update forces RETURNING to fire on the conflict path).
-  // Guard against a future edit reverting to `ON CONFLICT DO NOTHING`
-  // (which returns nothing on conflict → caller advertises non-
-  // existent UIDs) or dropping the RETURNING clause.
   it("writeMailboxUid uses DO UPDATE + RETURNING so persisted UID is always returned", async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
@@ -575,10 +511,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
 });
 
 describe("buildCriterionClause — flag criteria use schema columns", () => {
-  // Regression guard (originally on searchMailsByUid's inline switch, retargeted
-  // here when #551 extracted the per-criterion logic into buildCriterionClause):
-  // the answered/deleted/draft flags map to their real boolean columns, never to
-  // a bare "FALSE" match-none sentinel that an earlier draft of this fix used.
   const clauseFor = async (type: string) => {
     const { buildCriterionClause } = await import(".");
     const values: unknown[] = [];
@@ -637,8 +569,6 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
       "uid_mailbox",
       values as never
     );
-    // Pre-fix this case had no `case "NOT"`/default, so the criterion fell
-    // through the switch and contributed NOTHING — the query matched everything.
     expect(frag).toBe("NOT (read = TRUE)");
     expect(values).toHaveLength(0);
   });
@@ -733,10 +663,6 @@ describe("buildCriterionClause — NOT/OR SQL generation (regression for #551)",
 });
 
 describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
-  // A UID sequence-set's ranges are alternatives, so they must OR among
-  // themselves. Before #659 store.ts emitted one criterion per range and
-  // searchMailsByUid ANDed them, so `1,3` became `uid = 1 AND uid = 3` — an
-  // always-empty set. Now the whole set renders as a single OR-of-ranges.
 
   it("renders a single exact element without an OR wrapper", async () => {
     const { buildCriterionClause } = await import(".");

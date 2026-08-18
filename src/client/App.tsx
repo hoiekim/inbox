@@ -177,8 +177,6 @@ const App = ({ user: session }: Props) => {
       setReplyData({});
       setNewMailsTotal(0);
     } else {
-      // Register the SW for every authenticated session, not just push opt-ins,
-      // so the asset cache + offline-navigation fallback reach all users (#458).
       registerServiceWorker();
       new Notifier().subscribe();
     }

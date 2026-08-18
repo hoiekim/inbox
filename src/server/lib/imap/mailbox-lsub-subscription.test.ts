@@ -1,13 +1,3 @@
-/**
- * Tests for LSUB's subscription filter (RFC 3501 §6.3.9, #688).
- *
- * Before the fix, listSubscribedMailboxes read the same `store.listMailboxes()`
- * set LIST reads and filtered only by the pattern, so LSUB output was
- * byte-identical to LIST and UNSUBSCRIBE was a persistent no-op. These cases
- * pin that an unsubscribed user-created mailbox drops out of LSUB, that the
- * derived system mailboxes stay in regardless, and that hierarchy attributes
- * are still computed against the full listable set.
- */
 
 import { describe, it, expect } from "bun:test";
 import { listSubscribedMailboxes, listMailboxes } from "./mailbox-ops";
@@ -153,8 +143,6 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     });
 
     it("does not promote a name that is only a string prefix, not a path ancestor", async () => {
-      // "Project" is a prefix of "Projects/Work" as a string but not an
-      // ancestor path, so it must stay hidden.
       const names = namesOf(
         await emit(listSubscribedMailboxes, "", "%", [
           { name: "Project", subscribed: false },
@@ -179,11 +167,6 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     });
 
     it("reports a SUBSCRIBED parent \\HasChildren too, not \\HasNoChildren", async () => {
-      // getMailboxAttributes returns \HasNoChildren for a user-created box
-      // (#778). Left uncorrected on LSUB that inverts the ancestor rule: a
-      // "%"-walker honouring \HasNoChildren would descend into the
-      // unsubscribed `Projects` above but not into a subscribed one, making
-      // the subscribed subtree the unreachable half.
       const lines = await emit(listSubscribedMailboxes, "", "%", [
         { name: "Projects", subscribed: true },
         { name: "Projects/Work", subscribed: true },
@@ -192,10 +175,6 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     });
 
     it('does not promote under "*" — the walker already gets the descendant', async () => {
-      // The RFC states the rule for "%", where the name would otherwise
-      // vanish. Firing it for "*" would leave an UNSUBSCRIBEd folder in the
-      // client's list permanently, merely non-openable — #688 unfixed for the
-      // common client that sends LSUB "" "*".
       const names = namesOf(await emit(listSubscribedMailboxes, "", "*", HIER));
       expect(names.sort()).toEqual(["INBOX", "Projects/Work"]);
       expect(names).not.toContain("Projects");

@@ -29,9 +29,6 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
 
     const { mail_id, read, save } = body as Record<string, unknown>;
 
-    // Shape-check rather than just non-empty: `mail_id` is a uuid column, so a
-    // malformed value raises 22P02 instead of matching no row, and the
-    // repository no longer swallows that (#747).
     if (!isUuid(mail_id)) {
       return { status: "failed", message: "mail_id must be a valid id" };
     }

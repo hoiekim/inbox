@@ -4,9 +4,6 @@ import { createLimiter, getClientIp } from "../rate-limit";
 
 const clientErrorRouter = Router();
 
-// Per-IP cap: frontend beacons only fire on actual JS errors, so a tight cap
-// is plenty for legitimate use. Without this, an unauthenticated attacker can
-// burn the alarm cooldown bucket indefinitely (issue #517).
 const clientErrorLimiter = createLimiter(
   5,
   "Too many client error reports, try again later",

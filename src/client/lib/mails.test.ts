@@ -24,7 +24,6 @@ describe("isSentMail", () => {
   });
 
   it("does not substring-match a domain that merely contains the user domain", () => {
-    // e.g. user domain "hoie.kim" must not match "hoie.kim.attacker.com"
     expect(isSentMail(makeMail("phish@hoie.kim.attacker.com"), "hoie.kim")).toBe(false);
     // …and must not match "fakehoie.kim" (no @ boundary)
     expect(isSentMail(makeMail("phish@fakehoie.kim"), "hoie.kim")).toBe(false);

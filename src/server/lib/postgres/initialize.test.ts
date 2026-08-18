@@ -2,17 +2,6 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { mailsTable } from "./models/mail";
 import { buildCreateIndex } from "./database";
 
-// getMailHeaders and getMailHeadersDelta filter rows with a jsonb `@>`
-// containment OR across the address columns (buildHeaderAddressCondition in
-// repositories/mails/http.ts). Each of those columns needs a GIN
-// (jsonb_path_ops) index or the planner seq-scans the whole mailbox on every
-// account open and delta poll — O(mailbox) instead of O(matches) (#679).
-//
-// The index set is declared on the model, so that half asserts on the real
-// definition. The filter side only manifests against a live planner, so — per
-// the repo's established SQL-shape-guard style (see http.test.ts) — it is read
-// off the source. Adding a 6th address column to the OR-union without an index,
-// or dropping an index, fails this test.
 describe("initialize — GIN index coverage for the address containment filter", () => {
   let conditionSource: string;
 

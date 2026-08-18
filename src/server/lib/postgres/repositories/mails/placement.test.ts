@@ -1,37 +1,3 @@
-/**
- * `saveMail`'s utility-folder placement, on BOTH branches.
- *
- * The INSERT branch is observable from the caller's input object, so
- * `imap/store.test.ts` can pin it. The 23505 merge branch is not: it rewrites a
- * row that already exists, and a caller-side assertion passes whether or not
- * that write happens.
- *
- * Previous versions of this file ran the real `saveMail` against a
- * `mock.module("../../client", ...)` FakePool to observe the emitted SQL.
- * That recipe is process-global in Bun and, on Linux CI, silently leaks the
- * pool mock into `users.test.ts` under some file-load orders — the CD run
- * for `refactor(imap): extract cloneMailToDestination + syncMappedPivotsForRow`
- * (2026-08-15) failed on 16 `users.test.ts` tests for exactly that reason,
- * as did the same suite twice mid-#830. The fix (per
- * `reference_bun_mock_module_global_hoisting.md`, fifth variant) is: **do
- * not reach for the FakePool seam to assert SQL shape. Extract a pure
- * helper and test that, or assert on the source directly.**
- *
- * These are per-branch source-level pins on `core.ts` — cheap, no pool, no
- * mock.module, no cross-file bleed. The critical detail is that each
- * assertion scans a SLICE of the source keyed to a branch anchor (not the
- * whole file), so a regression that drops `...input.placement` from only
- * ONE branch fails a test — the previous whole-file scan would have stayed
- * green because the spread still appears once in the surviving branch.
- *
- * The "write actually fires at runtime" leg of coverage is NOT replaced by
- * this file (the repo has no test that runs the real `saveMail` — every
- * higher-level test mocks or shims it, so end-to-end IMAP tests do NOT
- * catch a saveMail regression). A follow-up refactor extracting
- * `applyPlacementMerge` / `applyPlacementInsert` as pure helpers would let
- * us re-add narrow runtime assertions without the mock.module hazard —
- * filed on the task list.
- */
 import { describe, it, expect } from "bun:test";
 
 // Anchor on `import.meta.url` rather than `process.cwd()` — the former is

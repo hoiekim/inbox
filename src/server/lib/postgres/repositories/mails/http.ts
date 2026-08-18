@@ -56,28 +56,9 @@ export interface GetMailHeadersOptions {
   spam?: boolean;
   from?: number;
   size?: number;
-  // ISO timestamp; when set, restrict to rows whose `updated` is newer than
-  // this. Used by the IndexedDB-cache delta path (#457) to fetch only the
-  // rows a cached client hasn't seen.
   since?: string;
 }
 
-// Builds the address-match SQL fragment for a per-account header query, bound
-// to `$2` = the address-as-jsonb param. Shared by the full-list and the delta
-// (getMailHeadersDelta) paths so the sent/received/saved address semantics
-// can't drift between them.
-//   - sent: match from_address only.
-//   - received: match to_address, cc_address, bcc_address AND envelope_to.
-//     `envelope_to` is the SMTP-level delivery address that can differ from
-//     MIME to/cc/bcc under listserv-style routing (e.g. GitHub notifications:
-//     MIME `to` = list address, envelope_to = the actual recipient
-//     sub-address). Mirrors the received-branch expansion in `getAccountStats`
-//     (PR #525) so an account row surfaced by envelope_to still resolves to
-//     its mails when the user clicks through.
-//   - saved (no explicit folder): a starred mail can be sent or received, so
-//     the Saved view must span both branches. Without this, a starred *sent*
-//     mail is unreachable from the Saved view — its account address only
-//     matches from_address, never the received condition (#568).
 export const buildHeaderAddressCondition = (
   options: Pick<GetMailHeadersOptions, "sent" | "saved">
 ): string => {
@@ -316,11 +297,6 @@ export const searchMails = async (
   }
 };
 
-// Received-account address expansion. Unions to/cc/bcc + envelope_to (the
-// SMTP-level delivery address) so sub-addressed / listserv-routed mail resolves
-// to the receiving account even when the MIME to/cc/bcc omits it (see the long
-// comment in getAccountStats and PR #525). Shared by getAccountStats and
-// searchAccountStats so the two never drift.
 const RECEIVED_ADDRESS_EXPANSION = `jsonb_array_elements(
   COALESCE(to_address, '[]'::jsonb) ||
   COALESCE(cc_address, '[]'::jsonb) ||
@@ -348,17 +324,6 @@ export const getAccountStats = async (
   }[]
 > => {
   try {
-    // For sent mails, only look at from_address.
-    // For received mails, union to_address + cc_address + bcc_address AND
-    // envelope_to. `envelope_to` is the SMTP-level delivery address, which
-    // can differ from MIME to/cc/bcc when a sender uses listserv-style
-    // routing (e.g. GitHub notifications: MIME `to_text` =
-    // `"hoiekim/budget" <budget@noreply.github.com>`, envelope_to =
-    // `<sub-addr>@hoie.kim`). Without including envelope_to, mails
-    // delivered via sub-addressing don't surface in the per-account
-    // received view at all — but the push badge counts them, causing
-    // FE shows 0 / badge shows N.
-    // Spam is received mail, so it always groups by the received address set.
     const useSentExpansion = sent && !spamOnly;
 
     const addressExpansion = useSentExpansion

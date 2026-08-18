@@ -1,19 +1,3 @@
-/**
- * Tests for idle-manager.ts.
- *
- * Suite 1 — IdleManager.notifyNewMail mailbox filtering. Regression coverage for
- * #549: PR #373 added a per-mailbox filter so an IDLE session is only notified
- * when it watches one of the target mailboxes (with an INBOX catch-all). PR
- * #331's async refactor constructed `mailboxSet` but never consulted it, so
- * every session for the user got EXISTS regardless of mailbox.
- *
- * Suite 2 — heartbeat sweep, covers #547:
- *   Bug 1: a timed-out session must be terminated through session.endIdle(), not
- *          by dropping the manager record alone (which leaves isIdling true,
- *          silently swallowing later commands).
- *   Bug 2: the sweep interval must stay below the timeout, or the first tick
- *          terminates every session before any keepalive helps.
- */
 
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 // idle-manager ↔ push ↔ server-barrel form a runtime import cycle: idle-manager

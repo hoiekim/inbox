@@ -223,8 +223,6 @@ describe("healthRouter GET /", () => {
     expect(body.body.timestamp).toBeGreaterThan(0);
   });
 
-  // ── New: TLS-not-configured behavior (#466) ─────────────────────────────────
-
   it("returns 200 and marks TLS ports 'not_configured' when SSL_CERTIFICATE is unset", async () => {
     delete process.env.SSL_CERTIFICATE;
     delete process.env.SSL_CERTIFICATE_KEY;

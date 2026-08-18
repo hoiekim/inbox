@@ -28,9 +28,6 @@ describe("validateIncomingMail (envelope-to gate via isValidAddress)", () => {
   });
 
   it("rejects a confusable domain that only embeds the target as a substring (regression: PR #478-class bug)", () => {
-    // "evil-hoie.kim-attack.com" includes the substring "hoie.kim" but is not
-    // a subdomain — the prior `.includes()` check accepted it, the suffix
-    // check must reject it.
     const mail = makeMail([{ address: "victim@evil-hoie.kim-attack.com" }]);
     expect(validateIncomingMail(mail, "hoie.kim")).toBeUndefined();
   });
@@ -86,23 +83,6 @@ describe("addressToUsername", () => {
     expect(addressToUsername("hi@hoie.kim")).toBe("admin");
   });
 });
-
-// Regression guard for #528: `saveIncomingMail` now builds the spam
-// `EmailContext` from the normalized `convertMail` output instead of
-// re-implementing the single-vs-array address unwrap inline. The spam check
-// reads:
-//
-//   fromAddress:    mail.from?.value?.[0]?.address
-//   fromName:       mail.from?.text
-//   replyToAddress: mail.replyTo?.value?.[0]?.address
-//
-// where `mail.from = convertMailAddress(incoming.from)` and
-// `mail.replyTo = convertMailAddress(incoming.replyTo)`. So these assertions
-// test the exact pure normalization the spam inputs depend on — locking in the
-// single/array unwrap, the address lowercasing, and the joined `text` so a
-// change to the normalization can't silently regress the spam check.
-//
-// `convertMailAddress` is pure (no DB / pool), so there's no mock surface here.
 
 // Mirror of saveIncomingMail's spam-context extraction.
 const extract = (from?: IncomingMailAddress | IncomingMailAddress[], replyTo?: IncomingMailAddress | IncomingMailAddress[]) => {

@@ -97,21 +97,6 @@ export const initializePostgres = async (): Promise<void> => {
 
   await postgresIsAvailable();
 
-  // Fast-path: on the happy path (steady-state boot, no DDL change
-  // deployed), the DB's `schema_meta.schema_hash` matches
-  // `CURRENT_SCHEMA_HASH` and we skip the entire DDL block below —
-  // CREATE TABLE × 10 + runMigrations (advisory-lock transaction) +
-  // CREATE INDEX × 20+ + trigger DDL. That's ~35+
-  // round-trips, each subject to `statement_timeout`. The pre-flight is
-  // one SELECT. Under a restart where the PG instance is under load
-  // from other containers, the old path can crashloop (2026-08-01
-  // 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query
-  // read timeout` before the 6th restart stuck).
-  //
-  // Any mismatch (marker missing, hash different, query failure) falls
-  // through to the authoritative slow path. The slow path always writes
-  // `schema_meta.schema_hash = CURRENT_SCHEMA_HASH` on success, so the
-  // next boot fast-paths.
   if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH)) {
     logger.info("[Fast-path] Schema already at target — skipping DDL.");
     logger.info("Database tables created/verified successfully.");

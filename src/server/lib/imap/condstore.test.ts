@@ -1,25 +1,3 @@
-/**
- * Tests for IMAP CONDSTORE phase 2 (RFC 4551) — inbox #608.
- *
- * The "visible-tracking layer": the client can READ mod-sequence state but not
- * yet USE it for incremental sync (phase 3) or conflict detection (phase 4).
- * Coverage:
- *  - CAPABILITY advertises CONDSTORE.
- *  - Parser accepts the MODSEQ fetch item, the HIGHESTMODSEQ status item, and
- *    ENABLE CONDSTORE.
- *  - ENABLE CONDSTORE echoes `* ENABLED CONDSTORE` and flips the session flag
- *    (idempotent on re-enable).
- *  - SELECT / EXAMINE include `* OK [HIGHESTMODSEQ N]`.
- *  - STATUS supports the HIGHESTMODSEQ item.
- *  - FETCH emits `MODSEQ (n)` when requested, implicitly on every response once
- *    CONDSTORE is enabled, and exactly once when both apply.
- *  - STORE's untagged FETCH carries MODSEQ once CONDSTORE is enabled.
- *
- * Isolation mirrors message-ops.test.ts: mock `pg` so the lazy pool in
- * postgres/client.ts is a FakePool, then run the REAL imap code (selectMailbox
- * reaches getImapUidValidity, which queries Postgres). No mock of the `server`
- * barrel (which would bleed across files via Bun's process-global mock.module).
- */
 
 import {
   describe,
@@ -515,10 +493,6 @@ describe("CONDSTORE — FETCH pulls the modseq column only when needed", () => {
     expect(out).not.toContain("MODSEQ");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Phase 3 (#609) — FETCH CHANGEDSINCE: parsing, filter threading, implicit MODSEQ
-// ---------------------------------------------------------------------------
 
 const fetchDataOf = (line: string) => {
   const result = parseCommand(line);

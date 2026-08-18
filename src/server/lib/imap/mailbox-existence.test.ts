@@ -1,18 +1,3 @@
-/**
- * Tests for mailbox-existence validation on SELECT / EXAMINE / STATUS (#595).
- *
- * Before the fix, all three commands detected non-existence solely via
- * `countMessages(...) === null`, but countMessages returns a zero-count
- * aggregate (never null) for an unknown name — so every invented mailbox
- * "succeeded" as a valid-but-empty mailbox. RFC 3501 §6.3.1/2/10 require a
- * tagged NO for a non-existent mailbox. These cases pin: NO for an unknown
- * name across SELECT/EXAMINE/STATUS, and OK for a real (existing-but-empty)
- * mailbox.
- *
- * Uses a fake Store (the mailbox-list.test.ts pattern) so no DB is touched.
- * The STATUS OK case requests no UIDVALIDITY item, so statusMailbox never
- * reaches getImapUidValidity.
- */
 
 import { describe, it, expect } from "bun:test";
 import { selectMailbox, statusMailbox } from "./mailbox-ops";
@@ -130,13 +115,6 @@ describe("mailbox-existence validation (#595)", () => {
 });
 
 describe("Store.mailboxExists (#595)", () => {
-  // The constructor only stashes the user (no DB), so we can build a real
-  // Store and override its list methods to exercise the real mailboxExists.
-  // `mailboxExists` consults `listMailboxesOrThrow` (the throwing path —
-  // see #601) so transient backend errors propagate instead of getting
-  // swallowed into a false "does not exist." We patch both — the public
-  // `listMailboxes` (for any consumer reading it directly) and the private
-  // `listMailboxesOrThrow` (what `mailboxExists` actually calls).
   const makeStore = (boxes: string[]): Store => {
     const store = new Store({ id: "u1", username: "admin" } as SignedUser);
     store.listMailboxes = async () => boxes;

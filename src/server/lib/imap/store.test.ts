@@ -1,11 +1,3 @@
-/**
- * Tests for store.ts — IMAP Store class.
- *
- * Regression coverage for: listMailboxes must filter getAccountStats by the
- * user's domain so external CC/BCC/recipient addresses on stored mails do
- * not leak into the IMAP mailbox listing. PR #310 originally added this
- * filter; PR #196 (CREATE/DELETE/RENAME mailboxes) inadvertently removed it.
- */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { SignedUser } from "common";
@@ -83,10 +75,6 @@ describe("Store.listMailboxes", () => {
   });
 
   it("returns only the server-defined boxes when no accounts and no user mailboxes exist", async () => {
-    // The utility folders are unconditional (#725): a client has to see
-    // `Drafts` before it has a draft to put there, `Starred` / `Trash`
-    // before it can promote a mail to them, and RFC 6154 role discovery
-    // reads them off LIST. The account folders stay conditional.
     const store = new Store(makeUser());
     const result = await store.listMailboxes();
     expect(result).toEqual(["INBOX", "Drafts", "Junk", "Starred", "Trash"]);
@@ -293,7 +281,6 @@ describe("simplifyCriterion — unexpressible criteria are preserved, not droppe
   });
 
   it("preserves an unknown criterion type instead of dropping it to null", () => {
-    // Pre-fix this returned null and the criterion vanished from the query.
     expect(simplifyCriterion({ type: "SOMETHING-UNSUPPORTED" } as never)).toEqual({
       type: "SOMETHING-UNSUPPORTED",
     });

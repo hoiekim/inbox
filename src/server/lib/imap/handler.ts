@@ -562,46 +562,10 @@ export class ImapRequestHandler {
       const rssDeltaMB = Math.round((rssAfter - rssBefore) / 1_048_576);
       const responseBytes = session.bytesWritten - bytesBefore;
       const durationMs = Math.round(performance.now() - startedAt);
-      // Threshold-gate the per-command line. Under a client retry storm
-      // (observed 2026-07-28: 208.82.98.54 issuing ~1700 UID FETCH FLAGS
-      // /min per socket → 1700 lines/min on inbox alone), the noise floor
-      // — commands with zero RSS delta AND sub-INTERESTING_DURATION_MS
-      // duration AND sub-INTERESTING_RESPONSE_BYTES response — drowns
-      // journald's 10k-line tail cap in ~6 min and starves triage of the
-      // interesting samples (the ones that actually moved RSS or ran
-      // slow). Keep the interesting ones at INFO where the alarm embed
-      // and default triage tail find them; drop the noise to DEBUG.
-      //
-      // What "DEBUG" means in prod: `logger.ts:shouldLog` compares
-      // against `LOG_LEVEL` (default `"info"`), and `debug < info` short-
-      // circuits BEFORE console.log runs — no stdout write, so journald
-      // never sees the line. `journalctl -p debug` can't recover it;
-      // raising verbosity requires `LOG_LEVEL=debug` + a restart, which
-      // kills the storm's active sockets. That's fine for the OOM /
-      // latency triage this fix targets: samples that moved RSS or ran
-      // slow still land at INFO with the full payload. What DOES move
-      // off-log is per-IP command-rate attribution during a live storm
-      // (e.g. "how many UID FLAGS from :50613 in this minute?") — that
-      // signal now lives on the monitor sidecar's docker-stats poller,
-      // not in the app's log stream.
-      //
-      // Auth events (LOGIN / AUTHENTICATE) DO NOT rely on this gate;
-      // `auth.ts` emits its own `logger.info("IMAP LOGIN success", ...)`
-      // / `IMAP AUTHENTICATE success` line on the success path so the
-      // audit surface holds even when bcrypt completes in under
-      // `INTERESTING_DURATION_MS` on strong hardware.
       const isInteresting =
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||
         responseBytes >= INTERESTING_RESPONSE_BYTES;
-      // Body-budget wait attribution (#726): when many sockets pipeline
-      // distinct large-body FETCHes concurrently, most of the caller's
-      // duration is spent WAITING for a body-budget slot rather than
-      // doing DB / serialization work. Log the wait so an OOM / latency
-      // triage can attribute FETCH latency to backpressure vs the app.
-      // Read from the request-scoped AsyncLocalStorage ledger — a
-      // module-global cell would race with concurrent commands on
-      // other sockets.
       const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
       // Attribution of the per-command RSS delta by memory class. `rss` is
       // OS-reported (Node process resident) — the other four are V8/Node

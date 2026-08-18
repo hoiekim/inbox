@@ -3,29 +3,6 @@ import { MailType, MailAddressValueType, AttachmentType } from "common";
 import { getUserDomain } from "server";
 import { logger } from "server";
 
-/**
- * Deterministic Message-ID for a COPY/MOVE destination row, derived from the
- * source Message-ID + destination mailbox path. Two properties matter:
- *
- * 1. **Retry idempotency.** If a multi-mail COPY/MOVE partially fails (iteration
- *    K writes the `mails` row but `writeMailboxUid` throws), the client's retry
- *    of the same command re-derives the same message-id for each iteration →
- *    `saveMail`'s `UNIQUE(user_id, message_id)` 23505 branch fires → the retry
- *    merges into the row from the first attempt instead of inserting a
- *    duplicate. Without this, every retry-loop iteration draws a fresh random
- *    id (`getRandomId()`), 23505 never fires, iterations 0..K-1 land as new
- *    rows → destination shows duplicates. Filed as hoiekim/inbox#721.
- *
- * 2. **RFC compliance.** RFC 3501 §6.4.7 doesn't require preserving the source
- *    Message-ID across COPY — the destination row is a server-storage
- *    representation, not a re-delivered RFC 5322 message. A deterministic
- *    derived id is as legal as a fresh random one.
- *
- * SHA-256 truncated to 16 hex chars (64 bits) gives collision-safety far above
- * the working-set size (n=2^32 mails per user before ~1% collision probability).
- * The `.copy@` suffix + input separator `\0` avoid accidental collision with
- * external Message-IDs and prevent length-extension edge cases.
- */
 export const deriveCopyMessageId = (
   sourceMessageId: string | undefined,
   destMailbox: string
@@ -48,60 +25,9 @@ export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");
 };
 
-/**
- * A stored value on its way into an RFC 5322 header field body.
- *
- * ```
- * unstructured    = *([FWS] VCHAR) *WSP
- * FWS             = ([*WSP CRLF] 1*WSP)
- * ```
- *
- * A line break is legal in a field body only as folding — CRLF followed by
- * WSP — and mailparser hands us already-unfolded values, so a CR or LF in a
- * stored string is never something to preserve. Emitted raw it terminates the
- * current header line and everything after it becomes a NEW header field:
- * a subject of `Hello\r\nFrom: ceo@bank.example` puts a second, sender-chosen
- * `From:` into the block, and `BODY[HEADER.FIELDS (FROM)]` hands it to the
- * client as the message's sender. A CRLF CRLF ends the header block outright
- * and the remainder of the value renders as body.
- *
- * The inputs are attacker-controlled — `receive.ts` stores `subject`,
- * `message_id` and the `*.text` address blobs verbatim from the inbound
- * message, and mailparser decodes encoded-words, so `=?utf-8?B?…?=` carries
- * arbitrary bytes into the column. Route every stored value through here
- * rather than checking at the call site; partial escaping at four sites is
- * what produced #762 and #767 on the neighbouring RFC 3501 grammar.
- *
- * Each run collapses to a single space rather than being dropped: the bytes
- * carry no header semantics, and a space keeps adjacent words apart in the
- * value a client renders. NUL goes with them — it is outside `VCHAR`.
- *
- * U+2028 / U+2029 are stripped for the same reason one step removed: they are
- * not RFC 5322 line breaks, but they ARE ECMAScript `LineTerminator`s, so a
- * `/^…/m` regex run over the emitted block — `rewriteContentType` in
- * `session-utils.ts` is one — sees a line starting mid-value. Leaving them in
- * would make "no stored value can start a line" true of the wire and false of
- * every JS reader of the same bytes.
- */
 export const headerFieldValue = (value: string): string =>
   value.replace(/[\r\n\0\u2028\u2029]+/g, " ");
 
-/**
- * A stored value on its way into an RFC 2045 §5.1 quoted `parameter` value
- * (`filename="…"`, `name="…"`). Beyond the line-break rule above, an
- * unescaped `"` closes the parameter early, so the rest of the value is read
- * as further parameters — `evil.txt"; filename="wanted.pdf` renames the
- * attachment on the client. `quoted-string` escapes `"` and `\` with a
- * backslash, and both must be escaped: escaping only `"` turns a value ending
- * in a backslash into an unterminated string.
- *
- * Sibling of `quoteString` (RFC 3501 §9, added by #824 for the IMAP wire
- * grammar). The two expand to the same expression today and are still
- * deliberately separate: they encode different grammars for different
- * consumers, so a future divergence — RFC 2045's parameter-length limit, or
- * RFC 2231 continuations for non-ASCII filenames — belongs in one of them and
- * not the other. Keep the cross-reference if you touch either.
- */
 export const headerQuotedParam = (value: string): string =>
   `"${headerFieldValue(value).replace(/[\\"]/g, "\\$&")}"`;
 
@@ -475,42 +401,6 @@ export const ACCOUNTS_FOLDER = "INBOX/accounts";
 export const SENT_MESSAGES_FOLDER = "Sent Messages";
 export const SENT_MESSAGES_ACCOUNTS_FOLDER = `${SENT_MESSAGES_FOLDER}/accounts`;
 
-/**
- * Server-defined utility mailboxes: flag-derived views of the user's mail that
- * exist whether or not anything currently matches, the way `Drafts` and `Junk`
- * do on Gmail and Outlook.
- *
- * - `specialUse` is the RFC 6154 attribute LIST reports, so a client can find
- *   each box by role instead of by name.
- * - `placement` is what a write into the box has to set for the row to actually
- *   be in it. These views select by flag, so a COPY / MOVE / APPEND that names
- *   one and does not set the flag would report success and leave the message
- *   nowhere the client can see it.
- * - `uidSpace` picks the UID enumeration:
- *   - `"domain"`: UIDs come from `mails.uid_domain`, and membership is a
- *     predicate over `mails` (`Drafts`, `Junk`). No mapping rows, no counter
- *     rows. Works only for views that resolve to a single value of the `sent`
- *     axis — `mail_uid_counters` keys on `(user_id, uid_kind, uid_scope, sent)`
- *     so two mails with the same `uid_domain` (one sent, one received) collide
- *     in a view that spans both. `Drafts` and `Junk` are both effectively
- *     `sent = false`, so the collision doesn't fire.
- *   - `"mapped"`: UIDs come from `mail_mailbox_uid.uid`, and membership is a
- *     row in `mail_mailbox_uid` keyed on `(user_id, mailbox, mail_id)` — same
- *     shape the per-account `INBOX/accounts/<local>` boxes already use. This
- *     gives the view a UID space of its own, so it works for a view that
- *     spans both `sent = true` and `sent = false`. Used for `Starred` (a mail
- *     may be flagged in either direction) and `Trash` (soft-deletion applies
- *     to sent mail too — see #725).
- *
- *     Mapped-utility rows are populated by the flag-write hooks — a STORE that
- *     flips `saved` inserts the pivot row for `Starred`, a STORE that flips
- *     `deleted` inserts the pivot for `Trash`, and clearing the flag drops the
- *     row. The receive/send paths do the same on initial-flag writes.
- *
- * The matching read-side predicate lives in `repositories/mails/views.ts`,
- * which this module cannot import (the repository is re-exported by the
- * `server` barrel this file pulls from). `views.test.ts` pins the two together.
- */
 export type UtilityPlacement = {
   draft?: boolean;
   is_spam?: boolean;
@@ -621,24 +511,6 @@ export const isInbox = (box: string): boolean => {
   return box.toUpperCase() === "INBOX";
 };
 
-/**
- * Returns true for the mailboxes whose UID space is `uid_domain` rather than
- * the per-mailbox UID (`mail_mailbox_uid.uid`): INBOX, the unified
- * "Sent Messages" folder, and the DOMAIN-SCOPED utility folders (`Drafts`,
- * `Junk`). Mapped-utility folders (`Starred`, `Trash`, #725) join
- * `mail_mailbox_uid` like `INBOX/accounts/<local>` and are NOT included —
- * that's the whole point of separating the two `uidSpace` classes on
- * `UTILITY_FOLDERS`. FETCH / COPY / MOVE / APPEND must gate on this
- * predicate (not `isInbox` alone): the unified Sent folder is domain-scoped
- * too, so keying its emitted UID off the per-mailbox UID makes
- * `uidToSeqNumber` miss (messages silently dropped from FETCH, wrong
- * COPYUID source UIDs). See #702.
- *
- * Not the same question as "does the repository take `null` for this box":
- * a domain-scoped utility folder still passes its name, because that is
- * what its membership predicate is keyed on. `Store.resolveMappedBox` draws
- * that second line.
- */
 export const isDomainScoped = (box: string): boolean => {
   if (isInbox(box) || box === SENT_MESSAGES_FOLDER) return true;
   const utility = utilityFolder(box);
@@ -657,7 +529,6 @@ export const isSentMessagesAccountsFolder = (box: string): boolean => {
 
 export const boxToAccount = (username: string, box: string): string => {
   const domain = getUserDomain(username);
-  // Strip Sent Messages/accounts/ or accounts/ prefix to extract the local part
   let localPart = box;
   if (localPart.startsWith(SENT_MESSAGES_ACCOUNTS_FOLDER + "/")) {
     localPart = localPart.slice(SENT_MESSAGES_ACCOUNTS_FOLDER.length + 1);

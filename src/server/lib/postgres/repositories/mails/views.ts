@@ -20,7 +20,6 @@ import { IS_SPAM, DRAFT } from "../../models";
  * repository. `views.test.ts` pins the two copies together.
  */
 
-/** Prefix of the per-account received boxes (`INBOX/accounts/<local-part>`). */
 const INBOX_ACCOUNTS_PREFIX = "INBOX/accounts/";
 
 /**
@@ -67,42 +66,9 @@ export const isUtilityView = (mailbox: string | null): boolean =>
 export const usesDomainUidSpace = (mailbox: string | null): boolean =>
   mailbox === null || isUtilityView(mailbox);
 
-/**
- * Whether a mailbox is in the INBOX tree — INBOX itself or one of its
- * per-account sub-views. Those are the boxes that hide spam-classified and
- * half-written mail.
- *
- * INBOX (`mailbox === null`, `sent = false`) has no address condition at all,
- * and its per-account sub-views match purely on delivery address, so a
- * spam-classified or half-written mail lands in both simply by existing, showing
- * up intermixed with real mail and counting toward EXISTS/UNSEEN. Each now has a
- * view of its own (`Junk`, `Drafts`) — this is the other half of giving them
- * one home, and it matches where the web client already routes the same rows.
- *
- * Deliberately narrow on two axes:
- * - **Sent is never classified.** `is_spam` is only ever written on received
- *   mail, so the unified `Sent Messages` view and its sub-boxes are untouched.
- * - **User-created mailboxes keep their contents.** A mail the user COPYed into
- *   `Archive` is an explicit placement; the classifier does not get to hide it.
- *
- * Note this is not extended to `deleted`: `mails.deleted` is the IMAP
- * `\Deleted` flag, and RFC 3501 §6.4.3 requires `\Deleted` messages to stay in
- * the mailbox until EXPUNGE removes them. Soft-deleted mail leaving INBOX is a
- * `Trash` mailbox question (#725), not an INBOX predicate.
- */
 export const isInboxTree = (mailbox: string | null, sent: boolean): boolean =>
   !sent && (mailbox === null || mailbox.startsWith(INBOX_ACCOUNTS_PREFIX));
 
-/**
- * The rows a mailbox contains, on top of the scope (user, `sent`, `expunged`,
- * mapping join) its caller already applies. Empty for a box that filters
- * nothing.
- *
- * The utility views need no `sent` term of their own: `Drafts` and `Junk` both
- * resolve to `sent = false` through `isSentBox`, and every caller binds that.
- * A view spanning both directions (`Starred`, `Trash`) would need the `sent`
- * condition to move in here — see #725.
- */
 export const membershipFilter = (
   mailbox: string | null,
   sent: boolean
@@ -115,11 +81,6 @@ export const membershipFilter = (
   return {};
 };
 
-/**
- * The membership rule as a boolean expression. `TRUE` for a box that filters
- * nothing, so callers can interpolate it unconditionally. `prefix` qualifies the
- * columns for queries that alias `mails` (e.g. `"m."`).
- */
 export const membershipExpression = (
   mailbox: string | null,
   sent: boolean,

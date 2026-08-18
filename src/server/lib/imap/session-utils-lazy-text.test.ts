@@ -1,14 +1,3 @@
-/**
- * Tests for the `lazy-text` MessageSegment variant — the pg-SUBSTRING body
- * stream that replaces "load the whole text/html column per FETCH" in
- * `buildMessageSegments`. Peak transient per BODY[] fetch drops from
- * O(body-length) (the pre-#738 shape re-introduced whenever the mail row
- * was loaded with text/html) to O(chunk), regardless of body size.
- *
- * Isolated to its own file so the pg-FakePool mock (Bun's `mock.module` is
- * process-global, per reference_bun_mock_module_global_hoisting.md) does
- * not bleed into the other IMAP test suites.
- */
 
 import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import { restoreLeaves } from "test-helpers";
@@ -30,14 +19,6 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const [mail_id, , offset, take] = values as [string, string, number, number];
     substringCalls.push({ column, offset, take });
     const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
-    // Pg SUBSTRING FROM is 1-indexed and counts CHARACTERS (code points),
-    // NOT UTF-16 code units. `String.slice` counts code units, so a mock
-    // built on it disagrees with Postgres for any body containing an
-    // astral character — and, because the reader used to advance its
-    // offset in code units too, the two errors cancelled and the emoji
-    // round-trip test below passed against a stream that silently dropped
-    // characters in prod (#765). Spreading to an array gives code points,
-    // which is the unit Postgres actually uses.
     const codePoints = [...stored];
     const start = Math.max(0, offset - 1);
     const chunk = codePoints.slice(start, start + take).join("");
@@ -65,11 +46,6 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const chunk = bytes.subarray(start, start + take);
     return { rows: [{ chunk }], rowCount: 1 };
   }
-  // Guard against a regression back to the `col::bytea` cast: byteain
-  // would parse the source text as escaped bytea input and throw on any
-  // `\<letter>` sequence. Fail LOUDLY so the mock can't silently
-  // simulate the broken shape as if it were correct — matches the
-  // reviewoie-R1 HIGH finding on PR 798.
   if (/SUBSTRING\((text|html)::bytea\s+FROM/.test(sql)) {
     throw new Error(
       `Regression: pgByteChunks reverted to col::bytea cast. Use convert_to(col, 'UTF8') — ` +
@@ -298,9 +274,6 @@ describe("lazy-text MessageSegment — pre-measured `{N}` + chunked stream", () 
   it("peak transient per stream is O(chunk) — no returned SUBSTRING > PG_TEXT_CHUNK_CHARS", async () => {
     substringCalls.length = 0;
     columnStore.clear();
-    // 500 KB HTML body — the pre-fix shape held this whole string in memory
-    // per in-flight FETCH. Post-fix, no single SUBSTRING result exceeds the
-    // PG_TEXT_CHUNK_CHARS budget.
     const body = "<p>" + "x".repeat(500 * 1024 - 8) + "</p>";
     columnStore.set("mail-5:html", body);
 
@@ -685,12 +658,6 @@ describe("streamPartialFromSegments — byte-range slice", () => {
     async () => {
       substringCalls.length = 0;
       columnStore.clear();
-      // 3 MB html body — matches the shape of the mail whose retry loop
-      // this fix targets (iOS #772 post-merge: a multi-MB body's tail
-      // windows took O(offset) SUBSTRING calls under the pre-fix
-      // sliceStream(streamOneSegment(...)) path, so per-window latency
-      // grew linearly and iOS timed out on the tail windows before
-      // download completed).
       const html = "q".repeat(3_000_000);
       columnStore.set("mail-partial-tail:html", html);
 
@@ -715,12 +682,6 @@ describe("streamPartialFromSegments — byte-range slice", () => {
       }
       expect(emitted).toBe(length);
 
-      // Pre-fix (drain-from-1 sliceStream) would issue ~250+ SUBSTRING
-      // calls to reach a tail 3.9 MB in. Post-fix (byte-indexed
-      // pgByteChunks starting at rawSkip+1) needs one call per emitted
-      // chunk of the slice — bounded by ceil(length_in_raw_bytes /
-      // PG_TEXT_CHUNK_BYTES) + tail terminator. 400 KB base64 = 300 KB
-      // raw = ~7 chunks + terminator = well under 20.
       expect(substringCalls.length).toBeLessThan(20);
 
       // Every SUBSTRING call must start FAR into the column — never at
@@ -782,13 +743,6 @@ describe("streamPartialFromSegments — byte-range slice", () => {
     async () => {
       substringCalls.length = 0;
       columnStore.clear();
-      // Content with `\a` / `\C` / `\.` / `\ ` byte sequences that pg's
-      // `byteain` would reject as invalid bytea escape input (reviewoie
-      // PR 798 HIGH-1). `convert_to(col, 'UTF8')` doesn't parse the
-      // content as bytea — it does a charset conversion (no-op on a
-      // UTF-8 column) — so the byte-indexed reader handles this fine.
-      // The mock's `::bytea` branch throws to guard against a regression;
-      // the `convert_to` branch is a plain byte slice.
       const backslashSample =
         "prefix \\a mid \\C \\. \\z \\  end " + "x".repeat(400);
       const html = backslashSample.repeat(80);

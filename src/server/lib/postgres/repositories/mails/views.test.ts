@@ -1,12 +1,3 @@
-/**
- * Which rows each mailbox contains (#725).
- *
- * The utility views are defined twice by necessity — once here in the
- * repository (the predicate) and once in `imap/util.ts` (the LIST attribute and
- * the write-side placement flag), because the IMAP module pulls from the
- * `server` barrel that re-exports this repository. The last describe block is
- * the guard that keeps the two copies saying the same thing.
- */
 
 import { describe, it, expect } from "bun:test";
 import {
@@ -119,12 +110,6 @@ describe("INBOX", () => {
 });
 
 describe("the IMAP-side folder table agrees with the predicate", () => {
-  // Only the DOMAIN-scoped utility folders participate in the views.ts side.
-  // Mapped-utility folders (`Starred`, `Trash`, #725 remainder) hold their
-  // membership in `mail_mailbox_uid` pivot rows, not in a flag predicate —
-  // there is no `membershipFilter` for them, and their UID space is
-  // `mail_mailbox_uid.uid` rather than `mails.uid_domain`. They live in
-  // `UTILITY_FOLDERS` for LIST + placement purposes only.
   it("names the same domain-scoped boxes", async () => {
     const { UTILITY_FOLDERS } = await import("../../../imap/util");
     const domainScoped = UTILITY_FOLDERS.filter((f) => f.uidSpace === "domain")

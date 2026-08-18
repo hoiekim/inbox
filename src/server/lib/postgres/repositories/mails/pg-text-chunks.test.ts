@@ -1,29 +1,3 @@
-/**
- * Offset-arithmetic tests for the mail-body pager behind `pgTextChunks`
- * (inbox #765).
- *
- * The reader pages a mail body with `SUBSTRING(<col> FROM $off FOR $take)`.
- * Postgres offsets a `text` column by CHARACTERS — one per code point —
- * while `String.prototype.length` counts UTF-16 code units, two for every
- * non-BMP character. Advancing the offset by the code-unit count overshoots
- * by exactly the number of astral characters in the chunk, dropping that
- * many characters at each boundary. Because `segmentByteLength` advertises
- * `octet_length()` in the `{N}` literal, the loss also shortens the literal
- * and desynchronizes strict IMAP clients.
- *
- * `pageByCodePoints` takes the reader as an argument, so these tests drive
- * the real loop against a Postgres-accurate fake WITHOUT `mock.module("pg")`.
- * That matters: `mock.module` is process-global in Bun
- * (reference_bun_mock_module_global_hoisting.md) and a dozen files in this
- * suite install their own pool double — the first importer of `client.ts`
- * binds it for the whole run, so a mock-based test here passes alone and
- * fails in `bun test src/server`.
- *
- * The fake below slices by CODE POINT, which is what Postgres does. The pool
- * mocks in the IMAP suites used `String.slice` (code units); that error
- * cancelled the reader's identical error, which is why their emoji
- * round-trip test passed against a stream that dropped characters in prod.
- */
 
 import { describe, it, expect } from "bun:test";
 import { pageByCodePoints, PG_TEXT_CHUNK_CHARS } from "./imap";

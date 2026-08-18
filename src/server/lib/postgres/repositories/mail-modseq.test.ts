@@ -1,18 +1,3 @@
-/**
- * CONDSTORE phase 1 (#607) — per-message mod-sequence groundwork (RFC 7162).
- *
- * `getNextModseq` MUST reserve through the same atomic `mail_uid_counters`
- * upsert as UID assignment (INSERT … ON CONFLICT … DO UPDATE last_uid + 1),
- * NOT a bare `SELECT MAX(modseq)+1` read — the bare read is the TOCTOU that let
- * two concurrent mutations claim the same value (#617, same class of bug for
- * UIDs). The counter is keyed by kind="modseq" so it never collides with the
- * domain/account UID rows.
- *
- * Pure `build*` helpers pin the SQL shape with no pool interception (mock.module
- * on the shared `../client` bleeds across the whole suite). The monotonic
- * concurrency proof — N parallel reservations yield strictly distinct, ascending
- * mod-sequences — is the disposable-DB E2E in the PR body.
- */
 
 import { describe, it, expect } from "bun:test";
 import { buildModseqQuery } from "./mails";

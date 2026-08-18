@@ -1,7 +1,3 @@
-/**
- * Tests for session-utils.ts — pure utility functions extracted from ImapSession
- * Covers inbox #341
- */
 
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import fs from "node:fs";
@@ -153,8 +149,6 @@ describe("getBodySectionKey", () => {
     expect(getBodySectionKey(section)).toBe("BODY[1.2.3]");
   });
 
-  // #657: the sub-section must survive in the response label, otherwise a
-  // client sees the reply keyed as BODY[1] for its BODY[1.HEADER] request.
   it("returns BODY[1.HEADER] for MIME_PART with HEADER sub-section", () => {
     const section: BodySection = {
       type: "MIME_PART",
@@ -446,9 +440,6 @@ describe("buildFullMessage", () => {
     expect(lines.length).toBeGreaterThan(1);
   });
 
-  // #826: the MIME framing this function emits is derived from stored values
-  // an external sender controls, so a hostile mail must not be able to steer
-  // it.
   describe("stored values cannot steer the MIME framing (#826)", () => {
     it("a subject carrying boundary=\"…\" does not become the boundary", () => {
       // The boundary used to be recovered by matching `boundary="([^"]+)"`
@@ -708,10 +699,6 @@ describe("getBodyPart", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// getBodyPartHeaders (#657)
-// ---------------------------------------------------------------------------
-
 describe("getBodyPartHeaders", () => {
   const TEXT_HDR =
     "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64";
@@ -857,11 +844,6 @@ describe("streamFromSegments — emitBase64 input chunking", () => {
   });
 
   it("yields multiple chunks and never emits > ~64 KiB per chunk for a 200 KiB HTML body (input isn't materialized whole)", async () => {
-    // 200 KiB of ASCII HTML — larger than SLICE_RAW_BYTES (48 KiB), so if the
-    // pre-fix `Buffer.from(source, "utf8")` regressed back in, we'd see either
-    // one giant chunk or peak transient tracking the source size. The
-    // post-fix contract is: each yielded chunk stays in the ~64 KiB ballpark
-    // (SLICE_RAW_BYTES raw → base64 expansion ≈ 4/3 → ~64 KiB out).
     const html = "<p>" + "x".repeat(200 * 1024 - 8) + "</p>";
     const mail: Partial<MailType> = { html };
     const segments = buildMessageSegments(mail, "big-html");
@@ -869,8 +851,6 @@ describe("streamFromSegments — emitBase64 input chunking", () => {
       streamFromSegments(segments)
     );
 
-    // Chunk count must scale with body size — one giant chunk (the pre-fix
-    // shape) would be `chunkCount === headers-count + 1 attachment-part`.
     expect(chunkCount).toBeGreaterThanOrEqual(4);
     // No single chunk should be anywhere near the source size.
     expect(maxChunkBytes).toBeLessThan(80 * 1024);

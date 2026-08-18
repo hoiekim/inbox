@@ -445,17 +445,8 @@ const Accounts = ({
         "/api/users/login"
       );
       if (response.status !== "success") return;
-      // Drop the IndexedDB query cache so the next user on this browser can't be
-      // seeded with this user's cached mail headers (#457).
       await clearCachedQueries();
-      // Tear down the SW + Cache Storage so the logged-out browser holds no
-      // cached app shell / assets from this session (#458).
       await unregisterServiceWorker();
-      // Clear per-session localStorage: compose draft data (so it doesn't leak
-      // to the next user on this browser) plus the push subscription handle.
-      // `originalMessage` is a legacy key removed in #668; `originalMessageMeta`
-      // is the new small-payload key that holds only the reply target's id +
-      // labels.
       [
         "name",
         "to",

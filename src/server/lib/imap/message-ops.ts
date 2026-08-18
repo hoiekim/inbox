@@ -284,12 +284,6 @@ const resolveUidCriterionRanges = (
   return { type: "UID", sequenceSet: { type: "sequence", ranges: uidRanges } };
 };
 
-// Resolve one criterion, recursing into NOT/OR operands — store.ts's
-// simplifyCriterion recurses the same way, so a UID/SEQ set nested under
-// NOT/OR (e.g. `UID SEARCH NOT UID *`, `UID SEARCH OR UID 1000:* SEEN`) must
-// be resolved here too, or its `*` sentinel reaches buildCriterionClause
-// unresolved and overflows the int4 uid column exactly like the top-level
-// case (#678).
 const resolveOneSearchKey = (
   criterion: SearchCriterion,
   isUidCommand: boolean,
@@ -314,9 +308,6 @@ const resolveOneSearchKey = (
       right: resolveOneSearchKey(orCriterion.right, isUidCommand, seqState),
     };
   }
-  // Explicit `UID <set>` keyword — already UID-axis, but `*` still needs
-  // resolving before it reaches the SQL layer and overflows a Postgres
-  // `integer` bind parameter (#678).
   if (criterion.type === "UID") {
     return resolveUidCriterionRanges(criterion as UidCriterion, seqState);
   }
@@ -432,13 +423,6 @@ export async function storeFlagsTyped(
     const { sequenceSet, operation, flags, silent } = storeRequest;
     const ranges = convertSequenceSet(sequenceSet);
 
-    // Which mapped-utility pivots the STORE might have moved (#725). A
-    // FLAGS (SET) always resets both flags, so both may have changed. A
-    // +FLAGS / -FLAGS only touches the flags in `flags`. The invariant
-    // before this STORE is `pivot ⇔ mails.<flag>` (see `syncMailboxPivot`),
-    // so a flag the STORE didn't name is guaranteed unchanged and we skip
-    // the pivot write for it — otherwise every STORE of `\Seen` on 100
-    // rows would round-trip 200 useless pivot upserts.
     const baseOp = operation.replace(".SILENT", "");
     const touchesSaved = baseOp === "FLAGS" || flags.includes("\\Flagged");
     const touchesDeleted = baseOp === "FLAGS" || flags.includes("\\Deleted");
@@ -490,14 +474,6 @@ export async function storeFlagsTyped(
         continue;
       }
 
-      // Mirror the post-STORE flag values into the mapped-utility pivots
-      // (#725) — one pivot per mapped-utility folder we might have moved.
-      // Runs concurrently across mails (each row's writes are on disjoint
-      // pivot rows); a failure aborts the STORE via the outer try/catch so
-      // the client retries rather than seeing a half-synced view. `userId`
-      // is fetched lazily here — the STORE tests that mock `store` with
-      // only `setFlags` still exercise the RFC compliance paths without
-      // needing a full session.
       if (touchesSaved || touchesDeleted) {
         const userId = store.getUser().id;
         await Promise.all(
@@ -581,13 +557,6 @@ export type DestContext = {
   destPreservesRecipient: boolean;
 };
 
-/**
- * Compute a `DestContext` for `destMailbox`. Docstring for the individual
- * axes lives on the fields above — the three-axis split is what the #725
- * mapped-utility work introduced (previously `isDomainScoped` was
- * overloaded to mean both 'address-free filtering' AND 'domain UID space',
- * which is why `Starred`/`Trash` couldn't exist).
- */
 export const resolveDestContext = (
   username: string,
   destMailbox: string
@@ -659,8 +628,6 @@ export const cloneMailToDestination = async (
     replyTo: sourceMail.replyTo,
     envelopeFrom: sourceMail.envelopeFrom,
     attachments: sourceMail.attachments,
-    // Derived from source Message-ID + destination mailbox — see
-    // `deriveCopyMessageId` docstring for retry-safety rationale (#721).
     messageId: deriveCopyMessageId(sourceMail.messageId, destMailbox),
     insight: sourceMail.insight,
     read: sourceMail.read,
@@ -785,15 +752,6 @@ export async function copyMessageTyped(
       return;
     }
 
-    // The full set of fields we need to clone — anything the FETCH/render
-    // pipeline might surface to a client of the destination mailbox. `read`
-    // / `saved` / `deleted` / `draft` / `answered` are explicit here because
-    // RFC 3501 §6.4.7 requires COPY to preserve flags on the copy — and
-    // `getMessages` won't return them unless they're named. Without this
-    // the COPY of a starred INBOX mail to `Archive` loses the star, which
-    // #725's mapped-utility invariant assumes DOES propagate (saveMail's
-    // pivot sync fires on `data.saved = true`, which needs the field
-    // populated here).
     const cloneFields = [
       "subject",
       "date",
@@ -881,14 +839,6 @@ export async function copyMessageTyped(
     const sourceUids: number[] = [];
     const destUids: number[] = [];
 
-    // Per-mail loop is sequential; a mid-loop failure (e.g.
-    // writeMailboxUid throw) leaves the already-committed iterations in
-    // the destination. On client retry the destination Message-IDs are
-    // DETERMINISTIC via `deriveCopyMessageId(source, destMailbox)`, so
-    // the retry's INSERT hits `mails_user_id_message_id_key` 23505 for
-    // the iterations that already committed → saveMail's merge branch
-    // fires → each iteration converges to the first-attempt row. See
-    // #721.
     for (const sourceMail of uniqueSourceMails) {
       const result = await cloneMailToDestination(
         store,
