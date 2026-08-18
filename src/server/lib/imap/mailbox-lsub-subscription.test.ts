@@ -220,23 +220,25 @@ describe("LSUB honours the subscribed flag (#688)", () => {
 });
 
 describe("LSUB — the attribute and the expansion agree", () => {
-  // Same rule LIST follows: a parent marked \HasChildren whose expansion
-  // returns nothing is the state RFC 5258 §3 exists to rule out, so the
-  // pattern has to be matched against the spelling ancestry uses.
+  // LSUB already returns an unsubscribed name that sits between the root and a
+  // subscribed descendant, marked \Noselect (RFC 3501 §6.3.9), so a name whose
+  // parent is not itself a mailbox still reaches its child here. LIST has no
+  // such rule, which is why the two answer differently for such a name.
   const boxes: MailboxEntry[] = [
     { name: "INBOX", subscribed: true },
     { name: "inbox/foo", subscribed: true },
   ];
 
-  it("reports INBOX \\HasChildren for a child subscribed under the lowercase spelling", async () => {
-    expect(await emit(listSubscribedMailboxes, "", "%", boxes)).toContainEqual(
-      '* LSUB (\\HasChildren) "/" "INBOX"\r\n'
-    );
+  it("synthesizes the missing parent rather than claiming INBOX owns the child", async () => {
+    const lines = await emit(listSubscribedMailboxes, "", "%", boxes);
+    expect(lines).toContainEqual('* LSUB (\\HasNoChildren) "/" "INBOX"\r\n');
+    expect(lines).toContainEqual('* LSUB (\\HasChildren \\Noselect) "/" "inbox"\r\n');
   });
 
-  it("returns that child when the client expands the parent it was given", async () => {
-    expect(namesOf(await emit(listSubscribedMailboxes, "", "INBOX/%", boxes))).toEqual([
+  it("expands the name it synthesized, not the one it did not claim", async () => {
+    expect(namesOf(await emit(listSubscribedMailboxes, "", "inbox/%", boxes))).toEqual([
       "inbox/foo",
     ]);
+    expect(namesOf(await emit(listSubscribedMailboxes, "", "INBOX/%", boxes))).toEqual([]);
   });
 });

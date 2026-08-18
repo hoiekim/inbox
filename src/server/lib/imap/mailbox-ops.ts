@@ -295,21 +295,6 @@ export async function statusMailbox(
 // ---------------------------------------------------------------------------
 
 /**
-/**
- * A mailbox path under the spelling LIST/LSUB reason about, as opposed to the
- * one they emit. `canonicalMailbox` folds only whole names, so apply it to the
- * leading segment: CREATE accepts `inbox/foo`, the listable set carries that
- * verbatim, and the row it descends from is listed as `INBOX`. Every path
- * comparison — ancestry, the \HasChildren lookup, and the reference+pattern
- * match — has to agree on one spelling or the response contradicts itself.
- */
-const canonicalPath = (box: string): string => {
-  const delimiter = box.indexOf("/");
-  if (delimiter === -1) return canonicalMailbox(box);
-  return canonicalMailbox(box.slice(0, delimiter)) + box.slice(delimiter);
-};
-
-/**
  * Every proper ancestor path of the given names — `Projects/Work/Q3`
  * contributes `Projects` and `Projects/Work`. Built in one pass
  * (O(names × depth)) rather than re-scanning the set per candidate, which
@@ -320,7 +305,7 @@ const canonicalPath = (box: string): string => {
 export const collectAncestors = (names: string[]): Set<string> => {
   const ancestors = new Set<string>();
   names.forEach((name) => {
-    const parts = canonicalPath(name).split("/");
+    const parts = name.split("/");
     for (let i = 1; i < parts.length; i++) {
       ancestors.add(parts.slice(0, i).join("/"));
     }
@@ -342,7 +327,7 @@ export const collectAncestors = (names: string[]): Set<string> => {
 export function getMailboxAttributes(box: string, parentPaths: ReadonlySet<string>): string {
   // RFC 5258 §3: \HasChildren / \HasNoChildren is what a client keys its
   // expand affordance off, so it has to follow the names actually listed.
-  const hierarchy = parentPaths.has(canonicalPath(box)) ? "\\HasChildren" : "\\HasNoChildren";
+  const hierarchy = parentPaths.has(box) ? "\\HasChildren" : "\\HasNoChildren";
   // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
   // in a plain LIST response, which is how a client maps a role to a box name
   // without guessing at the name.
@@ -408,7 +393,7 @@ export async function listMailboxes(
     // still makes its parent \HasChildren.
     const parentPaths = collectAncestors(boxes);
     boxes
-      .filter((box) => matchesListPattern(reference, pattern, canonicalPath(box)))
+      .filter((box) => matchesListPattern(reference, pattern, box))
       .forEach((box) => {
         const attrs = getMailboxAttributes(box, parentPaths);
         write(`* LIST (${attrs}) "/" "${box}"\r\n`);
@@ -458,7 +443,7 @@ export async function listSubscribedMailboxes(
 
     [...entries, ...synthesized]
       .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
-      .filter((entry) => matchesListPattern(reference, pattern, canonicalPath(entry.name)))
+      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
       .forEach((entry) => {
         // An unsubscribed name is in this response only because it has a
         // subscribed descendant, hence \HasChildren unconditionally.

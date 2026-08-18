@@ -144,46 +144,43 @@ describe("listMailboxes hierarchy attributes (RFC 5258 §3)", () => {
   });
 });
 
-describe("listMailboxes hierarchy attributes — case-insensitive names", () => {
-  it("parents INBOX from a child CREATEd under the lowercase spelling", async () => {
-    const rows = await attributesFor(["INBOX", "inbox/foo"]);
-    expect(rows.get("INBOX")).toBe("\\HasChildren");
-  });
-
-  it("parents a utility folder from a child CREATEd under a different case", async () => {
-    const rows = await attributesFor(["INBOX", "Drafts", "drafts/sub"]);
-    expect(rows.get("Drafts")).toBe("\\Drafts \\HasChildren");
-  });
-
-  it("leaves an ordinary name case-sensitive, per RFC 3501 §5.1", async () => {
-    const rows = await attributesFor(["INBOX", "Archive", "archive/old"]);
-    expect(rows.get("Archive")).toBe("\\HasNoChildren");
-  });
-});
-
 describe("listMailboxes — the attribute and the expansion agree", () => {
   // RFC 5258 §3 exists so a client can decide whether to offer an expand
-  // affordance. A parent marked \HasChildren whose expansion returns nothing
-  // is the state the attribute is supposed to rule out, so the pattern match
-  // has to read the same spelling the ancestry does.
-  const expandable = async (boxes: string[], parent: string): Promise<string[]> =>
+  // affordance, so every \HasChildren has to be answerable by the `%`
+  // expansion of that same name — and every \HasNoChildren by its absence.
+  const expansionOf = async (boxes: string[], parent: string): Promise<string[]> =>
     [...(await attributesFor(boxes, `${parent}/%`)).keys()];
 
-  it("expands INBOX to a child CREATEd under the lowercase spelling", async () => {
-    const rows = await attributesFor(["INBOX", "inbox/foo"]);
-    expect(rows.get("INBOX")).toBe("\\HasChildren");
-    expect(await expandable(["INBOX", "inbox/foo"], "INBOX")).toEqual(["inbox/foo"]);
+  it("a parent with a child: attribute says branch, expansion returns it", async () => {
+    const boxes = ["INBOX", "Projects", "Projects/Work"];
+    expect((await attributesFor(boxes)).get("Projects")).toBe("\\HasChildren");
+    expect(await expansionOf(boxes, "Projects")).toEqual(["Projects/Work"]);
   });
 
-  it("expands a utility folder to a child CREATEd under a different case", async () => {
-    const boxes = ["INBOX", "Drafts", "drafts/sub"];
+  it("a utility folder with a child: special-use attribute rides alongside", async () => {
+    const boxes = ["INBOX", "Drafts", "Drafts/sub"];
     expect((await attributesFor(boxes)).get("Drafts")).toBe("\\Drafts \\HasChildren");
-    expect(await expandable(boxes, "Drafts")).toEqual(["drafts/sub"]);
+    expect(await expansionOf(boxes, "Drafts")).toEqual(["Drafts/sub"]);
   });
 
-  it("does not expand an ordinary name across a case difference", async () => {
+  // RFC 3501 §5.1 makes INBOX case-insensitive as a whole name and leaves
+  // every other name case-sensitive, which `matchesListPattern` already
+  // implements. Ancestry reads names the same way, so a name differing only in
+  // the case of its first segment is a different branch of the tree — not a
+  // child — and the attribute and the expansion agree on that.
+  it("a name differing only in leading-segment case is not a child", async () => {
     const boxes = ["INBOX", "Archive", "archive/old"];
     expect((await attributesFor(boxes)).get("Archive")).toBe("\\HasNoChildren");
-    expect(await expandable(boxes, "Archive")).toEqual([]);
+    expect(await expansionOf(boxes, "Archive")).toEqual([]);
+  });
+
+  it("the same holds for the reserved names, and each is reachable under its own spelling", async () => {
+    const boxes = ["INBOX", "Drafts", "inbox/foo", "drafts/sub"];
+    const rows = await attributesFor(boxes);
+    expect(rows.get("INBOX")).toBe("\\HasNoChildren");
+    expect(rows.get("Drafts")).toBe("\\Drafts \\HasNoChildren");
+    expect(await expansionOf(boxes, "INBOX")).toEqual([]);
+    expect(await expansionOf(boxes, "inbox")).toEqual(["inbox/foo"]);
+    expect(await expansionOf(boxes, "drafts")).toEqual(["drafts/sub"]);
   });
 });
