@@ -145,3 +145,30 @@ describe("listMailboxes hierarchy attributes (RFC 5258 §3)", () => {
     expect(bare.get("Sent Messages")).toBe("\\HasNoChildren");
   });
 });
+
+describe("listMailboxes hierarchy attributes — case-insensitive names", () => {
+  const attributesFor = async (boxes: string[]): Promise<Map<string, string>> => {
+    const rows = new Map<string, string>();
+    await listMailboxes("A1", "", "*", fakeStore(boxes), (data: string) => {
+      const match = data.match(/^\* LIST \((.*)\) "\/" "(.*)"\r\n$/);
+      if (match) rows.set(match[2], match[1]);
+      return true;
+    });
+    return rows;
+  };
+
+  it("parents INBOX from a child CREATEd under the lowercase spelling", async () => {
+    const rows = await attributesFor(["INBOX", "inbox/foo"]);
+    expect(rows.get("INBOX")).toBe("\\HasChildren");
+  });
+
+  it("parents a utility folder from a child CREATEd under a different case", async () => {
+    const rows = await attributesFor(["INBOX", "Drafts", "drafts/sub"]);
+    expect(rows.get("Drafts")).toBe("\\Drafts \\HasChildren");
+  });
+
+  it("leaves an ordinary name case-sensitive, per RFC 3501 §5.1", async () => {
+    const rows = await attributesFor(["INBOX", "Archive", "archive/old"]);
+    expect(rows.get("Archive")).toBe("\\HasNoChildren");
+  });
+});

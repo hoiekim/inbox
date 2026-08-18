@@ -301,13 +301,19 @@ export async function statusMailbox(
  * would be quadratic on an account with thousands of per-address boxes, and
  * keyed on path segments so a `Project` that is merely a string prefix of
  * `Projects/Work` is not treated as its parent.
+ *
+ * Each path is canonicalized because CREATE accepts `inbox/foo` and the
+ * listable set carries it verbatim, while the row it parents is listed as
+ * `INBOX`. `canonicalMailbox` passes multi-segment paths through untouched,
+ * so this only folds the depth-1 segment where the case-insensitive names
+ * live.
  */
 export const collectAncestors = (names: string[]): Set<string> => {
   const ancestors = new Set<string>();
   names.forEach((name) => {
     const parts = name.split("/");
     for (let i = 1; i < parts.length; i++) {
-      ancestors.add(parts.slice(0, i).join("/"));
+      ancestors.add(canonicalMailbox(parts.slice(0, i).join("/")));
     }
   });
   return ancestors;
@@ -326,8 +332,7 @@ export const collectAncestors = (names: string[]): Set<string> => {
  */
 export function getMailboxAttributes(box: string, parentPaths: ReadonlySet<string>): string {
   // RFC 5258 §3: \HasChildren / \HasNoChildren is what a client keys its
-  // expand affordance off, so it has to follow the names actually listed —
-  // a hardcoded per-name answer hides a real child behind a leaf row.
+  // expand affordance off, so it has to follow the names actually listed.
   const hierarchy = parentPaths.has(box) ? "\\HasChildren" : "\\HasNoChildren";
   // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
   // in a plain LIST response, which is how a client maps a role to a box name

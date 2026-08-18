@@ -79,8 +79,7 @@ describe("LSUB honours the subscribed flag (#688)", () => {
   });
 
   it("takes 'Sent Messages' attributes from the full set even when its children are filtered out", async () => {
-    // getMailboxAttributes derives \HasChildren for "Sent Messages" by looking
-    // for a "Sent Messages/accounts/" entry. That lookup must see the full
+    // The ancestor set behind \HasChildren has to be built from the full
     // listable set, not the subscribed subset — otherwise dropping the
     // unsubscribed children would flip the parent to \HasNoChildren and a
     // client would prune a branch it can still SELECT.
@@ -167,6 +166,9 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     });
 
     it("reports a SUBSCRIBED parent \\HasChildren too, not \\HasNoChildren", async () => {
+      // A "%"-walker honouring \HasNoChildren would descend into the
+      // unsubscribed `Projects` above but not into a subscribed one, making
+      // the subscribed subtree the unreachable half.
       const lines = await emit(listSubscribedMailboxes, "", "%", [
         { name: "Projects", subscribed: true },
         { name: "Projects/Work", subscribed: true },
