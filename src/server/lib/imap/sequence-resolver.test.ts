@@ -445,10 +445,8 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   });
 
   it("`UID 1:*` on a pruned mailbox emits a range of REAL UIDs, not seq positions", () => {
-    // The R1 HIGH scenario: previously returned `{start:1, end:50}` and
-    // silently matched zero rows. Now returns `{start:10001, end:10003}`
-    // for limit=3 — the actual first-3 UIDs, and since they're contiguous
-    // the coalescer collapses them into a single range.
+    // A pruned mailbox's UIDs start well above 1; the clamper must resolve
+    // 1..* to the actual first-limit UIDs and coalesce contiguous runs.
     const result = clampSequenceSetToFirst(
       uids,
       set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
@@ -482,11 +480,9 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   });
 
   it("walks multiple ranges in order, stopping at limit, and emits coalesced sub-ranges", () => {
-    // The R2 MED scenario: matched UIDs are non-contiguous, so a single
-    // enclosing range [10001..10006] would over-fetch (dense mailbox has
-    // real 10003/10004 in it, so `getMessages(10001, 10006)` would return
-    // 6 rows — 2 unrequested — breaching the cap by 50%). Coalescing
-    // preserves the request's shape post-clamp.
+    // Non-contiguous matched UIDs: a single enclosing range would over-fetch
+    // (the dense mailbox holds intermediate UIDs, breaching the cap).
+    // Coalescing preserves the request's shape post-clamp.
     const result = clampSequenceSetToFirst(
       uids,
       set([

@@ -715,9 +715,9 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
     expect(decodePart(wire, "present.bin").equals(Buffer.alloc(120_000, 5))).toBe(true);
   });
 
-  // MED 4 in review: the MIME layout used to be hand-parallel across the
-  // measure/emit/materialize functions, so a shape covered by only one of them
-  // could drift. These walk every branch of the layout with a real file on disk.
+  // Walk every branch of the MIME layout with a real file on disk so a shape
+  // covered by only one of measure/emit/materialize cannot drift out of the
+  // others silently.
   const layoutShapes: Array<[string, (id: string) => Partial<MailType>]> = [
     [
       "text + html + attachment (alternative nested in mixed)",

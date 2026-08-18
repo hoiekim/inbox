@@ -153,30 +153,21 @@ export interface MailHeadersDeltaResult {
 // latency + clock skew (NTP keeps the latter well under a second).
 const DELTA_CURSOR_SAFETY_MARGIN_SECONDS = 2;
 
-// Delta variant of getMailHeaders for the IndexedDB cache (#457): returns only
-// rows changed since `since`, plus the ids of rows expunged within that window
-// so a cached client can apply an incremental update and evict stale entries
-// instead of refetching the whole folder.
+// Delta variant of getMailHeaders for the IndexedDB cache: returns only rows
+// changed since `since`, plus the ids of rows expunged within that window so a
+// cached client can apply an incremental update and evict stale entries.
 //
 // `as_of` is read from the DB clock BEFORE the data queries and backed off by
-// DELTA_CURSOR_SAFETY_MARGIN_SECONDS, making it a safe lower bound: every
-// mutation up to that instant is reflected here, and anything newer (or within
-// the margin) is re-sent next call (at-least-once — the client dedups by id).
-// Reading from the DB, not the app clock, keeps it on the same timeline as the
-// `updated` column (set by CURRENT_TIMESTAMP on the flag-update paths).
-// NOTE: the expunge path (expungeDeletedMails) currently stamps `updated` from
-// the *app* clock (`new Date()`); the safety margin absorbs the resulting skew,
-// but the rigorous fix is to move every `updated` write onto the DB clock —
-// tracked as a follow-up. Fully eliminating the concurrent-commit window would
-// further need an xid-snapshot cursor, beyond the approved Phase-1 timestamp
-// contract.
+// DELTA_CURSOR_SAFETY_MARGIN_SECONDS, making it a safe lower bound: any
+// mutation newer than that (or within the margin) is re-sent next call
+// (at-least-once — the client dedups by id). Reading the DB clock keeps this
+// on the same timeline as the `updated` column set by CURRENT_TIMESTAMP.
 //
-// Tombstones (`expunged_ids`) cover EXPUNGED rows only — the approved Phase-1
-// contract. In a filtered view (?new / ?saved) a row that LEAVES the filter
-// (marked read, un-starred) drops out of `headers` but is NOT reported as a
-// tombstone, so a client applying delta to a filtered view must full-revalidate
-// it. The default (inbox/sent) view is fully correct. Generalizing this to an
-// `evicted_ids` set is an open contract question for the Phase-2 client.
+// Tombstones (`expunged_ids`) cover EXPUNGED rows only. In a filtered view
+// (?new / ?saved) a row that LEAVES the filter (marked read, un-starred)
+// drops out of `headers` but is NOT reported as a tombstone, so a client
+// applying delta to a filtered view must full-revalidate it. The default
+// inbox/sent view is fully correct.
 export const getMailHeadersDelta = async (
   user_id: string,
   address: string,

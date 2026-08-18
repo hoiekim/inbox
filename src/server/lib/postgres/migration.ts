@@ -413,7 +413,7 @@ export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean
     }
     return true;
   } catch (error: unknown) {
-    // schema_meta missing (first-ever boot after this PR ships), connection
+    // schema_meta missing (first-ever boot on a fresh DB), connection
     // dropped, statement_timeout — all fall through to the authoritative
     // slow path, which is safe to run against any state.
     const message = error instanceof Error ? error.message : String(error);

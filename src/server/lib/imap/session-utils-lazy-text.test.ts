@@ -684,11 +684,11 @@ describe("streamPartialFromSegments — byte-range slice", () => {
 
       expect(substringCalls.length).toBeLessThan(20);
 
-      // Every SUBSTRING call must start FAR into the column — never at
-      // offset 1 (the drain-from-1 anti-pattern this PR fixes). The
-      // earliest byte we should ever touch is roughly (start - headers) *
-      // 3 / 4 raw bytes into the column; a lower bound of 1 MB suffices to
-      // prove we did NOT drain from position 1 on a 3.9 MB seek target.
+      // Every SUBSTRING call must start FAR into the column — draining from
+      // offset 1 wastes bandwidth on a large seek target. The earliest byte
+      // we should ever touch is roughly (start - headers) * 3 / 4 raw bytes
+      // into the column; a 1 MB lower bound is well past the drain-from-1
+      // anti-pattern on a 3.9 MB seek.
       for (const call of substringCalls) {
         expect(call.offset).toBeGreaterThan(1_000_000);
       }

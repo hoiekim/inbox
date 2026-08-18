@@ -175,13 +175,12 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Populated here so a mail inserted after this PR is always a
-      // BODYSTRUCTURE cache hit — never triggers the fallback string-load
-      // path in fetch-helpers. Pre-migration rows sit NULL until their
-      // first BODYSTRUCTURE observation backfills them. The `""` split
-      // yields `[""]` (length 1), matching the current buildTextPart math
-      // for an empty part; buildTextPart's `hasText` predicate skips it,
-      // so a stored 1 for an empty column is never surfaced.
+      // Populated at insert so BODYSTRUCTURE cache hits never fall back to
+      // the string-load path in fetch-helpers. Rows that predate this write
+      // sit NULL until their first BODYSTRUCTURE observation backfills them.
+      // The `""` split yields `[""]` (length 1), matching buildTextPart's
+      // math for an empty part; its `hasText` predicate skips it, so a
+      // stored 1 for an empty column is never surfaced.
       [TEXT_LINE_COUNT]: countLines(text),
       [HTML_LINE_COUNT]: countLines(html),
       // Same shape as line counts: populate at INSERT so the RFC822.SIZE
