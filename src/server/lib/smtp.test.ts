@@ -583,6 +583,60 @@ describe("onData handler", () => {
     expect(mailData.to).toBe("bob@test.com,friend@other.com");
   });
 
+  it("reads To recipients out of an RFC 5322 address group", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<group@example.com>",
+        from: {
+          text: "Admin <admin@test.com>",
+          value: [{ address: "admin@test.com", name: "Admin" }]
+        },
+        to: {
+          text: "Team: bob@test.com, friend@other.com;",
+          value: [
+            {
+              name: "Team",
+              group: [
+                { address: "bob@test.com", name: "" },
+                { address: "friend@other.com", name: "" }
+              ]
+            }
+          ]
+        },
+        subject: "Hello",
+        html: "<p>body</p>",
+        text: "body",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    const mailData = mockSendMail.mock.calls[0][1] as {
+      sender: string;
+      to: string;
+    };
+    expect(mailData.sender).toBe("admin");
+    expect(mailData.to).toBe("bob@test.com,friend@other.com");
+  });
+
   it("maps attachments through the parsed attachment array", async () => {
     mockSimpleParser.mockImplementation(() =>
       Promise.resolve({
