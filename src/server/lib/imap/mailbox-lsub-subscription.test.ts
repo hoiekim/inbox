@@ -229,7 +229,12 @@ describe("LSUB — the attribute and the expansion agree", () => {
     { name: "inbox/foo", subscribed: true },
   ];
 
-  it("synthesizes the missing parent rather than claiming INBOX owns the child", async () => {
+  // TODO: the response below carries two rows for what RFC 3501 §5.1 calls one
+  // mailbox — `INBOX` selectable and `inbox` \Noselect. That is a defect in
+  // its own right, and the fix belongs where the aliasing name is accepted;
+  // this pins current behavior so the change is visible when it lands, not
+  // because the shape is right.
+  it("keeps its own two spellings self-consistent, wrong as the pair is", async () => {
     const lines = await emit(listSubscribedMailboxes, "", "%", boxes);
     expect(lines).toContainEqual('* LSUB (\\HasNoChildren) "/" "INBOX"\r\n');
     expect(lines).toContainEqual('* LSUB (\\HasChildren \\Noselect) "/" "inbox"\r\n');
