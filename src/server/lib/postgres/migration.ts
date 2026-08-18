@@ -429,10 +429,6 @@ export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean
  * subsequent boots can fast-path. Called from the slow path AFTER all DDL
  * succeeds — never from the fast path, since the invariant is: marker
  * present + matching hash ⇒ slow-path DDL not needed.
- *
- * `CREATE TABLE IF NOT EXISTS` first, so the first-ever boot after this
- * PR ships lands the marker table itself. On subsequent boots the table
- * exists and this is a no-op DDL followed by the UPSERT.
  */
 export async function writeSchemaMarker(hash: string): Promise<void> {
   await pool.query(`

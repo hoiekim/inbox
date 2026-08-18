@@ -28,12 +28,6 @@ export type TlsCredentials =
  * and the health route. Read per call rather than cached at import: certificates
  * are renewed under a running process, and every caller is on a per-connection
  * or per-request path where two `access` syscalls are free.
- *
- * Readability, not mere existence, is the test every caller actually needs —
- * each one follows this with `readFileSync`. A Let's Encrypt `privkey.pem` left
- * at `0640 root:root` exists for a non-root app user and then throws `EACCES`,
- * which is the same class of failure as the missing file this module was
- * written for.
  */
 export const getTlsCredentials = (): TlsCredentials => {
   const { SSL_CERTIFICATE, SSL_CERTIFICATE_KEY } = process.env;

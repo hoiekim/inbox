@@ -101,15 +101,6 @@ export class ImapSession {
     return { total: result.total, recent: 0 };
   };
 
-  /**
-   * Monotonic counter of plaintext IMAP response bytes written on this
-   * session. Sampled before/after each command by the diagnostic log so we
-   * can attribute a memory spike to the specific command that ballooned the
-   * response. Bumped inside `write` rather than derived from
-   * `socket.bytesWritten` because the latter reports post-TLS ciphertext
-   * bytes on TLS sockets — a small offset today, but the invariant here is
-   * "IMAP response payload size", not "wire bytes".
-   */
   bytesWritten = 0;
 
   write = (data: string) => {

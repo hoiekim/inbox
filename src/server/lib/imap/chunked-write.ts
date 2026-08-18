@@ -2,26 +2,6 @@ import { EventEmitter } from "events";
 
 /**
  * Socket-agnostic backpressure-aware chunked writer.
- *
- * Extracted from `ImapSession` so the write loop can be unit-tested
- * against a fake socket without pulling the full session (and its
- * transitive `server` barrel dependency) into leaf test files. The
- * session's `writeChunked` method is a thin wrapper — see `session.ts`.
- *
- * The loop:
- * - Slices `payload` into `CHUNK_BYTES`-sized zero-copy views.
- * - For each slice: `socket.write(slice)`; if that returns false (Node
- *   reports its writable-side high-water mark reached), await `drain`
- *   before writing the next chunk. That's the whole point: without this
- *   await, a retry-storm of multi-MB responses lets the outbound queue
- *   grow unbounded, defeating the RSS cap that motivated this fix.
- * - `close` mid-drain also wakes the awaiter — otherwise a socket that
- *   dies between `write:false` and any potential `drain` would hang the
- *   whole FETCH pipeline on that promise.
- *
- * `onError` receives any exception thrown by `socket.write` so callers
- * can log with their own component tag; it's invoked once per failed
- * write and the function returns early (partial write, no throw).
  */
 export interface ChunkedWriteSocket extends EventEmitter {
   destroyed: boolean;
