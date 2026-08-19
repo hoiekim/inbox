@@ -1,14 +1,3 @@
-/**
- * Tests for IMAP IDLE termination — handler.ts + session.ts (#546).
- *
- * Regression coverage: DONE must be detected by the handler's main line
- * buffer (which reassembles split TCP chunks and \r\n-delimited lines), not a
- * separate raw-socket listener that only matched when an entire chunk equalled
- * "DONE". The old listener left the session stranded in IDLE forever when:
- *   1. DONE was split across TCP chunks ("DO" then "NE\r\n"), or
- *   2. DONE was pipelined with the next command ("DONE\r\nA4 NOOP\r\n") — and
- *      the pipelined command was silently dropped.
- */
 
 import { describe, it, expect, spyOn, beforeEach, afterAll } from "bun:test";
 import { EventEmitter } from "events";

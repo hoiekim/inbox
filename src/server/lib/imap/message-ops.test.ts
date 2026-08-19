@@ -1,31 +1,3 @@
-/**
- * Tests for message-ops.ts — IMAP message operations.
- *
- * Covers three regressions:
- *  - inbox #543: STORE on a UID/sequence range that matches no messages must
- *    send exactly ONE tagged response (OK, not NO). The old code wrote a
- *    tagged NO and threw on an empty result, and the surrounding catch block
- *    then wrote a SECOND tagged NO — two tagged responses for a single
- *    command, which desynchronizes IMAP clients (RFC 3501 §2.2.1 requires
- *    exactly one tagged response per command). [storeFlagsTyped]
- *  - #544: the APPENDUID response code must carry the user's stored
- *    UIDVALIDITY (the same stable value SELECT returns), not a fresh
- *    `Date.now()` timestamp. RFC 4315 requires the APPENDUID's UIDVALIDITY to
- *    match the destination mailbox's UIDVALIDITY so UIDPLUS clients can
- *    correlate the appended message without a full re-sync. [appendMessage]
- *  - #548: an APPEND with no flag list must store the mail with draft = false
- *    (RFC 3501 §6.3.11: absent flag list means "no flags set", not "\Draft
- *    set"). The old `?? true` default misclassified every flag-less APPEND as
- *    a draft, hiding it from the per-account web UI. [appendMessage]
- *
- * Isolation mirrors users.test.ts: mock `pg` so the lazy pool in
- * postgres/client.ts instantiates a FakePool, then run the REAL
- * getDomainUidNext / getAccountUidNext / getImapUidValidity against it.
- * mockQuery is the single seam every DB call funnels through. No DI, and no
- * mock of the `server` barrel (which would bleed across files via Bun's
- * process-global mock.module — see search.test.ts / update.test.ts).
- * `afterAll(restoreLeaves)` + resetPool re-mocks pg back to real.
- */
 
 import {
   describe,
@@ -94,14 +66,6 @@ const mockQuery = mock(async (sql: string, values?: unknown[]) => {
     const next_uid = kind === "account" ? ACCOUNT_UID : DOMAIN_UID;
     return { rows: [{ next_uid: String(next_uid) }], rowCount: 1 };
   }
-  // usersTable.queryOne(...) for getImapUidValidity — narrowed to queries
-  // that target the users table so an out-of-file leak (Bun's mock.module
-  // is process-global; whichever pg-mock wins the load-order race owns the
-  // pool for every subsequent test file — see
-  // `reference_bun_mock_module_global_hoisting.md`) doesn't answer
-  // `users.test.ts`'s "no row matches" SELECTs with a truthy USER_ROW. A
-  // truly bare `return { rows: [USER_ROW] }` default caused CD to fail on
-  // 0edf95c (see PR #835 write-up) with 16 users.test.ts failures.
   if (/from\s+users\b/i.test(sqlStr)) {
     return { rows: [USER_ROW], rowCount: 1 };
   }
@@ -154,10 +118,6 @@ beforeEach(() => {
   uidReservations.length = 0;
 });
 
-// ---------------------------------------------------------------------------
-// appendMessage — APPENDUID (#544) + flag defaults (#548)
-// ---------------------------------------------------------------------------
-
 type AppendedMail = { sent: boolean };
 
 type FakeStore = {
@@ -168,10 +128,6 @@ type FakeStore = {
   appended: Array<{ mail: AppendedMail; mailbox?: string }>;
 };
 
-// The listable set a Store would report for user "admin": INBOX, the unified
-// Sent folder, and one per-account box in each lane. The received per-account
-// path is `INBOX/accounts/<local>` (ACCOUNTS_FOLDER in util.ts), not
-// `accounts/<local>` — `accountToBox` builds it from that prefix.
 const EXISTING_MAILBOXES = [
   "INBOX",
   "Sent Messages",
@@ -277,10 +233,6 @@ describe("appendMessage — APPENDUID UIDVALIDITY (#544)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// appendMessage — target mailbox (#695)
-// ---------------------------------------------------------------------------
-
 describe("appendMessage — target mailbox (#695)", () => {
   it("files an APPEND to the unified Sent folder as sent mail", async () => {
     const store = makeAppendStore();
@@ -372,20 +324,12 @@ describe("appendMessage — target mailbox (#695)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// storeFlagsTyped — empty result (inbox #543)
-// ---------------------------------------------------------------------------
-
 // ── Suite 1 helpers ──────────────────────────────────────────────────────────
 const emptySeqState = (): SequenceState => ({
   seqToUid: [],
   uidToSeq: new Map(),
 });
 
-// A store whose setFlags resolves to `result` and records its calls.
-// getUser is included so the #725 pivot-sync path in storeFlagsTyped
-// (which reads `store.getUser().id`) doesn't throw when the STORE touches
-// `\Flagged` / `\Deleted`.
 const makeFlagStore = (
   result: { uid: number; mail_id?: string; read?: boolean; saved?: boolean; deleted?: boolean }[]
 ) => {
@@ -481,7 +425,6 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
       write
     );
 
-    // UID STORE → the untagged FETCH must carry the UID item (#589).
     expect(lines).toContain("* 1 FETCH (UID 5 FLAGS (\\Seen))\r\n");
     expect(taggedResponses(lines, "A003")).toEqual([
       "A003 OK STORE completed\r\n",
@@ -509,10 +452,6 @@ describe("storeFlagsTyped — empty result (inbox #543)", () => {
     expect(tagged[0]).toContain("NO [READ-ONLY]");
   });
 });
-
-// ---------------------------------------------------------------------------
-// storeFlagsTyped — UID item on UID-command FETCH (#589, RFC 3501 §6.4.8)
-// ---------------------------------------------------------------------------
 
 const seqStoreRequest = (start: number, end?: number): StoreRequest => ({
   sequenceSet: { type: "sequence", ranges: [{ start, end }] },
@@ -674,11 +613,6 @@ describe("appendMessage flag defaults (#548)", () => {
   });
 });
 
-// #649: a bare sequence-set (SEQ) search key names message sequence numbers in
-// a plain SEARCH and UIDs in a UID SEARCH. resolveSeqSearchKeys rewrites SEQ to
-// a UID criterion so store.search (which has no seqState) can run it, resolving
-// against the seq→uid map for a plain SEARCH. A mailbox where seq != uid pins
-// the axis: seq 1→uid 11395, seq 2→uid 11396, seq 3→uid 11400 (expunge gap).
 describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
   const seqState: SequenceState = {
     seqToUid: [11395, 11396, 11400],
@@ -736,9 +670,6 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
       { type: "SEEN" },
       { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 42 }] } },
     ];
-    // The explicit `UID <set>` keyword already names UIDs, but still passes
-    // through resolveUidCriterionRanges to normalize `*` (#678) — a
-    // single-value range without a `*` comes out with end filled in.
     expect(resolveSeqSearchKeys(criteria, false, seqState)).toEqual([
       { type: "SEEN" },
       { type: "UID", sequenceSet: { type: "sequence", ranges: [{ start: 42, end: 42 }] } },
@@ -769,10 +700,6 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
     expect(out.map((c) => c.type)).toEqual(["SEEN", "UID"]);
   });
 
-  // reviewoie finding on PR #708: store.simplifyCriterion recurses into
-  // NOT/OR operands, so a UID criterion nested under either must have its
-  // `*` sentinel resolved here too — otherwise `UID SEARCH NOT UID *` /
-  // `UID SEARCH OR UID 1000:* SEEN` still overflow the int4 uid column.
   it("resolves a bare `*` nested under NOT (#678)", () => {
     const criteria: Parameters<typeof resolveSeqSearchKeys>[0] = [
       {
@@ -818,10 +745,6 @@ describe("resolveSeqSearchKeys — bare sequence-set (#649)", () => {
   });
 });
 
-// #659: a multi-element bare set (`SEARCH 1,3`) resolves to a multi-range UID
-// criterion. store.search once ANDed its ranges (silent empty result), so #658
-// gated it with `NO Not supported`. Now the ranges OR among themselves, so the
-// set executes on both the plain and UID SEARCH forms — the gate is gone.
 describe("searchTyped — multi-element bare set executes (#659)", () => {
   const seqState: SequenceState = {
     seqToUid: [11395, 11396, 11400],
@@ -891,8 +814,6 @@ describe("searchTyped — multi-element bare set executes (#659)", () => {
     const { out, passed } = await run("t3", seqReq([{ start: 1 }, { start: 3 }]), true);
     expect(out).toContain("OK SEARCH completed");
     expect(out).not.toContain("NO Not supported");
-    // UID SEARCH: the set already names UIDs, so relabel (with `*`
-    // normalized, though neither range here uses it — #678).
     expect(passed).toEqual([
       {
         type: "UID",
@@ -913,10 +834,6 @@ describe("searchTyped — multi-element bare set executes (#659)", () => {
     expect(out).not.toContain("NO Not supported");
   });
 });
-
-// ---------------------------------------------------------------------------
-// storeFlagsTyped — mapped-utility pivot sync (#725)
-// ---------------------------------------------------------------------------
 
 describe("storeFlagsTyped — Starred / Trash pivot sync (#725)", () => {
   const seqState: SequenceState = {
@@ -1026,9 +943,6 @@ describe("storeFlagsTyped — Starred / Trash pivot sync (#725)", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveDestContext — the 5-axis destination fact resolver (#830)", () => {
-  // getUserDomain("admin") reads process.env.EMAIL_DOMAIN or falls back to
-  // "mydomain" (util.ts). No env set here — assertions accept either
-  // "…@mydomain" or the CI-set value by matching on the local-part prefix.
   const domainAgnosticAccount = (account: string, prefix: string) =>
     expect(account.startsWith(`${prefix}@`)).toBe(true);
 
@@ -1059,11 +973,6 @@ describe("resolveDestContext — the 5-axis destination fact resolver (#830)", (
   });
 
   it("Starred / Trash (mapped-utility) preserve recipient, NOT domain-scoped, IS mapped-utility, not sent", () => {
-    // The three-axis split #725 introduced — destIsDomainScoped decouples
-    // from destPreservesRecipient here. A regression that collapsed them
-    // back would either rewrite the Starred COPY's recipient to
-    // `Starred@<domain>` (nonsense) OR emit uid.domain in COPYUID (a UID
-    // that addresses nothing in the mapped-utility mailbox).
     for (const box of ["Starred", "Trash"]) {
       const d = resolveDestContext("admin", box);
       expect(d.destIsDomainScoped).toBe(false);
@@ -1101,9 +1010,6 @@ describe("resolveDestContext — the 5-axis destination fact resolver (#830)", (
   });
 
   it("destPreservesRecipient is the disjunction of destIsDomainScoped and destIsMappedUtility — never true otherwise", () => {
-    // Table-invariant: no destination reads as preserving recipient without
-    // ALSO being domain-scoped or mapped-utility. A drift would resurrect
-    // the pre-#725 conflation.
     for (const box of [
       "INBOX",
       "Sent Messages",
@@ -1185,10 +1091,6 @@ describe("cloneMailToDestination — the shared COPY/MOVE per-mail body (#830)",
   });
 
   it("preserves the source flags on the new mail (RFC 3501 §6.4.7)", async () => {
-    // Every flag SET on the source has to survive the clone; every flag
-    // FALSE has to stay false. The pre-#823 gap that motivated the flag
-    // preservation was `cloneFields` dropping `saved` at the fetch layer;
-    // this pin catches the second half — the field-copy in the clone itself.
     const store = makeCaptureStore();
     const ctx = resolveDestContext("admin", "INBOX");
     await cloneMailToDestination(
@@ -1208,10 +1110,6 @@ describe("cloneMailToDestination — the shared COPY/MOVE per-mail body (#830)",
   });
 
   it("preserves recipient on a mapped-utility destination (Starred) — no `Starred@<domain>` rewrite", async () => {
-    // The #725 rule: a destination whose row-selection is address-free
-    // (`destPreservesRecipient`) keeps the source's `to` / `envelopeTo`
-    // unchanged. A regression that dropped the mapped-utility half of
-    // `destPreservesRecipient` would put `Starred@<domain>` on the wire.
     const store = makeCaptureStore();
     const ctx = resolveDestContext("admin", "Starred");
     await cloneMailToDestination(
@@ -1304,9 +1202,6 @@ describe("cloneMailToDestination — the shared COPY/MOVE per-mail body (#830)",
   });
 
   it("returns destUid = uid.domain for domain-scoped destination, uid.account otherwise", async () => {
-    // The pre-#725 conflation was `isDomainScoped` overloaded to mean both
-    // 'address-free filtering' AND 'domain UID space'. Verify the two axes
-    // are still doing their intended jobs post-refactor.
     const store = makeCaptureStore();
 
     // Domain-scoped INBOX → destUid is uid.domain (mocked to 100 via

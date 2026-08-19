@@ -1,33 +1,3 @@
-/**
- * Tests for `moveMessageTyped` (#453, RFC 6851).
- *
- * MOVE is copy-then-targeted-expunge: clone the source rows into the
- * destination (same shape as `copyMessageTyped` — fresh messageId, the
- * `sent` arg threaded through UidNext helpers, envelope_to / cc / bcc
- * re-anchored away from the source address), then call
- * `Store.expungeUids(box, sourceUids)` to soft-delete exactly the
- * moved set. RFC 6851 §3.3 forbids both setting `\\Deleted` on the
- * source and the mailbox-wide EXPUNGE that the COPY+STORE+EXPUNGE
- * pattern would produce — the targeted expunge avoids both.
- *
- * Two layers of coverage:
- *   - Control flow (no DB): read-only refusal, TRYCREATE, no-op range
- *     cases, MOVE-to-self short-circuit. Driven with a bare fake Store.
- *   - End-to-end happy path: real source mails → COPYUID + targeted
- *     EXPUNGE emission, fresh messageId, and the address-routing
- *     invariants (non-INBOX dest re-anchors to the dest account; INBOX
- *     dest from a non-INBOX source CLEARS routing so the moved copy
- *     does not re-surface in the source account view). The copy phase
- *     reaches `getDomainUidNext` / `getAccountUidNext` /
- *     `getImapUidValidity` (imported from the `server` barrel, not on
- *     the store), so we use the pg-FakePool pattern from
- *     message-ops.test.ts: mock `pg` so postgres/client.ts's lazy pool
- *     is a FakePool and run the REAL helpers against it. We mock `pg`
- *     (NOT the `server` barrel) so those helpers keep their real
- *     identities — stubbing the barrel would bleed across files via
- *     Bun's process-global mock.module. `afterAll(restoreLeaves)` +
- *     resetPool re-mocks pg back to real.
- */
 
 import {
   describe,
@@ -416,7 +386,6 @@ describe("MOVE overlapping ranges — dedupe by source UID (#626, RFC 4315 §3 v
       seqState
     );
 
-    // One clone per distinct source UID — pre-#626 stored 6 (4,5 twice).
     expect(stored.length).toBe(4);
     // The targeted expunge hits each source UID exactly once, ascending.
     expect(getExpungeArg()).toEqual([3, 4, 5, 6]);
@@ -529,8 +498,6 @@ describe("MOVE COPYUID positional pairing — out-of-order set (#624, RFC 4315 �
     // The COPYUID response must report the REAL mapping, not an inverted one.
     expect(claimedPairing.get(3)).toBe(actualDestOf(3));
     expect(claimedPairing.get(5)).toBe(actualDestOf(5));
-    // And the smaller source UID must own the smaller dest UID (ascending
-    // assignment) — the assertion that fails on the pre-#624 code.
     expect(actualDestOf(3)).toBeLessThan(actualDestOf(5));
   });
 });
@@ -586,10 +553,6 @@ describe("MOVE address routing into a utility folder (#725)", () => {
   });
 
   it("keeps the source recipient for the unified Sent folder", async () => {
-    // `boxToAccount(user, "Sent Messages")` matches neither accounts prefix, so
-    // it would hand back the folder name as a local part — the same shape as
-    // `Junk@<domain>`, and `getAccountStats` has no `sent` term to filter it
-    // back out, so it would surface as a phantom per-account box in LIST.
     const mails = [sourceMail({ domain: 5, account: 50 })];
     const { store, stored } = makeMoveStore(["Sent Messages"], mails);
     await runMove(

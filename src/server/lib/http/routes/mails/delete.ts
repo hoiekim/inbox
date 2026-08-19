@@ -12,9 +12,6 @@ export const deleteMailRoute = new Route<MailDeleteResponse>(
 
     const mailId = req.params.id;
 
-    // A malformed uuid raises 22P02 in Postgres rather than matching no row,
-    // and the repository no longer swallows that — screen it here so a bad id
-    // stays a plain rejection instead of a 500 (#747).
     if (!isUuid(mailId)) {
       return {
         status: "failed",

@@ -24,9 +24,6 @@ const config: PoolConfig = {
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
-  // Server-side cap: Postgres aborts the query with 57014 after 30s. Guards
-  // against runaway queries pinning a pool client (and, since #710, blocking
-  // every coalesced caller waiting on that client's inflight promise).
   statement_timeout: 30_000,
   // Client-side backstop: fires if statement_timeout can't — e.g. the TCP
   // connection is silently wedged and the server never delivers the abort.
@@ -42,23 +39,6 @@ const config: PoolConfig = {
   },
 };
 
-// Lazy pool: the Proxy defers `new Pool(config)` to first property
-// access. `Pool` here is a LIVE ESM binding to `pg.Pool` — bun's
-// `mock.module("pg", () => ({ Pool: FakePool, … }))` from a test file
-// re-points it, so the first method call during that file's tests
-// instantiates the test's FakePool.
-//
-// `resetPool()` clears the cached instance so the NEXT first-access
-// rebuilds against whatever `Pool` resolves to at that moment. Tests
-// call this from `afterAll(restoreLeaves)` (`scripts/test-helpers.ts`,
-// landing alongside the test infra in #557 step 1) so file B's run
-// doesn't inherit file A's FakePool. Production never calls
-// `resetPool()` — the cached real Pool stays for the process lifetime.
-//
-// The traps below all forward to `_pool`. `set`/`deleteProperty`/`has`
-// are required (not just `get`) because pg's own Pool methods do
-// `this.ending = true`, `this._clients = filtered`, etc. — the default
-// Proxy `set` would write to the empty target, leaving `_pool` stale.
 let _pool: Pool | null = null;
 const getPool = (): Pool => {
   if (!_pool) _pool = new Pool(config);

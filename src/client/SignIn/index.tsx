@@ -53,12 +53,6 @@ const Home = () => {
       const user = new SignedUser(
         mutation.data?.body as unknown as SignedUserType
       );
-      // The bootstrap hydrate/persist setup (src/index.tsx) ran before this
-      // in-app login, so it saw no user. Re-point the query cache at the now
-      // logged-in user so persistence starts, and seed from any cache that
-      // survived a prior session on this browser. Await the seed before showing
-      // the app so a slow IDB read can't land after — and clobber — the fresh
-      // fetch the mail list kicks off on mount. (#457)
       setCacheUser(user.id);
       hydrateQueryCache(user.id).finally(() => {
         setTimeout(() => setUserInfo(user), 500);

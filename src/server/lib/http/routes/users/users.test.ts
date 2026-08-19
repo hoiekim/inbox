@@ -356,8 +356,6 @@ describe("postTokenRoute", () => {
   });
 });
 
-// ── rate-limit integration with login/token routes (#504) ─────────────────────
-
 describe("postLoginRoute + loginLimiter integration (#504)", () => {
   beforeEach(() => {
     mockGetUser.mockClear();

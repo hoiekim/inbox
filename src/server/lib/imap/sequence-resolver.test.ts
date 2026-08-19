@@ -130,9 +130,6 @@ describe("resolveSeqRangeToUids (inbox #588)", () => {
     expect(resolveSeqRangeToUids([], 1, 10)).toBeUndefined();
   });
 
-  // inbox #660: a bare `*` (both endpoints MAX_SAFE_INTEGER) targets the last
-  // message, not nothing. The `*` sentinel start is exempt from the
-  // out-of-range guard; a concrete past-end start still matches nothing.
   it("resolves a bare `*` (start and end are `*`) to the last message", () => {
     expect(
       resolveSeqRangeToUids(uids, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)
@@ -178,10 +175,6 @@ describe("resolveUidRangeSentinel (inbox #678)", () => {
     });
   });
 
-  // The regression this closes: `*` used to reach the SQL layer as the raw
-  // Number.MAX_SAFE_INTEGER sentinel and overflow a Postgres `integer` bind
-  // parameter (crashed hoie-inbox-1 via a `UID SEARCH *` retry loop, OOM'd
-  // after ~9 min of the resulting tight failure loop).
   it("never leaves MAX_SAFE_INTEGER in the resolved pair", () => {
     const { uidStart, uidEnd } = resolveUidRangeSentinel(
       uids,
@@ -263,10 +256,6 @@ describe("countSequenceSetMessages — SEQ axis (isUidCommand=false)", () => {
   });
 
   it("handles reversed ranges (`*:1` ≡ `1:*`) — counts whole mailbox, not 0", () => {
-    // Pre-fix returned 0 → cap gate skipped → downstream
-    // `convertSequenceSet` normalized to `1:*` and fetched every row,
-    // breaching the 50-body cap. Real cap-bypass DoS via a spec-legal
-    // `SEQ FETCH *:1`.
     const set: SequenceSet = {
       type: "sequence",
       ranges: [{ start: Number.MAX_SAFE_INTEGER, end: 1 }],
@@ -456,10 +445,8 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   });
 
   it("`UID 1:*` on a pruned mailbox emits a range of REAL UIDs, not seq positions", () => {
-    // The R1 HIGH scenario: previously returned `{start:1, end:50}` and
-    // silently matched zero rows. Now returns `{start:10001, end:10003}`
-    // for limit=3 — the actual first-3 UIDs, and since they're contiguous
-    // the coalescer collapses them into a single range.
+    // A pruned mailbox's UIDs start well above 1; the clamper must resolve
+    // 1..* to the actual first-limit UIDs and coalesce contiguous runs.
     const result = clampSequenceSetToFirst(
       uids,
       set([{ start: 1, end: Number.MAX_SAFE_INTEGER }]),
@@ -493,11 +480,9 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   });
 
   it("walks multiple ranges in order, stopping at limit, and emits coalesced sub-ranges", () => {
-    // The R2 MED scenario: matched UIDs are non-contiguous, so a single
-    // enclosing range [10001..10006] would over-fetch (dense mailbox has
-    // real 10003/10004 in it, so `getMessages(10001, 10006)` would return
-    // 6 rows — 2 unrequested — breaching the cap by 50%). Coalescing
-    // preserves the request's shape post-clamp.
+    // Non-contiguous matched UIDs: a single enclosing range would over-fetch
+    // (the dense mailbox holds intermediate UIDs, breaching the cap).
+    // Coalescing preserves the request's shape post-clamp.
     const result = clampSequenceSetToFirst(
       uids,
       set([
@@ -532,12 +517,6 @@ describe("clampSequenceSetToFirst — UID axis (isUidCommand=true)", () => {
   });
 
   it("R5 HIGH: `UID FETCH *:10051` on pruned mailbox — resolves `*`, normalizes reversed range, clamps to first N", () => {
-    // Pre-fix: `startUid = MAX_SAFE_INTEGER`, `endUid = 10051`.
-    // Predicate `uid >= MAX_SAFE_INTEGER` is never true → matched=[] →
-    // returns empty ranges → silent zero-fetch even though the counter
-    // now correctly reports 9900 requested UIDs. Post-fix resolves the
-    // `*` sentinel to maxUid, normalizes to `[10051..maxUid]`, and
-    // clamps to the first N.
     const pruned = Array.from({ length: 9950 }, (_, i) => 10001 + i);
     const result = clampSequenceSetToFirst(
       pruned,

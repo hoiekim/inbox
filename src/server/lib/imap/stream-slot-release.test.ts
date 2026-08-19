@@ -1,19 +1,3 @@
-/**
- * Slot release when a FETCH consumer dies mid-stream (#728).
- *
- * `withBodyBudgetStream` and `withStreamMutex` both hand ownership back in a
- * `finally`. An async generator only runs that `finally` if the consumer
- * either drains it or calls `.return()` on it — a consumer that pulls one
- * chunk and then walks away holds its slot for the lifetime of the process,
- * and the budget's effective capacity drops by one permanently.
- *
- * `writeStreamToSocket` is the only consumer of these generators, and it
- * unwinds through `for await`, whose abrupt-completion path calls `.return()`.
- * These tests pin that contract at the seam the socket actually dies on, so a
- * future refactor of the write loop (an early `return` hoisted out of the
- * `for await`, a manual `.next()` pump, a `Promise.race` around the drain)
- * cannot silently reintroduce the leak.
- */
 import { describe, it, expect, beforeEach } from "bun:test";
 
 import {

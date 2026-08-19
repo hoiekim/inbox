@@ -1,12 +1,3 @@
-/**
- * Unit tests for SpamAllowlistTable methods.
- *
- * Verifies the SQL string + parameter normalization layer that wraps the DB.
- * Pool is mocked — no live PostgreSQL needed.
- *
- * Specifically covers the regression from #483: addEntry's ON CONFLICT clause
- * references (user_id, pattern) and must match the table's UNIQUE constraint.
- */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 

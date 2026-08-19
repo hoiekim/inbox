@@ -24,15 +24,6 @@ export const SEARCH_VECTOR_COLUMNS = [
   "to_text",
 ] as const;
 
-/**
- * `subject` / `from_text` / `to_text` are plain text, so angle brackets are
- * blanked before tokenizing — otherwise a subject like `<alert>` tokenizes
- * as an HTML tag and the word is silently dropped. `text` (the HTML body) is
- * passed through untouched, where tag stripping IS the desired behavior.
- *
- * `prefix` is `"NEW."` inside the trigger function and `""` for a bare
- * UPDATE against the table.
- */
 export const searchVectorExpression = (prefix: "" | "NEW."): string =>
   `to_tsvector('english',
         coalesce(replace(replace(${prefix}subject,   '<', ' '), '>', ' '), '') || ' ' ||
@@ -41,18 +32,6 @@ export const searchVectorExpression = (prefix: "" | "NEW."): string =>
         coalesce(replace(replace(${prefix}to_text,   '<', ' '), '>', ' '), '')
       )`;
 
-/**
- * Idempotent DDL for the trigger function and the INSERT/UPDATE trigger
- * pair, in execution order.
- *
- * The pair is split so the UPDATE side can carry `UPDATE OF <cols>` and skip
- * retokenizing metadata-only writes (`updateRfc822Size` per #731, flag and
- * spam updates). INSERT has no `OF` equivalent and always fires — a new row
- * needs its `search_vector` no matter which columns the INSERT enumerates.
- *
- * The DROPs also retire the older combined `BEFORE INSERT OR UPDATE`
- * definition that used the `mails_search_update` name.
- */
 export const searchVectorDdl = (): string[] => [
   `CREATE OR REPLACE FUNCTION mails_search_vector_trigger() RETURNS trigger AS $$
       BEGIN

@@ -385,14 +385,6 @@ export async function listMailboxes(
   }
 }
 
-/**
- * Every proper ancestor path of the given names — `Projects/Work/Q3`
- * contributes `Projects` and `Projects/Work`. Built in one pass
- * (O(names × depth)) rather than re-scanning the set per candidate, which
- * would be quadratic on an account with thousands of per-address boxes, and
- * keyed on path segments so a `Project` that is merely a string prefix of
- * `Projects/Work` is not treated as its parent.
- */
 const collectAncestors = (names: string[]): Set<string> => {
   const ancestors = new Set<string>();
   names.forEach((name) => {
@@ -404,16 +396,6 @@ const collectAncestors = (names: string[]): Set<string> => {
   return ancestors;
 };
 
-/**
- * `getMailboxAttributes` derives \HasChildren only for the `accounts/` parents
- * and the unified Sent folder, so a user-created `Projects` reports
- * \HasNoChildren even with `Projects/Work` present (#778 — the same gap hits
- * LIST). LSUB cannot carry it: the ancestor rule below returns an
- * *unsubscribed* parent as \HasChildren, so leaving the subscribed one at
- * \HasNoChildren would tell a "%"-walking client to descend into the hidden
- * branch and prune the visible one. Corrected on this response only; LIST
- * keeps its current bytes until #778 lands.
- */
 const withHierarchyAttribute = (attrs: string, hasChildren: boolean): string =>
   hasChildren ? attrs.replace("\\HasNoChildren", "\\HasChildren") : attrs;
 
@@ -437,12 +419,6 @@ export async function listSubscribedMailboxes(
     const allBoxes = entries.map((entry) => entry.name);
     const parentPaths = collectAncestors(allBoxes);
 
-    // RFC 3501 §6.3.9: an unsubscribed name sitting between the root and a
-    // subscribed descendant is still returned, marked \Noselect, or a client
-    // walking one level at a time never reaches the child. That loss is
-    // specific to "%": a "*" walker is handed the descendant itself, so
-    // promoting there would only keep an unsubscribed folder in the client's
-    // subscription list forever — the #688 complaint this PR is fixing.
     const promoteAncestors = (reference + pattern).includes("%");
     const ancestorsOfSubscribed = promoteAncestors
       ? collectAncestors(entries.filter((entry) => entry.subscribed).map((e) => e.name))

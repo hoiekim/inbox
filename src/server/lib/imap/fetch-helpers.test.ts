@@ -1,13 +1,3 @@
-/**
- * Tests for fetch-helpers.ts.
- *  - getRequestedFields column mapping. Covers inbox #542 (FETCH FLAGS must
- *    request the `answered` column so the \Answered flag round-trips).
- *  - buildFetchResponsePart FETCH response construction. Covers inbox #580:
- *    the ENVELOPE case must emit the RFC 3501 §7.4.2 10-field envelope (From
- *    in slot 3), not the dropped-From 11-field shape.
- *  - convertSequenceSet normalization. Covers inbox #582: a descending
- *    seq/UID range like `3:1` must resolve the same as `1:3` (RFC 3501 §9).
- */
 
 import { describe, it, expect, mock, afterAll } from "bun:test";
 import fs from "node:fs";
@@ -111,15 +101,11 @@ describe("getRequestedFields", () => {
       expect(fields.has("messageId")).toBe(true);
     });
 
-    // #667: the reply-to member of the §7.4.2 envelope needs its column
-    // selected, else it always renders NIL.
     it("requests replyTo so the envelope reply-to member is populated", () => {
       expect(getRequestedFields([{ type: "ENVELOPE" }]).has("replyTo")).toBe(true);
     });
   });
 
-  // #667: the served RFC-2822 header block must carry Reply-To when present,
-  // so every body fetch that serializes headers selects the replyTo column.
   describe("replyTo column selection (#667)", () => {
     it("BODY[] (FULL) requests replyTo", () => {
       const fields = getRequestedFields([
@@ -200,12 +186,6 @@ describe("getRequestedFields", () => {
         { type: "BODY", peek: false, section: { type: "TEXT" } }
       ]);
       expect([...rfc].sort()).toEqual([...body].sort());
-      // #757: TEXT projects ONLY the lazy synthetics, exactly like
-      // BODY[]. Both the partial and non-partial TEXT branches stream
-      // through the segment walker now, so nothing under TEXT needs the
-      // materialized strings — and projecting them would flip
-      // `wantsLazyBodies` to false, putting O(sizeof(text)+sizeof(html))
-      // back on the V8 heap for every command.
       expect(rfc.has("text")).toBe(false);
       expect(rfc.has("html")).toBe(false);
       expect(rfc.has("text_octets" as FetchRequestedField)).toBe(true);
@@ -215,12 +195,6 @@ describe("getRequestedFields", () => {
     });
   });
 
-  // #757: the per-command allocation that survived a same-socket
-  // pipelined burst. `getRequestedFields` drives the SQL projection, so
-  // a shape that adds `text`/`html` pulls the multi-MB columns into V8's
-  // heap for the whole command — 14 of those back-to-back is the
-  // 144 → 272 MB RSS climb the issue recorded. Only the two sub-sections
-  // that genuinely cannot stream may ask for them.
   describe("body-column projection is lazy-only except for .MIME / .HEADER (#757)", () => {
     const bodyFetch = (section: BodySection, partial?: { start: number; length: number }) =>
       getRequestedFields([
@@ -248,11 +222,6 @@ describe("getRequestedFields", () => {
       });
     }
 
-    // `getBodyPartHeaders` needs only "does a text/html part exist",
-    // which `resolveBodyPresence` answers from the octet counts. Pulling
-    // the strings would make `UID FETCH 1:* (BODY.PEEK[1.MIME])` project
-    // every row's full body — #757's allocation shape — to compute two
-    // booleans.
     for (const sub of ["MIME", "HEADER"] as const) {
       it(`BODY[1.${sub}] projects the octet counts, NOT text/html`, () => {
         const fields = bodyFetch({ type: "MIME_PART", partNumber: "1", subSection: sub });
@@ -288,12 +257,6 @@ describe("getRequestedFields", () => {
 
   describe("RFC822.SIZE (inbox #654)", () => {
     it("requests the full-message columns its size computation serializes, plus the cached column", () => {
-      // RFC822.SIZE is derived from the FULL-body serializer, so a bare
-      // `FETCH n RFC822.SIZE` must load the header columns too — otherwise
-      // formatHeaders omits those lines and the size under-reports vs BODY[].
-      // Post-#729: also request `rfc822_size` (the cached-column short-circuit)
-      // so the fetch handler can skip buildFullMessage when the value is
-      // already persisted. The set is a STRICT SUPERSET of BODY[]'s.
       const size = getRequestedFields([{ type: "RFC822.SIZE" }]);
       const body = getRequestedFields([
         { type: "BODY", peek: true, section: { type: "FULL" } }
@@ -666,21 +629,6 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
   });
 
   it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync (#733 reviewoie HIGH)", async () => {
-    // Reproduces the reviewoie HIGH: the stream side previously called
-    // `buildMessageSegments` independently from `computeFullMessageSize`,
-    // so each pass ran its own `fs.statSync` on the attachment. If the
-    // file grew between the two stats, `{N}` (from the first) < emitted
-    // bytes (from the second), corrupting the wire literal — reviewoie
-    // reproduced "declared 1833, emitted 67165". Fix hoisted segments to
-    // the caller so both size + stream derive from ONE list.
-    //
-    // The fix hoists `buildMessageSegments` to `buildBodyResponsePart`
-    // so ONE list drives both measurement and emit. This test proves it
-    // by growing the file AFTER the fetch part is constructed (which
-    // freezes the segment list) but BEFORE the stream drains — before
-    // the fix, the stream would `stat` the grown file and emit more
-    // bytes than declared. After the fix, the emit is clamped by the
-    // segment's stored `rawSize`.
     const id = "att-grows-mid-fetch";
     const initial = Buffer.alloc(1024, 7);
     writeAttachment(id, initial);
@@ -767,9 +715,9 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
     expect(decodePart(wire, "present.bin").equals(Buffer.alloc(120_000, 5))).toBe(true);
   });
 
-  // MED 4 in review: the MIME layout used to be hand-parallel across the
-  // measure/emit/materialize functions, so a shape covered by only one of them
-  // could drift. These walk every branch of the layout with a real file on disk.
+  // Walk every branch of the MIME layout with a real file on disk so a shape
+  // covered by only one of measure/emit/materialize cannot drift out of the
+  // others silently.
   const layoutShapes: Array<[string, (id: string) => Partial<MailType>]> = [
     [
       "text + html + attachment (alternative nested in mixed)",
@@ -981,12 +929,6 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
 });
 
 describe("getRequestedFields BODYSTRUCTURE cached-column projection (#740)", () => {
-  // The load-bearing invariant. BODYSTRUCTURE's projection MUST NOT include
-  // `text` / `html` after #740 — a bare `UID FETCH X BODYSTRUCTURE` was
-  // materializing multi-MB text/html per UID just to derive the `lines`
-  // field. Projection is now the pre-measured octet counts + persisted
-  // line-count columns (metadata-only); the cache-miss fallback loads
-  // text/html per row only when the persisted column is NULL.
   it("projects text_octets + html_octets + line-count columns, NOT text/html", () => {
     const fields = getRequestedFields([
       { type: "BODYSTRUCTURE", extensible: true },
@@ -1440,9 +1382,6 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     const part = await buildBodyResponsePart(mail, fetch, "doc-1", "INBOX");
 
     expect(part).not.toBeNull();
-    // #757: partial TEXT streams through the segment walker now instead
-    // of materializing via `buildFullMessage` + slicing. The literal-length
-    // invariant below is unchanged — only the carrier is.
     expect(part!.type).toBe("stream");
     const emitted = await contentAsStringAny(part!);
     // The {N} literal header must match the bytes that follow it on the wire;
@@ -1451,9 +1390,6 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     expect(Buffer.byteLength(emitted, "utf8")).toBe(part!.length);
     // A <0.10> partial returns exactly 10 octets — no trailing CRLF.
     expect(part!.length).toBe(10);
-    // inbox #640: the response partial marker is the single origin octet only
-    // (RFC 3501 §9 / §7.4.2 `"BODY" section ["<" number ">"]`). The request's
-    // `<start.length>` form must NOT be echoed into the response.
     expect(part!.header).toContain("<0>");
     expect(part!.header).not.toContain("<0.10>");
     expect(part!.header).not.toMatch(/<\d+\.\d+>/);
@@ -1547,17 +1483,12 @@ describe("buildBodyResponsePart — partial fetch literal length (inbox #581)", 
     const emitted = await contentAsStringAny(part!);
     expect(Buffer.byteLength(emitted, "utf8")).toBe(part!.length);
     expect(part!.length).toBe(8);
-    // inbox #640: single origin octet only — not the request's `<start.length>`.
     expect(part!.header).toContain("<5>");
     expect(part!.header).not.toContain("<5.8>");
     expect(part!.header).not.toMatch(/<\d+\.\d+>/);
   });
 });
 
-// inbox #582: RFC 3501 §9 — a seq/UID range is order-independent, so `3:1` must
-// resolve to the same set as `1:3`. The unnormalized version passed the raw
-// endpoints into a `uid >= start AND uid <= end` predicate, so a descending
-// range produced `>= 3 AND <= 1` → matched nothing (FETCH empty / STORE NO).
 const MAX = Number.MAX_SAFE_INTEGER; // the parser's expansion of `*`
 const seqSet = (ranges: { start: number; end?: number }[]): SequenceSet => ({
   type: "sequence",
@@ -1704,10 +1635,6 @@ describe("buildBodyResponsePart MIME part sub-sections (inbox #657)", () => {
   });
 });
 
-// #702 bug 2: the UID data item must draw from the domain-scoped UID space
-// (uid.domain) for INBOX AND the unified "Sent Messages" folder — both resolve
-// to accountName=null in resolveBox. Emitting uid.account for the unified Sent
-// folder made uidToSeqNumber miss and silently dropped messages from FETCH.
 describe("buildFetchResponsePart UID data item — domain-scoped UID space (#702)", () => {
   const mail: Partial<MailType> = {
     uid: { account: 7, domain: 42 } as MailType["uid"],
@@ -1810,16 +1737,6 @@ describe("buildBodyResponsePart cached-path shape preservation", () => {
   });
 });
 
-// Reviewoie R1 on #770 caught 3 HIGH bugs, all rooted in the same class:
-// existing fixtures pre-populate `mail.text = "..."` (materialized), which
-// forces the non-lazy code path. Prod mails on the FETCH hot path arrive
-// with `text` undefined + `text_octets` set. The fall-through paths
-// (`.MIME` / `.HEADER` sub-sections, partial TEXT, partial MIME_PART)
-// all read `mail.text.trim()` directly — undefined → predicate false →
-// wrong shape. Fixed by re-adding materialized `text` / `html` to
-// `addBodyFields` for TEXT + MIME_PART. These tests EXPLICITLY use the
-// prod-shape mail (lazy fields only, text/html undefined) to guard
-// against the field-projection regressing again.
 describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 R1)", () => {
   // Prod-shape: mail row projected by getMailsByRange as it appears
   // for a real FETCH — no `text` / `html` strings, just octet counts +
@@ -1842,29 +1759,6 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
     ...overrides,
   }) as Partial<MailType>;
 
-  // These tests EXPLICITLY set `text: undefined` so the mail arrives in
-  // the shape `getMailsByRange` now returns for every body-bearing
-  // section: lazy fields only, no materialized strings.
-  //
-  // Before #757, partial TEXT fell through to `buildFullMessage` (which
-  // THROWS "cannot materialize a lazy-text segment" on this shape) and
-  // partial bare MIME_PART fell through to `getBodyPart` (whose
-  // `mail.text && mail.text.trim().length > 0` predicate short-circuits
-  // on undefined → silent null-return, response part dropped from the
-  // FETCH tuple with no diagnostic). Both now take the segment walker
-  // and stream correctly — that is the fix, asserted positively below.
-  //
-  // `.MIME` / `.HEADER` has no streaming counterpart — it returns a few
-  // hundred bytes of static MIME header — but it no longer needs the
-  // materialized strings either: `getBodyPartHeaders` reads part
-  // existence through `resolveBodyPresence`, which prefers the octet
-  // counts. Previously this shape hit
-  // `mail.text && mail.text.trim().length > 0` with `text` undefined,
-  // short-circuited to falsy, and fired the early
-  // `!hasAttachments && !hasText && !hasHtml → return null` — a SILENT
-  // null-return that dropped the response part from the FETCH tuple with
-  // no diagnostic. Pinned positively now: the part is emitted, and it
-  // names the same part `BODY[1]` streams.
   it("BODY[1.MIME] on lazy-only mail (text/html undefined) returns the part's MIME header", async () => {
     const mail = prodShapeMail({ text: undefined as unknown as string, html: undefined as unknown as string });
     const part = await buildBodyResponsePart(
@@ -1970,15 +1864,6 @@ describe("buildBodyResponsePart on prod-shape (lazy-projected) mail (inbox #770 
 });
 
 describe("buildFetchResponsePart partial BODY[]<start.length> streams through segments", () => {
-  // iOS Mail's chunked large-body pull uses `BODY[]<0.65536>`, then
-  // `BODY[]<65536.65536>`, etc. Under the segment-walk streamer, partial
-  // fetches take the SAME shape as non-partial full fetches — they
-  // project the LAZY synthetics (`text_octets` / `html_octets` +
-  // `mail_id` / `user_id`) and stream through `streamPartialFromSegments`,
-  // slicing in-flight to the requested [start, start+length) window.
-  // Peak stays O(chunk) regardless of body size, which is the whole
-  // point of #757's kill-materialized-fallback direction — cache is
-  // not needed when the stream itself is byte-range-aware.
 
   const mail: Partial<MailType> = {
     uid: { account: 1, domain: 1 } as MailType["uid"],
@@ -2016,20 +1901,6 @@ describe("buildFetchResponsePart partial BODY[]<start.length> streams through se
   });
 
   it("emits EXACTLY `part.length` bytes on chunked <off.N> partial sequence (wire-trailer parity)", async () => {
-    // Reviewoie #769 R1 caught: partial FULL was using `sumSegmentBytes`
-    // (trailer-inclusive) as the total-bytes ceiling, but
-    // `streamPartialFromSegments` never emits the trailer — so any
-    // partial reaching end-of-body advertised `{N}` two bytes larger
-    // than what actually landed on the wire. iOS's real chunked sync
-    // uses `<0.65536>`, `<65536.65536>`, ..., `<last.65536>` — the last
-    // chunk always hits this, corrupting every subsequent tagged
-    // response. This test walks the same *pattern* at a much smaller
-    // chunk (250 B) against a small in-memory mail, so at least three
-    // iterations fire and the last one lands < chunkSize with the
-    // clamp active. Drains each stream and cross-checks the count
-    // instead of asserting only on `part.length` — the parity test in
-    // session-utils compared against `streamFromSegments` (which also
-    // excludes the trailer, so its parity held) and missed this class.
     const chunkSize = 250;
     let start = 0;
     for (let i = 0; i < 10; i += 1) {

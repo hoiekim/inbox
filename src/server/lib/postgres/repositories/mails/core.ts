@@ -70,18 +70,6 @@ export const decideMappedPivots = (
   return decisions;
 };
 
-/**
- * Mirror the mapped-utility invariants (#725) — `mails.saved = TRUE ⇔ pivot
- * on Starred`, `mails.deleted = TRUE ⇔ pivot on Trash` — after any saveMail
- * write. Called from both the INSERT branch (`saved`/`deleted` are the new
- * row's post-INSERT state) and the 23505 merge branch (they're
- * `input.placement.saved`/`input.placement.deleted`, i.e. the intended
- * post-placement state).
- *
- * `decideMappedPivots` above encodes the gating logic; this wrapper is the
- * pool-touching side and stays trivial so the unit tests can pin the
- * decisions instead of the effect.
- */
 export const syncMappedPivotsForRow = async (
   user_id: string,
   mail_id: string,
@@ -123,43 +111,16 @@ export interface SaveMailInput {
   expunged?: boolean;
   insight?: object | null;
   uid_domain?: number;
-  /**
-   * Per-mailbox UID reserved via `getMailboxUidNext` for the mailbox this
-   * write targets. Not persisted on the `mails` table (dropped in #702 PR 3);
-   * `saveMail` mirrors it into `mail_mailbox_uid.uid` (keyed by
-   * `input.mailbox`), which is now the sole per-mailbox UID source. Skip when
-   * the write is domain-only (INBOX / unified Sent Messages) — those views
-   * enumerate by `uid_domain`, not the mapping.
-   */
   uid_mailbox?: number;
   spam_score?: number;
   spam_reasons?: string[] | null;
   is_spam?: boolean;
-  /**
-   * Flags the destination box selects on. `Drafts` / `Junk` (domain-scoped
-   * utility views) select rows by the flag, so a merge that skipped this
-   * would answer `OK [APPENDUID …]` for a message that landed in no box the
-   * client named. `Starred` / `Trash` (mapped-utility, #725) do the reverse:
-   * a pivot row IS the membership, and saveMail mirrors `saved` / `deleted`
-   * here into the pivot on both the INSERT and the 23505 merge branch so a
-   * placement flip stays in agreement with the `mail_mailbox_uid` row.
-   * `utilityPlacement` in `imap/util.ts` produces it.
-   */
   placement?: {
     draft?: boolean;
     is_spam?: boolean;
     saved?: boolean;
     deleted?: boolean;
   };
-  /**
-   * Destination mailbox path (per-account like `INBOX/accounts/claude` /
-   * `Sent Messages/accounts/claude`, or user-created like `Archive`). When
-   * set alongside a non-zero `uid_mailbox`, `saveMail` writes the (user,
-   * mailbox, mail_id, uid) tuple into `mail_mailbox_uid` — the sole
-   * per-mailbox UID source after #702 PR 3. Domain-scoped destinations
-   * (INBOX, unified Sent Messages) are omitted deliberately: `uid_domain`
-   * is authoritative for those views.
-   */
   mailbox?: string;
 }
 
@@ -214,13 +175,12 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Populated here so a mail inserted after this PR is always a
-      // BODYSTRUCTURE cache hit — never triggers the fallback string-load
-      // path in fetch-helpers. Pre-migration rows sit NULL until their
-      // first BODYSTRUCTURE observation backfills them. The `""` split
-      // yields `[""]` (length 1), matching the current buildTextPart math
-      // for an empty part; buildTextPart's `hasText` predicate skips it,
-      // so a stored 1 for an empty column is never surfaced.
+      // Populated at insert so BODYSTRUCTURE cache hits never fall back to
+      // the string-load path in fetch-helpers. Rows that predate this write
+      // sit NULL until their first BODYSTRUCTURE observation backfills them.
+      // The `""` split yields `[""]` (length 1), matching buildTextPart's
+      // math for an empty part; its `hasText` predicate skips it, so a
+      // stored 1 for an empty column is never surfaced.
       [TEXT_LINE_COUNT]: countLines(text),
       [HTML_LINE_COUNT]: countLines(html),
       // Same shape as line counts: populate at INSERT so the RFC822.SIZE
@@ -264,14 +224,6 @@ export const saveMail = async (
     const row = await mailsTable.insert(data, [MAIL_ID]);
     if (row) {
       const inserted_id = row[MAIL_ID] as string;
-      // Write the per-mailbox mapping row. `mail_mailbox_uid` is now the
-      // sole per-mailbox UID source (PR 3 dropped `mails.uid_account`),
-      // so this write is authoritative — a miss here means the mail is
-      // invisible to the mailbox's account-scoped reads. Callers need
-      // the returned persisted UID (may differ from input.uid_mailbox
-      // when a row already exists — a partial-failure retry hits the
-      // ON CONFLICT DO UPDATE and returns the first-attempt UID; see
-      // #721 / #722).
       let persistedUid: number | undefined;
       if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
         persistedUid = await writeMailboxUid(
@@ -390,11 +342,6 @@ export const saveMail = async (
       };
     }
 
-    // Non-23505 error (mails INSERT transient, mail_mailbox_uid mapping-write
-    // failure via writeMailboxUid, etc.). Throw rather than return undefined
-    // so the SMTP-receive / IMAP-write caller replies 5xx / NO and the sender
-    // or client retries — silent-drop is worse than loud failure now that
-    // `mail_mailbox_uid` is the sole per-mailbox UID source (#702 PR 3).
     logger.error("Failed to save mail", {}, error instanceof Error ? error : new Error(String(error)));
     throw error;
   }
@@ -483,15 +430,6 @@ export const updateLineCounts = async (
   );
 };
 
-/**
- * Targeted body read for the BODYSTRUCTURE cache-miss fallback: pulls
- * only the `text` + `html` columns for one mail_id. Skipped when the
- * persisted line counts are present (the hot path — every row inserted
- * after #740 hits cache; only pre-migration rows sit NULL). After a
- * bulk backfill this branch effectively stops firing.
- *
- * Returns null when the row is gone (user deleted it mid-fetch).
- */
 export const getMailBody = async (
   user_id: string,
   mail_id: string
@@ -530,12 +468,6 @@ export const markMailSaved = async (
     [MAIL_ID]
   );
   if (rows.length === 0) return false;
-  // Mirror the flag into the `Starred` pivot so the IMAP utility view
-  // agrees with the web client (#725). If skipped, a "Save" from the web
-  // sets `mails.saved = true` and the `Starred` mailbox stays empty for
-  // that message — the two surfaces diverge on the same row. The IMAP
-  // STORE path syncs the pivot in `storeFlagsTyped`; this is the HTTP
-  // sibling. `syncMailboxPivot` is idempotent so a repeat mark is safe.
   await syncMailboxPivot(user_id, "Starred", mail_id, saved);
   return true;
 };
@@ -551,29 +483,6 @@ export const deleteMail = async (
   return count > 0;
 };
 
-/**
- * Mark or unmark a mail as spam.
- *
- * Returns:
- *   - `found`: true if the (user, mail) pair exists, regardless of current is_spam value
- *   - `changed`: true if the row's is_spam value was actually flipped
- *
- * Distinguishing "no change" from "not found" lets the caller skip classifier
- * training on idempotent re-marks while still surfacing real auth failures.
- * A DB fault is neither: it propagates so the route boundary answers 500
- * rather than telling the owner of an existing mail it is not theirs (#747).
- *
- * The flip moves the mail in or out of IMAP's INBOX (see `isInboxTree`), so
- * it advances the mod-sequence the way every other membership change does. That
- * keeps HIGHESTMODSEQ honest — without it a CONDSTORE client (RFC 7162 §3.1.2)
- * reads an unchanged value and concludes the mailbox never changed. It is not
- * on its own enough to evict the row: with no VANISHED channel, a client learns
- * the message is gone only on its next SELECT. Emitting that removal
- * mid-session is #742. As on the expunge paths, the mod-sequence is reserved
- * before the row count is known; an idempotent re-mark matches no row, so the
- * reserved value simply goes unused and HIGHESTMODSEQ (a MAX over stamped
- * rows) stays put.
- */
 export const markMailSpam = async (
   user_id: string,
   mail_id: string,

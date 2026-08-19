@@ -258,8 +258,6 @@ describe('mailbox-parsers', () => {
       expect(result.value.request.data.pattern).toBe('*');
     });
 
-    // Regression for #596: patterns that mix literal text with a wildcard were
-    // truncated at the first wildcard (only "%" survived from "INBOX/%").
     it('should keep a trailing wildcard after a hierarchy path', () => {
       const result = parseCommand('A001 LIST "" "INBOX/%"');
       expect(result.success).toBe(true);

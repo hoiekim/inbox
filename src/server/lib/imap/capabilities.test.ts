@@ -3,8 +3,6 @@ import { createTlsEnvFixture } from "test-helpers";
 import { getCapabilities } from "./capabilities";
 import { getImapPort, getImapTlsPort } from "./index";
 
-// STARTTLS is now gated on the certificate actually being readable (#763), so
-// every case that expects it advertised has to stage real files on disk.
 describe("IMAP capabilities", () => {
   let ssl: ReturnType<typeof createTlsEnvFixture>;
 

@@ -1,13 +1,5 @@
 import { MailHeaderData } from "common";
 
-/**
- * The single typed source of truth for which client queries are mirrored into
- * IndexedDB, plus each one's caching policy. Phase 1 reads this from the React
- * Query persistence layer (cachePersist.ts) to decide what to persist and how
- * to rebuild it on hydrate. Phase 2 (#458) will read the same table from the
- * service worker to decide what to serve offline — keep this the only place
- * that knows which endpoints are cacheable so the two layers can never drift.
- */
 export interface CacheCatalogEntry {
   /** Stable identifier — for debugging and the Phase 2 service worker. */
   id: string;
@@ -55,12 +47,5 @@ export const matchCacheCatalog = (
 ): CacheCatalogEntry | undefined =>
   cacheCatalog.find((entry) => entry.matches(queryKey));
 
-/**
- * React Query's `refetchOnMount` for a query key. Cataloged keys paint from
- * IndexedDB before the first render, so they need `"always"` — which refetches
- * regardless of `staleTime` — or a seeded paint can outlive the new-mail count
- * heuristic's blind spot (a net-zero count change) until the 10-min interval
- * fires. Everything else keeps the client-wide `refetchOnMount: false`. (#622)
- */
 export const revalidateOnMountPolicy = (queryKey: string): "always" | false =>
   matchCacheCatalog(queryKey) ? "always" : false;

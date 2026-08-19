@@ -194,11 +194,6 @@ const RenderedMail = ({
       const clonedActiveMailId = { ...activeMailId, [mail.id]: true };
       setActiveMailId(clonedActiveMailId);
     }
-    // The Writer derives the composer's "From" from `replyData.to.address`
-    // and the composer's "To" from `replyData.from.value[0].address`. For
-    // received mail that lines up naturally; for sent mail surfaced via
-    // search (or Sent Mails), we swap `from`/`to` so Reply addresses the
-    // original recipient — not the user themselves. See #510.
     if (isSentMail(mail, domainName)) {
       const ownAddress = mail.from?.value?.[0]?.address || selectedAccount;
       setReplyData({ ...mail, from: mail.to, to: { address: ownAddress } });

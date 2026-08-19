@@ -1,16 +1,3 @@
-/**
- * The compose editor must bind its tiptap `update` handler once per editor
- * instance, not once per render (#768).
- *
- * `@tiptap/core`'s `EventEmitter.on` appends without deduping and `emit` walks
- * the whole array, so a registration in the render body grows the callback list
- * by one per render and never prunes it. Every accumulated handler re-serializes
- * the document and issues a synchronous `localStorage.setItem`, which made an
- * n-character mail cost O(n^2).
- *
- * These tests render the real `Writer` and read the live `Editor`'s callback
- * list, so a regression is caught here rather than only by a manual E2E.
- */
 
 import {
   describe,

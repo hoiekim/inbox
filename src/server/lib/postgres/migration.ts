@@ -396,41 +396,6 @@ export async function runMigrations(
   }
 }
 
-/**
- * Fast-path pre-flight for `initializePostgres`: read one row from the
- * `schema_meta` marker table and check whether its stored hash equals the
- * `expectedHash` derived from the current code's DDL inputs.
- *
- * On the happy path (steady-state boot, no DDL change deployed) this one
- * SELECT replaces the ~35+ DDL round-trips `initializePostgres` would
- * otherwise issue (CREATE TABLE IF NOT EXISTS × 10 + advisory-lock
- * migration transaction + CREATE INDEX IF NOT EXISTS × 20+ + trigger DDL
- * + reindex), each of which can queue behind concurrent PG work and hit
- * `statement_timeout`. Under a prod restart
- * where the postgres instance is under load from other containers, the
- * old path can take the crashloop pattern seen at 2026-08-01
- * 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query read
- * timeout` before the 6th restart stuck.
- *
- * Returns `true` iff the marker row exists AND its `value` equals
- * `expectedHash`. Returns `false` on any mismatch, missing marker, or
- * query error — the caller falls back to the authoritative slow path.
- *
- * Correctness. `expectedHash` is computed at import time from every input
- * the slow path emits DDL for: table schemas + indexes + constraints,
- * `searchVectorDdl()`, `searchVectorReindexSql()`, and the literal text of
- * each raw-DDL const in `initialize.ts` (currently `IDX_MAILS_SEARCH_SQL`).
- * Because those same const strings are what the slow path also issues via
- * `pool.query`, any edit to a raw block automatically drifts the digest —
- * including trigger-body-only edits and index-only PRs that a name-check
- * would silently miss. Whitespace changes in schema definition strings
- * also change the hash, which is fine (the slow path is idempotent).
- *
- * Rolling deploys. If old and new versions coexist, an old boot with hash
- * X sees the newer marker Y → returns false → runs slow path → overwrites
- * to X. New boot sees X → returns false → runs slow path → overwrites to
- * Y. Flip-flopping is safe because the slow path is idempotent.
- */
 export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean> {
   try {
     const result = await pool.query<{ value: string }>(
@@ -448,7 +413,7 @@ export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean
     }
     return true;
   } catch (error: unknown) {
-    // schema_meta missing (first-ever boot after this PR ships), connection
+    // schema_meta missing (first-ever boot on a fresh DB), connection
     // dropped, statement_timeout — all fall through to the authoritative
     // slow path, which is safe to run against any state.
     const message = error instanceof Error ? error.message : String(error);
@@ -464,10 +429,6 @@ export async function checkSchemaAtTarget(expectedHash: string): Promise<boolean
  * subsequent boots can fast-path. Called from the slow path AFTER all DDL
  * succeeds — never from the fast path, since the invariant is: marker
  * present + matching hash ⇒ slow-path DDL not needed.
- *
- * `CREATE TABLE IF NOT EXISTS` first, so the first-ever boot after this
- * PR ships lands the marker table itself. On subsequent boots the table
- * exists and this is a no-op DDL followed by the UPSERT.
  */
 export async function writeSchemaMarker(hash: string): Promise<void> {
   await pool.query(`

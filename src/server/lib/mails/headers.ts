@@ -81,9 +81,6 @@ export const getMailHeaders = async (
   return mailModels.map(toMailHeaderData);
 };
 
-// Incremental fetch for the IndexedDB cache (#457): only rows changed since
-// `since`, plus tombstones (ids of rows expunged in the window) for eviction,
-// and `as_of` for the client to persist as the next cursor.
 export const getMailHeadersDelta = async (
   user: MaskedUser | SignedUser,
   address: string,

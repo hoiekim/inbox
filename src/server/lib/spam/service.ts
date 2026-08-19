@@ -15,11 +15,6 @@ import { evaluateRules, DEFAULT_RULES } from "./rules";
 import { isAllowlisted as realIsAllowlisted } from "../postgres/repositories/spam_allowlists";
 import { classifyEmail as realClassifyEmail } from "./classifier";
 
-// DI seams — production callers pass nothing and get the real
-// implementations. Tests inject stubs through these args instead of
-// `mock.module`, which is process-wide in Bun and leaks across sibling
-// test files (root cause of the classifier.test.ts CD flake on
-// 2026-05-17; same DI factoring as backfill-snapshots.ts).
 type IsAllowlistedFn = typeof realIsAllowlisted;
 type ClassifyEmailFn = typeof realClassifyEmail;
 export interface CheckSpamDeps {

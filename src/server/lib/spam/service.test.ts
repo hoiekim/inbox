@@ -1,12 +1,3 @@
-/**
- * Unit tests for `checkSpam` — verifies the classifier scoring gate
- * within the 4-layer spam pipeline.
- *
- * Uses dependency injection via `checkSpam(... , deps)` instead of
- * `mock.module`. The latter is process-wide in Bun and silently
- * replaced classifier.test.ts's imported `classifyEmail` with this
- * file's mock, causing the CD flake on 2026-05-17 (Hoie).
- */
 
 import { describe, it, expect } from "bun:test";
 import { checkSpam, CheckSpamDeps } from "./service";
@@ -37,8 +28,6 @@ const subtleHamEmail = {
 describe("checkSpam — classifier scoring gate", () => {
   it("ignores classifier score < 50 (HAM verdict) so it does not inflate totalScore", async () => {
     const result = await checkSpam("user1", subtleHamEmail, {}, baseDeps(49, null));
-    // Rules contribute 20 (reply-to mismatch + html-only). Classifier verdict is HAM
-    // (score 49 < 50, reason null) and must contribute 0 — pre-fix it added 49 → 69.
     expect(result.score).toBe(20);
     expect(result.isSpam).toBe(false);
     expect(result.flaggedBy).toBeUndefined();

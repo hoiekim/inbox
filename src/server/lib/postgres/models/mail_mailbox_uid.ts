@@ -81,11 +81,6 @@ export const mailMailboxUidTable = createTable({
   constraints: [
     // Natural PK: one UID per (user, mailbox, mail).
     `PRIMARY KEY (${USER_ID}, ${MAILBOX}, ${MAIL_ID})`,
-    // RFC 3501 §2.3.1.1 — UIDs strictly unique per mailbox. Doubles as the
-    // view-order index (SELECT … WHERE user, mailbox match ORDER BY uid ASC
-    // uses this prefix). Also load-bearing for the insert path's
-    // ON CONFLICT DO NOTHING — a losing racer that reserved a duplicate UID
-    // falls through and re-reads.
     `UNIQUE (${USER_ID}, ${MAILBOX}, ${UID})`,
     // Cascade delete when the mail row is deleted so the mapping doesn't
     // leak. Postgres does not auto-index the referencing column, so the

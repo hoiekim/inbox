@@ -17,8 +17,6 @@ import {
 import type { MailType, MailAddressValueType } from "common";
 
 describe("IMAP util", () => {
-  // #702 bug 2: domain-scoped boxes (INBOX + unified "Sent Messages") draw
-  // their UID space from uid.domain; everything else is account-scoped.
   describe("isDomainScoped", () => {
     it("is true for INBOX in any casing", () => {
       expect(isDomainScoped("INBOX")).toBe(true);
@@ -442,11 +440,6 @@ describe("IMAP util", () => {
     });
   });
 
-  // #826: an external sender picks the bytes in `subject`, `message_id` and
-  // the `*.text` address blobs — `receive.ts` stores them verbatim and
-  // mailparser decodes `=?utf-8?B?…?=`, so a CRLF reaches the column. Emitted
-  // raw into the RFC 5322 block, it opens a header field of the sender's
-  // choosing.
   describe("formatHeaders — header injection (#826)", () => {
     /** The block's field names, in order, one entry per emitted line. */
     const fieldsOf = (block: string): string[] =>
@@ -477,9 +470,6 @@ describe("IMAP util", () => {
       expect(block).toContain("From: real@sender.example\r\n");
     });
 
-    // Every stored string named in #826's acceptance criteria, each carrying
-    // the same payload. Asserting the mapped result per field (rather than
-    // `.every(...)`) so one leaking field can't hide behind the others.
     const CARRIERS = [
       ["messageId", (v: string) => ({ messageId: v })],
       ["subject", (v: string) => ({ subject: v })],
@@ -710,11 +700,6 @@ describe("IMAP util", () => {
       expect(formatBodyStructure(mail)).toBe(expected);
     });
 
-    // #740: BODYSTRUCTURE's `size` + `lines` derive from the persisted
-    // octet / line-count columns when the caller projects them (the
-    // BODYSTRUCTURE hot path — no text/html string materialization). The
-    // wire response for the same underlying content must be byte-identical
-    // whether we take the cached path or fall through to base64+split.
     it("derives text-part size + lines from the cached synthetics with no strings loaded", () => {
       const cached = formatBodyStructure({
         text_octets: 30,
@@ -740,9 +725,6 @@ describe("IMAP util", () => {
       expect(cached).toBe(materialized);
     });
 
-    // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
-    // extension data: md5/disposition/language/location on single parts and
-    // param-list/disposition/language/location on the multipart wrappers (#666).
     describe("non-extensible form (extensible=false)", () => {
       it("leaves a leaf text part identical (it carries no extension data)", () => {
         const mail: Partial<MailType> = { text: "Hello, World!" };
@@ -788,14 +770,6 @@ describe("IMAP util", () => {
     });
   });
 
-  // #721: multi-mail COPY/MOVE partial-failure retry safety. The old code
-  // drew a fresh random Message-ID per iteration, so a client retry after
-  // an iteration-K throw produced duplicate destination rows for the
-  // iterations that had committed (the retry's fresh ids didn't collide
-  // with the first attempt's ids). `deriveCopyMessageId` makes the id a
-  // deterministic function of (source Message-ID, dest mailbox) so the
-  // retry's INSERTs hit `mails_user_id_message_id_key` 23505 and merge
-  // into the first attempt's rows instead of inserting duplicates.
   describe("deriveCopyMessageId — retry idempotency (#721)", () => {
     it("returns the same id for the same (source, dest) — the load-bearing invariant", () => {
       const a = deriveCopyMessageId("src-msg-id", "INBOX/accounts/foo");

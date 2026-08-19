@@ -1,16 +1,3 @@
-/**
- * The IMAP surface of the utility mailboxes (#725).
- *
- * `Drafts` and `Junk` are server-defined views, not rows in `mailboxes`. That
- * makes them behave like INBOX for every command that manipulates the mailbox
- * itself: they always exist, so CREATE is a conflict, and there is nothing
- * behind them to DELETE or RENAME. Without the guards the DB layer answers each
- * of those with `[NONEXISTENT] Mailbox does not exist` — for a box the client
- * can see in its own LIST output.
- *
- * The row-level half of the feature (which mails each view holds) lives in
- * `repositories/mails/views.test.ts`.
- */
 
 import { describe, it, expect } from "bun:test";
 import {
@@ -73,11 +60,6 @@ describe("isUtilityFolder", () => {
   });
 
   it("splits utility folders by uidSpace: Drafts/Junk domain-scoped, Starred/Trash mapped", () => {
-    // Pre-#725-remainder invariant was "every utility folder is domain-scoped."
-    // The remainder needs a view spanning both `sent` axes (`Starred`, `Trash`),
-    // and the domain-scoped counter (`mail_uid_counters` keyed on
-    // `(user_id, uid_kind, uid_scope, sent)`) can't emit unique UIDs across
-    // that span — hence the split.
     expect(isDomainScoped("Drafts")).toBe(true);
     expect(isDomainScoped("Junk")).toBe(true);
     expect(isDomainScoped("Starred")).toBe(false);
@@ -108,10 +90,6 @@ describe("LIST attributes", () => {
   it("reports the RFC 6154 special-use attribute", () => {
     expect(getMailboxAttributes("Drafts", NAMES)).toBe("\\Drafts \\HasNoChildren");
     expect(getMailboxAttributes("Junk", NAMES)).toBe("\\Junk \\HasNoChildren");
-    // #725 mapped-utility variants — RFC 6154 role discovery works only if
-    // LIST advertises the attribute for these too. Apple Mail's "Choose
-    // Mailbox Behaviors" screen keys off `\Flagged` / `\Trash` when the
-    // user picks which server folder is Starred / Trash.
     expect(getMailboxAttributes("Starred", NAMES)).toBe("\\Flagged \\HasNoChildren");
     expect(getMailboxAttributes("Trash", NAMES)).toBe("\\Trash \\HasNoChildren");
   });
@@ -155,12 +133,6 @@ describe("utilityPlacement", () => {
   it("returns the flag a write into the box must set", () => {
     expect(utilityPlacement("Drafts")).toEqual({ draft: true });
     expect(utilityPlacement("Junk")).toEqual({ is_spam: true });
-    // #725 mapped-utility variants — read side selects rows via the pivot
-    // table, but the flag still has to be set here so `mails.saved = TRUE ⇔
-    // pivot on Starred` (see saveMail INSERT/merge sync). A COPY into Starred
-    // that skipped `saved = TRUE` on the row would land a mail with a Starred
-    // pivot but a stale flag — the two surfaces (IMAP view / web
-    // `mails.saved`) would disagree on membership.
     expect(utilityPlacement("Starred")).toEqual({ saved: true });
     expect(utilityPlacement("Trash")).toEqual({ deleted: true });
   });

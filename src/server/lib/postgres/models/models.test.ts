@@ -1,24 +1,3 @@
-/**
- * Unit tests for postgres model construction and transformation functions.
- *
- * These tests cover:
- *   - validateObject() from base.ts
- *   - ModelValidationError from base.ts
- *   - Model subclass construction (assigns fields, throws on bad data)
- *   - toJSON() / toUser() / toMaskedUser() transformations
- *   - PartialMailModel (field validation, unknown field rejection, partial assignment)
- *   - FilterCondition / DeleteWhereFilters type guards (structural, not DB)
- *   - resolveMutationFilters() from base.ts — the predicate rules deleteWhere()
- *     and updateWhere() bind through (#790)
- *
- * Statement execution (query, insert, update, upsert, softDelete, hardDelete,
- * deleteWhere, updateWhere, queryByIds, getByUserIds, deleteOlderThan,
- * isAllowlisted, addEntry, removeByPattern, removeById, getAllForUser)
- * is NOT tested here — it requires a live PostgreSQL connection, and
- * intercepting the pool via `mock.module` is process-global and bleeds across
- * the suite (see repositories/mail-modseq.test.ts). Pure helpers those methods
- * delegate to are fair game and belong here.
- */
 
 import { describe, it, expect } from "bun:test";
 import {
@@ -482,8 +461,6 @@ describe("UserModel.toUser", () => {
     expect(() => u.toUser()).toThrow("no password set");
   });
 
-  // #496: token/expiry must round-trip through toUser() so callers like
-  // setUserInfo / startTimer can validate them.
   it("propagates token + expiry when present", () => {
     const u = new UserModel(
       makeUserData({ token: "tok-abc", expiry: "2026-12-31T00:00:00+00:00" }),
@@ -692,15 +669,6 @@ describe("Model base class", () => {
     expect(m.constructor).toBe(MailModel);
   });
 });
-
-// ---------------------------------------------------------------------------
-// resolveMutationFilters — the predicate rules deleteWhere/updateWhere bind
-// through. `POST /api/mails/mark` with no `mail_id` reached
-// `updateWhere({ mail_id: undefined, user_id })`, and dropping the undefined
-// entry emitted `UPDATE mails SET read = $1 WHERE user_id = $2` — the caller's
-// entire mailbox (#790). Dropping undefined stays correct for optional *search*
-// filters; on a mutation it removes the predicate the caller meant to apply.
-// ---------------------------------------------------------------------------
 
 const USER_ID = "11111111-1111-1111-1111-111111111111";
 const MAIL_ID = "22222222-2222-2222-2222-222222222222";

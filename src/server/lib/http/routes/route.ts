@@ -73,9 +73,6 @@ export class Route<T> {
   };
 
   register = (router: Router) => {
-    // Bind to the exact method + path. Using `router.use(path, handler)` would
-    // mount-match (prefix match) and let a wildcard like `/:id` shadow more
-    // specific paths registered after it (#505).
     const method = this.method.toLowerCase() as "get" | "post" | "delete";
     router[method](this.path, this.handler);
   };

@@ -1,19 +1,3 @@
-/**
- * Pure decision logic behind saveMail's mapped-utility pivot sync (#725).
- *
- * `decideMappedPivots` encodes the two axes that gate a pivot write:
- *   1. flag value — `undefined` skips (INSERT branch for false-flag fresh
- *      rows; merge branch for flags the placement didn't touch).
- *   2. destination match — a write into `Starred` / `Trash` itself already
- *      wrote that pivot via `writeMailboxUid` for the reserved UID, so the
- *      sync skips it to avoid a wasted counter tick.
- *
- * Pool-mock-free by design — the pool-facing sibling `syncMappedPivotsForRow`
- * is exercised end-to-end through `storeFlagsTyped` in `message-ops.test.ts`
- * ("Starred / Trash pivot sync (#725)"). Splitting the two keeps this file
- * from touching the fragile `mock.module` pool surface (see
- * `reference_bun_mock_module_global_hoisting.md`).
- */
 import { describe, it, expect } from "bun:test";
 import { decideMappedPivots } from "./pivot-decisions";
 

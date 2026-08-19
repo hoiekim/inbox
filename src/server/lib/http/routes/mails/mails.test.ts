@@ -16,9 +16,6 @@ const mockGetMailBody = mock(async () => null as unknown);
 // Matches the real `deleteMail(): Promise<boolean>` — a stub resolving
 // `undefined` could never surface the true/false distinction the route reads.
 const mockDeleteMail = mock(async () => true);
-// `markRead` / `markSaved` report the outcome as a boolean — false means the
-// row did not match, and a DB fault throws instead (#747). Mock the real
-// signature so a route that ignores the result cannot pass.
 const mockMarkRead = mock(async () => true);
 const mockMarkSaved = mock(async () => true);
 const mockDecrementBadgeCount = mock(async () => {});
@@ -106,9 +103,6 @@ mock.module("server/lib/spam/classifier", () => ({
 
 const makeUser = (username = "alice", id = "u1") => ({ id, username });
 
-// `mails.mail_id` is `UUID PRIMARY KEY DEFAULT gen_random_uuid()`, and the
-// routes now shape-check it before querying (#747), so fixtures have to use
-// ids that could actually exist.
 const MAIL_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 const MISSING_ID = "9c8b7a65-4d3e-42f1-8a09-1b2c3d4e5f60";
 const OTHER_ID = "5e4d3c2b-1a09-4f8e-b7d6-c5b4a3928170";
@@ -1077,8 +1071,6 @@ describe("getAttachmentRoute", () => {
   });
 });
 
-// ── DB fault is not reported as not-found (#747) ─────────────────────────────
-
 describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
   // The mail repository used to catch its own errors and return the same
   // falsy value it returns for a genuinely missing row. A transient DB fault
@@ -1143,8 +1135,6 @@ describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
     ).rejects.toThrow("connection terminated");
   });
 });
-
-// ── malformed mail_id stays a rejection, not a 500 (#747) ────────────────────
 
 describe("mail routes reject a malformed mail_id before it reaches Postgres (#747)", () => {
   // `mails.mail_id` is a uuid column, so Postgres answers a malformed value

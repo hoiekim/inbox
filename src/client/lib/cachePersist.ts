@@ -7,13 +7,6 @@ import {
   idbPutQuery,
 } from "./idbStore";
 
-/**
- * Wires the IndexedDB query cache (idbStore.ts) into React Query so the app's
- * first paint can be served from the last session's data instead of waiting on
- * the network. Read-side only — mutations are unchanged. The offline / service-
- * worker behavior layered on top of this lands in Phase 2 (#458).
- */
-
 // The user whose data we may currently read and persist. null while logged out:
 // persistence pauses (it never writes another user's cache) until the next
 // bootstrap re-establishes it via setCacheUser().
@@ -27,17 +20,6 @@ export const setCacheUser = (userId?: string): void => {
   currentUserId = userId ?? null;
 };
 
-/**
- * Seed the React Query cache from IndexedDB for `userId` BEFORE the first render
- * so cached screens paint immediately without waiting on the network. Foreign-
- * user and over-age entries are skipped and purged. No-ops when logged out.
- *
- * Freshness after the seeded paint is handled by the app's existing refresh
- * machinery: the accounts query refetches on every load and its onSuccess
- * MailsSynchronizer refetches the headers when a count changes (new mail), plus
- * the 10-min refetchInterval. Reconnect-driven revalidation of the whole catalog
- * is Phase 2 (#458), which adds the online signal to drive it.
- */
 export const hydrateQueryCache = async (userId?: string): Promise<void> => {
   if (!userId) return;
   const now = Date.now();

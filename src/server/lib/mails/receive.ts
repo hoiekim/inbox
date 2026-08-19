@@ -85,10 +85,6 @@ const saveIncomingMail = async (
   let spamResult: SpamCheckResult | undefined;
   if (user.id) {
     try {
-      // `mail` was already normalized by convertMail above, which routes every
-      // AddressObject through convertMailAddress / convertAddressValue. Reuse
-      // those normalized fields instead of re-implementing the
-      // single-vs-array unwrap inline (#518).
       const emailContext: EmailContext = {
         fromAddress: mail.from?.value?.[0]?.address,
         fromName: mail.from?.text,
@@ -119,17 +115,6 @@ export const saveMail = async (
 ): Promise<{ _id: string } | undefined> => {
   if (!userId) return;
 
-  // Derive the destination account mailbox for the per-mailbox UID map
-  // (#702 PR-2b). This wrapper handles BOTH receive and send call sites:
-  //  - Received mail (mail.sent === false): envelope-to[0] is the
-  //    recipient account address; the mail lands in that account's
-  //    `INBOX/accounts/<local>` folder. Same address that scoped the
-  //    earlier `getAccountUidNext` reservation in `convertMail`.
-  //  - Sent mail (mail.sent === true): envelope-from[0] is the sender
-  //    account address; the mail lands in the sender's
-  //    `Sent Messages/accounts/<local>` folder. Same address that
-  //    scoped `getAccountUidNext(user, fromEmail, sent=true)` in
-  //    `sendMail`.
   const scopeAddress = mail.sent
     ? mail.envelopeFrom?.[0]?.address
     : mail.envelopeTo?.[0]?.address;
@@ -175,17 +160,6 @@ export const saveMail = async (
   try {
     return await pgSaveMail(input);
   } catch (error) {
-    // Persist a full copy of the mail + error for post-mortem before the
-    // failure propagates; the write is best-effort. Then re-throw so the
-    // caller (saveMailHandler → SMTP `cb(err)` → 5xx, or IMAP APPEND/COPY/
-    // MOVE → NO) fails loudly and mailgun / the client retries. Silent-
-    // return here was the #702 PR 3 mapping-write-failure loss channel.
-    //
-    // Distinguish the alarm title by mail.sent so ops-side triage in
-    // Discord routes to the right code path: a `Mail Receive Failed`
-    // signal must not fire for send-path failures (send.ts's post-
-    // mailgun-commit swallow chain calls into this saveMail with
-    // mail.sent = true).
     logger.error("Error saving mail", {}, error);
     const alarmTitle = mail.sent ? "Mail Send Save Failed" : "Mail Receive Failed";
     sendAlarm(
@@ -282,8 +256,6 @@ export const convertMailAddress = (
   return { value, text };
 };
 
-// Exported for direct unit coverage of the group-expansion / address-split /
-// empty-filter logic — the corruption fixed in #535 is entirely inside here.
 export const convertAddressValue = (
   incoming?: IncomingMailAddressValue | IncomingMailAddressValue[]
 ) => {
@@ -371,11 +343,6 @@ const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
     .map((e) => addressToUsername(e.address as string));
 };
 
-/**
- * Returns the IMAP mailbox paths that received this incoming mail.
- * Used to filter IDLE notifications so only sessions watching the
- * relevant mailbox are notified (fixes #364).
- */
 const getMailboxesFromIncomingMail = (data: IncomingMail): string[] => {
   const { envelopeTo } = data;
   if (!envelopeTo) return [];

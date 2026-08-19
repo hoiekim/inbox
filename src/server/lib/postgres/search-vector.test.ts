@@ -33,8 +33,6 @@ import {
 
 describe("search_vector expression", () => {
   it("uses the same expression in the trigger and the reindex", () => {
-    // The ONLY difference permitted between the two is the `NEW.` prefix.
-    // Anything else means the direct writer and the trigger disagree.
     const triggerSide = searchVectorExpression("NEW.").replaceAll("NEW.", "");
     expect(triggerSide).toBe(searchVectorExpression(""));
   });

@@ -1,6 +1,3 @@
-/**
- * Body-budget semaphore invariants (#726).
- */
 import { describe, it, expect, beforeEach } from "bun:test";
 
 import {

@@ -1,14 +1,3 @@
-/**
- * Source-level guards for error propagation in the mail repository (#747).
- *
- * Every consumer mocks these functions away — the repository is stubbed at the
- * barrel in each route/service test — so no behavioral test can observe whether
- * they swallow a DB fault. These read the source and pin the shape, the same
- * technique the mod-sequence guards in `imap.test.ts` use.
- *
- * Named for the invariant rather than the file, so it does not collide with the
- * unrelated `core-decisions.test.ts` (pivot-gating logic, #725).
- */
 import { describe, it, expect, beforeAll } from "bun:test";
 
 describe("core.ts does not report a DB fault as not-found (#747)", () => {

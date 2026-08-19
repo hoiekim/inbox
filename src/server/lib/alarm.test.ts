@@ -51,8 +51,6 @@ describe("sendAlarm", () => {
 
   it("isolates cooldowns by key — different keys do not suppress each other", async () => {
     process.env.DISCORD_ALARM_WEBHOOK = "https://discord.com/api/webhooks/test";
-    // Simulates the issue #517 scenario: a flood of client-error alarms must
-    // not suppress unrelated server-side alarms.
     await alarm.sendAlarm("Client JS Error", "detail", "client-error");
     await alarm.sendAlarm("Unhandled Promise Rejection", "detail");
     await alarm.sendAlarm("Uncaught Exception", "detail");

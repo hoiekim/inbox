@@ -1,14 +1,3 @@
-/**
- * Pure decision logic behind saveMail's mapped-utility pivot sync (#725).
- *
- * Lives here — not next to the pool-facing `syncMailboxPivot` in
- * `./counters` or the caller `./core` — so its test file can load ONLY this
- * module without pulling `./core`'s transitive graph (pool, models,
- * `imap/session-utils`) into scope. That graph is what makes a pool-mock
- * test file (`placement.test.ts`) leak into `users.test.ts` on Linux CI
- * under some file-enumeration orders; see
- * `reference_bun_mock_module_global_hoisting.md`.
- */
 
 /** The two mapped-utility mailbox names — kept in sync with the same
  * literals in `./core` (which cannot import from here at load time via a

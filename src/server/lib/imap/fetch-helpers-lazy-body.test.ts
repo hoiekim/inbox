@@ -37,8 +37,6 @@ const mockQuery = mock(async (sql: string, values: unknown[]) => {
     const column = substringMatch[1] as "text" | "html";
     const [mail_id, , offset, take] = values as [string, string, number, number];
     const stored = columnStore.get(`${mail_id}:${column}`) ?? "";
-    // Code points, not code units — Postgres offsets a text column by
-    // characters. See the same note in session-utils-lazy-text.test.ts (#765).
     const codePoints = [...stored];
     const start = Math.max(0, offset - 1);
     const chunk = codePoints.slice(start, start + take).join("");
@@ -127,10 +125,6 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
   it("no SUBSTRING pull exceeds PG_TEXT_CHUNK_CHARS AND emitted chunks stay ≤ ~64 KiB", async () => {
     substringCalls.length = 0;
     columnStore.clear();
-    // 500 KB ASCII HTML body — under the pre-fix shape this string lived
-    // in mail.html on the row for the whole FETCH lifetime, per in-flight
-    // concurrent fetch. Under the lazy shape, only the octet count travels
-    // on the row; the body streams chunk-by-chunk from PG.
     const html = "<p>" + "x".repeat(500 * 1024 - 8) + "</p>";
     columnStore.set("mail-big:html", html);
 
@@ -180,8 +174,6 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
       expect(call.returned).toBeLessThanOrEqual(PG_TEXT_CHUNK_CHARS);
     }
 
-    // Chunk count MUST scale with body size. A single giant pull (the
-    // pre-fix shape) or an off-by-CHUNK_CHARS bug would produce ~1 chunk.
     expect(chunkCount).toBeGreaterThan(3);
     expect(substringCalls.length).toBeGreaterThanOrEqual(
       Math.floor(html.length / PG_TEXT_CHUNK_CHARS)
@@ -235,15 +227,6 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
     expect(substringCalls.length).toBe(0);
   });
 
-  // #757: BODY[] was the only section on the lazy path. TEXT and
-  // MIME_PART projected the materialized `text`/`html` columns, so each
-  // command held O(sizeof(text) + sizeof(html)) in V8's heap for its
-  // whole duration — invisible to the concurrency and bytes-in-flight
-  // budgets (#727 / #753), which bound CONCURRENT builds and a
-  // same-socket pipeline is serial by construction
-  // (`handler.ts` awaits each `handleRequest`). 14 of these back to back
-  // is the 144 → 272 MB climb the issue recorded. These tests pin every
-  // body-bearing section onto the chunked reader.
   const sectionCases: Array<{
     label: string;
     fetch: Parameters<typeof buildFetchResponsePart>[1];
@@ -429,9 +412,6 @@ describe("BODY[] peak-transient bound: 500 KB lazy body streams in chunks, not o
     for (let k = 0; k < windowCount; k++) {
       const start = k * windowLength;
       const { body, pulls, declared } = await readSection({ start, length: windowLength });
-      // Every window reads by BYTE offset — a regression to the
-      // code-point reader (`unit: "chars"`) would re-introduce #765's
-      // over-advance on astral characters as well as the cost climb.
       expect(substringCalls.map((c) => c.unit)).toEqual(
         substringCalls.map(() => "bytes")
       );

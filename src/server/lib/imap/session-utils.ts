@@ -80,16 +80,6 @@ export const shouldMarkAsRead = (dataItems: FetchDataItem[]): boolean => {
 
 /**
  * One piece of the RFC 822 serialization.
- *
- * `buildMessageSegments` is the SINGLE definition of the MIME layout.
- * `sumSegmentBytes` measures the segments and `streamFromSegments`
- * emits them, so the `{N}` literal the writer advertises and the
- * octets that follow it are derived from one source and cannot
- * disagree. Keeping the layout in one place is the invariant,
- * not an aesthetic choice: three hand-parallel copies (measure, emit,
- * materialize) is how the count and the payload drift apart, and a
- * literal whose count is wrong desyncs every subsequent response on the
- * connection.
  */
 export type MessageSegment =
   /**
@@ -122,15 +112,6 @@ export type MessageSegment =
       filename: string;
       partPath?: string;
     }
-  /**
-   * A `mails.text` or `mails.html` column, streamed via chunked
-   * `SUBSTRING` reads and base64-encoded. `byteLength` is the raw
-   * `octet_length(<col>)` measured at range-read time (see
-   * `PartialMailModel.text_octets` / `html_octets`), so the encoded byte
-   * count is pinned before the first chunk yields — the `{N}` literal
-   * cannot race the stream. `partPath` = RFC 3501 part number for
-   * `BODY[<part>]` addressing.
-   */
   | {
       kind: "lazy-text";
       source: "text" | "html";
@@ -228,18 +209,6 @@ const wantsLazyBodies = (mail: FetchMailInput): boolean =>
 
 /**
  * Does this mail have a text / an html body part?
- *
- * Single source of truth for the predicate that decides the synthetic MIME
- * structure — `buildMessageSegments` (which parts exist on the wire) and
- * `getBodyPartHeaders` (which part number names which header block) MUST
- * agree, or `BODY[1.MIME]` describes a different part than `BODY[1]` emits.
- *
- * In lazy mode it derives from `octet_length()` so neither caller has to
- * project the multi-MB `text` / `html` columns just to compute two booleans.
- * A non-zero octet count is treated as "has content" even if the content is
- * whitespace-only; the materialized path keeps the stricter `.trim()` check.
- * Whitespace-only bodies are pathological in real mail, and the two modes
- * only ever disagree on that case.
  */
 const resolveBodyPresence = (
   mail: FetchMailInput
@@ -796,18 +765,6 @@ async function* emitAttachment(
   }
 }
 
-/**
- * Stream a pre-built segment list as `Buffer` chunks. Sum of yielded
- * byte-lengths equals `sumSegmentBytes(segments) - WIRE_TRAILER` — the
- * caller appends the wire trailer.
- *
- * **Load-bearing invariant:** the caller must share ONE segment list with
- * `sumSegmentBytes` for its `{N}` — reproducing the segment list here
- * (via `buildMessageSegments`) would `stat` files a second time and can
- * race the measurement pass, corrupting the wire response by up to
- * whatever the file's size changed by. That was hoiekim/inbox#733
- * reviewoie HIGH.
- */
 export async function* streamFromSegments(
   segments: MessageSegment[]
 ): AsyncGenerator<Buffer, void, unknown> {
@@ -864,30 +821,6 @@ async function* sliceStream(
   }
 }
 
-/**
- * Emit exactly the bytes `[start, start+length)` of the segment
- * concatenation. Same output as `Buffer.concat(...streamFromSegments(segs))
- * .subarray(start, start + length)`, but never materializes the whole
- * concatenation and stops pulling the moment `take` is satisfied.
- *
- * Byte-offset walk: for each segment we know its exact wire byte count
- * (`segmentByteLength`), so we skip segments entirely before the window,
- * stop on the first segment entirely after it, and slice-in-flight through
- * `sliceStream` on the ones that overlap.
- *
- * This is the streaming path for `BODY[]<start.length>` — the RFC 3501
- * §6.4.5 partial-fetch form. iOS Mail uses it for essentially every
- * body fetch (verified via #758 attribution: 25/25 partial vs 0/25 full
- * stream in the sample window). Before this fn, partial fell to
- * `buildFullMessage` which materialized the whole RFC 2822 serialization
- * then sliced; peak allocation was O(message). With this: O(chunk).
- *
- * Load-bearing invariant (same as `streamFromSegments`): the caller MUST
- * share ONE segment list with `sumSegmentBytes` for the range-clamp math —
- * a second `buildMessageSegments` call would `stat` attachment files a
- * second time and can race the measurement, producing a wire-length
- * disagreement.
- */
 export async function* streamPartialFromSegments(
   segments: MessageSegment[],
   start: number,
@@ -906,18 +839,6 @@ export async function* streamPartialFromSegments(
     const skipInSeg = Math.max(0, start - segStart);
     const takeInSeg = Math.min(segBytes, end - segStart) - skipInSeg;
     if (takeInSeg <= 0) continue;
-    // `lazy-text` gets the offset-aware fast path: read pgByteChunks
-    // starting at the byte position corresponding to `skipInSeg` in the
-    // segment's base64 output, instead of draining the column from
-    // position 1 and discarding through `sliceStream`. Cuts partial
-    // BODY[] window latency from O(offset) SUBSTRING round-trips to O(1)
-    // per window, so iOS's 30s per-command timeout on a multi-MB body
-    // full-sync stops firing after the first couple of tail windows
-    // (#793 unmasked this: iOS's own follow-up FETCHes for the same
-    // large message hit ever-later windows). Other segment kinds still
-    // funnel through `sliceStream` — their emitters (`emitLiteral`,
-    // `emitBase64`, `emitAttachment`) already yield in bounded chunks
-    // from a source that's cheap to re-open per window.
     if (segment.kind === "lazy-text") {
       yield* streamLazyTextPartial(segment, skipInSeg, takeInSeg);
       continue;
@@ -963,19 +884,6 @@ async function* streamLazyTextPartial(
   yield* sliceStream(base64, residualBase64, takeInSeg);
 }
 
-/**
- * Stream only the segments after the top-level header block — the payload
- * of `BODY[TEXT]` per RFC 3501 §6.4.5 ("Refers to the text body of the
- * message, omitting the header"). The header literal is tagged
- * `role: "headers"` by `buildMessageSegments`; the emitter skips exactly
- * that one and emits the rest verbatim, so multipart boundaries and
- * per-part MIME headers are preserved. Same peak-chunk bound as
- * `streamFromSegments`.
- *
- * Load-bearing invariant: the caller must share ONE segment list with
- * `sumBodyBytes` for its `{N}` (or with a `pre-length` computed by
- * summing `segmentByteLength(seg)` for the emitted subset).
- */
 export async function* streamBodyFromSegments(
   segments: MessageSegment[]
 ): AsyncGenerator<Buffer, void, unknown> {
@@ -1068,19 +976,6 @@ async function* streamOneSegment(
   }
 }
 
-/**
- * Build the complete RFC 822 message as a single string.
- *
- * **No production caller as of #757.** Its last one was `getBodyContent`'s
- * FULL / TEXT sections; every body-bearing section now takes the segment-walk
- * streaming path (`streamFromSegments` / `streamBodyFromSegments` paired with
- * `sumSegmentBytes` / `sumBodyBytes` on the same `buildMessageSegments`
- * result), so nothing materializes a whole message any more. Kept with its
- * tests because it is still the reference semantics the streamers are
- * asserted against; deletion is tracked in #834, which also covers the
- * `session.ts` / `models/common.ts` prose that names it. Do NOT reintroduce
- * it on a fetch path — peak allocation is O(message), which is #729/#757.
- */
 export const buildFullMessage = (mail: FetchMailInput, docId?: string): string => {
   const parts: string[] = [];
   for (const segment of buildMessageSegments(mail, docId)) {
@@ -1125,13 +1020,6 @@ export const buildFullMessage = (mail: FetchMailInput, docId?: string): string =
   return parts.join("");
 };
 
-/**
- * Get specific body part from multipart message.
- *
- * **No production caller as of #757**, for the same reason as
- * `buildFullMessage`: `BODY[<part>]` (bare and `.TEXT`) streams via
- * `selectPartBodySegments`. Deletion tracked in #834.
- */
 export const getBodyPart = (
   mail: Partial<MailType>,
   partNum: string
@@ -1198,27 +1086,6 @@ export const getBodyPart = (
   return null;
 };
 
-/**
- * MIME header block for a specific body part (RFC 3501 §6.4.5 `BODY[<part>.MIME]`
- * / `BODY[<part>.HEADER]`). Returns the part's `Content-Type` +
- * `Content-Transfer-Encoding` (+ `Content-Disposition` for attachments) fields
- * with no trailing CRLF — the caller appends the delimiting blank line.
- *
- * Shares `resolveBodyPresence` with `buildMessageSegments`, so the two agree
- * on WHETHER a text / html part exists. They still disagree on attachment
- * numbering when a mail has attachments but no text/html body: this function
- * reserves slot 1 for body content unconditionally while
- * `buildMessageSegments` does not, so the attachment stamped `partPath` `"1"`
- * is described here as part 2. Pre-existing and tracked in #833 — do not
- * assume the two are interchangeable for attachment parts.
- *
- * Reads the body columns only through `resolveBodyPresence`, which prefers
- * `text_octets` / `html_octets` — every return below is a static
- * `Content-Type:` block or an attachment header, so the content itself is
- * never needed. That is what lets `addBodyFields` keep `text` / `html` out of
- * the `.MIME` / `.HEADER` projection: `UID FETCH 1:* (BODY.PEEK[1.MIME])`
- * would otherwise pull every row's full body into `fetchMailsForRange`'s Map.
- */
 export const getBodyPartHeaders = (
   mail: FetchMailInput,
   partNum: string

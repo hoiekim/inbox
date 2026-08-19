@@ -51,26 +51,6 @@ export function seqToUidNumber(seqToUid: number[], seq: number): number | undefi
   return seqToUid[seq - 1]; // seq is 1-indexed, array is 0-indexed
 }
 
-/**
- * Resolve a message-sequence range [start, end] to UID bounds for a store query.
- *
- * RFC 3501 §6.4.5/§9: an endpoint beyond the largest message number is not an
- * error — it is clamped to the last message and the in-range messages are still
- * returned. The previous behaviour (resolve each endpoint independently, drop
- * the whole range if either is undefined) silently matched nothing whenever the
- * upper bound exceeded the mailbox size (e.g. `11320:11400` on 11322 messages).
- *
- * Returns undefined only when the range starts past the end of the mailbox (no
- * messages match) or the mailbox is empty. '*' (MAX_SAFE_INTEGER) clamps to the
- * last message. Endpoint ordering is left as-is; descending ranges are handled
- * separately in convertSequenceSet (issue #582).
- *
- * '*' means "the highest message in the mailbox" (RFC 3501 §9), so a `*` start
- * clamps to the last message like `end` does — `SEARCH *` / `FETCH *` target
- * the final message. This is exempt from the out-of-range guard: a *concrete*
- * sequence number past the end (e.g. `SEARCH 99999` on a 3-message mailbox)
- * must still match nothing, so only the sentinel is let through (issue #660).
- */
 export function resolveSeqRangeToUids(
   seqToUid: number[],
   start: number,
@@ -100,16 +80,6 @@ export function uidToSeqNumber(
   return uidToSeq.get(uid);
 }
 
-/**
- * Resolve the '*' UID sentinel (MAX_SAFE_INTEGER) in a UID-axis range to the
- * mailbox's actual highest UID (RFC 3501 §9: '*' = highest UID in the
- * mailbox). Concrete UIDs pass through unchanged. Unlike the sequence-number
- * axis, an out-of-range concrete UID is not an error case — it simply
- * matches no messages — so this always returns a resolved pair rather than
- * undefined. On an empty mailbox the sentinel resolves to -1 (below any real
- * UID, which are ≥ 1) instead of leaving MAX_SAFE_INTEGER to overflow a
- * Postgres `integer` bind parameter (#678).
- */
 export function resolveUidRangeSentinel(
   seqToUid: number[],
   start: number,
@@ -181,13 +151,6 @@ export function countSequenceSetMessages(
     if (range.end === undefined) {
       count += 1;
     } else {
-      // RFC 3501 §9: `10:3` ≡ `3:10`. Normalize AFTER the seq-clamp so
-      // `*:1` (parser: `{start: MAX_SAFE_INTEGER, end: 1}`) clamps to
-      // `{maxSeq, 1}` then swaps to `{1, maxSeq}` and counts the whole
-      // mailbox — matching what `convertSequenceSet` sends downstream.
-      // Pre-fix returned 0 (Math.max(0, 1 - maxSeq + 1) clamps to 0)
-      // so the cap gate skipped, and downstream fetched every row
-      // (cap-bypass DoS via a spec-legal `SEQ FETCH *:1`).
       const clampedEnd = Math.min(range.end, maxSeq);
       const clampedStart = Math.min(range.start, maxSeq);
       const lo = Math.min(clampedStart, clampedEnd);

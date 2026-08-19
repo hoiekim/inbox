@@ -34,9 +34,6 @@ export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
       return { status: "failed", message: "is_spam must be a boolean" };
     }
 
-    // `mail_id` reaches a uuid column unchecked here. A malformed value raises
-    // 22P02 rather than matching no row, and the repository no longer swallows
-    // that, so screen the shape before the query (#747).
     if (!isUuid(mail_id)) {
       return {
         status: "failed",

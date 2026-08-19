@@ -62,31 +62,11 @@ export type StoreFetchedMail = Partial<Mail> & {
   user_id?: string;
 };
 
-/**
- * One name from the listable mailbox set, with the subscription state LSUB
- * filters on. Only user-created mailboxes have a `mailboxes` row to
- * unsubscribe from; the derived ones (INBOX, the unified Sent folder, the
- * `accounts/` parents and the per-account boxes) are implicitly subscribed and
- * must stay in LSUB regardless — a client that loses INBOX from LSUB has no
- * folder set left to render (#688).
- */
 export interface MailboxEntry {
   name: string;
   subscribed: boolean;
 }
 
-/**
- * Normalises a parsed SearchCriterion into the flat `{ type, value }` shape that
- * searchMailsByUid consumes. NOT/OR recurse so their operands are normalised too —
- * otherwise the SQL builder would read the wrong field off the raw parser shape
- * (e.g. `.date`/`.field` instead of `.value`) and silently mis-handle the nested
- * criterion. An unexpressible leaf is preserved as a bare `{ type }` (never
- * dropped) so buildCriterionClause maps it to a match-none fragment — the SEARCH
- * fails closed, never matching every message (#672). A UID set
- * normalises to one `UID_SET` entry carrying all its ranges, so the SQL builder
- * ORs the ranges among themselves (a message is in the set if it falls in ANY
- * range) — nested UID keys under NOT/OR resolve the same way. See #551, #659.
- */
 export const simplifyCriterion = (
   criterion: SearchCriterion
 ): SimplifiedCriterion | null => {
@@ -145,12 +125,6 @@ export const simplifyCriterion = (
       return { type, value: sizeCriterion.size };
     }
 
-    // Logical NOT: negate a single (normalised) criterion. `inner` is never
-    // null in practice — no leaf returns null post-#672 (unexpressible leaves
-    // fail closed via the default case), so the null-guard here is defensively
-    // unreachable. If a null-returning leaf is ever reintroduced, route it
-    // through buildCriterionClause's match-none algebra rather than dropping
-    // the node — a dropped NOT fails OPEN (matches everything).
     case "NOT": {
       const notCriterion = criterion as { type: string; criterion: SearchCriterion };
       const inner = simplifyCriterion(notCriterion.criterion);
@@ -167,11 +141,6 @@ export const simplifyCriterion = (
       const left = simplifyCriterion(orCriterion.left);
       const right = simplifyCriterion(orCriterion.right);
       if (left && right) return { type: "OR", value: { left, right } };
-      // Defensively unreachable: neither side is null because no leaf returns
-      // null post-#672. Were a side ever null, dropping the OR fails OPEN
-      // (matches everything) — the opposite of the fail-closed direction the
-      // rest of the search path now takes. A reintroduced null-leaf should
-      // preserve the OR node and let buildCriterionClause reduce it instead.
       return null;
     }
 
@@ -184,18 +153,11 @@ export const simplifyCriterion = (
     case "UNKEYWORD":
       return { type };
 
-    // UID set: carry every range in one entry so the SQL builder ORs them —
-    // set membership means a message matches if it falls in ANY range (#659).
     case "UID": {
       const uidCriterion = criterion as UidCriterion;
       return { type: "UID_SET", value: uidCriterion.sequenceSet.ranges };
     }
 
-    // Unsupported criterion: preserve the type (no value) rather than dropping
-    // it here. Dropping would leave it out of the WHERE clause entirely, which
-    // matches EVERY message (fail-open) — the dangerous direction for a filter.
-    // buildCriterionClause maps any type it can't express to a match-none
-    // fragment, so the criterion fails closed instead. (#672)
     default:
       logger.warn("Unsupported search criterion", { component: "imap.store", type });
       return { type };
@@ -228,31 +190,12 @@ export class Store {
     return { accountName, isSent };
   }
 
-  /**
-   * Variant of `resolveBox` for the eight #702 mapping-aware read/write sites
-   * (countMessages/getMailsByRange/setMailFlags/getAllUids/getFirstUnseenUid/
-   * searchMailsByUid/expungeDeletedMails/expungeMailsByUid). `mailboxArg` is
-   * the raw box path — the same string the write side stores in
-   * `mail_mailbox_uid.mailbox` — for account-scoped, sent-account-scoped, AND
-   * user-created mailboxes (`Archive`, etc.), and the lookup key for a utility
-   * folder's membership predicate. `null` only for `INBOX` and the unified
-   * `Sent Messages`, the two views that select their rows by scope alone and so
-   * have nothing for the repository to key on.
-   */
   private resolveMappedBox(box: string): { mailboxArg: string | null; isSent: boolean } {
     const isSent = isSentBox(box);
     const mailboxArg = isInbox(box) || box === SENT_MESSAGES_FOLDER ? null : box;
     return { mailboxArg, isSent };
   }
 
-  /**
-   * Build the listable mailbox set; propagate backend errors. `listMailboxes`
-   * (below) wraps this in a fallback so the LIST command stays resilient,
-   * but the existence gate (`mailboxExists`) needs to distinguish "the user
-   * doesn't have this mailbox" from "I couldn't determine whether they do" —
-   * conflating the two turns a transient DB hiccup into a permanent-sounding
-   * `NO Mailbox does not exist` for the SELECT/STATUS/EXAMINE caller (#601).
-   */
   private listMailboxEntriesOrThrow = async (): Promise<MailboxEntry[]> => {
     // Match HTTP /api/mails/accounts: filter by user's domain so we only
     // expose addresses that belong to this server, not every external
@@ -345,12 +288,6 @@ export class Store {
     }
   };
 
-  /**
-   * LSUB-facing version: the same listable set as `listMailboxes`, carrying
-   * each name's subscription state so the LSUB handler can drop the
-   * unsubscribed ones while still computing hierarchy attributes against the
-   * full set (#688). Same `["INBOX"]` fallback rationale as `listMailboxes`.
-   */
   listMailboxEntries = async (): Promise<MailboxEntry[]> => {
     try {
       return await this.listMailboxEntriesOrThrow();
@@ -364,22 +301,6 @@ export class Store {
     }
   };
 
-  /**
-   * Whether `box` names a mailbox that actually exists for this user. INBOX
-   * always exists; every other name must be a member of the listable set
-   * (the unified Sent folder, the accounts/ parents, per-account boxes, and
-   * user-created mailboxes). countMessages can't answer this — it returns a
-   * zero-count aggregate for any unknown name — so SELECT/EXAMINE/STATUS must
-   * gate on this to return a tagged NO for phantom mailboxes rather than
-   * reporting them as valid-but-empty (RFC 3501 §6.3.1/2/10). See #595.
-   *
-   * Uses `listMailboxesOrThrow` (not the fallback `listMailboxes`) so a
-   * transient DB error propagates: the SELECT/STATUS handler's existing
-   * try-catch then writes `NO SELECT failed` / `NO STATUS failed` (a
-   * retry-friendly transient signal) instead of `NO Mailbox does not exist`
-   * (a permanent signal that makes the client treat the mailbox as deleted).
-   * See #601.
-   */
   mailboxExists = async (box: string): Promise<boolean> => {
     if (isInbox(box)) return true;
     const mailboxes = await this.listMailboxesOrThrow();
@@ -727,15 +648,6 @@ export class Store {
 
       const result = await pgSaveMail(input);
       if (!result) return false;
-      // Reconcile mail.uid.{account,domain} to the PERSISTED UIDs. On
-      // a 23505 merge (partial-failure retry of a multi-mail COPY /
-      // MOVE / APPEND, or an intentional dup-op to the same dest),
-      // saveMail returns the FIRST-attempt row's UIDs — the retry's
-      // freshly-reserved values would advertise UIDs that don't exist
-      // (client `UID FETCH`es come back empty). Wire callers (COPY /
-      // MOVE / APPEND) push mail.uid.{domain|account} into COPYUID /
-      // APPENDUID; reconciling here means no caller-side change. See
-      // #721 / #722.
       if (mail.uid) {
         if (result.uid_mailbox !== undefined) mail.uid.account = result.uid_mailbox;
         if (result.uid_domain !== undefined) mail.uid.domain = result.uid_domain;

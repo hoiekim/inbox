@@ -1,28 +1,3 @@
-/**
- * Tests for `copyMessageTyped` (#520).
- *
- * COPY was a stub returning `NO [CANNOT]`. After this fix it performs an
- * actual copy: for each source UID it inserts a new mail row in the
- * destination mailbox with a fresh `uid_domain` and `mail_mailbox_uid.uid`, preserving
- * subject / body / attachments / flags / headers, and emits a
- * `[COPYUID <uidvalidity> <source-set> <dest-set>]` response per RFC 4315.
- *
- * `copyMessageTyped`'s deps fall into three buckets:
- *   1. Store methods (mailboxExists, getMessages, storeMail, getUser) —
- *      patchable on the instance.
- *   2. Module-imported helpers (`getDomainUidNext`, `getAccountUidNext`,
- *      `getImapUidValidity`, `pgSaveMail` via `storeMail`) — touch the DB.
- *      We sidestep them by patching `storeMail` directly with a stub that
- *      records the call and returns true.
- *   3. The `seqState` for sequence→UID resolution — built locally.
- *
- * The TRYCREATE / sequence-resolution / COPYUID response shape tests don't
- * reach the per-mail loop, so they exercise the function without needing
- * a postgres mock. The end-to-end "store-mail is called" test patches
- * `getDomainUidNext` / `getAccountUidNext` / `getImapUidValidity` at the
- * module level via mock.module — scoped just to this file (per the
- * documented Bun hazard, full server-suite runs verify there's no bleed).
- */
 
 import {
   describe,
@@ -370,7 +345,6 @@ describe("COPY COPYUID positional pairing — out-of-order set (#624, RFC 4315 �
     // COPYUID must report the real source→dest mapping.
     expect(claimedPairing.get(3)).toBe(actualDestOf(3));
     expect(claimedPairing.get(5)).toBe(actualDestOf(5));
-    // Smaller source UID owns the smaller dest UID — fails on pre-#624 code.
     expect(actualDestOf(3)).toBeLessThan(actualDestOf(5));
   });
 });
@@ -418,7 +392,6 @@ describe("COPY overlapping ranges — dedupe by source UID (#626, RFC 4315 §3)"
       { store, storeMailCalls: stored }
     );
 
-    // One clone per distinct source UID — pre-#626 stored 6 (4,5 twice).
     expect(stored.length).toBe(4);
     const storedSubjects = stored.map((c) => c.subject).sort();
     expect(storedSubjects).toEqual(["src-3", "src-4", "src-5", "src-6"]);
@@ -435,7 +408,6 @@ describe("COPY overlapping ranges — dedupe by source UID (#626, RFC 4315 §3)"
       });
     const srcSet = expand(m[1]);
     const destSet = expand(m[2]);
-    // Pre-#626: srcSet dedupes to 4, destSet keeps 6 → lengths diverge.
     expect(srcSet.length).toBe(destSet.length);
     expect(srcSet.length).toBe(4);
 

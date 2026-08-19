@@ -460,7 +460,6 @@ describe("encryptPassword", () => {
     const hash = await encryptPassword("hunter2");
     expect(typeof hash).toBe("string");
     expect(hash).not.toBe("hunter2");
-    // bcrypt prefix: $2a$ / $2b$ / $2y$
     expect(hash).toMatch(/^\$2[aby]\$/);
     expect(await bcrypt.compare("hunter2", hash)).toBe(true);
     expect(await bcrypt.compare("wrong", hash)).toBe(false);

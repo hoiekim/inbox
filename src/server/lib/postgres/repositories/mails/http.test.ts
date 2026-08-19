@@ -4,16 +4,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from "bun:test";
 
 describe("getAccountStats — envelope_to inclusion in received address expansion", () => {
-  // Mails sent via listserv-style routing (e.g. GitHub notifications) carry
-  // a MIME `to` header that points at the list address (e.g.
-  // `<budget@noreply.github.com>`) and an SMTP-level `envelope_to` that
-  // points at the actual recipient sub-address (e.g. `<x@hoie.kim>`). If
-  // the received-side address expansion ignores envelope_to, those mails
-  // never surface in the per-account view — but the push badge counts
-  // them via the broader `getUnreadNotifications` query, so the FE shows
-  // 0 unread while the iOS badge shows N. Verified against prod on
-  // 2026-05-23: admin had badge=26 / FE=0 because 26 GitHub notification
-  // mails carried envelope_to=claoie@hoie.kim but MIME to=noreply.github.
   let mailsSource: string;
   let fnSource: string;
 
@@ -111,18 +101,6 @@ describe("getAccountStats — envelope_to inclusion in received address expansio
 });
 
 describe("draft-exclusion invariant — user-facing read paths hide drafts (#611)", () => {
-  // A draft lives in the IMAP Drafts folder; the web client presents no Drafts
-  // view, so a draft must not surface in ANY user-facing read surface (folder
-  // lists, per-account counts, search results, push badge, spam list). The
-  // invariant is enforced query-side with `AND draft = FALSE`. getMailHeaders
-  // and getAccountStats already carried it; searchMails / getUnreadNotifications
-  // dropped it (#611) so a draft showed in search but in no folder/count. The
-  // spam list is now a per-account getMailHeaders query (`?spam=1`), so its
-  // draft filter is covered by the getMailHeaders guard below. These source-scan
-  // guards pin the filter on every path so they cannot re-drift independently.
-  // Source-text scanning (not a live query) is
-  // used here because module-mock interactions make pool.query mocking fragile
-  // in the full suite — same rationale as the getAccountStats guard above.
   let mailsSource: string;
 
   beforeAll(async () => {
@@ -292,11 +270,6 @@ describe("getMailHeaders / getMailHeadersDelta — `?since=` delta path (#457)",
 });
 
 describe("getMailHeaders — saved query spans both folders (#568)", () => {
-  // A starred mail can be either sent or received. A saved query with no
-  // explicit folder must match an account address in EITHER from_address
-  // (sent) or the received to/cc/bcc/envelope_to branch — otherwise a
-  // starred sent mail is unreachable from the Saved view, the client-side
-  // complement of #384's server fix.
   let fnSource: string;
 
   beforeAll(async () => {

@@ -10,10 +10,6 @@ import { Route } from "../route";
 // Full-list response (no `?since=`). Unchanged shape — old clients keep working.
 export type HeadersGetResponse = MailHeaderDataType[];
 
-// Delta response, returned only when the client sends `?since=<ISO>` (#457).
-// `headers` are the rows changed since `since`; `expunged_ids` are rows
-// expunged in that window so a cached client can evict them; `as_of` is the
-// server view-time the client persists as the next `?since=` cursor.
 export interface HeadersDeltaGetResponse {
   as_of: string;
   headers: MailHeaderDataType[];

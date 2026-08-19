@@ -1,29 +1,3 @@
-/**
- * Global counting semaphore for large-body FETCH work.
- *
- * The per-key stream mutex (`stream-mutex.ts`) serializes IDENTICAL
- * concurrent body streams for the same `(mail, sectionKey)`, and
- * PR #710 coalesced the DB read the same way. Neither bounds the
- * NUMBER of DISTINCT concurrent large-body serializations across
- * sockets — a common iOS Mail / K-9 pattern is one client opening
- * several account tabs at once and issuing `UID FETCH … BODY[]` in
- * parallel against different mailboxes / different UIDs. Each in-flight
- * body allocates its per-chunk emitter transient; the container's RSS
- * scales linearly with distinct in-flight count and can OOM despite the
- * per-key coalescing.
- *
- * This module puts a hard bound on that count. Callers wrap their
- * large-body serialization in `withBodyBudget(fn)`; if the running
- * count is at or above `IMAP_BODY_FETCH_CONCURRENCY`, the caller
- * queues on a FIFO wait list; when a slot frees, the next waiter
- * runs. Metadata-only FETCH paths (BODY.PEEK[HEADER], UID FLAGS,
- * ENVELOPE) bypass the budget entirely — they're cheap allocations
- * the budget exists to protect.
- *
- * The budget is a per-process constant, NOT per-connection. That is
- * the point: one misbehaving client shouldn't be able to squeeze the
- * rest of the process out of memory just by opening more sockets.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "server";
 
@@ -91,21 +65,6 @@ const release = (): void => {
   if (next) next();
 };
 
-/**
- * Run `fn` inside the body budget. Waits for a slot if `CAPACITY`
- * large-body serializations are already in flight. Always releases,
- * even if `fn` throws. When the caller is inside a
- * `runInBodyBudgetContext` scope, the wait time (0 if the acquire was
- * immediate) is added to that scope's ledger.
- *
- * **No production caller as of #757** — every fetch path that used to
- * materialize a body now streams, so `withBodyBudgetStream` holds the slot
- * instead. Kept as the promise-shaped entry point to the SAME semaphore
- * (`acquire` / `release` / `waitQueue` / the ledger), which is what
- * `body-budget.test.ts` exercises directly; a materializing caller added
- * later must go through the budget rather than around it. Deletion — and
- * the test port it requires — tracked in #834.
- */
 export const withBodyBudget = async <T>(fn: () => Promise<T>): Promise<T> => {
   await acquire();
   try {
