@@ -252,18 +252,17 @@ export class ImapRequestHandler {
             // A payload that consumed its own line terminator (the client
             // counted the CRLF into `{N}`, or declared the last argument and
             // sent nothing after it) leaves no tail to read. Dispatch now
-            // rather than blocking on a CRLF that is never coming — the
-            // pre-#805 APPEND path did the same, and waiting turns a
-            // non-conforming client into a wedged session.
+            // rather than blocking on a CRLF that is never coming: waiting
+            // turns a non-conforming client into a wedged session.
             //
             // `buffer.length === 0` alone is NOT that condition: it means "no
             // further octets have arrived from the OS yet", which is also true
             // whenever the client flushed the payload in its own `write()` or
             // the payload happened to end on an MSS boundary. Dispatching
             // there answers the tag while the rest of the command is still in
-            // flight, and the remainder is then read as a fresh command line —
-            // putting the credential back in the journal and back on the wire,
-            // i.e. #805 verbatim.
+            // flight, and the remainder is then read as a fresh command line
+            // — putting the credential back in the journal and back on the
+            // wire, which is the leak this framing exists to close.
             //
             // Whether the command is complete is a question about STRUCTURE,
             // so ask the parser rather than inspecting the payload's bytes. A
@@ -307,12 +306,11 @@ export class ImapRequestHandler {
             }
             // If the command already parses without this line, the payload
             // carried its own terminator and `line` is not its tail — it is the
-            // NEXT command, pipelined behind it. Concatenating regardless
-            // appended it to the command text, where `parseAppend` succeeded
-            // and silently dropped it: `a1 APPEND INBOX {13+}` + `a2 NOOP`
-            // answered a1 and left a2 with no tagged completion at all, which
-            // RFC 3501 §7 does not allow. Dispatch what is complete, then fall
-            // through and read `line` as the fresh command it is.
+            // NEXT command, pipelined behind it. Appending it to the command
+            // text instead lets `parseAppend` succeed and drop it silently,
+            // leaving it with no tagged completion at all, which RFC 3501 §7
+            // does not allow. Dispatch what is complete, then fall through and
+            // read `line` as the fresh command it is.
             const literals = pendingLiterals;
             const complete = parseCommand(pendingCommand, literals).success;
             const input = complete ? pendingCommand : pendingCommand + line;
@@ -320,6 +318,14 @@ export class ImapRequestHandler {
             pendingLiterals = [];
             await executeCommand(input, literals);
             if (!complete) continue;
+            // `line` is the pipelined NEXT command, and it is about to be read
+            // by the rest of this iteration rather than by a fresh one — so
+            // the top-of-loop generation guard is already behind us. A
+            // literal-declaring `STARTTLS` swaps the socket inside the
+            // `executeCommand` above, and without this check the attacker's
+            // pipelined remainder would be answered inside the victim's
+            // encrypted channel (RFC 2595 §2.1, CVE-2011-0411 class).
+            if (generation !== this.generation) return;
           }
 
           // Handle SASL challenge response (client sends base64 after "+ " challenge)

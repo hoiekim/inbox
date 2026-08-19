@@ -1,13 +1,12 @@
 /**
  * Wire-level literal continuation (RFC 3501 §4.3, RFC 7888 LITERAL+).
  *
- * The drain loop used to CRLF-split the socket buffer with literal state for
- * APPEND only. Every other literal-bearing command therefore had its payload
- * lines parsed as commands of their own — and LOGIN carries its credentials in
- * exactly that position, so `A1 LOGIN {5+}\r\nadmin {8+}\r\npassword\r\n`
- * produced `admin BAD Invalid command` / `password BAD Invalid command` on the
- * wire and dropped both fragments into the parse-failure debug log
- * (hoiekim/inbox#805).
+ * A literal payload is octets, not a line. CRLF-splitting the socket buffer
+ * without literal state parses those octets as commands of their own — and
+ * LOGIN carries its credentials in exactly that position, so
+ * `A1 LOGIN {5+}\r\nadmin {8+}\r\npassword\r\n` yields
+ * `admin BAD Invalid command` / `password BAD Invalid command` on the wire and
+ * drops both fragments into the parse-failure debug log.
  *
  * These tests pin the invariants:
  *  1) A literal payload never becomes a command — one tagged response per
@@ -281,7 +280,8 @@ describe("IMAP literal continuation", () => {
     // more octets have arrived YET", not "the command is done": `admin` is not
     // the last argument, so the tail is still in flight. Dispatching on the
     // empty buffer answers A1 short and then reads ` "hunter2"` as a fresh
-    // command line — which is #805 verbatim, in the fix for #805.
+    // command line, putting the credential back on the wire and back in the
+    // journal.
     socket.emit("data", Buffer.from("A1 LOGIN {5+}\r\n"));
     await tick();
     socket.emit("data", Buffer.from("admin"));

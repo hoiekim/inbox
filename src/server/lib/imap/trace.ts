@@ -3,9 +3,9 @@ import { logger } from "server";
 const TRACE_ON = process.env.IMAP_TRACE === "1";
 const LINE_CAP = 512;
 
-// Inbound allow-shape. The handler now consumes literal payloads as octets
-// rather than lines (#805), so a credential can no longer arrive here as its
-// own "command" — but requiring `<tag> <VERB>` at the start keeps every
+// Inbound allow-shape. The handler consumes literal payloads as octets rather
+// than lines, so a credential can no longer arrive here as its own "command"
+// — but requiring `<tag> <VERB>` at the start keeps every
 // non-command line (junk, empty, anything a future path forgets to frame) out
 // of the journal regardless.
 const INBOUND_COMMAND = /^[A-Za-z0-9]+\s+[A-Z]+\b/;
