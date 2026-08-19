@@ -12,7 +12,7 @@ import { Store } from "./store";
 import type { SignedUser } from "common";
 
 // Pinned as a literal, not imported: the ceiling is the contract these
-// cases exist to hold, so moving the constant has to fail here.
+// cases exist to hold, so changing its value has to fail here.
 const LIMIT = 255;
 const ASTRAL = "\u{1F600}"; // 4 UTF-8 bytes, 2 UTF-16 code units
 
