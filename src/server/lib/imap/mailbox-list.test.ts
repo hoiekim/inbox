@@ -78,6 +78,78 @@ describe("matchesListPattern (RFC 3501 §6.3.8)", () => {
     expect(matchesListPattern("INBOX/", "%", "INBOX/accounts")).toBe(true);
     expect(matchesListPattern("INBOX/", "%", "Archive")).toBe(false);
   });
+
+  it('a "%" that stalls at the delimiter lets an earlier "*" absorb it', () => {
+    expect(matchesListPattern("", "*%b", "a/b")).toBe(true);
+    expect(matchesListPattern("", "*/%", "INBOX/accounts")).toBe(true);
+    expect(matchesListPattern("", "*/%", "INBOX/accounts/work")).toBe(true);
+    expect(matchesListPattern("", "*/%", "Archive")).toBe(false);
+  });
+
+  it("interleaved wildcards and literals match by position", () => {
+    expect(matchesListPattern("", "*a*b*", "xxaybzz")).toBe(true);
+    expect(matchesListPattern("", "*a*b*", "xxbyazz")).toBe(false);
+    expect(matchesListPattern("", "%a%", "za/b")).toBe(false);
+    expect(matchesListPattern("", "*a%", "za/b")).toBe(false);
+    expect(matchesListPattern("", "*a*", "za/b")).toBe(true);
+  });
+
+  it("regex metacharacters in a pattern stay literal", () => {
+    expect(matchesListPattern("", "a.c", "abc")).toBe(false);
+    expect(matchesListPattern("", "a.c", "a.c")).toBe(true);
+    expect(matchesListPattern("", "a+", "aa")).toBe(false);
+    expect(matchesListPattern("", "a+", "a+")).toBe(true);
+  });
+
+  it("an empty concatenated pattern matches only an empty name", () => {
+    expect(matchesListPattern("", "", "")).toBe(true);
+    expect(matchesListPattern("", "", "INBOX")).toBe(false);
+  });
+});
+
+describe("matchesListPattern cost is bounded by pattern x name (#856)", () => {
+  // The pattern below took 195 s against this name when the matcher compiled
+  // client input into a backtracking regex: ten unbounded quantifiers with a
+  // literal between each pair, and a trailing character that never matches, so
+  // the engine had to exhaust every way of distributing the "a"s before
+  // failing. These cases assert a wall-clock bound, because a matcher that
+  // merely returns the right answer would pass the cases above either way.
+  const LONG_NAME = `INBOX/accounts/${"a".repeat(60)}`;
+  const BUDGET_MS = 1000;
+
+  const elapsed = (run: () => void): number => {
+    const started = performance.now();
+    run();
+    return performance.now() - started;
+  };
+
+  it("a failing alternation of wildcards and literals returns promptly", () => {
+    let result = true;
+    const took = elapsed(() => {
+      result = matchesListPattern("", `${"*a".repeat(10)}!`, LONG_NAME);
+    });
+    expect(result).toBe(false);
+    expect(took).toBeLessThan(BUDGET_MS);
+  });
+
+  it("a long run of wildcards returns promptly", () => {
+    let result = false;
+    const took = elapsed(() => {
+      result = matchesListPattern("", "*".repeat(10_000), LONG_NAME);
+    });
+    expect(result).toBe(true);
+    expect(took).toBeLessThan(BUDGET_MS);
+  });
+
+  it("a long mixed wildcard run returns promptly and keeps its semantics", () => {
+    let crossesDelimiter = false;
+    const took = elapsed(() => {
+      crossesDelimiter = matchesListPattern("", "%*%".repeat(3_000), LONG_NAME);
+    });
+    expect(crossesDelimiter).toBe(true);
+    expect(matchesListPattern("", "%%%", "INBOX/accounts")).toBe(false);
+    expect(took).toBeLessThan(BUDGET_MS);
+  });
 });
 
 describe("listMailboxes filtering (#596)", () => {
