@@ -1,16 +1,9 @@
 /**
- * The byte ceiling on a mailbox name (#858).
+ * The byte ceiling on a mailbox name.
  *
- * A stored name is a multiplicand of LIST/LSUB matching cost and outlives the
- * command that wrote it, so no per-command cap can bound it. `mailboxes.name`
- * is `VARCHAR(255)`, but Postgres counts that column in characters — 255
- * astral characters are 1020 bytes — and the rejection arrives as a raised
- * error, which answers a generic `NO CREATE failed` and writes the whole
- * name into an ERROR log line.
- *
- * These cases pin the guard in bytes and pin that it runs *before* the DB
- * round-trip: the fake Store records `getUser`, which the command calls only
- * on the path that reaches the repository.
+ * The cases pin the guard in bytes rather than code units, and pin that it
+ * runs before the repository round-trip: the fake Store records `getUser`,
+ * which both commands call only once past the guards.
  */
 
 import { describe, it, expect } from "bun:test";
@@ -18,6 +11,8 @@ import { createMailbox, renameMailbox } from "./mailbox-ops";
 import { Store } from "./store";
 import type { SignedUser } from "common";
 
+// Pinned as a literal, not imported: the ceiling is the contract these
+// cases exist to hold, so moving the constant has to fail here.
 const LIMIT = 255;
 const ASTRAL = "\u{1F600}"; // 4 UTF-8 bytes, 2 UTF-16 code units
 
@@ -26,10 +21,8 @@ interface Probe {
   reachedRepository: () => boolean;
 }
 
-// getUser is the first thing both commands do once past the guards, and the
-// only Store call standing before the repository — so recording it reports
-// whether the name reached Postgres. It throws so the DB is never dialled;
-// the command's own catch turns that into the generic failure line.
+// Throws so no pool is ever dialled; the command's own catch turns that into
+// the generic failure line, which is what the accept cases assert.
 const probe = (): Probe => {
   let called = false;
   const store = {
@@ -77,8 +70,6 @@ describe("CREATE mailbox-name byte ceiling", () => {
   });
 
   it("counts UTF-8 bytes, not code units", async () => {
-    // 64 astral characters are 128 UTF-16 code units — far under a
-    // `name.length` cap — but 256 bytes on the wire and in the column.
     const overByBytes = ASTRAL.repeat(64);
     expect(overByBytes.length).toBeLessThan(LIMIT);
     expect(Buffer.byteLength(overByBytes, "utf8")).toBe(LIMIT + 1);
@@ -93,8 +84,6 @@ describe("CREATE mailbox-name byte ceiling", () => {
   });
 
   it("measures the name the server stores, not the quoted argument", async () => {
-    // The surrounding quotes are stripped before the guard, so a quoted name
-    // of exactly the ceiling is 257 bytes on the wire and still legal.
     const { lines, reachedRepository } = await create(`"${"a".repeat(LIMIT)}"`);
     expect(lines).toEqual([CREATE_REACHED]);
     expect(reachedRepository).toBe(true);
