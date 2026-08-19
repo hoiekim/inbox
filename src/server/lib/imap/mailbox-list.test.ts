@@ -46,6 +46,13 @@ describe("createListPatternMatcher (RFC 3501 §6.3.8)", () => {
     expect(createListPatternMatcher("", "%")("INBOX/accounts")).toBe(false);
   });
 
+  it("the INBOX fold applies to the stored name, not just the pattern", () => {
+    // store.ts dedups mailbox names case-sensitively, so a legacy lowercase
+    // "inbox" row can be listed alongside the synthetic canonical one.
+    expect(createListPatternMatcher("", "INBOX")("inbox")).toBe(true);
+    expect(createListPatternMatcher("", "inbox")("inbox")).toBe(true);
+  });
+
   it("an exact name with no wildcard matches only itself", () => {
     expect(createListPatternMatcher("", "INBOX")("INBOX")).toBe(true);
     expect(createListPatternMatcher("", "INBOX")("INBOX/accounts")).toBe(false);
