@@ -4,7 +4,7 @@ import { isInbox } from "./util";
 import {
   selectMailbox,
   statusMailbox,
-  matchesListPattern,
+  createListPatternMatcher,
   createMailbox,
   deleteMailbox,
   renameMailbox,
@@ -188,7 +188,7 @@ describe("STATUS canonicalizes INBOX casing in response echo (#600)", () => {
   });
 });
 
-describe("matchesListPattern is case-insensitive for INBOX target (#600 — review finding 2)", () => {
+describe("createListPatternMatcher is case-insensitive for INBOX target (#600 — review finding 2)", () => {
   // LIST returns the canonical "INBOX" name in its output, but the pattern
   // a client sends may be any casing of "inbox". RFC 3501 §5.1's
   // case-insensitivity applies to the pattern→INBOX match in LIST/LSUB too.
@@ -196,20 +196,20 @@ describe("matchesListPattern is case-insensitive for INBOX target (#600 — revi
   // name keeps strict case-sensitive matching.
 
   it('matches lowercase pattern "inbox" against canonical "INBOX"', () => {
-    expect(matchesListPattern("", "inbox", "INBOX")).toBe(true);
+    expect(createListPatternMatcher("", "inbox")("INBOX")).toBe(true);
   });
 
   it('matches mixed-case pattern "Inbox" against canonical "INBOX"', () => {
-    expect(matchesListPattern("", "Inbox", "INBOX")).toBe(true);
+    expect(createListPatternMatcher("", "Inbox")("INBOX")).toBe(true);
   });
 
   it('matches canonical "INBOX" pattern against "INBOX" (regression)', () => {
-    expect(matchesListPattern("", "INBOX", "INBOX")).toBe(true);
+    expect(createListPatternMatcher("", "INBOX")("INBOX")).toBe(true);
   });
 
   it('does NOT match "inbox" pattern against a non-INBOX mailbox', () => {
-    expect(matchesListPattern("", "inbox", "Archive")).toBe(false);
-    expect(matchesListPattern("", "inbox", "Sent Messages")).toBe(false);
+    expect(createListPatternMatcher("", "inbox")("Archive")).toBe(false);
+    expect(createListPatternMatcher("", "inbox")("Sent Messages")).toBe(false);
   });
 
   it('non-INBOX names stay case-sensitive — "archive" pattern does NOT match "Archive" mailbox', () => {
@@ -217,13 +217,13 @@ describe("matchesListPattern is case-insensitive for INBOX target (#600 — revi
     // any case — but a literal pattern stays case-sensitive for every
     // mailbox name other than INBOX. (Archive lowercased would have to be
     // its own LIST entry to be matchable.)
-    expect(matchesListPattern("", "archive", "Archive")).toBe(false);
+    expect(createListPatternMatcher("", "archive")("Archive")).toBe(false);
   });
 
   it("wildcard patterns work as before — `*` matches everything", () => {
-    expect(matchesListPattern("", "*", "INBOX")).toBe(true);
-    expect(matchesListPattern("", "*", "Archive")).toBe(true);
-    expect(matchesListPattern("", "*", "Sent Messages")).toBe(true);
+    expect(createListPatternMatcher("", "*")("INBOX")).toBe(true);
+    expect(createListPatternMatcher("", "*")("Archive")).toBe(true);
+    expect(createListPatternMatcher("", "*")("Sent Messages")).toBe(true);
   });
 });
 
