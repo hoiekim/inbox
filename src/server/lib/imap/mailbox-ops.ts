@@ -11,6 +11,7 @@ import {
   renameMailbox as dbRenameMailbox,
   setMailboxSubscribed,
   getImapUidValidity,
+  MAILBOX_NAME_MAX_BYTES,
 } from "server";
 import { logger } from "server";
 import {
@@ -33,16 +34,6 @@ import {
 // ---------------------------------------------------------------------------
 // CREATE
 // ---------------------------------------------------------------------------
-
-/**
- * The `mailboxes.name` column is `VARCHAR(255)`, which Postgres counts in
- * characters — a name of astral characters stores four bytes each and so
- * carries four times the intended budget. Both LIST and LSUB walk every
- * stored name against the client's pattern, so the byte length of a name is
- * a multiplicand of that cost and is durable once written. Cap it in bytes,
- * below the column, so the ceiling is the same one the matcher pays.
- */
-const MAILBOX_NAME_MAX_BYTES = 255;
 
 const exceedsNameLimit = (name: string): boolean =>
   Buffer.byteLength(name, "utf8") > MAILBOX_NAME_MAX_BYTES;

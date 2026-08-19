@@ -13,6 +13,14 @@ export const MAILBOX_SUBSCRIBED = "subscribed";
 export const MAILBOX_SPECIAL_USE = "special_use"; // \Inbox, \Sent, \Drafts, \Trash, etc.
 export const MAILBOX_CREATED = "created";
 
+/**
+ * `VARCHAR(255)` is 255 *characters*, so a name of astral characters occupies
+ * four bytes each and the column alone leaves the byte budget four times wider
+ * than it reads. Writers cap on this instead; LIST/LSUB walk every stored name
+ * per response, so bytes are what the matcher pays.
+ */
+export const MAILBOX_NAME_MAX_BYTES = 255;
+
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
 const isNullableString = (v: unknown): v is string | null =>
