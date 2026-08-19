@@ -323,35 +323,84 @@ export function getMailboxAttributes(box: string, allBoxes: string[]): string {
 }
 
 /**
+ * Collapse each run of adjacent wildcards to the single widest one it
+ * contains: a run holding any "*" spans the hierarchy delimiter, so it
+ * subsumes every "%" beside it, and a run of only "%" is no wider than one.
+ */
+const collapseWildcardRuns = (pattern: string): string => {
+  let collapsed = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char !== "*" && char !== "%") {
+      collapsed += char;
+      continue;
+    }
+    let widest = char;
+    while (index + 1 < pattern.length) {
+      const next = pattern[index + 1];
+      if (next !== "*" && next !== "%") break;
+      if (next === "*") widest = "*";
+      index++;
+    }
+    collapsed += widest;
+  }
+  return collapsed;
+};
+
+/**
  * Match a mailbox name against an IMAP LIST reference + pattern (RFC 3501
  * §6.3.8). The reference and pattern are concatenated; within the result "*"
  * matches across the "/" hierarchy delimiter while "%" matches only within a
  * single level. Every other character matches literally.
+ *
+ * @example
+ * matchesListPattern("INBOX/", "%", "INBOX/accounts"); // true
+ * matchesListPattern("", "INBOX/%", "INBOX/accounts/work"); // false
  */
 export function matchesListPattern(
   reference: string,
   pattern: string,
   box: string
 ): boolean {
-  const combined = reference + pattern;
-  let regex = "^";
-  for (const char of combined) {
-    if (char === "*") {
-      regex += ".*";
-    } else if (char === "%") {
-      regex += "[^/]*";
-    } else {
-      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  regex += "$";
-  // RFC 3501 §5.1: INBOX is matched case-insensitively. This applies to
+  // RFC 3501 §5.1: INBOX is matched case-insensitively, and that applies to
   // LIST/LSUB patterns too — `LIST "" "inbox"` must surface the canonical
-  // INBOX row. Apply the `i` regex flag ONLY when the target box is
-  // INBOX, so every other mailbox name stays strictly case-sensitive
-  // (Archive ≠ archive, per the RFC).
-  const flags = isInbox(box) ? "i" : "";
-  return new RegExp(regex, flags).test(box);
+  // INBOX row. Fold case ONLY when the target box is INBOX, so every other
+  // mailbox name stays strictly case-sensitive (Archive ≠ archive).
+  const fold = isInbox(box);
+  const source = collapseWildcardRuns(
+    fold ? (reference + pattern).toUpperCase() : reference + pattern
+  );
+  const target = fold ? box.toUpperCase() : box;
+
+  // reachable[j] is true when the first j pattern characters can consume the
+  // box prefix scanned so far. Advancing one box character at a time keeps the
+  // match linear in (pattern × name) with no backtracking search space, which
+  // a compiled regex over client-supplied wildcards does not give.
+  let reachable = new Array<boolean>(source.length + 1).fill(false);
+  reachable[0] = true;
+  for (let j = 0; j < source.length; j++) {
+    const char = source[j];
+    if (char !== "*" && char !== "%") break;
+    reachable[j + 1] = true;
+  }
+
+  for (let i = 1; i <= target.length; i++) {
+    const consumed = target[i - 1];
+    const next = new Array<boolean>(source.length + 1).fill(false);
+    for (let j = 1; j <= source.length; j++) {
+      const char = source[j - 1];
+      if (char === "*") {
+        next[j] = next[j - 1] || reachable[j];
+      } else if (char === "%") {
+        next[j] = next[j - 1] || (reachable[j] && consumed !== "/");
+      } else {
+        next[j] = reachable[j - 1] && char === consumed;
+      }
+    }
+    reachable = next;
+  }
+
+  return reachable[source.length];
 }
 
 export async function listMailboxes(
