@@ -251,19 +251,18 @@ describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #
   });
 });
 
-describe("account-scoped reads use the raw mailbox path (#702 PR 2b-2)", () => {
-  // The read cutover joins mail_mailbox_uid on `x.mailbox = $N` where `$N` is
-  // the mailbox path the caller passed in — the SAME string the write side
-  // stored via writeMailboxUid. An earlier revision derived the JOIN target
-  // as `INBOX/accounts/${localPart}` from a synthetic account address, which
-  // broke user-created mailboxes: `Archive` stores its rows with
-  // mail_mailbox_uid.mailbox = "Archive", but the derivation produced
-  // `INBOX/accounts/Archive` → JOIN returned 0 rows → mail invisible.
+describe("account-scoped reads use the raw mailbox path", () => {
+  // Reads join mail_mailbox_uid on `x.mailbox = $N` where `$N` is the mailbox
+  // path the caller passed in — the SAME string the write side stored via
+  // writeMailboxUid. Deriving the JOIN target from the account address (e.g.
+  // `INBOX/accounts/${localPart}`) breaks user-created mailboxes: `Archive`
+  // stores rows with mail_mailbox_uid.mailbox = "Archive", so a derived
+  // `INBOX/accounts/Archive` returns zero rows and the mail is invisible.
   //
-  // Static source check to guard against future re-derivation. The reader
-  // must (a) accept a `mailbox` parameter (nullable for domain-scoped views),
-  // (b) bind that parameter directly onto `x.mailbox = $N`, and
-  // (c) NOT redefine the mailboxPathForAccount helper that used to derive it.
+  // Static source check. The reader must (a) accept a `mailbox` parameter
+  // (nullable for domain-scoped views), (b) bind that parameter directly onto
+  // `x.mailbox = $N`, and (c) NOT define a mailboxPathForAccount helper that
+  // derives the path.
   let mailsSource: string;
 
   beforeAll(async () => {

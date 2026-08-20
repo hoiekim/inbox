@@ -1071,14 +1071,13 @@ describe("getAttachmentRoute", () => {
   });
 });
 
-describe("mail routes: a DB fault reaches the route boundary (#747)", () => {
-  // The mail repository used to catch its own errors and return the same
-  // falsy value it returns for a genuinely missing row. A transient DB fault
-  // therefore reached the user as "not found or you don't have permission" —
-  // an authorization verdict on a mail the user owns. The repository now lets
-  // the error propagate, so `Route.handler` logs it, fires the alarm and
-  // answers 500. These assert the callback rejects rather than resolving to a
-  // not-found body.
+describe("mail routes: a DB fault reaches the route boundary", () => {
+  // A DB fault in the repository must propagate to `Route.handler` — swallowing
+  // it and returning the same falsy value that means "no row matched" would
+  // reach the user as "not found or you don't have permission", an authorization
+  // verdict on a mail the user owns. The route boundary logs, alarms and answers
+  // 500. These assert the callback rejects rather than resolving to a not-found
+  // body.
   beforeEach(() => {
     mockMarkSpam.mockClear();
     mockMarkRead.mockClear();

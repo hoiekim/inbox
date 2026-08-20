@@ -51,7 +51,7 @@ describe("body-budget semaphore (#726)", () => {
     expect(results).toEqual(gates.map((_, i) => `done-${i}`));
   });
 
-  it("wakes multiple queued callers in FIFO order (#727 reviewoie LOW)", async () => {
+  it("wakes multiple queued callers in FIFO order", async () => {
     // Guards against a future refactor swapping shift/pop for LIFO or
     // waking every waiter at once. Fill capacity with holders, queue
     // three waiters A/B/C in that order, then release holders one at

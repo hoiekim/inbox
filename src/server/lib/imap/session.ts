@@ -606,9 +606,9 @@ export class ImapSession {
 
     this.write("+ idling\r\n");
     // DONE is detected by the handler's main line buffer (handler.ts), which
-    // reassembles split TCP chunks and \r\n-delimited lines. A separate raw
-    // socket "data" listener here used to miss split ("DO" + "NE\r\n") and
-    // pipelined ("DONE\r\nA4 NOOP\r\n") DONEs, stranding the session in IDLE.
+    // reassembles split TCP chunks and \r\n-delimited lines. A raw socket
+    // "data" listener here would miss split ("DO" + "NE\r\n") and pipelined
+    // ("DONE\r\nA4 NOOP\r\n") DONEs, stranding the session in IDLE.
   };
 
   endIdle = (reason?: string) => {

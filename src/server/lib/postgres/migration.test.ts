@@ -138,10 +138,9 @@ describe("initializePostgres — fast-path integration", () => {
   });
 
   it("writes the marker with CURRENT_SCHEMA_HASH after the slow path succeeds", async () => {
-    // Symmetric counterpart: with no marker present, the slow path must
-    // run AND end by writing the marker. A refactor that drops the
-    // writeSchemaMarker call reintroduces the crashloop pattern this PR
-    // is fixing, and this test locks that invariant in.
+    // Symmetric counterpart: with no marker present, the slow path must run
+    // AND end by writing the marker. Dropping the writeSchemaMarker call
+    // reintroduces a startup crashloop, and this test locks the invariant in.
     const { initializePostgres, CURRENT_SCHEMA_HASH } = await import("./initialize");
 
     const seenCalls: Array<{ sql: string; values: unknown[] | undefined }> = [];

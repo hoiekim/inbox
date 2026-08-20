@@ -392,17 +392,16 @@ describe("MOVE overlapping ranges — dedupe by source UID (#626, RFC 4315 §3 v
   });
 });
 
-describe("MOVE happy path — non-INBOX source → INBOX dest (#453)", () => {
+describe("MOVE happy path — non-INBOX source → INBOX dest", () => {
   it("keeps the routing addresses, and still targets the expunge and the dest UID space", async () => {
-    // Source is a mapped mailbox (Archive). The clone used to have its
-    // routing JSONB cleared here, on the theory that a jsonb address filter
-    // would otherwise re-match it in Archive after the original is expunged.
-    // That filter (`buildHeaderAddressCondition`) belongs to the WEB reads in
-    // `repositories/mails/http.ts`; every IMAP box outside the domain-scoped
-    // set reads through an INNER JOIN on `mail_mailbox_uid` instead, and the
-    // clone gets no mapping row for a domain-scoped destination — so it
-    // cannot re-surface in Archive either way. Clearing only stripped the
-    // recipient the web views group by.
+    // Source is a mapped mailbox (Archive); the clone's routing JSONB must be
+    // preserved. The jsonb address filter (`buildHeaderAddressCondition`)
+    // belongs to the WEB reads in `repositories/mails/http.ts`; IMAP boxes
+    // outside the domain-scoped set read through an INNER JOIN on
+    // `mail_mailbox_uid`, and the clone has no mapping row for a
+    // domain-scoped destination — so it cannot re-surface in Archive either
+    // way. Clearing the JSONB would only strip the recipient the web views
+    // group by.
     const mails = [sourceMail({ domain: 9, account: 90 })];
     const { store, stored, getExpungeArg } = makeMoveStore(["Archive"], mails);
     const seqState: SequenceState = {

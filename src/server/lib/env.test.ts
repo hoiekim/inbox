@@ -83,10 +83,10 @@ describe("server source", () => {
 
 describe("bundled env module", () => {
   // Under the gitignored `build/`, not `os.tmpdir()`, so the throwaway bundle
-  // is created and removed without an `fs` import (see the note above).
-  // Suffixed with the pid to keep the per-process uniqueness `mkdtempSync`
-  // used to give: a second `bun test` on the same checkout would otherwise
-  // `rm -rf` this directory while the first is still writing into it.
+  // is created and removed without an `fs` import (see the note above). The
+  // pid suffix keeps the directory unique per process — a concurrent
+  // `bun test` on the same checkout would otherwise `rm -rf` this directory
+  // while the first is still writing into it.
   const outdir = path.resolve(import.meta.dir, `../../../build/test-env-bundle-${process.pid}`);
 
   afterEach(restoreNodeEnv);
