@@ -82,9 +82,9 @@ export type CreateMailboxResult =
  * Create a new user-defined mailbox, refusing once the user is at
  * {@link MAILBOX_COUNT_MAX} rows.
  *
- * The ceiling is checked here rather than in the caller because this is the
- * only write path to the table, and it is checked after the name probe so a
- * name that already exists still reports as existing at the ceiling.
+ * The ceiling is enforced here because this is the only write path to the
+ * table, and after the name probe so a name that already exists still reports
+ * as existing at the ceiling.
  */
 export const createMailbox = async (
   input: CreateMailboxInput
@@ -108,7 +108,7 @@ export const createMailbox = async (
     },
     ["*"]
   );
-  if (!row) return { status: "exists" };
+  if (!row) throw new Error("mailboxes INSERT returned no row");
   return { status: "created", mailbox: new MailboxModel(row) };
 };
 
