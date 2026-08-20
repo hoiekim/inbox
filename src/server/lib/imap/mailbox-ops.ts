@@ -265,7 +265,7 @@ export async function statusMailbox(
       highestModseq = await store.getHighestModseq(mailbox);
     }
 
-    // Same lazy shape: UIDNEXT is its own counter read (#743), so only pay for
+    // Same lazy shape: UIDNEXT is its own counter read, so only pay for
     // it when the client asked for it.
     let uidNext: number | null = null;
     if (items.includes("UIDNEXT")) {
@@ -513,6 +513,11 @@ export async function selectMailbox(
 
   try {
     if (!(await store.mailboxExists(cleanName))) {
+      // RFC 3501 §6.3.1: a failed SELECT leaves no mailbox selected. Without
+      // this the session keeps serving the previously selected mailbox behind
+      // a `NO`, and the two failure exits below would disagree with this one.
+      setSelected(null, 0);
+      clearSeqState();
       write(`${tag} NO Mailbox does not exist\r\n`);
       return;
     }
@@ -537,7 +542,7 @@ export async function selectMailbox(
     // untagged write. Two reasons, both load-bearing:
     //
     // - `getUidNext` throws on a DB fault (deliberately — a swallowed fault
-    //   would surface as a too-low UIDNEXT, which is #743 itself). Reading it
+    //   would surface as a too-low UIDNEXT, which is the bug itself). Reading it
     //   after `* EXISTS` had gone out would leave the client holding a
     //   half-written SELECT response followed by `NO SELECT failed`.
     // - The four reads are mutually independent, so paying four serial
@@ -552,7 +557,7 @@ export async function selectMailbox(
     // those decrease whenever the highest-UID message leaves the mailbox —
     // hidden by INBOX's spam quarantine, expunged, or hard-deleted — which RFC
     // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out
-    // (#743). STATUS reads the same counter, so the two agree by construction.
+    // STATUS reads the same counter, so the two agree by construction.
     //
     // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's
     // HIGHESTMODSEQ so the client can detect changes since its last-known

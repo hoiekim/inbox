@@ -40,6 +40,7 @@ mock.module("server", () => ({
 }));
 
 import { Store, simplifyCriterion } from "./store";
+import { UTILITY_FOLDERS } from "./util";
 
 const makeUser = (overrides: Partial<{ id: string; username: string; email: string }> = {}) =>
   new SignedUser({
@@ -363,18 +364,17 @@ describe("Store.getMessages — replyTo mapping (#667)", () => {
 });
 
 /**
- * `Store.getUidNext` resolves its box on the ADDRESS axis (`resolveBox` ->
- * `boxToAccount`), NOT the raw-box-path axis (`resolveMappedBox`) that the
- * eight #702 mapping-aware read sites use. That difference is the whole
- * correctness claim of #743: `mail_uid_counters` rows are keyed by address,
- * because that is the key every write path reserves through
- * (`boxToAccount` -> `getAccountUidNext`).
+ * `Store.getUidNext` must peek the counter row its box's WRITE path reserves
+ * through, and there are three of them: the domain counter, the per-mailbox
+ * counter, and the per-account counter. Reading any other row means COALESCE
+ * falls through to a seed over rows the box does not own, and UIDNEXT comes
+ * back at or below UIDs already handed out.
  *
- * Harmonising this with its `resolveMappedBox` siblings would look like a
- * tidy-up and would silently restore the bug — the peek would read a counter
- * row keyed `uid_scope = 'INBOX/accounts/bob'`, which nothing ever writes, so
- * COALESCE falls through to the seed and reports a UIDNEXT at or below
- * already-assigned UIDs. These assert the axis explicitly so that edit fails.
+ * Two edits would silently restore that, which is why the axis is asserted per
+ * UID-space class rather than per path shape: harmonising this with its
+ * `resolveMappedBox` siblings (giving the peek a raw-box-path scope nothing
+ * writes), and collapsing the three branches back onto the address axis
+ * (which puts `Drafts`/`Junk`/`Starred`/`Trash` on counters nothing writes).
  */
 describe("Store.getUidNext — counter key axis", () => {
   beforeEach(() => {
@@ -382,43 +382,77 @@ describe("Store.getUidNext — counter key axis", () => {
     mockGetUidNext.mockResolvedValue(1);
   });
 
-  it("passes accountName=null for the two domain-scoped views", async () => {
+  const scopeFor = async (box: string) => {
+    mockGetUidNext.mockClear();
     const store = new Store(makeUser());
-    for (const box of ["INBOX", "Sent Messages"]) {
-      mockGetUidNext.mockClear();
-      await store.getUidNext(box);
-      expect(mockGetUidNext).toHaveBeenCalledWith("user-123", null, box === "Sent Messages");
+    await store.getUidNext(box);
+    return mockGetUidNext.mock.calls[0][1];
+  };
+
+  it("reads the domain counter for every box whose UIDs come from mails.uid_domain", async () => {
+    // INBOX and unified Sent Messages hold no mapping rows; Drafts and Junk are
+    // predicates over the same domain UID space. All four are written by
+    // getDomainUidNext, so all four must peek the kind="domain" row.
+    for (const [box, sent] of [
+      ["INBOX", false],
+      ["Sent Messages", true],
+      ["Drafts", false],
+      ["Junk", false],
+    ] as const) {
+      expect(await scopeFor(box)).toEqual({ kind: "domain", sent });
     }
   });
 
-  it("passes the ADDRESS, not the box path, for a per-account received box", async () => {
-    const store = new Store(makeUser());
-    await store.getUidNext("INBOX/accounts/bob");
-    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "bob@alice.example.com", false);
+  it("reads the per-mailbox counter for a mapped-utility box, with no sent axis", async () => {
+    // Starred/Trash are one mailbox each, reserved through getMailboxUidNext
+    // under the literal box name — the same string mail_mailbox_uid.mailbox holds.
+    expect(await scopeFor("Starred")).toEqual({ kind: "mailbox", mailbox: "Starred" });
+    expect(await scopeFor("Trash")).toEqual({ kind: "mailbox", mailbox: "Trash" });
   });
 
-  it("passes the ADDRESS and sent=true for a per-account sent box", async () => {
-    const store = new Store(makeUser());
-    await store.getUidNext("Sent Messages/accounts/bob");
-    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "bob@alice.example.com", true);
+  it("canonicalizes a mapped-utility box before using it as the counter scope", async () => {
+    // utilityFolder matches case-insensitively but the pivot rows carry the
+    // canonical spelling, so a lowercased SELECT must not open a second counter.
+    expect(await scopeFor("starred")).toEqual({ kind: "mailbox", mailbox: "Starred" });
   });
 
-  it("passes the derived address for a user-created mailbox", async () => {
+  it("reads the per-account counter keyed by ADDRESS, not the box path", async () => {
+    expect(await scopeFor("INBOX/accounts/bob")).toEqual({
+      kind: "account",
+      account: "bob@alice.example.com",
+      sent: false,
+    });
+    expect(await scopeFor("Sent Messages/accounts/bob")).toEqual({
+      kind: "account",
+      account: "bob@alice.example.com",
+      sent: true,
+    });
     // `boxToAccount("Archive")` -> "Archive@<domain>", the same string the
-    // COPY/MOVE write path reserves under (message-ops `boxToAccount`).
-    const store = new Store(makeUser());
-    await store.getUidNext("Archive");
-    expect(mockGetUidNext).toHaveBeenCalledWith("user-123", "Archive@alice.example.com", false);
+    // COPY/MOVE write path reserves under.
+    expect(await scopeFor("Archive")).toEqual({
+      kind: "account",
+      account: "Archive@alice.example.com",
+      sent: false,
+    });
   });
 
-  it("never passes a raw box path as the counter scope", async () => {
-    const store = new Store(makeUser());
+  it("never passes a raw box path as an account scope", async () => {
     for (const box of ["INBOX/accounts/bob", "Sent Messages/accounts/bob", "Archive"]) {
-      mockGetUidNext.mockClear();
-      await store.getUidNext(box);
-      const scope = mockGetUidNext.mock.calls[0][1];
-      expect(scope).not.toBe(box);
-      expect(String(scope)).toContain("@");
+      const scope = await scopeFor(box);
+      expect(scope.kind).toBe("account");
+      expect(scope.account).not.toBe(box);
+      expect(scope.account).toContain("@");
+    }
+  });
+
+  it("gives every declared utility folder the UID space its declaration names", async () => {
+    // Derived from UTILITY_FOLDERS rather than a hand-written list: a fifth
+    // folder added with either uidSpace is covered the moment it is declared,
+    // which is how Drafts/Junk slipped onto the account counter unnoticed.
+    for (const folder of UTILITY_FOLDERS) {
+      const scope = await scopeFor(folder.name);
+      expect(scope.kind).toBe(folder.uidSpace === "domain" ? "domain" : "mailbox");
+      expect(scope.kind).not.toBe("account");
     }
   });
 

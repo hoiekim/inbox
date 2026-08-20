@@ -1108,7 +1108,7 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       );
     });
 
-    it("does not compute UIDNEXT — a MAX over live rows can only regress (#743)", () => {
+    it("does not compute UIDNEXT — a MAX over live rows can only regress", () => {
       // UIDNEXT now comes from `getUidNext` (mail_uid_counters, the authority
       // that assigns UIDs). Re-deriving it here from any MAX over these rows
       // brings the bug straight back: the rows are the surviving ones, so an

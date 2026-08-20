@@ -19,6 +19,7 @@ import {
   getFirstUnseenUid as pgGetFirstUnseenUid,
   getHighestModseq as pgGetHighestModseq,
   getUidNext as pgGetUidNext,
+  UidScope,
   SaveMailInput,
   UpdatedMailFlags,
   StoreOperationType,
@@ -33,6 +34,7 @@ import {
   isSentBox,
   isAccountsFolder,
   isSentMessagesAccountsFolder,
+  utilityFolder,
   utilityPlacement,
   UTILITY_FOLDERS,
   ACCOUNTS_FOLDER,
@@ -177,18 +179,22 @@ export class Store {
   }
 
   /**
-   * Resolve an IMAP mailbox name into the (accountName, isSent) pair used by
-   * the mail repository. `INBOX` and the unified `Sent Messages` folder both
-   * map to `accountName=null` (no account scoping); everything else maps to
-   * the per-account address derived from the box name.
+   * Resolve an IMAP mailbox name into the counter row that assigns its UIDs.
+   *
+   * The three branches mirror the three reservation calls the write path makes
+   * (`getDomainUidNext` / `getMailboxUidNext` / `getAccountUidNext`), keyed off
+   * the same `UTILITY_FOLDERS[].uidSpace` declaration, so a box can never be
+   * read from a counter nothing writes.
    */
-  private resolveBox(box: string): { accountName: string | null; isSent: boolean } {
-    const isDomainInbox = isInbox(box);
-    const isUnifiedSent = box === SENT_MESSAGES_FOLDER;
-    const isSent = isSentBox(box);
-    const accountName =
-      isDomainInbox || isUnifiedSent ? null : boxToAccount(this.user.username, box);
-    return { accountName, isSent };
+  private resolveUidScope(box: string): UidScope {
+    if (isDomainScoped(box)) return { kind: "domain", sent: isSentBox(box) };
+    const utility = utilityFolder(box);
+    if (utility?.uidSpace === "mapped") return { kind: "mailbox", mailbox: utility.name };
+    return {
+      kind: "account",
+      account: boxToAccount(this.user.username, box),
+      sent: isSentBox(box),
+    };
   }
 
   private resolveMappedBox(box: string): { mailboxArg: string | null; isSent: boolean } {
@@ -323,18 +329,13 @@ export class Store {
   /**
    * UIDNEXT for `box`, read from the UID counter that actually assigns UIDs.
    *
-   * Keyed by `resolveBox` (the account address, or `null` for the domain-scoped
-   * views) rather than `resolveMappedBox` (the raw box path), because the
-   * counter rows are keyed on the address — the same key every write path
-   * reserves through (`boxToAccount` → `getAccountUidNext`).
-   *
    * Deliberately NOT wrapped in a catch-and-return-null: a swallowed fault here
-   * would surface as a too-low UIDNEXT, which is the bug (#743). Let it
-   * propagate to the SELECT/EXAMINE/STATUS handler's tagged `NO … failed`.
+   * would surface as a too-low UIDNEXT, which is the bug this reads the counter
+   * to avoid. Let it propagate to the SELECT/EXAMINE/STATUS handler's tagged
+   * `NO … failed`.
    */
   getUidNext = async (box: string): Promise<number> => {
-    const { accountName, isSent } = this.resolveBox(box);
-    return await pgGetUidNext(this.user.id, accountName, isSent);
+    return await pgGetUidNext(this.user.id, this.resolveUidScope(box));
   };
 
   /**
