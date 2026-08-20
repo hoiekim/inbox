@@ -11,6 +11,7 @@ import {
   MAILBOX_UID_NEXT,
   MAILBOX_SUBSCRIBED,
   MAILBOX_SPECIAL_USE,
+  MAILBOX_COUNT_MAX,
 } from "../models";
 
 /**
@@ -57,12 +58,6 @@ export const getMailboxByAddress = async (
   });
 };
 
-/**
- * How many mailbox rows this user holds. One indexed aggregate on `user_id`.
- */
-export const countMailboxesByUser = async (user_id: string): Promise<number> =>
-  mailboxesTable.count({ [MAILBOX_USER_ID]: user_id });
-
 export interface CreateMailboxInput {
   user_id: string;
   name: string;
@@ -73,14 +68,32 @@ export interface CreateMailboxInput {
 }
 
 /**
- * Create a new user-defined mailbox.
- * Returns the created mailbox, or null if a mailbox with that name already exists.
+ * The outcome of a CREATE attempt. A refusal names its own reason so the
+ * protocol layer can answer with the response code the client acts on —
+ * `ALREADYEXISTS` is success to a client running ensure-folder-exists, while
+ * `LIMIT` is not.
+ */
+export type CreateMailboxResult =
+  | { status: "created"; mailbox: MailboxModel }
+  | { status: "exists" }
+  | { status: "at_limit" };
+
+/**
+ * Create a new user-defined mailbox, refusing once the user is at
+ * {@link MAILBOX_COUNT_MAX} rows.
+ *
+ * The ceiling is checked here rather than in the caller because this is the
+ * only write path to the table, and it is checked after the name probe so a
+ * name that already exists still reports as existing at the ceiling.
  */
 export const createMailbox = async (
   input: CreateMailboxInput
-): Promise<MailboxModel | null> => {
+): Promise<CreateMailboxResult> => {
   const existing = await getMailboxByName(input.user_id, input.name);
-  if (existing) return null; // already exists
+  if (existing) return { status: "exists" };
+
+  const stored = await mailboxesTable.count({ [MAILBOX_USER_ID]: input.user_id });
+  if (stored >= MAILBOX_COUNT_MAX) return { status: "at_limit" };
 
   const row = await mailboxesTable.insert(
     {
@@ -95,8 +108,8 @@ export const createMailbox = async (
     },
     ["*"]
   );
-  if (!row) return null;
-  return new MailboxModel(row);
+  if (!row) return { status: "exists" };
+  return { status: "created", mailbox: new MailboxModel(row) };
 };
 
 /**
