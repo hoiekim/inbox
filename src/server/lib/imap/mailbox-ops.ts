@@ -11,6 +11,7 @@ import {
   renameMailbox as dbRenameMailbox,
   setMailboxSubscribed,
   getImapUidValidity,
+  MAILBOX_NAME_MAX_BYTES,
 } from "server";
 import { logger } from "server";
 import {
@@ -35,6 +36,9 @@ import {
 // CREATE
 // ---------------------------------------------------------------------------
 
+const exceedsNameLimit = (name: string): boolean =>
+  Buffer.byteLength(name, "utf8") > MAILBOX_NAME_MAX_BYTES;
+
 export async function createMailbox(
   tag: string,
   mailbox: string,
@@ -54,6 +58,10 @@ export async function createMailbox(
   // out of LIST but lingers in the table.
   if (isInbox(cleanName) || isUtilityFolder(cleanName)) {
     write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);
+    return;
+  }
+  if (exceedsNameLimit(cleanName)) {
+    write(`${tag} NO [LIMIT] Mailbox name exceeds ${MAILBOX_NAME_MAX_BYTES} bytes\r\n`);
     return;
   }
   try {
@@ -154,6 +162,10 @@ export async function renameMailbox(
   // Target must not collide with a synthetic mailbox either.
   if (isInbox(cleanNew) || isUtilityFolder(cleanNew)) {
     write(`${tag} NO [ALREADYEXISTS] Target mailbox already exists\r\n`);
+    return;
+  }
+  if (exceedsNameLimit(cleanNew)) {
+    write(`${tag} NO [LIMIT] Mailbox name exceeds ${MAILBOX_NAME_MAX_BYTES} bytes\r\n`);
     return;
   }
   try {
