@@ -308,6 +308,25 @@ export class ImapRequestHandler {
       draining = true;
       try {
         while (true) {
+          // RFC 2595 §2.1: a server MUST discard any knowledge obtained from
+          // the client before TLS that was not obtained from the TLS
+          // negotiation itself. `startTls` swaps the socket from inside this
+          // very loop, so without this check the rest of the cleartext segment
+          // — commands an attacker can pipeline into the same TCP write as
+          // `STARTTLS` — would keep being dispatched, and answered inside the
+          // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
+          // and hand the connection to the new generation's own loop.
+          if (generation !== this.generation) {
+            buffer = Buffer.alloc(0);
+            pendingCommand = null;
+            pendingLiterals = [];
+            awaitingLiteral = false;
+            literalBytesNeeded = 0;
+            discardBytesRemaining = 0;
+            discardToEndOfCommand = false;
+            return;
+          }
+
           // Recovery from an over-cap LITERAL+ declaration (#837): swallow the
           // announced octets, then the remainder of that command line, without
           // holding any of it. Runs ahead of literal accumulation so the
