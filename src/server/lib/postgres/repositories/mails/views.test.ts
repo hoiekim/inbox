@@ -3,7 +3,6 @@ import { describe, it, expect } from "bun:test";
 import {
   DRAFTS_VIEW,
   JUNK_VIEW,
-  filtersMembership,
   isUtilityView,
   membershipCondition,
   membershipExpression,
@@ -103,9 +102,6 @@ describe("INBOX", () => {
     expect(membershipExpression("Sent Messages/accounts/alice", true)).toBe("TRUE");
     expect(membershipExpression("Archive", false)).toBe("TRUE");
     expect(membershipCondition("Archive", false)).toBe("");
-    expect(filtersMembership("Archive", false)).toBe(false);
-    expect(filtersMembership(null, false)).toBe(true);
-    expect(filtersMembership(DRAFTS_VIEW, false)).toBe(true);
   });
 });
 

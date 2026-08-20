@@ -1063,7 +1063,7 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     };
 
     const HELPERS =
-      "(?:membershipCondition|membershipExpression|membershipFilter|filtersMembership)";
+      "(?:membershipCondition|membershipExpression|membershipFilter)";
 
     const applicationSites = (rawBody: string) => {
       // Comments mention the rule by name constantly; counting them would let a
@@ -1138,12 +1138,52 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       // Mapping rows outlive the expunge that hid their mail, so the OFFSET
       // subquery has to filter `sent` and `expunged` exactly as getAllUids
       // does — membership alone leaves every position after an expunged row
-      // off by one.
+      // off by one. `membershipExpression` renders `TRUE` on a box that shows
+      // spam, so a join gated on the membership rule drops those filters for
+      // exactly the boxes that still need them.
       const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
-      const join = body.match(/const membershipJoin[\s\S]*?: "";/)![0];
+      const join = body.match(/const membershipJoin =[\s\S]*?`;/)![0];
       expect(join).toContain("z.${SENT} = $2");
       expect(join).toContain("z.${EXPUNGED} = FALSE");
       expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
+      // Both halves of "unconditional": nothing gates the assignment, and
+      // nothing gates a filter from inside the template. The positive
+      // assertions above pass either way — a ternary branch still contains
+      // the text they look for. Optional chains are stripped first so the
+      // conditional test is about conditionals only.
+      expect(join).toMatch(/^const membershipJoin = `/);
+      expect(join.replace(/\?\./g, "")).not.toContain("?");
+    });
+
+    it("addresses no expunged mail in any branch", () => {
+      // A STORE that reaches an expunged mail bumps a modseq no client can
+      // resolve, and on the sequence-number branches it shifts every position
+      // after the expunged row — so the EXPUNGE behind a `\Deleted` store
+      // destroys the wrong message.
+      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      // Each branch closes by binding its own parameter list, so the text
+      // before each `baseValues =` is exactly one branch's SQL construction.
+      const branches = body.split("baseValues = ").slice(0, 4);
+      expect(branches).toHaveLength(4);
+      // Matched on the interpolated form so the prose in the preamble comment
+      // cannot satisfy it.
+      for (const branch of branches) {
+        expect(branch).toContain("${EXPUNGED} = FALSE");
+      }
+    });
+
+    it("indexes the sequence-number branches 1-based and honours the range end", () => {
+      // IMAP sequence numbers are 1-based while OFFSET is 0-based, and a
+      // `STORE 2:5` has to reach four messages, not one.
+      const body = source.match(/export const setMailFlags[\s\S]*?\n};/)![0];
+      const seqBindings = [...body.matchAll(/baseValues = \[([^\]]*)\];/g)]
+        .map((m) => m[1])
+        .filter((binding) => binding.includes("start - 1"));
+      expect(seqBindings).toHaveLength(2);
+      for (const binding of seqBindings) {
+        expect(binding).toContain("end - start + 1");
+      }
+      expect(body).not.toMatch(/OFFSET \$\d+ LIMIT 1/);
     });
   });
 });

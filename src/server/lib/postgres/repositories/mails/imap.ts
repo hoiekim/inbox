@@ -19,7 +19,6 @@ import {
 import { getNextModseq } from "./counters";
 import { singleFlight } from "./inflight";
 import {
-  filtersMembership,
   membershipCondition,
   membershipExpression,
   membershipFilter,
@@ -563,7 +562,8 @@ export const setMailFlags = async (
     if (usesDomainUidSpace(mailbox)) {
       const returningCols = `${MAIL_ID}, ${UID_DOMAIN} as uid, read, saved, deleted, draft, answered, ${MODSEQ} as modseq`;
       if (useUid) {
-        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4${membership}`;
+        const whereClause = `user_id = $1 AND sent = $2 AND ${UID_DOMAIN} >= $3 AND ${UID_DOMAIN} <= $4
+          AND ${EXPUNGED} = FALSE${membership}`;
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
           SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
@@ -573,23 +573,24 @@ export const setMailFlags = async (
       } else {
         const whereClause = `mail_id IN (
           SELECT mail_id FROM mails
-          WHERE user_id = $1 AND sent = $2${membership}
+          WHERE user_id = $1 AND sent = $2 AND ${EXPUNGED} = FALSE${membership}
           ORDER BY ${UID_DOMAIN} ASC
-          OFFSET $3 LIMIT 1
+          OFFSET $3 LIMIT $4
         )`;
         selectSql = `SELECT ${returningCols} FROM mails WHERE ${whereClause}`;
         updateSql = `UPDATE mails
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $4
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
           WHERE ${whereClause}
           RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, start];
+        baseValues = [user_id, sent, start - 1, end - start + 1];
       }
     } else {
       const returningCols = `m.${MAIL_ID}, x.${UID} as uid, m.read, m.saved, m.deleted, m.draft, m.answered, m.${MODSEQ} as modseq`;
       if (useUid) {
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
           AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
-          AND x.${UID} >= $4 AND x.${UID} <= $5${membershipCondition(mailbox, sent, "m.")}`;
+          AND x.${UID} >= $4 AND x.${UID} <= $5
+          AND m.${EXPUNGED} = FALSE${membershipCondition(mailbox, sent, "m.")}`;
         selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
         // UPDATE ... FROM syntax joins the mapping to the target mails
         // rows. Postgres semantics: rows matching the join get updated
@@ -601,37 +602,33 @@ export const setMailFlags = async (
           RETURNING ${returningCols}`;
         baseValues = [user_id, sent, mailbox, start, end];
       } else {
-        // Sequence-number path: match a single row at the OFFSETth
-        // position in the mailbox's UID-ordered list.
-        // A sequence number counts only the messages the mailbox shows, so this
-        // OFFSET has to walk the same list `getAllUids` builds — which means
-        // `sent` and `expunged` too, not just the membership rule: mapping rows
-        // outlive the expunge that hid their mail, so a mapping-only scan
-        // counts messages the seq map does not and shifts every position after
-        // them. The join is emitted only for a box that filters; every other
-        // box keeps the mapping-only scan it had.
-        const membershipJoin = filtersMembership(mailbox, sent)
-          ? `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
+        // Sequence-number path: slice the mailbox's UID-ordered list by
+        // position. That list is the one `getAllUids` builds, so the walk
+        // filters `sent` and `expunged` too, not just membership — mapping
+        // rows outlive the expunge that hid their mail, so a mapping-only
+        // scan counts messages the sequence map does not. The join carries
+        // those filters unconditionally: `membershipExpression` is `TRUE` on
+        // a box that shows spam, where a gated join would drop them.
+        const membershipJoin = `JOIN mails z ON z.${USER_ID} = y.${USER_ID} AND z.${MAIL_ID} = y.${MAIL_ID}
              AND z.${SENT} = $2 AND z.${EXPUNGED} = FALSE
-             AND ${membershipExpression(mailbox, sent, "z.")}`
-          : "";
+             AND ${membershipExpression(mailbox, sent, "z.")}`;
         const targetSubquery = `(
           SELECT y.${MAIL_ID} FROM ${MAIL_MAILBOX_UID} y
           ${membershipJoin}
           WHERE y.${USER_ID} = $1 AND y.${MAILBOX} = $3
           ORDER BY y.${UID} ASC
-          OFFSET $4 LIMIT 1
+          OFFSET $4 LIMIT $5
         )`;
         const whereClause = `m.${USER_ID} = $1 AND m.${SENT} = $2
           AND x.${USER_ID} = m.${USER_ID} AND x.${MAILBOX} = $3 AND x.${MAIL_ID} = m.${MAIL_ID}
           AND m.${MAIL_ID} IN ${targetSubquery}`;
         selectSql = `SELECT ${returningCols} FROM mails m, ${MAIL_MAILBOX_UID} x WHERE ${whereClause}`;
         updateSql = `UPDATE mails m
-          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $5
+          SET ${setClause}, updated = CURRENT_TIMESTAMP, ${MODSEQ} = $6
           FROM ${MAIL_MAILBOX_UID} x
           WHERE ${whereClause}
           RETURNING ${returningCols}`;
-        baseValues = [user_id, sent, mailbox, start];
+        baseValues = [user_id, sent, mailbox, start - 1, end - start + 1];
       }
     }
 
