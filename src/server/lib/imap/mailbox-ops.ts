@@ -323,35 +323,105 @@ export function getMailboxAttributes(box: string, allBoxes: string[]): string {
 }
 
 /**
- * Match a mailbox name against an IMAP LIST reference + pattern (RFC 3501
- * §6.3.8). The reference and pattern are concatenated; within the result "*"
- * matches across the "/" hierarchy delimiter while "%" matches only within a
- * single level. Every other character matches literally.
+ * Collapse each run of adjacent wildcards to the single widest one it
+ * contains: a run holding any "*" spans the hierarchy delimiter, so it
+ * subsumes every "%" beside it, and a run of only "%" is no wider than one.
  */
-export function matchesListPattern(
-  reference: string,
-  pattern: string,
-  box: string
-): boolean {
-  const combined = reference + pattern;
-  let regex = "^";
-  for (const char of combined) {
-    if (char === "*") {
-      regex += ".*";
-    } else if (char === "%") {
-      regex += "[^/]*";
-    } else {
-      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const collapseWildcardRuns = (pattern: string): string => {
+  let collapsed = "";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char !== "*" && char !== "%") {
+      collapsed += char;
+      continue;
     }
+    let widest = char;
+    while (index + 1 < pattern.length) {
+      const next = pattern[index + 1];
+      if (next !== "*" && next !== "%") break;
+      if (next === "*") widest = "*";
+      index++;
+    }
+    collapsed += widest;
   }
-  regex += "$";
-  // RFC 3501 §5.1: INBOX is matched case-insensitively. This applies to
+  return collapsed;
+};
+
+/**
+ * Sweep the mailbox name one character at a time, carrying the set of pattern
+ * positions that can still consume the prefix scanned so far. Position j is
+ * reachable when "*" or "%" there matches the character just consumed (only
+ * "%" is barred from the "/" delimiter), when a wildcard matches nothing, or
+ * when a literal is exactly the character consumed. The cost is the product of
+ * the two lengths, with no search space to backtrack through.
+ */
+const isReachableByPattern = (source: string, target: string): boolean => {
+  let reachable = new Array<boolean>(source.length + 1).fill(false);
+  let scratch = new Array<boolean>(source.length + 1).fill(false);
+  reachable[0] = true;
+  for (let j = 0; j < source.length; j++) {
+    const char = source[j];
+    if (char !== "*" && char !== "%") break;
+    reachable[j + 1] = true;
+  }
+
+  for (let i = 1; i <= target.length; i++) {
+    const consumed = target[i - 1];
+    let anyReachable = false;
+    scratch[0] = false;
+    for (let j = 1; j <= source.length; j++) {
+      const char = source[j - 1];
+      let position: boolean;
+      if (char === "*") {
+        position = scratch[j - 1] || reachable[j];
+      } else if (char === "%") {
+        position =
+          scratch[j - 1] || (reachable[j] && consumed !== "/");
+      } else {
+        position = reachable[j - 1] && char === consumed;
+      }
+      scratch[j] = position;
+      anyReachable = anyReachable || position;
+    }
+    // An empty reachable set is absorbing: position 0 is unreachable once any
+    // character has been consumed, so nothing downstream can revive it.
+    if (!anyReachable) return false;
+    const consumedRow = reachable;
+    reachable = scratch;
+    scratch = consumedRow;
+  }
+
+  return reachable[source.length];
+};
+
+/**
+ * Build a matcher for an IMAP LIST reference + pattern (RFC 3501 §6.3.8),
+ * reusable across every mailbox name in one response. The reference and
+ * pattern are concatenated; within the result "*" matches across the "/"
+ * hierarchy delimiter while "%" matches only within a single level. Every
+ * other character matches literally.
+ *
+ * @example
+ * const matches = createListPatternMatcher("INBOX/", "%");
+ * matches("INBOX/accounts"); // true
+ * matches("INBOX/accounts/work"); // false
+ */
+export function createListPatternMatcher(
+  reference: string,
+  pattern: string
+): (box: string) => boolean {
+  const combined = reference + pattern;
+  const collapsed = collapseWildcardRuns(combined);
+  // RFC 3501 §5.1: INBOX is matched case-insensitively, and that applies to
   // LIST/LSUB patterns too — `LIST "" "inbox"` must surface the canonical
-  // INBOX row. Apply the `i` regex flag ONLY when the target box is
-  // INBOX, so every other mailbox name stays strictly case-sensitive
-  // (Archive ≠ archive, per the RFC).
-  const flags = isInbox(box) ? "i" : "";
-  return new RegExp(regex, flags).test(box);
+  // INBOX row. Fold case ONLY when the target box is INBOX, so every other
+  // mailbox name stays strictly case-sensitive (Archive ≠ archive).
+  const foldedForInbox = collapseWildcardRuns(combined.toUpperCase());
+
+  return (box: string): boolean =>
+    isInbox(box)
+      ? isReachableByPattern(foldedForInbox, box.toUpperCase())
+      : isReachableByPattern(collapsed, box);
 }
 
 export async function listMailboxes(
@@ -370,8 +440,9 @@ export async function listMailboxes(
       return;
     }
     const boxes = await store.listMailboxes();
+    const matchesPattern = createListPatternMatcher(reference, pattern);
     boxes
-      .filter((box) => matchesListPattern(reference, pattern, box))
+      .filter(matchesPattern)
       .forEach((box) => {
         // Attributes are computed against the full set so \HasChildren stays
         // correct even when the child rows are filtered out of the response.
@@ -413,6 +484,7 @@ export async function listSubscribedMailboxes(
       return;
     }
     const entries = await store.listMailboxEntries();
+    const matchesPattern = createListPatternMatcher(reference, pattern);
     // Hierarchy is a property of the full listable set, not of the subscribed
     // subset, so filtering a child out of the response cannot change what its
     // parent reports.
@@ -437,7 +509,7 @@ export async function listSubscribedMailboxes(
 
     [...entries, ...synthesized]
       .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
-      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
+      .filter((entry) => matchesPattern(entry.name))
       .forEach((entry) => {
         // An unsubscribed name is in this response only because it has a
         // subscribed descendant, hence \HasChildren unconditionally.
