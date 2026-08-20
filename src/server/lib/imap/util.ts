@@ -25,6 +25,60 @@ export const encodeText = (str: string) => {
   return Buffer.from(str, "utf8").toString("base64");
 };
 
+export const headerFieldValue = (value: string): string =>
+  value.replace(/[\r\n\0\u2028\u2029]+/g, " ");
+
+export const headerQuotedParam = (value: string): string =>
+  `"${headerFieldValue(value).replace(/[\\"]/g, "\\$&")}"`;
+
+/**
+ * The `Content-Type` value and quoted `filename` parameter for one attachment
+ * part header.
+ *
+ * The fallbacks mirror `formatBodyStructure`'s (`application/octet-stream` /
+ * `unnamed`) deliberately: BODYSTRUCTURE and the emitted part headers describe
+ * the same part, and a client comparing them must not be told two different
+ * things. They are `||` fallbacks rather than assertions because `attachments`
+ * reaches here straight off the JSONB column with no model hydration, so a row
+ * written before a field existed arrives `undefined` — which would throw on
+ * `.replace` where the old raw interpolation merely emitted the literal
+ * `undefined`.
+ *
+ * `Attachment`'s constructor (`common/models/mails/Mail.ts`) defaults the same
+ * two fields to `text/plain` / `unnamed_file` instead. Those lose because the
+ * constructor never runs on this path — `store.ts` casts the JSONB column
+ * straight to `AttachmentType[]` with no hydration — and because BODYSTRUCTURE
+ * is the value a client cross-checks against. If hydration is ever added to
+ * the read path, reconcile the two rather than letting the wire drift.
+ */
+export const attachmentPartHeaderFields = (
+  attachment: Pick<AttachmentType, "contentType" | "filename">
+): { contentType: string; filenameParam: string } => ({
+  contentType: headerFieldValue(
+    attachment.contentType || "application/octet-stream"
+  ),
+  filenameParam: headerQuotedParam(attachment.filename || "unnamed")
+});
+
+/**
+ * The MIME multipart boundary token derived from a mail's stable id.
+ *
+ * The id falls back to `mail.messageId` when no `docId` is passed, which puts
+ * an attacker-controlled string inside `Content-Type: …; boundary="…"` and
+ * inside every `--<boundary>` delimiter. RFC 2046 §5.1.1 `bcharsnospace`
+ * admits far less than an arbitrary Message-ID, so map anything outside it to
+ * `_`.
+ *
+ * Character-for-character, so the boundary's CODE-UNIT count never changes.
+ * That is not the same as its byte count, and `segmentByteLength` measures
+ * bytes: a non-ASCII id shrinks (`café` 5 bytes → 4, `a😀b` 6 → 4). Harmless
+ * for a size computed from the same build — `RFC822.SIZE` and the `{N}`
+ * literal both derive from one `buildMessageSegments` call — but see the
+ * PR body for the persisted `mails.rfc822_size` rows this invalidates.
+ */
+export const boundaryToken = (stableId: string): string =>
+  stableId.replace(/[^A-Za-z0-9_.-]/g, "_");
+
 /**
  * RFC 3501 §9 quoted string:
  *
