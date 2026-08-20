@@ -13,6 +13,13 @@ export const MAILBOX_SUBSCRIBED = "subscribed";
 export const MAILBOX_SPECIAL_USE = "special_use"; // \Inbox, \Sent, \Drafts, \Trash, etc.
 export const MAILBOX_CREATED = "created";
 
+/**
+ * Ceiling on user-created mailboxes per user. LIST/LSUB materialise every
+ * stored row and emit one response line each, so the row count — not any
+ * single name — is what bounds a LIST response.
+ */
+export const MAILBOX_COUNT_MAX = 1000;
+
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
 const isNullableString = (v: unknown): v is string | null =>
