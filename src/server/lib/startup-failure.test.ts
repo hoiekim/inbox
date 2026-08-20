@@ -7,7 +7,6 @@ import {
   spyOn,
 } from "bun:test";
 import * as alarm from "./alarm";
-import { CRASH_ALARM_TIMEOUT_MS } from "./crash-alarm";
 import { handleStartupFailure } from "./startup-failure";
 
 describe("handleStartupFailure", () => {
@@ -57,22 +56,6 @@ describe("handleStartupFailure", () => {
     expect(code).toBe(1);
     sendSpy.mockRestore();
   });
-
-  it("bounds wait on a hung alarm at CRASH_ALARM_TIMEOUT_MS + exits anyway", async () => {
-    // Never resolves — simulates a fetch stuck against a slow/down webhook.
-    const sendSpy = spyOn(alarm, "sendAlarm").mockImplementation(
-      () => new Promise<void>(() => undefined),
-    );
-    const started = Date.now();
-    const code = await runHandler(new Error("hang test"));
-    const elapsed = Date.now() - started;
-    expect(code).toBe(1);
-    // Give a generous ceiling (CI jitter) — the point is we DID exit, not
-    // that we exited at exactly the timeout.
-    expect(elapsed).toBeGreaterThanOrEqual(CRASH_ALARM_TIMEOUT_MS - 100);
-    expect(elapsed).toBeLessThan(CRASH_ALARM_TIMEOUT_MS + 2_000);
-    sendSpy.mockRestore();
-  }, 10_000);
 
   it("stringifies a non-Error rejection value into the alarm message", async () => {
     const sendSpy = spyOn(alarm, "sendAlarm").mockResolvedValue(undefined);

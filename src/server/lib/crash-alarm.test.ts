@@ -9,10 +9,19 @@ import {
 import * as alarm from "./alarm";
 import {
   alarmThenExit,
+  claimCrashSequence,
   deliverCrashAlarm,
   formatCrashDetail,
+  resetCrashSequence,
   CRASH_ALARM_TIMEOUT_MS,
 } from "./crash-alarm";
+
+// Read via `Bun.file(...).text()` NOT `fs.readFileSync`: sibling test files
+// do `mock.module("fs", ...)`, which is process-global in Bun and can replace
+// the export under some full-suite orderings.
+const START_TS = await Bun.file(
+  new URL("../start.ts", import.meta.url),
+).text();
 
 describe("formatCrashDetail", () => {
   it("renders an Error's message and stack", () => {
@@ -46,10 +55,7 @@ describe("deliverCrashAlarm", () => {
   afterEach(() => errorSpy.mockRestore());
 
   it("waits for a slow webhook to finish before resolving", async () => {
-    // The regression this module exists to prevent: the old
-    // uncaughtException handler fired sendAlarm without awaiting, so
-    // process.exit ran while the POST was still in flight. Assert the
-    // send has actually SETTLED by the time we hand control back.
+    // Assert the send has actually SETTLED by the time we hand control back.
     let settled = false;
     const sendSpy = spyOn(alarm, "sendAlarm").mockImplementation(
       () =>
@@ -127,5 +133,54 @@ describe("alarmThenExit", () => {
     expect(settled).toBe(true);
     expect(exitSpy.mock.calls[0]?.[0]).toBe(1);
     sendSpy.mockRestore();
+  });
+});
+
+describe("claimCrashSequence", () => {
+  afterEach(() => resetCrashSequence());
+
+  it("grants the sequence to the first caller only", () => {
+    expect(claimCrashSequence()).toBe(true);
+    expect(claimCrashSequence()).toBe(false);
+    expect(claimCrashSequence()).toBe(false);
+  });
+
+  it("lets the first fault's delivery settle while a second fault is dropped", async () => {
+    let delivered = false;
+    const sendSpy = spyOn(alarm, "sendAlarm").mockImplementation(
+      () =>
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            delivered = true;
+            resolve();
+          }, 200),
+        ),
+    );
+    const handle = async (error: unknown): Promise<"exited" | "dropped"> => {
+      if (!claimCrashSequence()) return "dropped";
+      await deliverCrashAlarm("Uncaught Exception", error);
+      return "exited";
+    };
+    const [first, second] = await Promise.all([
+      handle(new Error("fault A")),
+      handle(new Error("fault B")),
+    ]);
+    expect(first).toBe("exited");
+    expect(second).toBe("dropped");
+    expect(delivered).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    sendSpy.mockRestore();
+  });
+});
+
+describe("uncaughtException handler wiring", () => {
+  it("awaits the crash-alarm delivery before exiting", () => {
+    expect(
+      START_TS.includes('await deliverCrashAlarm("Uncaught Exception"'),
+    ).toBe(true);
+  });
+
+  it("drops a re-entrant fault instead of racing the in-flight delivery", () => {
+    expect(START_TS.includes("if (!claimCrashSequence()) return;")).toBe(true);
   });
 });

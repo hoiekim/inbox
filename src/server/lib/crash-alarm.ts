@@ -27,12 +27,38 @@ export const deliverCrashAlarm = async (
   title: string,
   error: unknown,
 ): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     sendAlarm(title, formatCrashDetail(error)).catch(() => undefined),
-    new Promise<void>((resolve) =>
-      setTimeout(resolve, CRASH_ALARM_TIMEOUT_MS),
-    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CRASH_ALARM_TIMEOUT_MS);
+    }),
   ]);
+  clearTimeout(timer);
+};
+
+let crashSequenceOwned = false;
+
+/**
+ * Claim the one crash sequence. Returns true to the first caller only; every
+ * later caller gets false and must return without exiting.
+ *
+ * A crash cascade — a dead pool, a socket-teardown storm — throws from several
+ * callbacks within milliseconds, and the `uncaughtException` handler is async
+ * and therefore re-entrant. `sendAlarm` suppresses a repeat title under its
+ * cooldown, so a second fault's delivery resolves in the same tick and its
+ * `process.exit` kills the first fault's POST mid-flight, leaving nothing
+ * delivered at all.
+ */
+export const claimCrashSequence = (): boolean => {
+  if (crashSequenceOwned) return false;
+  crashSequenceOwned = true;
+  return true;
+};
+
+/** Release the claim (for testing). */
+export const resetCrashSequence = (): void => {
+  crashSequenceOwned = false;
 };
 
 /** `deliverCrashAlarm`, then `process.exit(1)` so docker's restart policy takes over. */

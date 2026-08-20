@@ -11,7 +11,11 @@ import {
 } from "server";
 import { pool } from "server";
 import { sendAlarm } from "./lib/alarm";
-import { deliverCrashAlarm, formatCrashDetail } from "./lib/crash-alarm";
+import {
+  claimCrashSequence,
+  deliverCrashAlarm,
+  formatCrashDetail,
+} from "./lib/crash-alarm";
 import { handleStartupFailure } from "./lib/startup-failure";
 
 // Process-level error handlers (centralised here alongside SIGTERM/SIGINT).
@@ -30,6 +34,7 @@ process.on("unhandledRejection", (reason) => {
 
 process.on("uncaughtException", async (error) => {
   console.error("Uncaught exception:", error);
+  if (!claimCrashSequence()) return;
   await deliverCrashAlarm("Uncaught Exception", error);
   try {
     await pool.end();
