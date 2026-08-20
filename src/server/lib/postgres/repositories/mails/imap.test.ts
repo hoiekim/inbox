@@ -1059,9 +1059,9 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     // was told does not exist. Dropping it from setMailFlags' domain UID
     // branch is the other: `UID STORE 1:* +FLAGS (\Deleted)` on INBOX followed
     // by EXPUNGE destroys quarantined spam the client was never shown.
-    // Counts are of SQL application sites only — `applicationSites` strips
-    // comments first. They were previously inflated by every occurrence of the
-    // word "membership" in a docstring, which made them track wording.
+    // Counts are of SQL application sites only: `applicationSites` strips
+    // comments first, so an occurrence of the word "membership" in prose
+    // cannot inflate them.
     const applications: Record<string, number> = {
       countMessages: 4, // total + unread FILTER, in each of the two branches
       getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch

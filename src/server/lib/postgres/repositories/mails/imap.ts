@@ -230,10 +230,8 @@ export const countMessages = async (
       // Per-mailbox view — the `mail_mailbox_uid` mapping is the
       // authoritative membership source. INNER JOIN encodes it: a row
       // exists iff the mail is in this mailbox. Legacy mails that predate
-      // the write-side dual-write and never got backfilled —
-      // e.g. the 140 rows the one-shot script skipped over duplicate-UID
-      // collisions from an early race — have no mapping row and are
-      // intentionally invisible to reads.
+      // the write-side dual-write and never got backfilled have no mapping
+      // row and are intentionally invisible to reads.
       const joinMembership = membershipExpression(mailbox, sent, "m.");
       sql = `
         SELECT
