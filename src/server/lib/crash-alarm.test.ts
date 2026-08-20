@@ -9,6 +9,7 @@ import {
 import * as alarm from "./alarm";
 import {
   alarmThenExit,
+  boundCrashStep,
   claimCrashSequence,
   deliverCrashAlarm,
   formatCrashDetail,
@@ -75,7 +76,7 @@ describe("deliverCrashAlarm", () => {
     sendSpy.mockRestore();
   });
 
-  it("resolves instead of rejecting when the webhook errors", async () => {
+  it("resolves instead of rejecting when sendAlarm rejects", async () => {
     const sendSpy = spyOn(alarm, "sendAlarm").mockRejectedValue(
       new Error("webhook 500"),
     );
@@ -112,6 +113,7 @@ describe("alarmThenExit", () => {
   afterEach(() => {
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+    resetCrashSequence();
   });
 
   it("exits 1 only after the alarm has settled", async () => {
@@ -176,11 +178,74 @@ describe("claimCrashSequence", () => {
 describe("uncaughtException handler wiring", () => {
   it("awaits the crash-alarm delivery before exiting", () => {
     expect(
-      START_TS.includes('await deliverCrashAlarm("Uncaught Exception"'),
+      /await deliverCrashAlarm\(\s*"Uncaught Exception"/.test(START_TS),
     ).toBe(true);
   });
 
   it("drops a re-entrant fault instead of racing the in-flight delivery", () => {
-    expect(START_TS.includes("if (!claimCrashSequence()) return;")).toBe(true);
+    expect(/if \(!claimCrashSequence\(\)\)\s*\{?\s*return/.test(START_TS)).toBe(
+      true,
+    );
+  });
+
+  it("bounds the pool drain so a wedged pool cannot swallow the exit", () => {
+    expect(
+      /await boundCrashStep\(\s*pool\.end\(\),\s*POOL_SHUTDOWN_TIMEOUT_MS/.test(
+        START_TS,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("alarmThenExit — crash sequence handoff", () => {
+  let exitSpy: ReturnType<typeof spyOn>;
+  let errorSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    exitSpy = spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("__test_process_exit__");
+    }) as never);
+    errorSpy = spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    errorSpy.mockRestore();
+    resetCrashSequence();
+  });
+
+  it("neither alarms nor exits when another fault already owns the sequence", async () => {
+    const sendSpy = spyOn(alarm, "sendAlarm").mockResolvedValue(undefined);
+    claimCrashSequence();
+    let handedOff = true;
+    void alarmThenExit("Startup Failed", new Error("boom")).then(
+      () => (handedOff = false),
+      () => (handedOff = false),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(handedOff).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    sendSpy.mockRestore();
+  });
+});
+
+describe("boundCrashStep", () => {
+  it("gives up on a step that never settles", async () => {
+    const started = Date.now();
+    await boundCrashStep(new Promise(() => undefined), 150);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+  });
+
+  it("swallows a rejecting step instead of propagating it", async () => {
+    expect(
+      await boundCrashStep(Promise.reject(new Error("pool wedged")), 1_000),
+    ).toBe(undefined);
+  });
+
+  it("returns as soon as the step settles", async () => {
+    const started = Date.now();
+    await boundCrashStep(Promise.resolve(), 5_000);
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });

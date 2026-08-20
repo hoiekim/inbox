@@ -8,6 +8,34 @@ import { sendAlarm } from "./alarm";
  */
 export const CRASH_ALARM_TIMEOUT_MS = 5_000;
 
+/**
+ * Max time we wait for the pg pool to drain before the process exits anyway.
+ * `pool.end()` stays pending forever while a client is checked out against a
+ * dead socket, which is precisely the shape a fatal DB fault arrives in.
+ */
+export const POOL_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+/**
+ * Await `step`, giving up after `timeoutMs` and swallowing its rejection.
+ *
+ * Every await on a path that ends in `process.exit` has to be bounded, or the
+ * exit never happens and the container sits up-but-dead with docker's restart
+ * policy never firing — the failure the exit exists to trigger.
+ */
+export const boundCrashStep = async (
+  step: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    step.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]);
+  clearTimeout(timer);
+};
+
 /** Render a thrown value as the alarm body: message plus a bounded stack. */
 export const formatCrashDetail = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
@@ -23,19 +51,14 @@ export const formatCrashDetail = (error: unknown): string => {
  * the request flushes, so the crash pages nobody. Never rejects — a failed
  * alarm must not divert the caller's crash sequence.
  */
-export const deliverCrashAlarm = async (
+export const deliverCrashAlarm = (
   title: string,
   error: unknown,
-): Promise<void> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  await Promise.race([
-    sendAlarm(title, formatCrashDetail(error)).catch(() => undefined),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, CRASH_ALARM_TIMEOUT_MS);
-    }),
-  ]);
-  clearTimeout(timer);
-};
+): Promise<void> =>
+  boundCrashStep(
+    sendAlarm(title, formatCrashDetail(error)),
+    CRASH_ALARM_TIMEOUT_MS,
+  );
 
 let crashSequenceOwned = false;
 
@@ -61,11 +84,17 @@ export const resetCrashSequence = (): void => {
   crashSequenceOwned = false;
 };
 
-/** `deliverCrashAlarm`, then `process.exit(1)` so docker's restart policy takes over. */
+/**
+ * `deliverCrashAlarm`, then `process.exit(1)` so docker's restart policy takes
+ * over. If another fault already owns the crash sequence, hand off to it rather
+ * than exiting: that sequence is bounded and will exit on its own, whereas
+ * exiting here kills its in-flight POST.
+ */
 export const alarmThenExit = async (
   title: string,
   error: unknown,
 ): Promise<never> => {
+  if (!claimCrashSequence()) return new Promise<never>(() => undefined);
   await deliverCrashAlarm(title, error);
   process.exit(1);
 };

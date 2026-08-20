@@ -12,9 +12,11 @@ import {
 import { pool } from "server";
 import { sendAlarm } from "./lib/alarm";
 import {
+  boundCrashStep,
   claimCrashSequence,
   deliverCrashAlarm,
   formatCrashDetail,
+  POOL_SHUTDOWN_TIMEOUT_MS,
 } from "./lib/crash-alarm";
 import { handleStartupFailure } from "./lib/startup-failure";
 
@@ -36,11 +38,7 @@ process.on("uncaughtException", async (error) => {
   console.error("Uncaught exception:", error);
   if (!claimCrashSequence()) return;
   await deliverCrashAlarm("Uncaught Exception", error);
-  try {
-    await pool.end();
-  } catch (e) {
-    // ignore pool shutdown errors during crash
-  }
+  await boundCrashStep(pool.end(), POOL_SHUTDOWN_TIMEOUT_MS);
   process.exit(1);
 });
 

@@ -7,6 +7,7 @@ import {
   spyOn,
 } from "bun:test";
 import * as alarm from "./alarm";
+import { resetCrashSequence } from "./crash-alarm";
 import { handleStartupFailure } from "./startup-failure";
 
 describe("handleStartupFailure", () => {
@@ -25,6 +26,9 @@ describe("handleStartupFailure", () => {
   afterEach(() => {
     exitSpy.mockRestore();
     errorSpy.mockRestore();
+    // handleStartupFailure claims the one-shot crash sequence; without the
+    // release every case after the first hands off and never resolves.
+    resetCrashSequence();
   });
 
   const runHandler = async (error: unknown): Promise<number | undefined> => {
