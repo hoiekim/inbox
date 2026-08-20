@@ -18,7 +18,7 @@ import type { ImapSession } from "./session";
 const makeSession = () => {
   const write = mock(() => {});
   const countMailboxMessages = mock(() =>
-    Promise.resolve({ total: 3, unread: 1, maxUid: 3 })
+    Promise.resolve({ total: 3, unread: 1 })
   );
   const session = { write, countMailboxMessages } as unknown as ImapSession;
   return { session, write, countMailboxMessages };

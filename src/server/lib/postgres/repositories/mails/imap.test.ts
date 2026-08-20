@@ -1051,6 +1051,9 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     // was told does not exist. Dropping it from setMailFlags' domain UID
     // branch is the other: `UID STORE 1:* +FLAGS (\Deleted)` on INBOX followed
     // by EXPUNGE destroys quarantined spam the client was never shown.
+    // Counts are of SQL application sites only: `applicationSites` strips
+    // comments first, so an occurrence of the word "membership" in prose
+    // cannot inflate them.
     const applications: Record<string, number> = {
       countMessages: 4, // total + unread FILTER, in each of the two branches
       getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch
@@ -1105,18 +1108,18 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       );
     });
 
-    it("never filters MAX(uid) — UIDNEXT must not regress on a spam-mark", () => {
-      // mailbox-ops emits `max_uid + 1` as UIDNEXT, which RFC 3501 §2.3.1.1
-      // requires to exceed every UID ever assigned and never to decrease. The
-      // counts are FILTERed; the MAX is deliberately not.
+    it("does not compute UIDNEXT — a MAX over live rows can only regress", () => {
+      // UIDNEXT now comes from `getUidNext` (mail_uid_counters, the authority
+      // that assigns UIDs). Re-deriving it here from any MAX over these rows
+      // brings the bug straight back: the rows are the surviving ones, so an
+      // EXPUNGE / hard delete / spam-mark of the highest-UID mail lowers it,
+      // which RFC 3501 §2.3.1.1 forbids. The counts stay FILTERed.
       const body = source.match(/export const countMessages[\s\S]*?\n};/)![0];
       expect(body).toMatch(/COUNT\(\*\) FILTER \(WHERE \$\{membership\}\)/);
-      const maxUidLines = body
-        .split("\n")
-        .filter((line) => line.includes("as max_uid"));
-      // One per branch: domain-scoped (uid_domain) and per-mailbox (x.uid).
-      expect(maxUidLines).toHaveLength(2);
-      for (const line of maxUidLines) expect(line).not.toContain("FILTER");
+      // Comments stripped — the prose here explains the ban and would match it.
+      const code = body.replace(/^\s*\/\/.*$/gm, "");
+      expect(code).not.toMatch(/MAX\s*\(/);
+      expect(code).not.toContain("max_uid");
     });
 
     it("stamps a mod-sequence when a spam flip moves a mail out of INBOX", async () => {

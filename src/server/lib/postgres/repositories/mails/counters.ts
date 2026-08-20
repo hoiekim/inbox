@@ -35,47 +35,152 @@ const buildReserveUidQuery = (
   return { sql, values: [user_id, kind, scope, sent, ...seedParams] };
 };
 
+/**
+ * Build the non-allocating counterpart of `buildReserveUidQuery`: read what the
+ * NEXT reservation would return, without consuming it. This is UIDNEXT
+ * (RFC 3501 §2.3.1.1), which must exceed every UID ever assigned in the scope
+ * and must never decrease — so it has to come from the counter that actually
+ * assigns UIDs, not from a `MAX(uid)` over surviving rows (a `MAX` drops the
+ * moment the highest-UID mail is expunged or hard-deleted).
+ *
+ * `COALESCE` covers the pre-reservation state: a scope whose counter row does
+ * not exist yet answers with the very `seedSql` the first reservation would
+ * insert, so a peek and the allocation it predicts can never disagree. Same
+ * placeholder layout as the reservation ($1 user, $2 kind, $3 scope, $4 sent,
+ * $5… seed params) so `seedSql` is reused verbatim.
+ */
+const buildPeekUidNextQuery = (
+  user_id: string,
+  kind: string,
+  scope: string,
+  sent: boolean,
+  seedSql: string,
+  seedParams: ParamValue[]
+): { sql: string; values: ParamValue[] } => {
+  const sql = `
+    SELECT COALESCE(
+      (
+        SELECT ${LAST_UID} + 1 FROM ${MAIL_UID_COUNTERS}
+        WHERE ${USER_ID} = $1 AND ${UID_KIND} = $2
+          AND ${UID_SCOPE} = $3 AND ${SENT} = $4
+      ),
+      (${seedSql})
+    ) AS uid_next
+  `;
+  return { sql, values: [user_id, kind, scope, sent, ...seedParams] };
+};
+
+/** Seed for the domain-wide sequence — shared by the reservation and the peek. */
+const domainSeed = (): { sql: string; params: ParamValue[] } => ({
+  sql: `
+      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
+      WHERE ${USER_ID} = $1 AND ${SENT} = $4
+    `,
+  params: [],
+});
+
 /** Domain-wide UID-reservation query (kind="domain", no scope). */
 export const buildDomainUidQuery = (
   user_id: string,
   sent: boolean
 ): { sql: string; values: ParamValue[] } => {
-  const seedSql = `
-      SELECT COALESCE(MAX(${UID_DOMAIN}), 0) + 1 FROM mails
-      WHERE ${USER_ID} = $1 AND ${SENT} = $4
-    `;
-  return buildReserveUidQuery(user_id, "domain", "", sent, seedSql, []);
+  const seed = domainSeed();
+  return buildReserveUidQuery(user_id, "domain", "", sent, seed.sql, seed.params);
 };
 
+/** Domain-wide UIDNEXT peek — same counter row as `buildDomainUidQuery`. */
+export const buildDomainUidNextQuery = (
+  user_id: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const seed = domainSeed();
+  return buildPeekUidNextQuery(user_id, "domain", "", sent, seed.sql, seed.params);
+};
+
+/**
+ * Seed for a per-account sequence — shared by the reservation and the peek.
+ *
+ * Sources from `mail_mailbox_uid.uid`, the authoritative per-mailbox UID
+ * store. The tuple predicate matches any of the mailbox paths the write side derives from
+ * (address, sent): the per-account paths `INBOX/accounts/<local>` and
+ * `Sent Messages/accounts/<local>`, plus the raw local part for
+ * user-created mailboxes (`Archive` etc., where `boxToAccount` returns
+ * `<name>@<domain>` and the write side stores the box name unchanged).
+ * All three shapes coexist inside `mail_mailbox_uid.mailbox`; the
+ * OR-union covers each with one indexed lookup.
+ *
+ * Both the reservation and the peek evaluate it on the same condition — no
+ * counter row for the triple yet — so the two agree by construction.
+ */
+const accountSeed = (
+  account: string,
+  sent: boolean
+): { sql: string; params: ParamValue[] } => {
+  const localPart = account.split("@")[0];
+  const perAccountPath = sent
+    ? `Sent Messages/accounts/${localPart}`
+    : `INBOX/accounts/${localPart}`;
+  return {
+    sql: `
+      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
+      WHERE ${USER_ID} = $1
+        AND ${MAILBOX} IN ($5, $6)
+    `,
+    params: [perAccountPath, localPart],
+  };
+};
+
+/** Per-account UID-reservation query (kind="account", scope=address). */
 export const buildAccountUidQuery = (
   user_id: string,
   account: string,
   sent: boolean
 ): { sql: string; values: ParamValue[] } => {
-  const localPart = account.split("@")[0];
-  const perAccountPath = sent
-    ? `Sent Messages/accounts/${localPart}`
-    : `INBOX/accounts/${localPart}`;
-  const seedSql = `
-      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
-      WHERE ${USER_ID} = $1
-        AND ${MAILBOX} IN ($5, $6)
-    `;
-  return buildReserveUidQuery(user_id, "account", account, sent, seedSql, [
-    perAccountPath,
-    localPart,
-  ]);
+  const seed = accountSeed(account, sent);
+  return buildReserveUidQuery(user_id, "account", account, sent, seed.sql, seed.params);
 };
 
+/** Per-account UIDNEXT peek — same counter row as `buildAccountUidQuery`. */
+export const buildAccountUidNextQuery = (
+  user_id: string,
+  account: string,
+  sent: boolean
+): { sql: string; values: ParamValue[] } => {
+  const seed = accountSeed(account, sent);
+  return buildPeekUidNextQuery(user_id, "account", account, sent, seed.sql, seed.params);
+};
+
+/**
+ * Seed for a mapped-utility sequence — shared by the reservation and the peek.
+ *
+ * Scoped to the single `mail_mailbox_uid.mailbox` value the pivot rows carry,
+ * with no `sent` axis: `Starred` and `Trash` are one mailbox each, not a
+ * received/sent pair, so `(user, mailbox)` is the whole key.
+ */
+const mailboxSeed = (mailbox: string): { sql: string; params: ParamValue[] } => ({
+  sql: `
+      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
+      WHERE ${USER_ID} = $1 AND ${MAILBOX} = $5
+    `,
+  params: [mailbox],
+});
+
+/** Mapped-utility UID-reservation query (kind="mailbox", scope=box name). */
 export const buildMailboxUidQuery = (
   user_id: string,
   mailbox: string
 ): { sql: string; values: ParamValue[] } => {
-  const seedSql = `
-      SELECT COALESCE(MAX(${UID}), 0) + 1 FROM ${MAIL_MAILBOX_UID}
-      WHERE ${USER_ID} = $1 AND ${MAILBOX} = $5
-    `;
-  return buildReserveUidQuery(user_id, "mailbox", mailbox, false, seedSql, [mailbox]);
+  const seed = mailboxSeed(mailbox);
+  return buildReserveUidQuery(user_id, "mailbox", mailbox, false, seed.sql, seed.params);
+};
+
+/** Mapped-utility UIDNEXT peek — same counter row as `buildMailboxUidQuery`. */
+export const buildMailboxUidNextQuery = (
+  user_id: string,
+  mailbox: string
+): { sql: string; values: ParamValue[] } => {
+  const seed = mailboxSeed(mailbox);
+  return buildPeekUidNextQuery(user_id, "mailbox", mailbox, false, seed.sql, seed.params);
 };
 
 const reserveNextUid = async (query: {
@@ -132,6 +237,53 @@ export const getMailboxUidNext = async (
     return await reserveNextUid(buildMailboxUidQuery(user_id, mailbox));
   } catch (error) {
     logger.error("Error getting mailbox UID next", { mailbox }, error);
+    throw error;
+  }
+};
+
+/**
+ * Which counter row assigns a mailbox's UIDs. One variant per reservation
+ * function — `domain` pairs with `getDomainUidNext`, `account` with
+ * `getAccountUidNext`, `mailbox` with `getMailboxUidNext` — so a peek can
+ * never read a row its own write path does not use.
+ *
+ * @example
+ * getUidNext(user.id, { kind: "domain", sent: false })            // INBOX
+ * getUidNext(user.id, { kind: "mailbox", mailbox: "Starred" })    // mapped utility
+ */
+export type UidScope =
+  | { kind: "domain"; sent: boolean }
+  | { kind: "account"; account: string; sent: boolean }
+  | { kind: "mailbox"; mailbox: string };
+
+/**
+ * UIDNEXT for a mailbox (RFC 3501 §2.3.1.1) WITHOUT allocating a UID — what
+ * the reservation function matching `scope` would hand out next.
+ *
+ * Reading the counter rather than `MAX(uid)` over live rows is the whole point:
+ * a `MAX` decreases when the highest-UID mail is expunged or hard deleted,
+ * which the RFC forbids and which re-promises a UID the counter has already
+ * handed out. That guarantee only holds if the row read is the row
+ * written, which is why the caller names a scope rather than passing an
+ * address that has to be guessed back into a UID space.
+ *
+ * THROWS on a DB fault instead of returning a floor. A fabricated-low UIDNEXT
+ * is the exact corruption this removes, and every caller (SELECT / EXAMINE /
+ * STATUS) already turns a throw into a retry-friendly tagged `NO … failed`
+ * rather than a permanent-sounding wrong answer.
+ */
+export const getUidNext = async (user_id: string, scope: UidScope): Promise<number> => {
+  try {
+    const query =
+      scope.kind === "domain"
+        ? buildDomainUidNextQuery(user_id, scope.sent)
+        : scope.kind === "mailbox"
+          ? buildMailboxUidNextQuery(user_id, scope.mailbox)
+          : buildAccountUidNextQuery(user_id, scope.account, scope.sent);
+    const result = await pool.query(query.sql, query.values);
+    return parseInt(result.rows[0]?.uid_next || "1", 10);
+  } catch (error) {
+    logger.error("Error reading UIDNEXT", {}, error);
     throw error;
   }
 };
@@ -203,6 +355,26 @@ export const syncMailboxPivot = async (
   }
 };
 
+/**
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping.
+ *
+ * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or the
+ * pre-existing one when a row for `(user, mailbox, mail_id)` already exists
+ * (COPY-twice / partial-failure retry). Callers reporting a destination UID
+ * over the wire (COPY's COPYUID, MOVE's COPYUID response) MUST use the return
+ * value, not the `uid` they reserved — otherwise the response advertises a UID
+ * absent from the mapping and the client's `UID FETCH` comes back empty.
+ *
+ * `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` is a deliberate
+ * no-op update: `DO NOTHING RETURNING` yields no row on the conflict path,
+ * while `DO UPDATE ... RETURNING` always yields the row's current value.
+ *
+ * ABORTS ON FAILURE rather than returning undefined. This mapping is the sole
+ * per-mailbox UID source, so a swallowed fault leaves the mail invisible in
+ * its destination — every account-scoped read joins here and misses — while
+ * `mails.uid_domain` still surfaces it via INBOX, making the loss look like a
+ * routing quirk instead of a failed write.
+ */
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,
