@@ -6,10 +6,11 @@ import {
   SMTPServerSession,
   SMTPServerDataStream
 } from "smtp-server";
-import { simpleParser } from "mailparser";
+import { simpleParser, AddressObject, EmailAddress } from "mailparser";
 import { saveMailHandler, sendMail, getUser } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
+import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
@@ -156,6 +157,83 @@ const onDataIncoming = (
     });
 };
 
+const splitAddress = (address: string) => {
+  const at = address.lastIndexOf("@");
+  if (at === -1) return undefined;
+  const local = address.slice(0, at);
+  const domain = address.slice(at + 1);
+  if (!local || !domain || local.includes("@")) return undefined;
+  return { local, domain };
+};
+
+const addressList = (
+  header: AddressObject | AddressObject[] | undefined
+): string[] => {
+  const flatten = (entries: EmailAddress[]): string[] =>
+    entries.flatMap((entry) =>
+      entry.group ? flatten(entry.group) : [entry.address ?? ""]
+    );
+  if (!header) return [];
+  const objects = Array.isArray(header) ? header : [header];
+  return objects.flatMap((object) => flatten(object.value));
+};
+
+interface OutgoingSender {
+  sender: string;
+  recipients: string[];
+}
+
+/**
+ * Resolves which of the user's accounts an SMTP submission is sent as, given
+ * the parsed `To:` addresses in `addressedTo`.
+ *
+ * Clients strip `Bcc:` before DATA and carry those addresses only in the
+ * envelope, so a Cc and a Bcc cannot be told apart here and both select. `To:`
+ * is the one recipient field that always survives into the message, which is
+ * what makes excluding it possible.
+ */
+export const resolveOutgoingSender = (
+  username: string,
+  userDomain: string,
+  from: { header?: string; envelope?: string },
+  recipients: string[],
+  addressedTo: string[]
+): OutgoingSender => {
+  const normalize = (address: string | undefined) =>
+    address?.trim().toLowerCase();
+  const accountOf = (address: string | undefined) => {
+    const parts = splitAddress(normalize(address) ?? "");
+    if (!parts || parts.domain !== userDomain.toLowerCase()) return undefined;
+    return parts.local;
+  };
+
+  const fromAccount = accountOf(from.header) || accountOf(from.envelope);
+  if (fromAccount && fromAccount !== username) {
+    return { sender: fromAccount, recipients };
+  }
+
+  const addressed = new Set(addressedTo.map(normalize));
+  const selected = recipients.findIndex((address) => {
+    const account = accountOf(address);
+    return (
+      !!account && account !== username && !addressed.has(normalize(address))
+    );
+  });
+
+  if (selected === -1 || recipients.length === 1) {
+    const envelopeAccount = splitAddress(normalize(from.envelope) ?? "")?.local;
+    return {
+      sender: fromAccount || envelopeAccount || username,
+      recipients
+    };
+  }
+
+  return {
+    sender: accountOf(recipients[selected])!,
+    recipients: recipients.filter((_, index) => index !== selected)
+  };
+};
+
 const onDataOutgoing = async (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -171,19 +249,23 @@ const onDataOutgoing = async (
     }
 
     const parsed = await simpleParser(stream);
-    const fromAddress = session.envelope.mailFrom;
-    const sender =
-      (fromAddress && typeof fromAddress !== "boolean"
-        ? fromAddress.address
-        : ""
-      )?.split("@")[0] || "admin";
+    const mailFrom = session.envelope.mailFrom;
+    const envelopeFrom =
+      mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
+    const { sender, recipients } = resolveOutgoingSender(
+      username,
+      getUserDomain(username),
+      { header: parsed.from?.value?.[0]?.address, envelope: envelopeFrom },
+      session.envelope.rcptTo.map((addr) => addr.address),
+      addressList(parsed.to)
+    );
 
     const mailData = new MailDataToSend({
-      to: session.envelope.rcptTo.map((addr) => addr.address).join(","),
+      to: recipients.join(","),
       subject: parsed.subject || "",
       html: parsed.html || parsed.text || "",
       sender,
-      senderFullName: parsed.from?.text || sender
+      senderFullName: parsed.from?.value?.[0]?.name || sender
     });
 
     await sendMail(signedUser, mailData);
