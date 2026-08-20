@@ -17,7 +17,11 @@ const TREE = [
 ];
 
 const fakeStore = (boxes: string[]): Store =>
-  ({ listMailboxes: async () => boxes }) as unknown as Store;
+  ({
+    listMailboxes: async () => boxes,
+    listMailboxEntries: async () =>
+      boxes.map((name) => ({ name, subscribed: true })),
+  }) as unknown as Store;
 
 const listed = async (reference: string, pattern: string): Promise<string[]> => {
   const lines: string[] = [];

@@ -413,12 +413,42 @@ export async function listSubscribedMailboxes(
       write(`${tag} OK LSUB completed\r\n`);
       return;
     }
-    const boxes = await store.listMailboxes();
-    boxes
-      .filter((box) => matchesListPattern(reference, pattern, box))
-      .forEach((box) => {
-        const attrs = getMailboxAttributes(box, boxes);
-        write(`* LSUB (${attrs}) "/" ${quoteString(box)}\r\n`);
+    const entries = await store.listMailboxEntries();
+    // Hierarchy is a property of the full listable set, not of the subscribed
+    // subset, so filtering a child out of the response cannot change what its
+    // parent reports.
+    const allBoxes = entries.map((entry) => entry.name);
+    const parentPaths = collectAncestors(allBoxes);
+
+    const promoteAncestors = (reference + pattern).includes("%");
+    const ancestorsOfSubscribed = promoteAncestors
+      ? collectAncestors(entries.filter((entry) => entry.subscribed).map((e) => e.name))
+      : new Set<string>();
+
+    // An ancestor need not exist as a mailbox of its own. Nothing here creates
+    // the superior names on CREATE (RFC 3501 §6.3.3 only says SHOULD), so
+    // `Projects/Work` can be subscribed with no `Projects` row at all — and
+    // §6.3.9's own example is precisely such a name, which is why the rule
+    // marks it \Noselect rather than assuming it is selectable.
+    const listed = new Set(allBoxes);
+    const synthesized: MailboxEntry[] = [...ancestorsOfSubscribed]
+      .filter((name) => !listed.has(name))
+      .sort()
+      .map((name) => ({ name, subscribed: false }));
+
+    [...entries, ...synthesized]
+      .filter((entry) => entry.subscribed || ancestorsOfSubscribed.has(entry.name))
+      .filter((entry) => matchesListPattern(reference, pattern, entry.name))
+      .forEach((entry) => {
+        // An unsubscribed name is in this response only because it has a
+        // subscribed descendant, hence \HasChildren unconditionally.
+        const attrs = entry.subscribed
+          ? withHierarchyAttribute(
+              getMailboxAttributes(entry.name, allBoxes),
+              parentPaths.has(entry.name)
+            )
+          : "\\HasChildren \\Noselect";
+        write(`* LSUB (${attrs}) "/" ${quoteString(entry.name)}\r\n`);
       });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {
