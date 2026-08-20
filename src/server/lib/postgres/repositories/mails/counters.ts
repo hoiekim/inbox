@@ -100,9 +100,8 @@ export const buildDomainUidNextQuery = (
 /**
  * Seed for a per-account sequence — shared by the reservation and the peek.
  *
- * Sources from `mail_mailbox_uid.uid` — the authoritative per-mailbox UID
- * store now that `mails.uid_account` is gone. The tuple predicate
- * matches any of the mailbox paths that the write side derives from
+ * Sources from `mail_mailbox_uid.uid`, the authoritative per-mailbox UID
+ * store. The tuple predicate matches any of the mailbox paths the write side derives from
  * (address, sent): the per-account paths `INBOX/accounts/<local>` and
  * `Sent Messages/accounts/<local>`, plus the raw local part for
  * user-created mailboxes (`Archive` etc., where `boxToAccount` returns
@@ -110,14 +109,8 @@ export const buildDomainUidNextQuery = (
  * All three shapes coexist inside `mail_mailbox_uid.mailbox`; the
  * OR-union covers each with one indexed lookup.
  *
- * In practice the RESERVATION evaluates this only on the very first call for
- * a (user, address, sent) triple — every subsequent call takes the DO UPDATE
- * branch and doesn't re-evaluate it. Existing deployments already have counter
- * rows for every mailbox that has ever received a mail, so the seed's specific
- * value only matters for the exact new-mailbox-with-pre-existing-rows edge
- * (nonexistent under any real write path but defended against for
- * hostile-data safety). The PEEK evaluates it on the same condition — no
- * counter row yet — and gets the identical answer by construction.
+ * Both the reservation and the peek evaluate it on the same condition — no
+ * counter row for the triple yet — so the two agree by construction.
  */
 const accountSeed = (
   account: string,
@@ -267,10 +260,10 @@ export type UidScope =
  * UIDNEXT for a mailbox (RFC 3501 §2.3.1.1) WITHOUT allocating a UID — what
  * the reservation function matching `scope` would hand out next.
  *
- * Reading the counter rather than `MAX(uid)` over live rows is the whole point
- * a `MAX` decreases when the highest-UID mail is expunged or hard
- * deleted, which the RFC forbids and which re-promises a UID the counter has
- * already handed out. That guarantee only holds if the row read is the row
+ * Reading the counter rather than `MAX(uid)` over live rows is the whole point:
+ * a `MAX` decreases when the highest-UID mail is expunged or hard deleted,
+ * which the RFC forbids and which re-promises a UID the counter has already
+ * handed out. That guarantee only holds if the row read is the row
  * written, which is why the caller names a scope rather than passing an
  * address that has to be guessed back into a UID space.
  *
@@ -295,40 +288,6 @@ export const getUidNext = async (user_id: string, scope: UidScope): Promise<numb
   }
 };
 
-/**
- * Record a UID assignment in the per-(user, mailbox, mail) mapping.
- * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or
- * the pre-existing one when a row for `(user, mailbox, mail_id)` already
- * exists (COPY-twice / partial-failure retry). Callers that need to
- * report the destination UID over the wire (COPY's COPYUID, MOVE's
- * COPYUID response) MUST use this returned value, not the caller's
- * freshly-reserved `uid` param — otherwise the response advertises UIDs
- * that don't exist in the mapping (client `UID FETCH`es on those UIDs
- * come back empty).
- *
- * SQL uses `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` as
- * a no-op update: Postgres's `INSERT ... ON CONFLICT DO NOTHING RETURNING`
- * returns nothing for the conflict path, but `DO UPDATE ... RETURNING`
- * always returns the row's current value.
- *
- * ABORTS ON FAILURE. `mail_mailbox_uid` is now the sole per-mailbox UID
- * source now that `mails.uid_account` is gone, so a transient DB
- * fault at this write path means the mail is invisible in the
- * destination mailbox — every account-scoped SELECT / STATUS / FETCH /
- * SEARCH / STORE / EXPUNGE / MOVE joins this mapping and misses. The
- * mail row itself already landed on `mails` at the point saveMail calls
- * here, so `mails.uid_domain` still surfaces the message via INBOX /
- * unified Sent Messages — but any per-account view is silent-drop.
- *
- * Throw → propagates through pgSaveMail's outer catch (non-23505 branch
- * now re-throws) → receive.ts saveMail's catch (alarm + error
- * dump, then re-throws) → saveMailHandler's Promise.all rejects →
- * smtp.ts's .catch(cb) → SMTP 5xx → mailgun retries. IMAP APPEND / COPY /
- * MOVE take the parallel path via storeMail (converts undefined-or-throw
- * → false → tagged NO → client retries). Send-path swallows the throw
- * back to a mailgun-response-return (mail already sent; a "retry" would
- * duplicate delivery — the ops-side error dump preserves recovery info).
- */
 /**
  * Drop a `mail_mailbox_uid` mapping row. Used by the mapped-utility flag hook
  * (see `syncMailboxPivot`): a STORE that clears `\Flagged` on a starred mail
@@ -396,6 +355,26 @@ export const syncMailboxPivot = async (
   }
 };
 
+/**
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping.
+ *
+ * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or the
+ * pre-existing one when a row for `(user, mailbox, mail_id)` already exists
+ * (COPY-twice / partial-failure retry). Callers reporting a destination UID
+ * over the wire (COPY's COPYUID, MOVE's COPYUID response) MUST use the return
+ * value, not the `uid` they reserved — otherwise the response advertises a UID
+ * absent from the mapping and the client's `UID FETCH` comes back empty.
+ *
+ * `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` is a deliberate
+ * no-op update: `DO NOTHING RETURNING` yields no row on the conflict path,
+ * while `DO UPDATE ... RETURNING` always yields the row's current value.
+ *
+ * ABORTS ON FAILURE rather than returning undefined. This mapping is the sole
+ * per-mailbox UID source, so a swallowed fault leaves the mail invisible in
+ * its destination — every account-scoped read joins here and misses — while
+ * `mails.uid_domain` still surfaces it via INBOX, making the loss look like a
+ * routing quirk instead of a failed write.
+ */
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,

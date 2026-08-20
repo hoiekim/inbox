@@ -556,7 +556,7 @@ export async function selectMailbox(
     // `seqToUid` nor from a MAX over the mailbox's surviving rows. Both of
     // those decrease whenever the highest-UID message leaves the mailbox —
     // hidden by INBOX's spam quarantine, expunged, or hard-deleted — which RFC
-    // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out
+    // 3501 §2.3.1.1 forbids and which re-promises a UID already handed out.
     // STATUS reads the same counter, so the two agree by construction.
     //
     // RFC 4551 §3.1.1: a CONDSTORE-capable server reports the mailbox's

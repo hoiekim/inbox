@@ -282,8 +282,8 @@ describe("COPY happy path (#520)", () => {
   });
 
   it("copies to the unified Sent folder with domain-space dest UIDs (#702)", async () => {
-    // The unified "Sent Messages" folder is domain-scoped (resolveBox →
-    // accountName=null → uid_domain). COPYUID's dest-set must therefore report
+    // The unified "Sent Messages" folder is domain-scoped, so its UIDs come
+    // from `mails.uid_domain`. COPYUID's dest-set must therefore report
     // the DOMAIN counter (100, 102), not the account counter (101, 103) — the
     // isDomainScoped fix. Source is INBOX (also domain-scoped) → source-set is
     // the source domain UIDs 5,7.
