@@ -5,6 +5,8 @@ import {
   buildAccountUidQuery,
   buildDomainUidNextQuery,
   buildAccountUidNextQuery,
+  buildMailboxUidQuery,
+  buildMailboxUidNextQuery,
 } from "./mails";
 import { mailUidCountersTable } from "../models";
 import { USER_ID, UID_KIND, UID_SCOPE, SENT, LAST_UID } from "../models";
@@ -83,7 +85,7 @@ describe("buildAccountUidQuery", () => {
 });
 
 /**
- * UIDNEXT peek (#743).
+ * UIDNEXT peek.
  *
  * UIDNEXT must exceed every UID ever assigned in the mailbox and must never
  * decrease (RFC 3501 §2.3.1.1). Deriving it from a `MAX(uid)` over the
@@ -155,5 +157,38 @@ describe("UIDNEXT peek", () => {
     ]) {
       expect(sql).not.toContain("expunged");
     }
+  });
+});
+
+describe("buildMailboxUidNextQuery", () => {
+  it("targets the same counter row buildMailboxUidQuery writes", () => {
+    // Starred/Trash reserve through getMailboxUidNext under the literal box
+    // name. A peek that reads any other row reports a UIDNEXT unrelated to the
+    // UIDs the box actually holds, which is what SELECT Starred did while this
+    // peek did not exist and the read fell through to the account counter.
+    const peek = buildMailboxUidNextQuery(userId, "Starred");
+    const reserve = buildMailboxUidQuery(userId, "Starred");
+    expect(peek.values).toEqual(reserve.values);
+    expect(peek.values.slice(0, 4)).toEqual([userId, "mailbox", "Starred", false]);
+  });
+
+  it("reads the counter, never a MAX over surviving pivot rows", () => {
+    const { sql } = buildMailboxUidNextQuery(userId, "Trash");
+    expect(sql).toContain(`FROM ${mailUidCountersTable.name}`);
+    expect(sql).toContain(`SELECT ${LAST_UID} + 1`);
+    expect(sql).not.toContain("INSERT");
+    expect(sql).not.toContain("DO UPDATE");
+    // The MAX that remains is the COALESCE seed, which only fires when no
+    // counter row exists — and it must stay unfiltered for the same reason
+    // the domain and account seeds do.
+    expect(sql).not.toContain("expunged");
+  });
+
+  it("carries no sent axis — one mailbox, not a received/sent pair", () => {
+    const starred = buildMailboxUidNextQuery(userId, "Starred");
+    expect(starred.values[3]).toBe(false);
+    // Distinct scopes must not collapse onto one counter row.
+    const trash = buildMailboxUidNextQuery(userId, "Trash");
+    expect(starred.values[2]).not.toBe(trash.values[2]);
   });
 });

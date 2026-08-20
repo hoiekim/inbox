@@ -214,7 +214,7 @@ export const countMessages = async (
     // `getUidNext`, which reads `mail_uid_counters`, the authority that assigns
     // UIDs. A `MAX(uid)` over these rows cannot back UIDNEXT: it drops when the
     // highest-UID mail is spam-quarantined, expunged or hard-deleted, and RFC
-    // 3501 §2.3.1.1 requires UIDNEXT to exceed every UID ever assigned (#743).
+    // 3501 §2.3.1.1 requires UIDNEXT to exceed every UID ever assigned.
     const membership = membershipExpression(mailbox, sent);
 
     if (usesDomainUidSpace(mailbox)) {
@@ -230,9 +230,9 @@ export const countMessages = async (
       // Per-mailbox view — the `mail_mailbox_uid` mapping is the
       // authoritative membership source. INNER JOIN encodes it: a row
       // exists iff the mail is in this mailbox. Legacy mails that predate
-      // the write-side dual-write (pre-#615) and never got backfilled —
+      // the write-side dual-write and never got backfilled —
       // e.g. the 140 rows the one-shot script skipped over duplicate-UID
-      // collisions from a #617-era race — have no mapping row and are
+      // collisions from an early race — have no mapping row and are
       // intentionally invisible to reads.
       const joinMembership = membershipExpression(mailbox, sent, "m.");
       sql = `
