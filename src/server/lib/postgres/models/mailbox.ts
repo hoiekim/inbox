@@ -21,6 +21,13 @@ export const MAILBOX_CREATED = "created";
  */
 export const MAILBOX_NAME_MAX_BYTES = 255;
 
+/**
+ * Ceiling on user-created mailboxes per user. LIST/LSUB materialise every
+ * stored row and emit one response line each, so the row count — not any
+ * single name — is what bounds a LIST response.
+ */
+export const MAILBOX_COUNT_MAX = 1000;
+
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
 const isNullableString = (v: unknown): v is string | null =>
