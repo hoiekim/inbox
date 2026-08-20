@@ -138,9 +138,7 @@ export class ImapRequestHandler {
     // A Buffer, not a string: `{N}` counts OCTETS, and a UTF-8 decode makes
     // `length` a count of UTF-16 code units instead — so slicing a literal off
     // a decoded string takes the wrong number of characters for any payload
-    // holding a multi-byte character. Decoding per TCP segment was also
-    // lossy in its own right: a multi-byte sequence split across two segments
-    // decoded to U+FFFD before the drain ever saw it.
+    // holding a multi-byte character.
     let buffer = Buffer.alloc(0);
 
     // Literal continuation state. `pendingCommand` is the command text

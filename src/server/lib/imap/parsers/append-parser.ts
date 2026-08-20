@@ -56,8 +56,7 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
     // Parse the message literal. Shared with every other literal-bearing
     // command: `{N}` counts octets, so the payload arrives out-of-band on
     // `context.literals` rather than being sliced out of the UTF-16 input by
-    // a byte count. Slicing it here is how the message silently lost its
-    // trailing bytes whenever it held a multi-byte character.
+    // a byte count.
     const literal = parseLiteral(context);
     if (!literal.success) {
       return {
