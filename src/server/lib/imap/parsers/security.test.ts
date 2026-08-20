@@ -11,12 +11,15 @@ import { describe, expect, it } from "bun:test";
 import { parseLogin, parseAuthenticate } from "./auth-parsers";
 import { parseAppend } from "./append-parser";
 import { parseSelect, parseCreate, parseDelete, parseRename, parseList, parseStatus } from "./mailbox-parsers";
+import { parseLiteral, skipWhitespace } from "./primitive-parsers";
+import { parseCommand } from "./command-parser";
 import { ParseContext } from "../types";
 
-const createContext = (input: string): ParseContext => ({
+const createContext = (input: string, literals?: string[]): ParseContext => ({
   input,
   position: 0,
-  length: input.length
+  length: input.length,
+  literals
 });
 
 describe("auth-parsers", () => {
@@ -128,7 +131,7 @@ describe("append-parser", () => {
   describe("parseAppend", () => {
     it("should parse APPEND with minimal args", () => {
       const message = "From: test@example.com\r\nSubject: Test\r\n\r\nBody";
-      const ctx = createContext(`INBOX {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.type).toBe("APPEND");
@@ -140,7 +143,7 @@ describe("append-parser", () => {
 
     it("should parse APPEND with quoted mailbox", () => {
       const message = "Test message";
-      const ctx = createContext(`"Sent Items" {${message.length}}\r\n${message}`);
+      const ctx = createContext(`"Sent Items" {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.mailbox).toBe("Sent Items");
@@ -152,7 +155,7 @@ describe("append-parser", () => {
     it("should parse APPEND with keyword flags (no backslash)", () => {
       // Keyword flags (without backslash) work
       const message = "Test";
-      const ctx = createContext(`INBOX (MyLabel Important) {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX (MyLabel Important) {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual(["MyLabel", "Important"]);
@@ -160,7 +163,7 @@ describe("append-parser", () => {
 
     it("should handle empty flags list", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX () {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX () {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual([]);
@@ -168,7 +171,7 @@ describe("append-parser", () => {
 
     it("should parse APPEND with date", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX "25-Feb-2026 12:34:56 +0000" {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.date).toBe("25-Feb-2026 12:34:56 +0000");
@@ -176,7 +179,7 @@ describe("append-parser", () => {
 
     it("should parse APPEND with keyword flags and date", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX (Important) "25-Feb-2026 12:34:56 +0000" {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX (Important) "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual(["Important"]);
@@ -214,14 +217,14 @@ describe("append-parser", () => {
     it("should handle large literal size safely", () => {
       // Test with reasonable size - should not crash
       const message = "X".repeat(1000);
-      const ctx = createContext(`INBOX {${message.length}}\r\n${message}`);
+      const ctx = createContext(`INBOX {${message.length}}`, [message]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.message.length).toBe(1000);
     });
 
     it("should handle zero-length message", () => {
-      const ctx = createContext("INBOX {0}\r\n");
+      const ctx = createContext("INBOX {0}", [""]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.message).toBe("");
@@ -440,6 +443,155 @@ describe("mailbox-parsers", () => {
       const ctx = createContext("");
       const result = parseStatus(ctx);
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+describe("literals (RFC 3501 §4.3 / RFC 7888 LITERAL+)", () => {
+  const literalContext = (input: string, literals: string[]): ParseContext => ({
+    input,
+    position: 0,
+    length: input.length,
+    literals
+  });
+
+  describe("parseLiteral", () => {
+    it("consumes the marker and returns the queued payload", () => {
+      const ctx = literalContext("{5} rest", ["admin"]);
+      const result = parseLiteral(ctx);
+      expect(result.success).toBe(true);
+      expect(result.value).toBe("admin");
+      expect(ctx.input.substring(ctx.position)).toBe(" rest");
+    });
+
+    it("accepts the non-synchronizing {N+} form", () => {
+      const result = parseLiteral(literalContext("{5+}", ["admin"]));
+      expect(result.success).toBe(true);
+      expect(result.value).toBe("admin");
+    });
+
+    it("takes payloads in wire order across chained literals", () => {
+      const ctx = literalContext("{5} {8}", ["admin", "password"]);
+      expect(parseLiteral(ctx).value).toBe("admin");
+      skipWhitespace(ctx);
+      expect(parseLiteral(ctx).value).toBe("password");
+    });
+
+    it("returns the payload byte-for-byte, including octets a quoted string could not carry", () => {
+      const result = parseLiteral(literalContext("{9}", ['p@ss "w\\d']));
+      expect(result.value).toBe('p@ss "w\\d');
+    });
+
+    it("does not measure the payload against the declared size", () => {
+      // `{4}` is four OCTETS; "café" is four code units and five octets. The
+      // parser must not re-derive one from the other — the handler already
+      // took exactly four bytes off the socket.
+      const result = parseLiteral(literalContext("{5}", ["café"]));
+      expect(result.success).toBe(true);
+      expect(result.value).toBe("café");
+    });
+
+    it("fails when a marker has no queued payload", () => {
+      const result = parseLiteral(literalContext("{5}", []));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Missing literal payload");
+      expect(result.value).toBeUndefined();
+    });
+
+    it("rejects a non-numeric size", () => {
+      const result = parseLiteral(literalContext("{5x}", ["admin"]));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Invalid literal size");
+    });
+
+    it("rejects an unterminated brace", () => {
+      const result = parseLiteral(literalContext("{5", ["admin"]));
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Unterminated literal");
+    });
+  });
+
+  describe("parseCommand with out-of-band literals", () => {
+    it("parses LITERAL+ LOGIN with both credentials as literals", () => {
+      const result = parseCommand("A1 LOGIN {5+} {8+}", ["admin", "password"]);
+      expect(result.success).toBe(true);
+      expect(result.value?.tag).toBe("A1");
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.username).toBe("admin");
+      expect(result.value.request.data.password).toBe("password");
+    });
+
+    it("does not drain the caller's literal array", () => {
+      // `parseLiteral` dequeues with `shift()`. Handing the caller's own array
+      // to the parse context would empty it as a side effect, so asking the
+      // same question twice would give two different answers — and the handler
+      // asks exactly that: "does this command parse yet?" before it commits to
+      // dispatching, then parses again for real.
+      const literals = ["admin", "password"];
+      const first = parseCommand("A1 LOGIN {5+} {8+}", literals);
+      expect(first.success).toBe(true);
+      expect(literals).toEqual(["admin", "password"]);
+
+      const second = parseCommand("A1 LOGIN {5+} {8+}", literals);
+      expect(second.success).toBe(true);
+      if (second.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(second.value.request.data.password).toBe("password");
+    });
+
+    it("reports an incomplete command as unparsed until its last argument lands", () => {
+      // What the handler's early-dispatch gate rides on: a literal that is not
+      // the final argument must not look like a finished command.
+      expect(parseCommand("A1 LOGIN {7+}", ["admin\r\n"]).success).toBe(false);
+      expect(parseCommand("A1 RENAME {7+}", ["Oldie\r\n"]).success).toBe(false);
+      expect(parseCommand("A1 STATUS {5+}", ["INBOX"]).success).toBe(false);
+      // …while a final literal completes it, CRLF-carrying payload included.
+      expect(parseCommand("a1 APPEND INBOX {13+}", ["Hello World\r\n"]).success).toBe(true);
+      expect(parseCommand("A1 SELECT {5+}", ["café"]).success).toBe(true);
+      expect(parseCommand("A1 LOGIN {5+} {8+}", ["admin", "password"]).success).toBe(true);
+    });
+
+    it("preserves a password whose octets include a trailing space", () => {
+      const result = parseCommand("A1 LOGIN {5+} {9+}", ["admin", "password "]);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.password).toBe("password ");
+    });
+
+    it("preserves a multi-byte password", () => {
+      const result = parseCommand("A1 LOGIN {5+} {9+}", ["admin", "pässword"]);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.password).toBe("pässword");
+    });
+
+    it("mixes a literal username with a quoted password", () => {
+      const result = parseCommand('A1 LOGIN {5+} "p@ss word"', ["admin"]);
+      if (result.value?.request.type !== "LOGIN") throw new Error("Expected LOGIN");
+      expect(result.value.request.data.username).toBe("admin");
+      expect(result.value.request.data.password).toBe("p@ss word");
+    });
+
+    it("accepts a literal mailbox name on SELECT", () => {
+      const result = parseCommand("A1 SELECT {5+}", ["INBOX"]);
+      if (result.value?.request.type !== "SELECT") throw new Error("Expected SELECT");
+      expect(result.value.request.data.mailbox).toBe("INBOX");
+    });
+
+    it("routes the APPEND message through the same literal path", () => {
+      const result = parseCommand("a1 APPEND INBOX (\\Seen) {13}", [
+        "Subject: x\r\n\r\nbody\r\n"
+      ]);
+      expect(result.success).toBe(true);
+      if (result.value?.request.type !== "APPEND") throw new Error("Expected APPEND");
+      expect(result.value.request.data.mailbox).toBe("INBOX");
+      expect(result.value.request.data.flags).toEqual(["\\Seen"]);
+      // The payload keeps its own trailing CRLF — the framing strip that used
+      // to eat it operated on the command text, which no longer holds it.
+      expect(result.value.request.data.message).toBe("Subject: x\r\n\r\nbody\r\n");
+    });
+
+    it("rejects an APPEND whose literal payload never arrived", () => {
+      const result = parseCommand("a1 APPEND INBOX {11}", []);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Missing literal payload");
     });
   });
 });

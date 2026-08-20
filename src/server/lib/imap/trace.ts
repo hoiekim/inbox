@@ -3,16 +3,29 @@ import { logger } from "server";
 const TRACE_ON = process.env.IMAP_TRACE === "1";
 const LINE_CAP = 512;
 
+// Inbound allow-shape. The handler now consumes literal payloads as octets
+// rather than lines (#805), so a credential can no longer arrive here as its
+// own "command" — but requiring `<tag> <VERB>` at the start keeps every
+// non-command line (junk, empty, anything a future path forgets to frame) out
+// of the journal regardless.
 const INBOUND_COMMAND = /^[A-Za-z0-9]+\s+[A-Z]+\b/;
 
 // LOGIN carries the plaintext password as the last quoted arg; AUTHENTICATE
 // carries the SASL initial response (RFC 4959) — base64-decoded, PLAIN yields
 // `\0user\0password`. Both must be scrubbed before the line lands in the
-// journal.
-const redactCredentials = (line: string): string =>
+// journal, whether it gets there via the wire trace or via a debug/parse-error
+// log in the handler.
+export const redactCredentials = (line: string): string =>
   line
-    .replace(/^(\S+\s+LOGIN\s+).*$/i, "$1[REDACTED]")
-    .replace(/^(\S+\s+AUTHENTICATE\s+\S+)\s+.*$/i, "$1 [REDACTED]");
+    // The tag is optional in the anchor. A conforming client always sends one,
+    // but an untagged `LOGIN admin hunter2` still reaches the parse-failure log
+    // — and a redactor that only covers well-formed input is not a redactor.
+    // Leading whitespace is skipped for the same reason: `executeCommand`
+    // redacts the raw assembled input, which is not pre-trimmed, so a malformed
+    // ` LOGIN admin hunter2` would otherwise walk straight past both anchors.
+    // `[\s\S]*` rather than `.*` so a payload sitting after a CRLF is covered.
+    .replace(/^(\s*(?:\S+\s+)?LOGIN\s+)[\s\S]*$/i, "$1[REDACTED]")
+    .replace(/^(\s*(?:\S+\s+)?AUTHENTICATE\s+\S+)\s+[\s\S]*$/i, "$1 [REDACTED]");
 
 // Outbound allowlist. The plain `write()` path also carries FETCH response
 // atoms — HEADER.FIELDS literal payload, ENVELOPE strings, BODY[HEADER] data —

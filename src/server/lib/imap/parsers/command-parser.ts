@@ -31,12 +31,25 @@ const parseId = (context: ParseContext): ParseResult<ImapRequest> => {
  * Parse a complete IMAP command line
  */
 export const parseCommand = (
-  line: string
+  line: string,
+  literals?: string[]
 ): ParseResult<{ tag: string; request: ImapRequest }> => {
+  // Only leading whitespace is framing. A blanket `trim()` used to run here;
+  // it is wrong now that literal payloads travel out-of-band on `literals` —
+  // a payload ending in whitespace is legal precisely because the client sent
+  // it as a literal, and trimming the command text can only lose real tokens.
+  const input = line.replace(/^\s+/, "");
+
   const context: ParseContext = {
-    input: line.trim(),
+    input,
     position: 0,
-    length: line.trim().length
+    length: input.length,
+    // Copy: `parseLiteral` dequeues with `shift()`, so handing the caller's own
+    // array to the context would drain it. That makes parsing a side effect on
+    // a caller-owned value, and it is what would silently break any speculative
+    // parse — the handler asks "does this command parse yet?" before committing
+    // to dispatch it, and must be able to ask twice.
+    literals: literals && [...literals]
   };
 
   try {
