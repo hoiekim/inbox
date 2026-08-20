@@ -338,8 +338,6 @@ const Accounts = ({
             ? preSearchAccount.current
             : selectedAccount;
 
-        // The destination category's account list — used to fall back to its
-        // first account when the candidate isn't present in it.
         let targetAccounts: Account[];
         if (e === Category.SentMails) targetAccounts = sent;
         else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);

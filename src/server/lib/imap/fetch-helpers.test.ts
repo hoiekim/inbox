@@ -628,7 +628,7 @@ describe("BODY[] {N} holds when the attachment file disagrees with the mail row"
     expect(decodePart(wire, "a.bin").equals(original)).toBe(true);
   });
 
-  it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync (#733 reviewoie HIGH)", async () => {
+  it("segment list is built ONCE per BODY[] fetch — length + stream cannot desync", async () => {
     const id = "att-grows-mid-fetch";
     const initial = Buffer.alloc(1024, 7);
     writeAttachment(id, initial);
@@ -854,9 +854,8 @@ describe("buildFetchResponsePart BODY[] streams without materializing", () => {
   });
 
   // The budget tests below deliberately saturate capacity BEFORE starting the
-  // stream. Asserting only "capacity is free after draining" would pass whether
-  // or not the stream ever acquired a slot — the same vacuous shape this file's
-  // size assertions used to have.
+  // stream. Asserting only "capacity is free after draining" would be vacuous
+  // — the assertion would pass whether or not the stream ever acquired a slot.
   const saturateAllButOne = () => {
     const releases: Array<() => void> = [];
     const held = Array.from({ length: bodyBudgetCapacity() - 1 }, () =>

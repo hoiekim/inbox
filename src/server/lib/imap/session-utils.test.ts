@@ -440,12 +440,12 @@ describe("buildFullMessage", () => {
     expect(lines.length).toBeGreaterThan(1);
   });
 
-  describe("stored values cannot steer the MIME framing (#826)", () => {
+  describe("stored values cannot steer the MIME framing", () => {
     it("a subject carrying boundary=\"…\" does not become the boundary", () => {
-      // The boundary used to be recovered by matching `boundary="([^"]+)"`
-      // against the whole header block, and Subject is emitted ahead of
-      // Content-Type — so this subject won the match and the `--` delimiters
-      // stopped agreeing with the declared boundary.
+      // Subject is emitted ahead of Content-Type. Recovering the boundary by
+      // matching `boundary="([^"]+)"` against the whole header block would let
+      // this subject win the match, so the `--` delimiters would stop agreeing
+      // with the declared boundary.
       const result = buildFullMessage(
         {
           subject: 'winter sale boundary="hijacked"',
@@ -464,11 +464,11 @@ describe("buildFullMessage", () => {
     });
 
     it("a subject carrying the text `Content-Type: ` is not rewritten", () => {
-      // `rewriteContentType`'s match used to be unanchored, and Subject is
-      // emitted ahead of Content-Type — so this subject won the replace and
-      // the user's real subject was overwritten on BODY[] / RFC822 while
-      // BODY[HEADER] (which goes through formatHeaders directly) still showed
-      // the true one. No CRLF required.
+      // `rewriteContentType`'s match must be anchored to a header line start.
+      // Subject is emitted ahead of Content-Type, so an unanchored match would
+      // let this subject win the replace — the real subject would appear
+      // overwritten on BODY[] / RFC822 while BODY[HEADER] (which goes through
+      // formatHeaders directly) still showed the true one. No CRLF required.
       const result = buildFullMessage(
         {
           subject: 'Content-Type: text/plain; boundary="evil"',

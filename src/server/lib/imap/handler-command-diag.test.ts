@@ -180,9 +180,9 @@ describe("per-command diag log — threshold gate (2026-07-28 log-volume)", () =
   });
 
   it("routes interesting commands to logger.info and noise-floor to logger.debug", () => {
-    // The finally block used to unconditionally `logger.info`. The gate
-    // splits into info+debug — the DEBUG branch is what prod's INFO
-    // filter drops.
+    // The gate splits completion logging into info + debug so prod's INFO
+    // filter drops the noise-floor branch — an unconditional `logger.info`
+    // would flood the sink.
     expect(handlerSource).toMatch(
       /if\s*\(isInteresting\)\s*\{\s*logger\.info\("IMAP command completed", payload\);/
     );
