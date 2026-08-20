@@ -7,10 +7,12 @@
 
 import {
   createMailbox as dbCreateMailbox,
+  countMailboxesByUser,
   deleteMailboxByName,
   renameMailbox as dbRenameMailbox,
   setMailboxSubscribed,
   getImapUidValidity,
+  MAILBOX_COUNT_MAX,
 } from "server";
 import { logger } from "server";
 import {
@@ -58,6 +60,10 @@ export async function createMailbox(
   }
   try {
     const userId = store.getUser().id;
+    if ((await countMailboxesByUser(userId)) >= MAILBOX_COUNT_MAX) {
+      write(`${tag} NO [LIMIT] Mailbox limit of ${MAILBOX_COUNT_MAX} reached\r\n`);
+      return;
+    }
     const created = await dbCreateMailbox({ user_id: userId, name: cleanName });
     if (!created) {
       write(`${tag} NO [ALREADYEXISTS] Mailbox already exists\r\n`);

@@ -57,6 +57,12 @@ export const getMailboxByAddress = async (
   });
 };
 
+/**
+ * How many mailbox rows this user holds. One indexed aggregate on `user_id`.
+ */
+export const countMailboxesByUser = async (user_id: string): Promise<number> =>
+  mailboxesTable.count({ [MAILBOX_USER_ID]: user_id });
+
 export interface CreateMailboxInput {
   user_id: string;
   name: string;
