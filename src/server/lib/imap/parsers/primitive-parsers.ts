@@ -334,3 +334,66 @@ export const consume = (context: ParseContext, expected: string): boolean => {
   }
   return false;
 };
+
+/**
+ * Parse a CONDSTORE modifier group — the parenthesized `(NAME <mod-sequence>)`
+ * that trails a FETCH sequence set (RFC 4551 §3.3.1) or sits between a STORE
+ * sequence set and its item name (RFC 7162 §3.1.3). Both grammars admit
+ * exactly one modifier name, so an unrecognized one is a client error rather
+ * than something to ignore: dropping it silently would run an unconditional
+ * command where the client asked for a conditional one.
+ *
+ * Absent group is the normal case and parses as `undefined`, not a failure.
+ *
+ * ```ts
+ * const modifier = parseModifierGroup(context, "FETCH", "CHANGEDSINCE");
+ * ```
+ */
+export const parseModifierGroup = (
+  context: ParseContext,
+  command: string,
+  modifier: string
+): ParseResult<number | undefined> => {
+  skipWhitespace(context);
+  if (peek(context) !== "(") {
+    return { success: true, value: undefined, consumed: context.position };
+  }
+  context.position++;
+
+  let value: number | undefined;
+  while (context.position < context.length) {
+    skipWhitespace(context);
+    if (peek(context) === ")") {
+      context.position++;
+      return { success: true, value, consumed: context.position };
+    }
+
+    const name = parseAtom(context);
+    if (!name.success) {
+      return { success: false, error: `Invalid ${command} modifier`, consumed: 0 };
+    }
+    if (name.value!.toUpperCase() !== modifier) {
+      return {
+        success: false,
+        error: `Unknown ${command} modifier: ${name.value}`,
+        consumed: 0
+      };
+    }
+    skipWhitespace(context);
+    const modseq = parseNumber(context);
+    if (!modseq.success) {
+      return {
+        success: false,
+        error: `${modifier} requires a mod-sequence value`,
+        consumed: 0
+      };
+    }
+    value = modseq.value!;
+  }
+
+  return {
+    success: false,
+    error: `Unterminated ${command} modifier group`,
+    consumed: 0
+  };
+};

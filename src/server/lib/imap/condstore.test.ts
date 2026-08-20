@@ -332,7 +332,7 @@ const makeFlagStore = (
   result: { uid: number; read: boolean; modseq: number }[]
 ): Store =>
   ({
-    setFlags: async () => result,
+    setFlags: async () => ({ updated: result, failed: [] }),
   }) as unknown as Store;
 
 const seqStateFor = (uids: number[]): SequenceState => {

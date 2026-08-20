@@ -14,6 +14,7 @@ import {
   parseString,
   parseAtom,
   parseFlag,
+  parseModifierGroup,
   peek
 } from "./primitive-parsers";
 
@@ -32,6 +33,7 @@ const isStoreOperation = (value: string): value is StoreOperation => {
   return validOperations.includes(value as StoreOperation);
 };
 
+
 /**
  * Parse STORE command
  */
@@ -43,6 +45,14 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
       error: "Invalid sequence set in STORE",
       consumed: 0
     };
+  }
+
+  // RFC 7162 §3.1.3: an optional `(UNCHANGEDSINCE <modseq>)` group sits
+  // between the sequence set and the item name. Unambiguous to detect — an
+  // item name is an atom and never starts with "(".
+  const unchangedSince = parseModifierGroup(context, "STORE", "UNCHANGEDSINCE");
+  if (!unchangedSince.success) {
+    return { success: false, error: unchangedSince.error, consumed: 0 };
   }
 
   skipWhitespace(context);
@@ -106,7 +116,8 @@ export const parseStore = (context: ParseContext): ParseResult<ImapRequest> => {
         sequenceSet: sequenceSet.value!,
         operation: operation,
         flags,
-        silent
+        silent,
+        unchangedSince: unchangedSince.value
       }
     },
     consumed: context.position
