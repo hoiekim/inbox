@@ -47,8 +47,16 @@ export const validateMailData = (
     return { valid: false, error: "Invalid sender name" };
   }
 
-  // Validate recipient (required)
-  if (!data.to || typeof data.to !== "string") {
+  // A Bcc-only send carries no `To:` header.
+  const { to, cc, bcc } = data;
+  const isAddressList = (list: unknown) =>
+    list === undefined || typeof list === "string";
+  const hasRecipient =
+    isAddressList(to) &&
+    isAddressList(cc) &&
+    isAddressList(bcc) &&
+    [to, cc, bcc].some((list) => list?.trim());
+  if (!hasRecipient) {
     return { valid: false, error: "Recipient email address is required" };
   }
 

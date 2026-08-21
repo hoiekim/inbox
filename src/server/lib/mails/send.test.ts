@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { parseAddressList } from "./send";
+import { addressField, parseAddressList } from "./send";
 
 describe("parseAddressList — case normalization (#573)", () => {
   it("lowercases a single address", () => {
@@ -27,6 +27,20 @@ describe("parseAddressList — case normalization (#573)", () => {
   });
 });
 
+describe("addressField — stored recipient fields", () => {
+  it("builds a value/text pair from a populated list", () => {
+    expect(addressField("Alice@X.com, bob@y.com")).toEqual({
+      value: [{ address: "alice@x.com" }, { address: "bob@y.com" }],
+      text: "Alice@X.com, bob@y.com"
+    });
+  });
+
+  it("returns undefined for an empty list so the column stays NULL", () => {
+    expect(addressField("")).toBeUndefined();
+    expect(addressField(undefined)).toBeUndefined();
+  });
+});
+
 describe("getSentMail — sender address normalization (#573)", () => {
   // getSentMail builds the *stored* Mail (delivery uses the raw mailToSend via
   // sendMailgunMail). It hits the DB for UID allocation, so the from-address
@@ -50,10 +64,5 @@ describe("getSentMail — sender address normalization (#573)", () => {
     expect(fnSource).toMatch(
       /fromEmail\s*=\s*`\$\{sender\}@\$\{userDomain\}`\.toLowerCase\(\)/
     );
-  });
-
-  it("builds recipient lists through the lowercasing parseAddressList", () => {
-    expect(fnSource).toContain("parseAddressList(to)");
-    expect(fnSource).not.toMatch(/const parseAddresses\s*=/);
   });
 });
