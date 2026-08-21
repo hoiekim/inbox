@@ -8,7 +8,7 @@ import { UploadedFileDynamicArray } from "./send";
 import { UploadedFile } from "express-fileupload";
 import { logger } from "../logger";
 
-const { EMAIL_DOMAIN = "mydomain", MAILGUN_KEY = "mailgun_key" } = process.env;
+const { MAILGUN_KEY = "mailgun_key" } = process.env;
 
 /**
  * Returns the file data as a Buffer.
@@ -40,21 +40,37 @@ export const sendMailgunMail = async (
   const { sender, senderFullName, to, cc, bcc, subject, html, inReplyTo } =
     mail;
 
-  const tos = to
-    .split(",")
-    .map((addr) => addr.trim())
-    .filter(Boolean);
-  const envelopTo = tos.filter((addr) => !addr.endsWith(`@${EMAIL_DOMAIN}`));
-  if (tos.length && !envelopTo.length) {
+  // Read at call time, not at module load: the filter below is only
+  // meaningful against the domain the process is actually serving.
+  const { EMAIL_DOMAIN = "mydomain" } = process.env;
+
+  const addresses = (list?: string) =>
+    (list ?? "")
+      .split(",")
+      .map((addr) => addr.trim())
+      .filter(Boolean);
+  const isExternal = (address: string) => !address.endsWith(`@${EMAIL_DOMAIN}`);
+
+  const tos = addresses(to);
+  const recipients = [...tos, ...addresses(cc), ...addresses(bcc)];
+  const envelopTo = tos.filter(isExternal);
+  if (recipients.length && !recipients.some(isExternal)) {
     logger.info("All recipients are to myself, skipping Mailgun sending.");
     return;
   }
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
+  const fromAddress = `${sender}@${userDomain}`;
   const from = senderFullName
-    ? `${senderFullName} <${sender}@${userDomain}>`
-    : `${sender}@${userDomain}`;
+    ? `${senderFullName} <${fromAddress}>`
+    : fromAddress;
+
+  // Mailgun rejects a message with no `to` (400 "to parameter is missing"),
+  // so a send whose visible recipients are all host-domain — or absent, as on
+  // a Bcc-only submission — is addressed to the sender. Promoting a cc or bcc
+  // address here would disclose exactly what this split exists to hide.
+  const visibleTo = envelopTo.length ? envelopTo : [fromAddress];
 
   const mailgun = new Mailgun(FormData);
   const mg = mailgun.client({
@@ -65,7 +81,7 @@ export const sendMailgunMail = async (
 
   const mailgunMessage: MailgunMessageData = {
     from,
-    to: envelopTo,
+    to: visibleTo,
     cc,
     bcc,
     subject,

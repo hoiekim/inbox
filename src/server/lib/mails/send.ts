@@ -115,6 +115,13 @@ export const parseAddressList = (str: string) =>
     .filter(Boolean)
     .map((address) => ({ address: address.toLowerCase() }));
 
+/**
+ * Builds a stored recipient field, or `undefined` when the list is empty so
+ * the column stays NULL and the IMAP ENVELOPE emits NIL.
+ */
+export const addressField = (list?: string) =>
+  !list ? undefined : { value: parseAddressList(list), text: list };
+
 const getSentMail = async (
   user: SignedUser,
   mailToSend: MailDataToSend,
@@ -147,11 +154,11 @@ const getSentMail = async (
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: senderFullName ? `${senderFullName} <${fromEmail}>` : fromEmail
     },
-    to: !to ? undefined : { value: parseAddressList(to), text: to },
-    cc: !cc ? undefined : { value: parseAddressList(cc), text: cc },
-    bcc: !bcc ? undefined : { value: parseAddressList(bcc), text: bcc },
+    to: addressField(to),
+    cc: addressField(cc),
+    bcc: addressField(bcc),
     envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],
-    envelopeTo: parseAddressList(to),
+    envelopeTo: parseAddressList([to, cc, bcc].filter(Boolean).join(",")),
     replyTo: {
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: fromEmail
