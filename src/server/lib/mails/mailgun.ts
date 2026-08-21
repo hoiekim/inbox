@@ -40,7 +40,10 @@ export const sendMailgunMail = async (
   const { sender, senderFullName, to, cc, bcc, subject, html, inReplyTo } =
     mail;
 
-  const tos = to.split(",").map((addr) => addr.trim());
+  const tos = to
+    .split(",")
+    .map((addr) => addr.trim())
+    .filter(Boolean);
   const envelopTo = tos.filter((addr) => !addr.endsWith(`@${EMAIL_DOMAIN}`));
   if (tos.length && !envelopTo.length) {
     logger.info("All recipients are to myself, skipping Mailgun sending.");

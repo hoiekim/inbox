@@ -147,7 +147,7 @@ const getSentMail = async (
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: senderFullName ? `${senderFullName} <${fromEmail}>` : fromEmail
     },
-    to: { value: parseAddressList(to), text: to },
+    to: !to ? undefined : { value: parseAddressList(to), text: to },
     cc: !cc ? undefined : { value: parseAddressList(cc), text: cc },
     bcc: !bcc ? undefined : { value: parseAddressList(bcc), text: bcc },
     envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],

@@ -175,7 +175,7 @@ const addressList = (
     );
   if (!header) return [];
   const objects = Array.isArray(header) ? header : [header];
-  return objects.flatMap((object) => flatten(object.value));
+  return objects.flatMap((object) => flatten(object.value)).filter(Boolean);
 };
 
 interface OutgoingSender {
@@ -234,6 +234,41 @@ export const resolveOutgoingSender = (
   };
 };
 
+/**
+ * Splits the SMTP envelope recipients into To / Cc / Bcc.
+ *
+ * A client puts Bcc addresses only in `RCPT TO` and strips the `Bcc:` header
+ * out of DATA, so an envelope recipient that neither header names is a Bcc.
+ * The envelope decides who is delivered to; the headers only decide which of
+ * the three lists each recipient belongs in.
+ *
+ * @example
+ * splitEnvelopeRecipients(["a@x.com", "b@x.com"], ["a@x.com"], [])
+ * // => { to: ["a@x.com"], cc: [], bcc: ["b@x.com"] }
+ */
+export const splitEnvelopeRecipients = (
+  recipients: string[],
+  addressedTo: string[],
+  addressedCc: string[]
+) => {
+  const normalize = (address: string) => address.trim().toLowerCase();
+  const toHeader = new Set(addressedTo.map(normalize));
+  const ccHeader = new Set(addressedCc.map(normalize));
+
+  const to: string[] = [];
+  const cc: string[] = [];
+  const bcc: string[] = [];
+
+  recipients.forEach((address) => {
+    const key = normalize(address);
+    if (toHeader.has(key)) to.push(address);
+    else if (ccHeader.has(key)) cc.push(address);
+    else bcc.push(address);
+  });
+
+  return { to, cc, bcc };
+};
+
 const onDataOutgoing = async (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -260,8 +295,16 @@ const onDataOutgoing = async (
       addressList(parsed.to)
     );
 
+    const { to, cc, bcc } = splitEnvelopeRecipients(
+      recipients,
+      addressList(parsed.to),
+      addressList(parsed.cc)
+    );
+
     const mailData = new MailDataToSend({
-      to: recipients.join(","),
+      to: to.join(","),
+      cc: cc.join(",") || undefined,
+      bcc: bcc.join(",") || undefined,
       subject: parsed.subject || "",
       html: parsed.html || parsed.text || "",
       sender,

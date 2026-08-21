@@ -64,7 +64,7 @@ const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockRetu
 // `DISCORD_ALARM_WEBHOOK` is unset (the early return in alarm.ts:15).
 
 // Import the actual SMTP handlers after mocks are set up
-import { onAuth, onData, resolveOutgoingSender } from "./smtp";
+import { onAuth, onData, resolveOutgoingSender, splitEnvelopeRecipients } from "./smtp";
 
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
@@ -686,6 +686,80 @@ describe("onData handler", () => {
     expect(mailArg.attachments[1]!.filename).toBe("attachment");
   });
 
+  const outgoingSession = (rcptTo: string[]) =>
+    ({
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: rcptTo.map((address) => ({ address }))
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const parseAs = (headers: {
+    to?: { address: string }[];
+    cc?: { address: string }[];
+  }) => {
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<test@example.com>",
+        from: { text: "admin@test.com", value: [{ address: "admin@test.com" }] },
+        to: headers.to && { text: "", value: headers.to },
+        cc: headers.cc && { text: "", value: headers.cc },
+        subject: "Test Subject",
+        html: "<p>Test HTML</p>",
+        text: "Test text",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+  };
+
+  const driveOutgoing = async (session: SMTPServerSession) => {
+    mockGetUser.mockResolvedValue({ getSigned: () => ({ username: "admin" }) });
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), session, (e) => resolve(e));
+    });
+    expect(err).toBeUndefined();
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    return mockSendMail.mock.calls[0][1];
+  };
+
+  it("keeps an envelope recipient the To: header omits out of the To field", async () => {
+    parseAs({ to: [{ address: "visible@other.com" }] });
+    const mailData = await driveOutgoing(
+      outgoingSession(["visible@other.com", "hidden@other.com"])
+    );
+
+    expect(mailData.to).toBe("visible@other.com");
+    expect(mailData.bcc).toBe("hidden@other.com");
+    expect(mailData.cc).toBeUndefined();
+  });
+
+  it("routes a Cc: header recipient to cc, not to to or bcc", async () => {
+    parseAs({
+      to: [{ address: "visible@other.com" }],
+      cc: [{ address: "copied@other.com" }]
+    });
+    const mailData = await driveOutgoing(
+      outgoingSession(["visible@other.com", "copied@other.com", "hidden@other.com"])
+    );
+
+    expect(mailData.to).toBe("visible@other.com");
+    expect(mailData.cc).toBe("copied@other.com");
+    expect(mailData.bcc).toBe("hidden@other.com");
+  });
+
+  it("sends a header-less submission entirely as bcc", async () => {
+    parseAs({});
+    const mailData = await driveOutgoing(
+      outgoingSession(["one@other.com", "two@other.com"])
+    );
+
+    expect(mailData.to).toBe("");
+    expect(mailData.bcc).toBe("one@other.com,two@other.com");
+  });
+
   it("does not invoke callback when neither incoming nor outgoing matches", async () => {
     // Both addresses outside EMAIL_DOMAIN — neither branch fires, cb stays uncalled.
     const stream = makeStream();
@@ -706,6 +780,39 @@ describe("onData handler", () => {
     expect(cbCalled).toBe(false);
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
+  });
+});
+
+describe("splitEnvelopeRecipients", () => {
+  it("assigns each envelope recipient by the header that names it", () => {
+    const split = splitEnvelopeRecipients(
+      ["a@x.com", "b@x.com", "c@x.com"],
+      ["a@x.com"],
+      ["b@x.com"]
+    );
+    expect(split).toEqual({ to: ["a@x.com"], cc: ["b@x.com"], bcc: ["c@x.com"] });
+  });
+
+  it("matches a header address to an envelope address case-insensitively", () => {
+    const split = splitEnvelopeRecipients(["Alice@X.com"], ["alice@x.com"], []);
+    expect(split).toEqual({ to: ["Alice@X.com"], cc: [], bcc: [] });
+  });
+
+  it("ignores a header address that the envelope never named", () => {
+    const split = splitEnvelopeRecipients(
+      ["real@x.com"],
+      ["real@x.com", "forged@x.com"],
+      []
+    );
+    expect(split).toEqual({ to: ["real@x.com"], cc: [], bcc: [] });
+  });
+
+  it("returns three empty lists for an empty envelope", () => {
+    expect(splitEnvelopeRecipients([], ["a@x.com"], ["b@x.com"])).toEqual({
+      to: [],
+      cc: [],
+      bcc: []
+    });
   });
 });
 
