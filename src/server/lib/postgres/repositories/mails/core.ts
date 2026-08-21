@@ -12,8 +12,6 @@ import {
   MODSEQ,
   DB_NOW,
   RFC822_SIZE,
-  TEXT_LINE_COUNT,
-  HTML_LINE_COUNT,
 } from "../../models";
 import {
   getNextModseq,
@@ -175,16 +173,8 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Populated at insert so BODYSTRUCTURE cache hits never fall back to
-      // the string-load path in fetch-helpers. Rows that predate this write
-      // sit NULL until their first BODYSTRUCTURE observation backfills them.
-      // The `""` split yields `[""]` (length 1), matching buildTextPart's
-      // math for an empty part; its `hasText` predicate skips it, so a
-      // stored 1 for an empty column is never surfaced.
-      [TEXT_LINE_COUNT]: countLines(text),
-      [HTML_LINE_COUNT]: countLines(html),
-      // Same shape as line counts: populate at INSERT so the RFC822.SIZE
-      // fetch handler's cache-hit branch fires from the first observation.
+      // Populate at INSERT so the RFC822.SIZE fetch handler's cache-hit
+      // branch fires from the first observation.
       // The lazy-populate fallback in fetch-helpers stays as a safety net
       // for pre-migration rows.
       [RFC822_SIZE]: rfc822_size,
@@ -392,57 +382,6 @@ export const updateRfc822Size = async (
     { [MAIL_ID]: mail_id, [USER_ID]: user_id },
     { [RFC822_SIZE]: rfc822_size }
   );
-};
-
-/**
- * Line count for the BODYSTRUCTURE `lines` field — the exact expression
- * buildTextPart in imap/util.ts uses to derive the field from the raw
- * text/html column. Kept here so INSERT-time population and read-side
- * fallback compute agree by construction.
- *
- * Note: `"".split(/\r?\n/)` yields `[""]` (length 1). That matches the
- * pre-existing buildTextPart math but the BODYSTRUCTURE emit path skips
- * empty parts via `hasText` / `hasHtml`, so a stored 1 for an empty
- * column is never surfaced on the wire.
- */
-export const countLines = (content: string): number =>
-  content.split(/\r?\n/).length;
-
-/**
- * Persist the derived `text_line_count` + `html_line_count` for a mail on
- * the first BODYSTRUCTURE FETCH that computes them (backfill path for
- * pre-migration rows — new rows populate at INSERT time above).
- *
- * Same shape + rationale as `updateRfc822Size`: no `updated` bump so the
- * CONDSTORE mod-sequence isn't churned; idempotent, so concurrent
- * writers of the same values collide harmlessly; fire-and-forget from
- * the caller.
- */
-export const updateLineCounts = async (
-  user_id: string,
-  mail_id: string,
-  text_line_count: number,
-  html_line_count: number
-): Promise<void> => {
-  await mailsTable.updateWhere(
-    { [MAIL_ID]: mail_id, [USER_ID]: user_id },
-    { [TEXT_LINE_COUNT]: text_line_count, [HTML_LINE_COUNT]: html_line_count }
-  );
-};
-
-export const getMailBody = async (
-  user_id: string,
-  mail_id: string
-): Promise<{ text: string; html: string } | null> => {
-  const result = await pool.query(
-    `SELECT text, html FROM mails WHERE mail_id = $1 AND user_id = $2`,
-    [mail_id, user_id]
-  );
-  if (result.rows.length === 0) return null;
-  return {
-    text: (result.rows[0].text as string | null) ?? "",
-    html: (result.rows[0].html as string | null) ?? "",
-  };
 };
 
 export const markMailRead = async (

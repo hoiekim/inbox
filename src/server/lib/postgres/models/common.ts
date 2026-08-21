@@ -72,6 +72,9 @@ export const SPAM_SCORE = "spam_score";
 export const SPAM_REASONS = "spam_reasons";
 export const IS_SPAM = "is_spam";
 export const RFC822_SIZE = "rfc822_size";
+// Legacy decoded line counts. Nothing reads or writes them: RFC 3501 §7.4.2's
+// `lines` describes the body in its transfer encoding, so BODYSTRUCTURE
+// derives its own count. Kept only until the columns are dropped.
 export const TEXT_LINE_COUNT = "text_line_count";
 export const HTML_LINE_COUNT = "html_line_count";
 

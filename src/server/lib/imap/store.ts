@@ -435,17 +435,6 @@ export class Store {
         if (model.rfc822_size !== undefined) {
           mail.rfc822_size = model.rfc822_size;
         }
-        // text_line_count / html_line_count: cached BODYSTRUCTURE `lines`
-        // fields. Same preserve-null-vs-undefined dance as rfc822_size —
-        // the BODYSTRUCTURE fetch handler distinguishes stored-value hit
-        // (typeof === 'number') from cache-miss fallback (load text/html
-        // + compute + persist).
-        if (model.text_line_count !== undefined) {
-          mail.text_line_count = model.text_line_count;
-        }
-        if (model.html_line_count !== undefined) {
-          mail.html_line_count = model.html_line_count;
-        }
 
         if (model.from_address) {
           mail.from = {

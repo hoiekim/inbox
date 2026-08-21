@@ -233,33 +233,33 @@ export const formatBodyStructure = (
    * data — present only in BODYSTRUCTURE. The bare `BODY` data item is the
    * non-extensible form (RFC 3501 §6.4.5): pass extensible=false to drop it.
    *
-   * Two paths for the text/html `size` + `lines` fields:
+   * `size` has two paths:
    *  - **Cached** — when the caller projects `text_octets` / `html_octets`
-   *    (from `octet_length()`) + `text_line_count` / `html_line_count`
-   *    (persisted at INSERT time; see saveMail), the fields are derived
-   *    with no string in memory. `size = ceil(octets/3)*4` matches
-   *    `Buffer.byteLength(base64(content))` exactly; `lines` reads the
-   *    cached value verbatim. This is the OOM-fix path — a bare
+   *    (from `octet_length()`), `size = ceil(octets/3)*4` matches
+   *    `Buffer.byteLength(base64(content))` exactly with no string in
+   *    memory. This is the OOM-fix path — a bare
    *    `UID FETCH X BODYSTRUCTURE` doesn't materialize text/html at all.
    *  - **Materialized** — when the caller passes `mail.text` / `mail.html`
-   *    directly (legacy in-memory shape used by tests + the cache-miss
-   *    fallback in fetch-helpers), we base64-encode + split on the string
-   *    the same way this function has always done. Semantically identical
-   *    to the cached path for any non-empty part.
+   *    directly (the in-memory `formatHeaders`-shaped callers and tests), we
+   *    base64-encode and measure the string.
    */
+
+  // RFC 3501 §7.4.2: body-fld-lines counts the body in its *transfer
+  // encoding*, not the decoded text. Every body this server serves is
+  // base64 with no line folding, so it is one line — zero when the part
+  // carries no bytes at all.
+  const encodedLineCount = (size: number): number => (size === 0 ? 0 : 1);
 
   const buildTextPart = (
     subtype: "plain" | "html",
     content: string | undefined,
-    octets: number | undefined,
-    lineCount: number | null | undefined
+    octets: number | undefined
   ): string => {
-    const size = typeof octets === "number"
-      ? Math.ceil(octets / 3) * 4
-      : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
-    const lines = typeof lineCount === "number"
-      ? lineCount
-      : (content ?? "").split(/\r?\n/).length;
+    const size =
+      typeof octets === "number"
+        ? Math.ceil(octets / 3) * 4
+        : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
+    const lines = encodedLineCount(size);
 
     // RFC 3501 §9: media-type and media-subtype are `string` (quoted or
     // literal), body-fld-enc is a quoted string too. Bare atoms like
@@ -276,12 +276,19 @@ export const formatBodyStructure = (
       lines.toString()
     ];
 
+    if (extensible) {
+      parts.push(
+        "NIL", // MD5
+        "NIL", // disposition
+        "NIL", // language
+        "NIL" // location
+      );
+    }
+
     return `(${parts.join(" ")})`;
   };
-  const textPart = () =>
-    buildTextPart("plain", mail.text, mail.text_octets, mail.text_line_count);
-  const htmlPart = () =>
-    buildTextPart("html", mail.html, mail.html_octets, mail.html_line_count);
+  const textPart = () => buildTextPart("plain", mail.text, mail.text_octets);
+  const htmlPart = () => buildTextPart("html", mail.html, mail.html_octets);
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
     const [type, subtype] = (
@@ -306,6 +313,14 @@ export const formatBodyStructure = (
       `"BASE64"`, // encoding — quoted string per RFC 3501 §9 body-fld-enc
       size.toString()
     ];
+
+    // RFC 3501 §9: `body-type-text = media-text SP body-fields SP
+    // body-fld-lines` — a text/* part carries one field more than
+    // body-type-basic, and a parser that dispatches on the media type reads
+    // every following field one position early without it.
+    if (type.toLowerCase() === "text") {
+      parts.push(encodedLineCount(size).toString());
+    }
 
     if (extensible) {
       parts.push(
@@ -381,8 +396,8 @@ export const formatBodyStructure = (
   }
 
   // Default case: empty text part (no lazy inputs either, so the
-  // materialized shape drives the count — split("") = [""], length 1).
-  return buildTextPart("plain", "", undefined, undefined);
+  // materialized shape drives the size — encodeText("") = "", 0 octets).
+  return buildTextPart("plain", "", undefined);
 };
 
 export const formatFlags = (mail: Partial<MailType>): string[] => {

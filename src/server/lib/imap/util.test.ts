@@ -14,6 +14,13 @@ import {
   isDomainScoped,
   deriveCopyMessageId,
 } from "./util";
+// The producer of the bytes `BODY[n]` serves. `body-fld-lines` is a constant
+// here only because that encoding is unfolded, so the invariant is pinned
+// against it rather than against this file's own encoder.
+import {
+  buildMessageSegments,
+  streamPartBodyFromSegments,
+} from "./session-utils";
 import type { MailType, MailAddressValueType } from "common";
 
 describe("IMAP util", () => {
@@ -597,6 +604,19 @@ describe("IMAP util", () => {
       expect(result).toContain('"BASE64"');
     });
 
+    it("advertises zero lines for a zero-octet part, the only honest count when BODY[n] has nothing to serve", () => {
+      // A mail with no text/html falls back to an empty TEXT PLAIN part.
+      // buildMessageSegments emits no body segment for it, and a BODY[1]
+      // fetch declines the data item outright rather than serving an empty
+      // literal — so claiming one line describes a line nobody receives.
+      const empty = formatBodyStructure({}, true);
+      const nonEmpty = formatBodyStructure({ text: "hi" }, true);
+      expect([
+        empty.includes(' "BASE64" 0 0 '),
+        nonEmpty.includes(' "BASE64" 4 1 ')
+      ]).toEqual([true, true]);
+    });
+
     it("quotes TEXT/HTML per RFC 3501 §9 (html-only)", () => {
       const mail: Partial<MailType> = { html: "<p>Hello, World!</p>" };
       const result = formatBodyStructure(mail);
@@ -666,7 +686,9 @@ describe("IMAP util", () => {
     // Byte-for-byte pin — regression against the exact prod shape that
     // Apple Mail iOS 26 stuck on. Covers all three violations at once:
     // (a) quoted TEXT/PLAIN/HTML, (b) quoted BASE64, (c) no space between
-    // sibling parts inside the outer multipart wrapper.
+    // sibling parts inside the outer multipart wrapper. The persisted
+    // decoded line counts are projected on purpose: they must not reach the
+    // wire, where body-fld-lines counts the transfer-encoded body instead.
     it("full byte-perfect shape for text+html+2 attachments (the iOS regression case)", () => {
       const mail: Partial<MailType> = {
         text_octets: 27060,
@@ -690,8 +712,8 @@ describe("IMAP util", () => {
       };
       const expected =
         '((' +
-          '("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 36080 522)' +
-          '("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" 14850696 230)' +
+          '("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 36080 1 NIL NIL NIL NIL)' +
+          '("TEXT" "HTML" ("CHARSET" "UTF-8") NIL NIL "BASE64" 14850696 1 NIL NIL NIL NIL)' +
           ' "alternative" NIL NIL NIL NIL' +
         ')' +
         '("image" "jpeg" ("NAME" "1000025304.jpg") NIL NIL "BASE64" 8216024 NIL ("ATTACHMENT" ("FILENAME" "1000025304.jpg")) NIL NIL)' +
@@ -700,15 +722,18 @@ describe("IMAP util", () => {
       expect(formatBodyStructure(mail)).toBe(expected);
     });
 
-    it("derives text-part size + lines from the cached synthetics with no strings loaded", () => {
+    // #740: BODYSTRUCTURE's `size` derives from the persisted octet column
+    // when the caller projects it (the BODYSTRUCTURE hot path — no text/html
+    // string materialization). The wire response for the same underlying
+    // content must be byte-identical whether we take the cached path or fall
+    // through to base64-and-measure.
+    it("derives text-part size from the cached octets with no strings loaded", () => {
       const cached = formatBodyStructure({
         text_octets: 30,
-        html_octets: 0,
-        text_line_count: 3,
-        html_line_count: 0,
+        html_octets: 0
       });
-      // ceil(30/3)*4 = 40 octets base64, three lines.
-      expect(cached).toContain('"BASE64" 40 3');
+      // ceil(30/3)*4 = 40 octets base64, served as one unfolded base64 line.
+      expect(cached).toContain('"BASE64" 40 1');
       // No HTML → single text part, not multipart.
       expect(cached).not.toContain("alternative");
     });
@@ -718,21 +743,166 @@ describe("IMAP util", () => {
       const materialized = formatBodyStructure({ text });
       const cached = formatBodyStructure({
         text_octets: Buffer.byteLength(text, "utf8"),
-        html_octets: 0,
-        text_line_count: text.split(/\r?\n/).length,
-        html_line_count: 0,
+        html_octets: 0
       });
       expect(cached).toBe(materialized);
     });
 
-    describe("non-extensible form (extensible=false)", () => {
-      it("leaves a leaf text part identical (it carries no extension data)", () => {
-        const mail: Partial<MailType> = { text: "Hello, World!" };
-        expect(formatBodyStructure(mail, false)).toBe(
-          formatBodyStructure(mail, true)
+    // RFC 3501 §7.4.2 — body-fld-octets and body-fld-lines must describe the
+    // same (transfer-encoded) representation of the part.
+    describe("body-fld-lines describes the transfer-encoded body", () => {
+      it("reports the encoded line count, not the decoded one", () => {
+        const text = Array.from({ length: 40 }, (_, i) => `line ${i}`).join(
+          "\n"
+        );
+        const encoded = encodeText(text);
+        const result = formatBodyStructure({ text }, false);
+        // 40 decoded lines, but one unfolded base64 line is what is served.
+        expect(result).toBe(
+          `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" ${encoded.length} 1)`
         );
       });
 
+      it("counts lines over the same bytes body-fld-octets measures", () => {
+        // The body has to clear the 76-column fold threshold RFC 2045 §6.8
+        // describes (>57 raw bytes), or `encoded.split(...)` is 1 whatever
+        // the encoder does and the derived expectation asserts nothing.
+        const html = Array.from({ length: 12 }, (_, i) => `<p>row ${i}</p>`).join("\r\n");
+        expect(Buffer.byteLength(html, "utf8")).toBeGreaterThan(57);
+        const encoded = encodeText(html);
+        const result = formatBodyStructure({ html }, false);
+        const [, size, lines] = result.match(/"BASE64" (\d+) (\d+)\)$/)!;
+        expect(Number(size)).toBe(Buffer.byteLength(encoded, "utf-8"));
+        expect(Number(lines)).toBe(encoded.split(/\r?\n/).length);
+      });
+
+      it("reports zero octets and zero lines on the empty default part", () => {
+        // buildMessageSegments emits no body segment for a mail with no
+        // text/html, and a BODY[1] fetch omits the data item rather than
+        // serving an empty literal — both counts must say so.
+        expect(formatBodyStructure({}, false)).toBe(
+          `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" 0 0)`
+        );
+      });
+    });
+
+    // `lines` is a constant, and the only thing that makes the constant true
+    // is that the base64 the server serves is unfolded. That encoding does
+    // NOT live in this file — `streamPartBodyFromSegments` emits the bytes
+    // `BODY[n]` returns, and it re-implements the encoder rather than
+    // importing `encodeText`. So the invariant is pinned against the real
+    // producer: fold the body at 76 columns per RFC 2045 §6.8 and
+    // `body-fld-lines 1` starts describing a representation nobody receives.
+    describe("the unfolded-base64 invariant the line count rests on", () => {
+      // Well past the 76-column wrap point, so a folding encoder cannot
+      // slip through on a body too short to wrap.
+      const text = Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\r\n");
+
+      const servedBody = async (
+        mail: Partial<MailType>,
+        partPath: string
+      ): Promise<string> => {
+        const chunks: Buffer[] = [];
+        const segments = buildMessageSegments(mail as MailType, "docId");
+        for await (const chunk of streamPartBodyFromSegments(segments, partPath)) {
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks as unknown as Uint8Array[]).toString("utf8");
+      };
+
+      it("the bytes BODY[n] actually serves carry no line break", async () => {
+        const served = await servedBody({ text }, "1");
+        expect(Buffer.byteLength(served, "utf8")).toBeGreaterThan(76);
+        expect(served).not.toContain("\n");
+        expect(served).not.toContain("\r");
+      });
+
+      it("the served bytes are one line, which is what BODYSTRUCTURE advertises", async () => {
+        const served = await servedBody({ text }, "1");
+        const advertised = formatBodyStructure({ text }, false).match(
+          /"BASE64" (\d+) (\d+)\)$/
+        )!;
+        expect(Number(advertised[1])).toBe(Buffer.byteLength(served, "utf8"));
+        expect(Number(advertised[2])).toBe(served.split(/\r?\n/).length);
+      });
+
+      it("the measuring encoder agrees with the serving one", async () => {
+        // `formatBodyStructure` sizes the materialized path with `encodeText`
+        // while the wire body comes from the segment stream. Two encoders,
+        // one invariant — they have to stay byte-identical.
+        expect(encodeText(text)).toBe(await servedBody({ text }, "1"));
+      });
+    });
+
+    // RFC 3501 §7.4.2 — `body-type-1part = body-type-text [SP body-ext-1part]`,
+    // where body-ext-1part is md5/disposition/language/location. Present in
+    // BODYSTRUCTURE, absent from the bare `BODY` data item (§6.4.5).
+    describe("body-ext-1part tail on text parts", () => {
+      it("is emitted on a leaf text part and dropped from the bare BODY form", () => {
+        const mail: Partial<MailType> = { text: "Hello, World!" };
+        const encoded = encodeText("Hello, World!");
+        const head = `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "BASE64" ${encoded.length} 1`;
+        expect(formatBodyStructure(mail, true)).toBe(`${head} NIL NIL NIL NIL)`);
+        expect(formatBodyStructure(mail, false)).toBe(`${head})`);
+      });
+
+      it("is emitted on text parts nested in a multipart", () => {
+        const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
+        const ext = formatBodyStructure(mail, true);
+        const nonExt = formatBodyStructure(mail, false);
+        expect(ext.match(/NIL NIL NIL NIL\)/g)).toHaveLength(3); // 2 text parts + the multipart tail
+        expect(nonExt).not.toContain("NIL NIL NIL NIL");
+      });
+    });
+
+    // RFC 3501 §9 — `body-type-text = media-text SP body-fields SP
+    // body-fld-lines`. An attachment whose media type is `text` takes the
+    // text grammar, not body-type-basic, so it carries the line count the
+    // inline text parts carry.
+    describe("body-fld-lines on text/* attachments", () => {
+      const withAttachment = (
+        contentType: string,
+        size: number
+      ): Partial<MailType> => ({
+        text: "Hello",
+        attachments: [
+          { content: { data: "att" }, filename: "notes.txt", size, contentType }
+        ]
+      });
+
+      it("emits the line count on a text/plain attachment and omits it on a binary one", () => {
+        const textPart = formatBodyStructure(withAttachment("text/plain", 100), false);
+        const binaryPart = formatBodyStructure(
+          withAttachment("application/pdf", 100),
+          false
+        );
+        const size = Math.ceil(100 / 3) * 4;
+        expect(textPart).toContain(
+          `("text" "plain" ("NAME" "notes.txt") NIL NIL "BASE64" ${size} 1)`
+        );
+        expect(binaryPart).toContain(
+          `("application" "pdf" ("NAME" "notes.txt") NIL NIL "BASE64" ${size})`
+        );
+      });
+
+      it("keeps the line count ahead of the body-ext-1part tail", () => {
+        const size = Math.ceil(100 / 3) * 4;
+        expect(formatBodyStructure(withAttachment("TEXT/PLAIN", 100), true)).toContain(
+          `"BASE64" ${size} 1 NIL ("ATTACHMENT" ("FILENAME" "notes.txt")) NIL NIL)`
+        );
+      });
+
+      it("advertises zero lines for a zero-octet text attachment", () => {
+        expect(formatBodyStructure(withAttachment("text/plain", 0), false)).toContain(
+          `"BASE64" 0 0)`
+        );
+      });
+    });
+
+    // Non-extensible form (the bare `BODY` data item, RFC 3501 §6.4.5) drops the
+    // extension data: md5/disposition/language/location on single parts and
+    // param-list/disposition/language/location on the multipart wrappers (#666).
+    describe("non-extensible form (extensible=false)", () => {
       it("drops the multipart/alternative extension tail", () => {
         const mail: Partial<MailType> = { text: "Hello", html: "<p>Hello</p>" };
         const ext = formatBodyStructure(mail, true);
