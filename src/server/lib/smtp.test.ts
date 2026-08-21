@@ -553,8 +553,8 @@ describe("onData handler", () => {
     }) as unknown as SMTPServerSession;
 
   const parseAs = (headers: {
-    to?: { address: string }[];
-    cc?: { address: string }[];
+    to?: { address?: string; group?: { address: string }[] }[];
+    cc?: { address?: string; group?: { address: string }[] }[];
   }) => {
     mockSimpleParser.mockImplementation(() =>
       Promise.resolve({
@@ -614,6 +614,20 @@ describe("onData handler", () => {
 
     expect(mailData.to).toBe("");
     expect(mailData.bcc).toBe("one@other.com,two@other.com");
+  });
+
+  it("reads addresses out of an RFC 5322 group in the To: header", async () => {
+    // `To: Team: a@x, b@x;` — mailparser nests the members under value[0].group
+    // and leaves value[0].address undefined.
+    parseAs({
+      to: [{ group: [{ address: "a@other.com" }, { address: "b@other.com" }] }]
+    });
+    const mailData = await driveOutgoing(
+      outgoingSession(["a@other.com", "b@other.com", "hidden@other.com"])
+    );
+
+    expect(mailData.to).toBe("a@other.com,b@other.com");
+    expect(mailData.bcc).toBe("hidden@other.com");
   });
 
   it("does not invoke callback when neither incoming nor outgoing matches", async () => {

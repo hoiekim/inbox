@@ -47,8 +47,7 @@ export const validateMailData = (
     return { valid: false, error: "Invalid sender name" };
   }
 
-  // A Bcc-only send carries no `To:` header, so the recipient requirement is
-  // at least one address across to/cc/bcc rather than a non-empty `to`.
+  // A Bcc-only send carries no `To:` header.
   const { to, cc, bcc } = data;
   const isAddressList = (list: unknown) =>
     list === undefined || typeof list === "string";
