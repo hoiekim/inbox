@@ -103,6 +103,26 @@ describe("validateMailData", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("should accept a Bcc-only send that carries no To address", () => {
+      const result = validateMailData({
+        sender: "admin",
+        to: "",
+        bcc: "hidden@example.com",
+      });
+      expect(result.valid).toBe(true);
+    });
+
+    it("should reject a send with no address in any recipient field", () => {
+      const result = validateMailData({
+        sender: "admin",
+        to: "",
+        cc: "",
+        bcc: "",
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("Recipient email address is required");
+    });
+
     it("should reject invalid email in recipient list", () => {
       const result = validateMailData({
         sender: "admin",

@@ -133,6 +133,18 @@ describe("sendMailgunMail", () => {
     expect(msgData.bcc).toBe("bcc@external.com");
   });
 
+  it("should not pass an empty To entry as a recipient on a Bcc-only send", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "hidden@external.com",
+    });
+    await sendMailgunMail("admin", mail);
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.to).toEqual([]);
+    expect(msgData.bcc).toBe("hidden@external.com");
+  });
+
   it("should include inReplyTo header when provided", async () => {
     const mail = new MailDataToSend({ ...baseMail, inReplyTo: "<original-msg@example.com>" });
     await sendMailgunMail("admin", mail);
