@@ -244,6 +244,12 @@ export const formatBodyStructure = (
    *    base64-encode and measure the string.
    */
 
+  // RFC 3501 §7.4.2: body-fld-lines counts the body in its *transfer
+  // encoding*, not the decoded text. Every body this server serves is
+  // base64 with no line folding, so it is one line — zero when the part
+  // carries no bytes at all.
+  const encodedLineCount = (size: number): number => (size === 0 ? 0 : 1);
+
   const buildTextPart = (
     subtype: "plain" | "html",
     content: string | undefined,
@@ -253,22 +259,7 @@ export const formatBodyStructure = (
       typeof octets === "number"
         ? Math.ceil(octets / 3) * 4
         : Buffer.byteLength(encodeText(content ?? ""), "utf-8");
-    // RFC 3501 §7.4.2: body-fld-octets and body-fld-lines both describe the
-    // body *in its transfer encoding* — the bytes `BODY[n]` serves, not the
-    // decoded text. Those bytes come from `session-utils.ts`, which
-    // base64-encodes the body with no line folding (`getBodyPart` and the
-    // streaming emitters each call `Buffer.toString("base64")` directly —
-    // the duplication is #751's complaint), so a text part is one line on
-    // the cached path as much as the materialized one. `encodeText` here
-    // only measures; it is unfolded too, which is why the two agree. A
-    // zero-octet part serves no bytes, so it advertises zero lines.
-    //
-    // The constant is only honest while that encoding stays unfolded —
-    // `util.test.ts` "the unfolded-base64 invariant the line count rests on"
-    // pins it against the real `getBodyPart` output, so folding base64 at
-    // 76 columns per RFC 2045 §6.8 (#751) reds a test instead of silently
-    // re-opening #682.
-    const lines = size === 0 ? 0 : 1;
+    const lines = encodedLineCount(size);
 
     // RFC 3501 §9: media-type and media-subtype are `string` (quoted or
     // literal), body-fld-enc is a quoted string too. Bare atoms like
@@ -322,6 +313,14 @@ export const formatBodyStructure = (
       `"BASE64"`, // encoding — quoted string per RFC 3501 §9 body-fld-enc
       size.toString()
     ];
+
+    // RFC 3501 §9: `body-type-text = media-text SP body-fields SP
+    // body-fld-lines` — a text/* part carries one field more than
+    // body-type-basic, and a parser that dispatches on the media type reads
+    // every following field one position early without it.
+    if (type.toLowerCase() === "text") {
+      parts.push(encodedLineCount(size).toString());
+    }
 
     if (extensible) {
       parts.push(

@@ -184,12 +184,9 @@ export function getRequestedFields(dataItems: FetchDataItem[]): Set<FetchRequest
         break;
 
       // BODYSTRUCTURE (RFC 3501 §7.4.2) needs `body-fld-octets` for each
-      // text/html part. Instead of projecting the multi-MB text/html columns
-      // and measuring per-fetch (the last materialization gap after #731 /
-      // #739 — spiked RSS on bare `UID FETCH X BODYSTRUCTURE` batches),
-      // project the pre-measured `octet_length()` synthetics. `body-fld-lines`
-      // needs no projection: it counts the transfer-encoded body, and
-      // unfolded base64 is always one line.
+      // text/html part. Project the pre-measured `octet_length()` synthetics
+      // rather than the multi-MB text/html columns, which would materialize
+      // every body on a bare `UID FETCH X BODYSTRUCTURE` batch.
       case "BODYSTRUCTURE":
         fields.add("text_octets");
         fields.add("html_octets");

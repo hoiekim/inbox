@@ -435,18 +435,6 @@ export class Store {
         if (model.rfc822_size !== undefined) {
           mail.rfc822_size = model.rfc822_size;
         }
-        // text_line_count / html_line_count: write-only. Nothing reads them —
-        // BODYSTRUCTURE's `lines` measures the body in its transfer encoding,
-        // and `encodeText` emits unfolded base64, so the field is the constant
-        // 1 rather than any decoded count. `getRequestedFields` no longer
-        // projects the columns, so both are always undefined here and neither
-        // copy fires. Removal is #764.
-        if (model.text_line_count !== undefined) {
-          mail.text_line_count = model.text_line_count;
-        }
-        if (model.html_line_count !== undefined) {
-          mail.html_line_count = model.html_line_count;
-        }
 
         if (model.from_address) {
           mail.from = {

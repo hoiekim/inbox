@@ -106,12 +106,9 @@ export interface MailType {
    */
   rfc822_size?: number | null;
   /**
-   * Decoded line counts for the mail's `text` / `html` columns, populated at
-   * INSERT time from the incoming strings. Write-only — they do not match
-   * RFC 3501 §7.4.2's `lines`, which counts the body in its transfer
-   * encoding, so BODYSTRUCTURE derives its own count and nothing projects
-   * these. Optional because the columns start NULL for pre-migration rows.
-   * #764 owns dropping them.
+   * Legacy decoded line counts. Nothing populates or projects them — they do
+   * not match RFC 3501 §7.4.2's `lines`, which counts the body in its
+   * transfer encoding, so BODYSTRUCTURE derives its own count.
    */
   text_line_count?: number | null;
   html_line_count?: number | null;

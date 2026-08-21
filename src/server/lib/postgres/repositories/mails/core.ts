@@ -12,8 +12,6 @@ import {
   MODSEQ,
   DB_NOW,
   RFC822_SIZE,
-  TEXT_LINE_COUNT,
-  HTML_LINE_COUNT,
 } from "../../models";
 import {
   getNextModseq,
@@ -175,14 +173,8 @@ export const saveMail = async (
       date,
       html,
       text,
-      // Decoded line counts. No read path consumes them: BODYSTRUCTURE's
-      // body-fld-lines measures the transfer-encoded body, which unfolded
-      // base64 makes a constant. Retained so the columns stay populated
-      // until their removal is decided (see hoiekim/inbox#764).
-      [TEXT_LINE_COUNT]: countLines(text),
-      [HTML_LINE_COUNT]: countLines(html),
-      // Same shape as line counts: populate at INSERT so the RFC822.SIZE
-      // fetch handler's cache-hit branch fires from the first observation.
+      // Populate at INSERT so the RFC822.SIZE fetch handler's cache-hit
+      // branch fires from the first observation.
       // The lazy-populate fallback in fetch-helpers stays as a safety net
       // for pre-migration rows.
       [RFC822_SIZE]: rfc822_size,
@@ -391,15 +383,6 @@ export const updateRfc822Size = async (
     { [RFC822_SIZE]: rfc822_size }
   );
 };
-
-/**
- * Decoded line count of a body column, for `text_line_count` /
- * `html_line_count`. Nothing reads those columns — BODYSTRUCTURE's
- * body-fld-lines describes the transfer-encoded body (RFC 3501 §7.4.2),
- * not the decoded text. Removal is tracked in hoiekim/inbox#764.
- */
-export const countLines = (content: string): number =>
-  content.split(/\r?\n/).length;
 
 export const markMailRead = async (
   user_id: string,
