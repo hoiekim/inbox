@@ -49,8 +49,7 @@ import {
   expunge as expungeOp,
 } from "./message-ops";
 import {
-  buildSequenceMapping,
-  departedSequenceNumbers,
+  reconcileSequenceMapping,
   SequenceState,
 } from "./sequence-resolver";
 
@@ -78,6 +77,29 @@ export class ImapSession {
     uidToSeq: new Map(),
   };
 
+  private serialTail: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `task` once everything already queued on this session has settled.
+   *
+   * The handler's command drain and the IDLE notifier both write untagged
+   * responses, and the notifier reaches the socket from a delivery callback
+   * rather than from the drain. Without a shared chain a notification parked
+   * on its DB read resumes in the middle of another command's response — RFC
+   * 3501 §7.4.1 forbids an EXPUNGE while answering FETCH, STORE or SEARCH,
+   * and renumbering mid-FETCH shifts the very sequence numbers that response
+   * is reporting. Two overlapping notifications would likewise diff against
+   * the same pre-rebuild snapshot and retire the same position twice.
+   */
+  runSerial = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = this.serialTail.then(task, task);
+    this.serialTail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  };
+
   constructor(
     private handler: ImapRequestHandler,
     public socket: Socket
@@ -91,38 +113,24 @@ export class ImapSession {
 
   /**
    * Re-advertise the selected mailbox to an IDLE client, announcing whatever
-   * left it first. Returns the new message count, or null when there is no
-   * mailbox to report on.
-   *
-   * RFC 3501 §7.3.1 lets the message count shrink only via EXPUNGE, so a bare
-   * `* <n> EXISTS` lower than the last one advertised is a protocol violation:
-   * the client keeps its old sequence map and every position after the first
-   * departed message is off by one. Messages leave without this session
-   * running an EXPUNGE — another session expunging, or the web client marking
-   * a mail spam, which quarantines it out of INBOX — so a departure has to be
-   * found by diffing the mailbox against what this session last advertised,
-   * not by observing our own commands.
-   *
-   * EXPUNGEs go out in DESCENDING sequence order. §7.4.1 renumbers the
-   * messages after an expunged one immediately, so descending order leaves
-   * every number still valid at the moment it is written and needs no
-   * renumbering arithmetic.
+   * left it first (see `reconcileSequenceMapping`). Returns the new message
+   * count, or null when there is no mailbox to report on or it could not be
+   * read — in which case nothing reaches the wire and the client keeps the
+   * mapping it already has.
    */
-  notifyMailboxUpdate = async (): Promise<number | null> => {
-    if (!this.store || !this.selectedMailbox) return null;
-    // `buildSequenceMapping` replaces `seqToUid` with a fresh array rather
-    // than mutating it, so this stays a snapshot of the advertised list.
-    const advertised = this.seqState.seqToUid;
-    await buildSequenceMapping(this.store, this.selectedMailbox, this.seqState);
-    for (const seq of departedSequenceNumbers(advertised, this.seqState.seqToUid)) {
-      this.write(`* ${seq} EXPUNGE\r\n`);
-    }
-    const total = this.seqState.seqToUid.length;
-    this.selectedMailboxMessageCount = total;
-    this.write(`* ${total} EXISTS\r\n`);
-    this.write(`* 0 RECENT\r\n`);
-    return total;
-  };
+  notifyMailboxUpdate = (): Promise<number | null> =>
+    this.runSerial(async () => {
+      const total = await reconcileSequenceMapping(
+        this.store,
+        this.selectedMailbox,
+        this.seqState,
+        this.write
+      );
+      if (total === null) return null;
+      this.write(`* ${total} EXISTS\r\n`);
+      this.write(`* 0 RECENT\r\n`);
+      return total;
+    });
 
   bytesWritten = 0;
 
@@ -533,10 +541,14 @@ export class ImapSession {
       this.selectedMailbox,
       this.write,
       async () => {
-        await buildSequenceMapping(
+        // The mail is already stored, so a failed rebuild is reported by the
+        // store's own log rather than by turning a completed APPEND into a
+        // tagged NO the client would answer by sending it again.
+        await reconcileSequenceMapping(
           this.store,
           this.selectedMailbox,
-          this.seqState
+          this.seqState,
+          this.write
         );
       }
     );

@@ -149,155 +149,160 @@ export class ImapRequestHandler {
       if (draining) return;
       draining = true;
       try {
-        while (true) {
-          // RFC 2595 §2.1: a server MUST discard any knowledge obtained from
-          // the client before TLS that was not obtained from the TLS
-          // negotiation itself. `startTls` swaps the socket from inside this
-          // very loop, so without this check the rest of the cleartext segment
-          // — commands an attacker can pipeline into the same TCP write as
-          // `STARTTLS` — would keep being dispatched, and answered inside the
-          // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
-          // and hand the connection to the new generation's own loop.
-          if (generation !== this.generation) {
-            buffer = "";
-            pendingAppendLine = null;
-            literalBytesNeeded = 0;
-            return;
-          }
-
-          // If accumulating literal data for APPEND, consume raw bytes first
-          if (pendingAppendLine !== null) {
-            if (buffer.length < literalBytesNeeded) return;
-            const literalData = buffer.substring(0, literalBytesNeeded);
-            buffer = buffer.substring(literalBytesNeeded);
-            // Skip optional \r\n after literal
-            if (buffer.startsWith("\r\n")) {
-              buffer = buffer.substring(2);
+        // The IDLE notifier writes untagged responses from a delivery
+        // callback, outside this loop; sharing the session's serial chain is
+        // what keeps its EXPUNGE out of the middle of a FETCH response.
+        await session.runSerial(async () => {
+          while (true) {
+            // RFC 2595 §2.1: a server MUST discard any knowledge obtained from
+            // the client before TLS that was not obtained from the TLS
+            // negotiation itself. `startTls` swaps the socket from inside this
+            // very loop, so without this check the rest of the cleartext segment
+            // — commands an attacker can pipeline into the same TCP write as
+            // `STARTTLS` — would keep being dispatched, and answered inside the
+            // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
+            // and hand the connection to the new generation's own loop.
+            if (generation !== this.generation) {
+              buffer = "";
+              pendingAppendLine = null;
+              literalBytesNeeded = 0;
+              return;
             }
 
-            const fullInput = pendingAppendLine + "\r\n" + literalData;
-            pendingAppendLine = null;
-            literalBytesNeeded = 0;
+            // If accumulating literal data for APPEND, consume raw bytes first
+            if (pendingAppendLine !== null) {
+              if (buffer.length < literalBytesNeeded) return;
+              const literalData = buffer.substring(0, literalBytesNeeded);
+              buffer = buffer.substring(literalBytesNeeded);
+              // Skip optional \r\n after literal
+              if (buffer.startsWith("\r\n")) {
+                buffer = buffer.substring(2);
+              }
+
+              const fullInput = pendingAppendLine + "\r\n" + literalData;
+              pendingAppendLine = null;
+              literalBytesNeeded = 0;
+
+              try {
+                const parseResult = parseCommand(fullInput.trim());
+                if (parseResult.success && parseResult.value) {
+                  const { tag, request } = parseResult.value;
+                  await this.handleRequest(tag, request);
+                } else {
+                  logger.debug("Parse failed (APPEND literal)", {
+                    component: "imap.parser",
+                    error: parseResult.error
+                  });
+                  const tag = fullInput.trim().split(" ")[0] || "BAD";
+                  session.write(`${tag} BAD ${parseResult.error || "Invalid APPEND command"}\r\n`);
+                }
+              } catch (error) {
+                logger.error("Error processing APPEND literal", { component: "imap" }, error);
+                session.write(`* BAD Internal server error\r\n`);
+              }
+              continue;
+            }
+
+            const lineEnd = buffer.indexOf("\r\n");
+            if (lineEnd === -1) return;
+
+            const line = buffer.substring(0, lineEnd);
+            buffer = buffer.substring(lineEnd + 2);
+
+            // Handle SASL challenge response (client sends base64 after "+ " challenge)
+            if (this._pendingSaslTag !== null) {
+              const tag = this._pendingSaslTag;
+              this._pendingSaslTag = null;
+              // Client may send "*" to cancel authentication
+              if (line.trim() === "*") {
+                session.write(`${tag} BAD Authentication cancelled\r\n`);
+              } else {
+                await session.authenticate(tag, "PLAIN", line.trim());
+              }
+              continue;
+            }
+
+            if (!line.trim()) continue;
+
+            // The only valid client input during IDLE is "DONE". This line
+            // buffer already reassembles split TCP chunks and pipelined input,
+            // so handle DONE here: terminate IDLE and fall through so any
+            // command pipelined after DONE (e.g. "DONE\r\nA4 NOOP\r\n") is
+            // processed on the next loop iteration. Non-DONE input during IDLE
+            // is ignored per RFC 2177.
+            if (session.isInIdleMode()) {
+              if (line.trim().toUpperCase() === "DONE") {
+                session.endIdle();
+              }
+              continue;
+            }
+
+            logger.debug("IMAP command received", {
+              component: "imap",
+              command: line.trim(),
+              mailbox: session.selectedMailbox
+            });
+            imapTrace("in", session.getSessionId(), line.trim());
+
+            // Pace pipelined bursts. RFC 3501 §7 requires a tagged
+            // completion for every command, so over-limit commands are
+            // delayed, never skipped — clients pipeline heavily during
+            // folder sync (iOS Mail sends STATUS for every mailbox in one
+            // burst after LIST).
+            await session.waitForCommandSlot();
+
+            // Detect APPEND command with a literal size indicator {N} or {N+}
+            // e.g. "a001 APPEND INBOX (\Seen) {512}"
+            // When found, switch to literal accumulation mode instead of parsing now.
+            const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
+            if (literalMatch) {
+              const upperLine = line.trim().toUpperCase();
+              // Only intercept APPEND literals here; other commands with literals
+              // (e.g. LOGIN with quoted strings) don't need this treatment.
+              const parts = upperLine.split(/\s+/);
+              const commandWord = parts[1] || parts[0];
+              if (commandWord === "APPEND") {
+                pendingAppendLine = line.trim();
+                literalBytesNeeded = parseInt(literalMatch[1], 10);
+                // Synchronizing literals {N} (without +) require a continuation
+                // response before the client will send the literal data.
+                // Non-synchronizing literals {N+} (LITERAL+) do not.
+                const isSynchronizing = !literalMatch[2];
+                if (isSynchronizing) {
+                  session.write("+ go ahead\r\n");
+                }
+                continue;
+              }
+            }
 
             try {
-              const parseResult = parseCommand(fullInput.trim());
+              // Parse the command using the typed parser
+              const parseResult = parseCommand(line.trim());
+
               if (parseResult.success && parseResult.value) {
                 const { tag, request } = parseResult.value;
                 await this.handleRequest(tag, request);
               } else {
-                logger.debug("Parse failed (APPEND literal)", {
+                // If parsing failed, send error response only if socket is writable
+                logger.debug("Parse failed", {
                   component: "imap.parser",
+                  input: line.trim(),
                   error: parseResult.error
                 });
-                const tag = fullInput.trim().split(" ")[0] || "BAD";
-                session.write(`${tag} BAD ${parseResult.error || "Invalid APPEND command"}\r\n`);
+                const parts = line.trim().split(" ");
+                const tag = parts[0] || "BAD";
+                const errorMsg = parseResult.error || "Invalid command syntax";
+                session.write(`${tag} BAD ${errorMsg}\r\n`);
               }
             } catch (error) {
-              logger.error("Error processing APPEND literal", { component: "imap" }, error);
-              session.write(`* BAD Internal server error\r\n`);
-            }
-            continue;
-          }
-
-          const lineEnd = buffer.indexOf("\r\n");
-          if (lineEnd === -1) return;
-
-          const line = buffer.substring(0, lineEnd);
-          buffer = buffer.substring(lineEnd + 2);
-
-          // Handle SASL challenge response (client sends base64 after "+ " challenge)
-          if (this._pendingSaslTag !== null) {
-            const tag = this._pendingSaslTag;
-            this._pendingSaslTag = null;
-            // Client may send "*" to cancel authentication
-            if (line.trim() === "*") {
-              session.write(`${tag} BAD Authentication cancelled\r\n`);
-            } else {
-              await session.authenticate(tag, "PLAIN", line.trim());
-            }
-            continue;
-          }
-
-          if (!line.trim()) continue;
-
-          // The only valid client input during IDLE is "DONE". This line
-          // buffer already reassembles split TCP chunks and pipelined input,
-          // so handle DONE here: terminate IDLE and fall through so any
-          // command pipelined after DONE (e.g. "DONE\r\nA4 NOOP\r\n") is
-          // processed on the next loop iteration. Non-DONE input during IDLE
-          // is ignored per RFC 2177.
-          if (session.isInIdleMode()) {
-            if (line.trim().toUpperCase() === "DONE") {
-              session.endIdle();
-            }
-            continue;
-          }
-
-          logger.debug("IMAP command received", {
-            component: "imap",
-            command: line.trim(),
-            mailbox: session.selectedMailbox
-          });
-          imapTrace("in", session.getSessionId(), line.trim());
-
-          // Pace pipelined bursts. RFC 3501 §7 requires a tagged
-          // completion for every command, so over-limit commands are
-          // delayed, never skipped — clients pipeline heavily during
-          // folder sync (iOS Mail sends STATUS for every mailbox in one
-          // burst after LIST).
-          await session.waitForCommandSlot();
-
-          // Detect APPEND command with a literal size indicator {N} or {N+}
-          // e.g. "a001 APPEND INBOX (\Seen) {512}"
-          // When found, switch to literal accumulation mode instead of parsing now.
-          const literalMatch = /\{(\d+)(\+?)\}\s*$/.exec(line.trim());
-          if (literalMatch) {
-            const upperLine = line.trim().toUpperCase();
-            // Only intercept APPEND literals here; other commands with literals
-            // (e.g. LOGIN with quoted strings) don't need this treatment.
-            const parts = upperLine.split(/\s+/);
-            const commandWord = parts[1] || parts[0];
-            if (commandWord === "APPEND") {
-              pendingAppendLine = line.trim();
-              literalBytesNeeded = parseInt(literalMatch[1], 10);
-              // Synchronizing literals {N} (without +) require a continuation
-              // response before the client will send the literal data.
-              // Non-synchronizing literals {N+} (LITERAL+) do not.
-              const isSynchronizing = !literalMatch[2];
-              if (isSynchronizing) {
-                session.write("+ go ahead\r\n");
-              }
-              continue;
-            }
-          }
-
-          try {
-            // Parse the command using the typed parser
-            const parseResult = parseCommand(line.trim());
-
-            if (parseResult.success && parseResult.value) {
-              const { tag, request } = parseResult.value;
-              await this.handleRequest(tag, request);
-            } else {
-              // If parsing failed, send error response only if socket is writable
-              logger.debug("Parse failed", {
-                component: "imap.parser",
-                input: line.trim(),
-                error: parseResult.error
-              });
+              logger.error("Error processing command", { component: "imap" }, error);
+              // Only send error response if socket is still writable
               const parts = line.trim().split(" ");
               const tag = parts[0] || "BAD";
-              const errorMsg = parseResult.error || "Invalid command syntax";
-              session.write(`${tag} BAD ${errorMsg}\r\n`);
+              session.write(`${tag} BAD Internal server error\r\n`);
             }
-          } catch (error) {
-            logger.error("Error processing command", { component: "imap" }, error);
-            // Only send error response if socket is still writable
-            const parts = line.trim().split(" ");
-            const tag = parts[0] || "BAD";
-            session.write(`${tag} BAD Internal server error\r\n`);
           }
-        }
+        });
       } catch (error) {
         logger.error("Error processing data", { component: "imap" }, error);
         if (!socket.destroyed) {

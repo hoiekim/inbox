@@ -575,3 +575,64 @@ describe("MOVE address routing into a utility folder (#725)", () => {
     expect(stored[0].to?.value).toEqual([{ address: destAddress, name: "" }]);
   });
 });
+
+describe("MOVE reconciles the whole mailbox, not just the moved set", () => {
+  it("announces a message that left underneath the session before rebuilding the baseline", async () => {
+    // The session advertised UIDs 10, 20 and 30; the web client then spam-marked
+    // UID 20, which quarantines it out of INBOX without this session running an
+    // EXPUNGE. Rebuilding from the live mailbox while announcing only UID 30
+    // would leave the client holding a phantom at sequence 2 forever.
+    const mails = [sourceMail({ domain: 30, account: 300 })];
+    const { store } = makeMoveStore(["Archive"], mails, [10]);
+    const seqState: SequenceState = {
+      seqToUid: [10, 20, 30],
+      uidToSeq: new Map([
+        [10, 1],
+        [20, 2],
+        [30, 3],
+      ]),
+    };
+
+    const lines = await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 30, end: 30 }] }),
+      true,
+      store,
+      false,
+      "INBOX",
+      seqState
+    );
+
+    expect(lines.filter((line) => line.includes("EXPUNGE"))).toEqual([
+      "* 3 EXPUNGE\r\n",
+      "* 2 EXPUNGE\r\n",
+    ]);
+    expect(seqState.seqToUid).toEqual([10]);
+    expect(lines[lines.length - 1]).toContain("A1 OK [COPYUID");
+  });
+
+  it("answers NO instead of claiming COPYUID when the mailbox cannot be re-read", async () => {
+    const mails = [sourceMail({ domain: 30, account: 300 })];
+    const { store } = makeMoveStore(["Archive"], mails, []);
+    store.getAllUids = async () => null;
+    const seqState: SequenceState = {
+      seqToUid: [10, 30],
+      uidToSeq: new Map([
+        [10, 1],
+        [30, 2],
+      ]),
+    };
+
+    const lines = await runMove(
+      moveReq("Archive", { type: "uid", ranges: [{ start: 30, end: 30 }] }),
+      true,
+      store,
+      false,
+      "INBOX",
+      seqState
+    );
+
+    expect(lines.some((line) => line.includes("EXPUNGE"))).toBe(false);
+    expect(lines[lines.length - 1]).toBe("A1 NO MOVE failed\r\n");
+    expect(seqState.seqToUid).toEqual([10, 30]);
+  });
+});

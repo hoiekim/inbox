@@ -19,25 +19,62 @@ export interface SequenceState {
 
 /**
  * Build sequence number → UID mapping for the selected mailbox.
- * Mutates `state.seqToUid` and `state.uidToSeq` in place.
+ *
+ * `state.seqToUid` is replaced with a fresh array rather than refilled, so a
+ * caller holding the previous one keeps an untouched snapshot of what it last
+ * advertised. Returns false when the mailbox could not be read, leaving
+ * `state` as it was: an unreadable mailbox and an empty one must not collapse
+ * to the same mapping, or every advertised message reads as departed.
  */
 export async function buildSequenceMapping(
   store: Store | null,
   selectedMailbox: string | null,
   state: SequenceState
-): Promise<void> {
+): Promise<boolean> {
   if (!store || !selectedMailbox) {
     state.seqToUid = [];
     state.uidToSeq.clear();
-    return;
+    return true;
   }
 
   const uids = await store.getAllUids(selectedMailbox);
+  if (uids === null) return false;
+
   state.seqToUid = uids;
   state.uidToSeq.clear();
   for (let i = 0; i < uids.length; i++) {
     state.uidToSeq.set(uids[i], i + 1); // seq numbers are 1-indexed
   }
+  return true;
+}
+
+/**
+ * Rebuild the mapping, announce whatever left the mailbox, and report the new
+ * message count. Returns null when the mailbox could not be read, in which
+ * case nothing is written and `state` is left alone.
+ *
+ * RFC 3501 §7.3.1 lets the message count shrink only via EXPUNGE, so every
+ * rebuild that drops a message the client still holds owes it an untagged
+ * `* <seq> EXPUNGE` first — otherwise the client keeps its old sequence map
+ * and every position after the first departure is off by one. Messages leave
+ * without this session running an EXPUNGE (another session expunging, or the
+ * web client marking a mail spam, which quarantines it out of INBOX), so
+ * departures are found by diffing the mailbox against what this session last
+ * advertised, not by observing our own commands.
+ */
+export async function reconcileSequenceMapping(
+  store: Store | null,
+  selectedMailbox: string | null,
+  state: SequenceState,
+  write: (data: string) => unknown
+): Promise<number | null> {
+  if (!store || !selectedMailbox) return null;
+  const advertised = [...state.seqToUid];
+  if (!(await buildSequenceMapping(store, selectedMailbox, state))) return null;
+  for (const seq of departedSequenceNumbers(advertised, state.seqToUid)) {
+    write(`* ${seq} EXPUNGE\r\n`);
+  }
+  return state.seqToUid.length;
 }
 
 /**
@@ -49,9 +86,6 @@ export async function buildSequenceMapping(
  * sent, so working from the back means each number is still valid when it is
  * written. Ascending order would need every subsequent number decremented by
  * the count already emitted.
- *
- * Split out from the session so the arithmetic is testable without standing up
- * a socket and a store double.
  */
 export function departedSequenceNumbers(
   advertised: number[],
