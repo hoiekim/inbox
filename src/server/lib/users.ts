@@ -114,21 +114,39 @@ export const isValidEmail = (email: string) => {
   return localValid && domainValid;
 };
 
+/**
+ * Reclaims the placeholder row `createToken` inserts for an address that has
+ * no account yet, once its claim window has passed.
+ *
+ * `token` and `expiry` carry two unrelated meanings on the same columns: on a
+ * placeholder they are the unclaimed sign-up, on a registered account they are
+ * a password reset in flight. A null `password` is what distinguishes them —
+ * gating on `expiry` alone destroys the account of anyone who ignores a reset
+ * mail. The row is read as a model rather than through `getUser`, whose
+ * `toUser` throws on exactly the password-less rows this reclaims.
+ */
+export const deleteExpiredSignup = async (userId: string): Promise<void> => {
+  const model = await usersTable.queryOne({ [USER_ID]: userId });
+  if (!model || model.password !== null) return;
+
+  const { expiry } = model;
+  if (!expiry || new Date(expiry).getTime() >= Date.now()) return;
+
+  await deleteUser(userId);
+  logger.info("Deleted an unclaimed sign-up.", { userId });
+};
+
 export const startTimer = (userId: string) => {
   // Clear any existing timer to prevent duplicate fires
   if (expiryTimer[userId]) clearTimeout(expiryTimer[userId]);
 
-  expiryTimer[userId] = setTimeout(async () => {
+  expiryTimer[userId] = setTimeout(() => {
     delete expiryTimer[userId];
-    const updatedUserInfo = await getUser({ id: userId });
-    if (!updatedUserInfo) return;
-    const { expiry } = updatedUserInfo;
-    if (expiry === undefined) return;
-    const expiryDate = expiry && new Date(expiry);
-    if (expiryDate && expiryDate.getTime() < Date.now()) {
-      await deleteUser(userId);
-      logger.info("Deleted user with expired token.", { userId });
-    }
+    // A repository fault here would otherwise be an unhandled rejection: the
+    // callback runs detached from any request, so nothing above it can catch.
+    deleteExpiredSignup(userId).catch((error) =>
+      logger.error("Failed to reclaim an unclaimed sign-up", { userId }, error)
+    );
   }, TOKEN_DURATION);
 };
 
