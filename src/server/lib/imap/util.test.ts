@@ -1,4 +1,5 @@
 import {
+  attachmentPartHeaderFields,
   boundaryToken,
   encodeText,
   formatAddressList,
@@ -1226,6 +1227,47 @@ describe("IMAP util", () => {
         const attachment = attachmentBody("a.bin", 'ap"p/pd\\f');
         expect(attachment[0]).toBe('ap"p');
         expect(attachment[1]).toBe("pd\\f");
+      });
+
+      it("emits the same media type in the part header as in BODYSTRUCTURE", () => {
+        // A Content-Type with a missing half is unparseable, so a client that
+        // trusts the header renders the part inline as text while the
+        // BODYSTRUCTURE-driven list shows it as an attachment.
+        const shapes = ["application", "/pdf", "application/", undefined];
+        const emitted = shapes.map((contentType) => {
+          const attachment = attachmentBody("a.bin", contentType);
+          const { contentType: header } = attachmentPartHeaderFields({
+            contentType,
+            filename: "a.bin",
+          } as AttachmentType);
+          return {
+            stored: contentType,
+            bodystructure: `${attachment[0]}/${attachment[1]}`,
+            header,
+          };
+        });
+        expect(emitted).toEqual([
+          {
+            stored: "application",
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+          {
+            stored: "/pdf",
+            bodystructure: "application/pdf",
+            header: "application/pdf",
+          },
+          {
+            stored: "application/",
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+          {
+            stored: undefined,
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+        ]);
       });
     });
 

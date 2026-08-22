@@ -32,16 +32,38 @@ export const headerQuotedParam = (value: string): string =>
   `"${headerFieldValue(value).replace(/[\\"]/g, "\\$&")}"`;
 
 /**
+ * The `type` and `subtype` halves of a stored `contentType`.
+ *
+ * Each half falls back on falsiness rather than through a destructuring
+ * default, which only fires on `undefined`: `"application"` leaves the subtype
+ * undefined, `"/pdf"` leaves the type an empty string, and `"application/"`
+ * leaves the subtype empty. A media type missing either half is unparseable,
+ * so a client falls back to `text/plain` and renders an attachment inline.
+ *
+ * BODYSTRUCTURE and the emitted part headers describe the same part, so both
+ * derive their media type here — a client comparing them must not be told two
+ * different things.
+ */
+export const mediaTypeParts = (
+  contentType?: string
+): { type: string; subtype: string } => {
+  const [rawType, rawSubtype] = (
+    contentType || "application/octet-stream"
+  ).split("/");
+  return {
+    type: rawType || "application",
+    subtype: rawSubtype || "octet-stream"
+  };
+};
+
+/**
  * The `Content-Type` value and quoted `filename` parameter for one attachment
  * part header.
  *
- * The fallbacks mirror `formatBodyStructure`'s (`application/octet-stream` /
- * `unnamed`) deliberately: BODYSTRUCTURE and the emitted part headers describe
- * the same part, and a client comparing them must not be told two different
- * things. They are `||` fallbacks rather than assertions because `attachments`
- * reaches here straight off the JSONB column with no model hydration, so a row
- * written before a field existed arrives `undefined` — which would throw on
- * `.replace` where the old raw interpolation merely emitted the literal
+ * The `filename` fallback mirrors `formatBodyStructure`'s (`unnamed`) for the
+ * same reason `mediaTypeParts` is shared. Both are `||` fallbacks rather than
+ * assertions because `attachments` reaches here straight off the JSONB column
+ * with no model hydration, so a row written before a field existed arrives
  * `undefined`.
  *
  * `Attachment`'s constructor (`common/models/mails/Mail.ts`) defaults the same
@@ -53,12 +75,13 @@ export const headerQuotedParam = (value: string): string =>
  */
 export const attachmentPartHeaderFields = (
   attachment: Pick<AttachmentType, "contentType" | "filename">
-): { contentType: string; filenameParam: string } => ({
-  contentType: headerFieldValue(
-    attachment.contentType || "application/octet-stream"
-  ),
-  filenameParam: headerQuotedParam(attachment.filename || "unnamed")
-});
+): { contentType: string; filenameParam: string } => {
+  const { type, subtype } = mediaTypeParts(attachment.contentType);
+  return {
+    contentType: headerFieldValue(`${type}/${subtype}`),
+    filenameParam: headerQuotedParam(attachment.filename || "unnamed")
+  };
+};
 
 /**
  * The MIME multipart boundary token derived from a mail's stable id.
@@ -333,17 +356,7 @@ export const formatBodyStructure = (
   const htmlPart = () => buildTextPart("html", mail.html, mail.html_octets);
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
-    // A stored contentType is not guaranteed to be `type/subtype`. Normalizing
-    // both halves on falsiness (rather than a destructuring default, which only
-    // fires on undefined) covers every malformed shape: "application" leaves
-    // the subtype undefined, "/pdf" leaves the type an empty string, and
-    // "application/" leaves the subtype empty. Each would otherwise reach the
-    // wire as the literal `"undefined"` or as an empty media type.
-    const [rawType, rawSubtype] = (
-      attachment.contentType || "application/octet-stream"
-    ).split("/");
-    const type = rawType || "application";
-    const subtype = rawSubtype || "octet-stream";
+    const { type, subtype } = mediaTypeParts(attachment.contentType);
     const filename = attachment.filename || "unnamed";
     // base64 length calculation without actually encoding
     const size = attachment.size ? Math.ceil(attachment.size / 3) * 4 : 0;
