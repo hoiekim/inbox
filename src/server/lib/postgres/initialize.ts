@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 import { pool } from "./client";
 import { writeUser, searchUser } from "./repositories";
-import { buildCreateTable, buildCreateIndex } from "./database";
-import { checkSchemaAtTarget, runMigrations, writeSchemaMarker } from "./migration";
+import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
+import { runBootMaintenance, MaintenanceWork, Statement } from "./maintenance";
+import { sendAlarm } from "../alarm";
+import {
+  checkSchemaAtTarget,
+  runMigrations,
+  writeSchemaMarker,
+  MarkerKey,
+} from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
 import {
@@ -38,15 +45,56 @@ export const tables: Table<unknown, Schema>[] = [
   mailgunEventsTable,
 ];
 
+// The full-text search index predates `table.indexes` and keeps its original
+// name — regenerating it as `idx_mails_search_vector_gin` would leave the
+// existing index in place and build a duplicate alongside it.
+const MAILS_SEARCH_INDEX_NAME = "idx_mails_search";
+
+/** Gates the row-scaled phase independently of the fatal schema DDL. */
+const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
+
+/** Ceiling on alarm delivery, so a wedged webhook cannot delay a stop. */
+const MAINTENANCE_ALARM_TIMEOUT_MS = 5_000;
+
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
 // `searchVector*`. Extracted as module-scoped constants so their literal
-// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string the
-// slow path issues. That way any edit to a raw block automatically
-// changes the digest (no descriptive-sentinel discipline required).
-const IDX_MAILS_SEARCH_SQL = `
-      CREATE INDEX IF NOT EXISTS idx_mails_search
-      ON mails USING GIN(search_vector)
-    `;
+// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string
+// `indexSpecs()` hands to the maintenance phase. That way any edit to a raw
+// block automatically changes the digest (no descriptive-sentinel discipline
+// required).
+const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
+  indexName: MAILS_SEARCH_INDEX_NAME,
+  using: "gin",
+  concurrently: true,
+});
+
+/**
+ * Every index the app owns, as (name, statement) pairs. Names are exposed
+ * alongside the SQL because the maintenance phase has to identify invalid
+ * leftovers by name before it can rebuild them.
+ */
+export const indexSpecs = (): Statement[] => {
+  const specs: Statement[] = [];
+  for (const table of tables) {
+    for (const idx of table.indexes) {
+      const options = { using: idx.using, opclass: idx.opclass, concurrently: true };
+      specs.push({
+        name: buildIndexName(table.name, idx.column, options),
+        sql: buildCreateIndex(table.name, idx.column, options),
+      });
+    }
+  }
+  specs.push({ name: MAILS_SEARCH_INDEX_NAME, sql: IDX_MAILS_SEARCH_SQL });
+  return specs;
+};
+
+/** The statements `bootMaintenance` hands to the long-budget session. */
+export const maintenanceWork = (): MaintenanceWork => ({
+  indexes: indexSpecs(),
+  statements: [
+    { name: "search_vector reindex", sql: searchVectorReindexSql(), drain: true },
+  ],
+});
 
 // Digest of every input the slow-path DDL consumes. Any code change to a
 // table schema, its indexes, its constraints, `searchVectorDdl()`,
@@ -121,38 +169,81 @@ export const initializePostgres = async (): Promise<void> => {
       tables.map((t) => ({ name: t.name, schema: t.schema }))
     );
 
-    // Create indexes after migrations ensure all columns exist
-    for (const table of tables) {
-      for (const idx of table.indexes) {
-        const createIndexSql = buildCreateIndex(
-          table.name,
-          idx.column,
-          undefined,
-          idx.using,
-          idx.opclass
-        );
-        await pool.query(createIndexSql);
-      }
-    }
-
-    // Create GIN index for full-text search on mails
-    await pool.query(IDX_MAILS_SEARCH_SQL);
-
-    // Trigger function + the INSERT / column-scoped UPDATE trigger pair, then
-    // the reindex — all three derived from `searchVectorExpression` so the
-    // trigger and the direct write can't drift apart. See search-vector.ts.
+    // Trigger function + the INSERT / column-scoped UPDATE trigger pair. The
+    // reindex they share an expression with runs in `bootMaintenance` — it is
+    // the one statement here whose cost scales with the table.
     for (const sql of searchVectorDdl()) await pool.query(sql);
-    await pool.query(searchVectorReindexSql());
 
-    // Record the marker so subsequent boots can fast-path. Written AFTER
-    // every DDL succeeded — if any step above threw, we don't want the
-    // marker in the DB.
+    // Record the marker so subsequent boots can fast-path. Written AFTER every
+    // statement in this block succeeded, and gated only on them: the
+    // row-scaled work in `bootMaintenance` has its own marker, because sending
+    // every boot back through this throwing block for as long as an index
+    // can't build would just move the crashloop rather than remove it.
     await writeSchemaMarker(CURRENT_SCHEMA_HASH);
-
-    logger.info("Database tables created/verified successfully.");
   } catch (error: unknown) {
     logger.error("Failed to create tables", {}, error);
     throw new Error("Failed to setup PostgreSQL tables.");
+  }
+
+  logger.info("Database tables created/verified successfully.");
+};
+
+/**
+ * The row-count-scaled half of the boot DDL: index builds and the search-vector
+ * reindex. Deliberately NOT part of `initializePostgres`, on two counts.
+ *
+ * It must not be fatal. A statement here failing means "too slow for its
+ * budget", not "the schema is broken" — the app serves correctly without an
+ * index, and with a stale search vector on rows nothing has touched. Exiting
+ * for it just crashloops the container into the same doomed statement, with
+ * no port ever bound to diagnose from.
+ *
+ * And it must not gate the listeners. Index builds are `CONCURRENTLY` so the
+ * table stays writable while they run, which buys nothing if HTTP/SMTP/IMAP
+ * aren't up yet. `start.ts` calls this after binding and does not await it.
+ *
+ * It carries its own marker, separate from the schema one. That marker is what
+ * lets a steady-state boot skip the phase entirely — without it every restart
+ * would re-run a full-table tsvector recompute that changes nothing. Writing
+ * it while a statement is still outstanding would strand that work forever,
+ * with every later boot fast-pathing past it and no error anywhere, so it is
+ * written only on a clean sweep.
+ *
+ * Never rejects: `start.ts` does not await it, so a rejection here would
+ * surface as a contextless unhandled-rejection page.
+ */
+export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
+  try {
+    if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY)) {
+      logger.info("[Maintenance] Already at target — skipping.");
+      return;
+    }
+
+    const result = await runBootMaintenance(maintenanceWork(), signal);
+    if (result === "complete") {
+      await writeSchemaMarker(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY);
+      return;
+    }
+    // `skipped` means another instance is doing the work, or shutdown
+    // cancelled it. Every rolling deploy produces one of those; paging for it
+    // would train the alarm to be ignored.
+    if (result === "skipped") return;
+
+    const message =
+      "Boot maintenance did not complete — an index or the search-vector reindex " +
+      "is outstanding. The maintenance marker is withheld, so the next boot retries.";
+    logger.warn(`[Maintenance] ${message}`);
+    // Degrading instead of exiting must not also mean degrading silently. The
+    // delivery is raced rather than awaited: `start.ts` awaits this phase on
+    // the graceful-shutdown path, and `sendAlarm`'s fetch carries no timeout of
+    // its own, so a wedged webhook would hold the stop open until compose's
+    // grace period expired and SIGKILL replaced the clean exit.
+    await Promise.race([
+      sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, MAINTENANCE_ALARM_TIMEOUT_MS)),
+    ]);
+  } catch (error: unknown) {
+    logger.error("[Maintenance] Phase failed unexpectedly.", {}, error);
   }
 };
 

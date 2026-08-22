@@ -50,11 +50,27 @@ export const searchVectorDdl = (): string[] => [
 ];
 
 /**
- * Reindex rows whose stored vector disagrees with the current expression —
- * a no-op once every row is up to date, so it is safe on every boot.
+ * Rows rewritten per execution of `searchVectorReindexSql`. An UPDATE holds a
+ * row lock on everything it rewrites until it commits, so an unbounded rewrite
+ * of `mails` would block concurrent flag writes past the pool's 30s
+ * `statement_timeout`. One chunk commits far inside it.
+ */
+export const SEARCH_VECTOR_REINDEX_CHUNK_ROWS = 1000;
+
+/**
+ * Reindex up to `SEARCH_VECTOR_REINDEX_CHUNK_ROWS` rows whose stored vector
+ * disagrees with the current expression — a no-op once every row is up to
+ * date, so it is safe on every boot. A rewritten row no longer matches the
+ * predicate, so repeated execution drains the backlog monotonically; the
+ * caller re-issues it until it reports no rows.
  */
 export const searchVectorReindexSql = (): string => `
       UPDATE mails
       SET search_vector = ${searchVectorExpression("")}
-      WHERE search_vector IS DISTINCT FROM ${searchVectorExpression("")}
+      WHERE mail_id IN (
+        SELECT mail_id
+        FROM mails
+        WHERE search_vector IS DISTINCT FROM ${searchVectorExpression("")}
+        LIMIT ${SEARCH_VECTOR_REINDEX_CHUNK_ROWS}
+      )
     `;
