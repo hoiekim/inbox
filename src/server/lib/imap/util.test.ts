@@ -1,4 +1,5 @@
 import {
+  attachmentPartHeaderFields,
   boundaryToken,
   encodeText,
   formatAddressList,
@@ -13,8 +14,14 @@ import {
   formatInternalDate,
   isDomainScoped,
   deriveCopyMessageId,
+  quoteString,
+  formatNString,
 } from "./util";
-import type { MailType, MailAddressValueType } from "common";
+import type {
+  MailType,
+  MailAddressValueType,
+  AttachmentType,
+} from "common";
 
 describe("IMAP util", () => {
   describe("isDomainScoped", () => {
@@ -816,6 +823,330 @@ describe("IMAP util", () => {
       // message-id (RFC 3501 §6.4.7 permits this).
       const id = deriveCopyMessageId("src", "dest");
       expect(id).toMatch(/^[a-f0-9]{16}\.copy@server$/);
+    });
+  });
+
+  // #762 (backslash escaping) + #767 (CR/LF). Both are desync bugs, not
+  // rendering bugs: a mis-escaped value makes the CLIENT's parser lose the
+  // string boundary and mis-frame every later token on the line. So these
+  // tests parse the emitted response with an independent RFC 3501 reader and
+  // assert the ORIGINAL values come back out — asserting the escaped bytes
+  // directly would just restate the implementation.
+  describe("quoted-string encoding (#762, #767)", () => {
+    type Token = string | null | Token[];
+
+    /**
+     * Minimal RFC 3501 §9 response reader: parenthesized lists, quoted
+     * strings (with `\` escapes), NIL, and bare atoms. Throws on anything
+     * the grammar forbids — an unterminated string, or a raw CR/LF inside a
+     * quoted string — which is exactly the client-side failure both issues
+     * describe.
+     */
+    const parse = (input: string): Token[] => {
+      let i = 0;
+
+      const readQuoted = (): string => {
+        i++; // opening DQUOTE
+        let out = "";
+        for (;;) {
+          if (i >= input.length) throw new Error("unterminated quoted string");
+          const ch = input[i];
+          if (ch === "\\") {
+            const next = input[i + 1];
+            if (next !== '"' && next !== "\\") {
+              throw new Error(`illegal escape \\${next}`);
+            }
+            out += next;
+            i += 2;
+            continue;
+          }
+          if (ch === '"') {
+            i++;
+            return out;
+          }
+          if (ch === "\r" || ch === "\n" || ch === "\0") {
+            throw new Error("CR/LF/NUL inside quoted string");
+          }
+          out += ch;
+          i++;
+        }
+      };
+
+      const readList = (): Token[] => {
+        i++; // opening paren
+        const items: Token[] = [];
+        for (;;) {
+          if (i >= input.length) throw new Error("unterminated list");
+          if (input[i] === ")") {
+            i++;
+            return items;
+          }
+          if (input[i] === " ") {
+            i++;
+            continue;
+          }
+          items.push(readToken());
+        }
+      };
+
+      const readToken = (): Token => {
+        const ch = input[i];
+        if (ch === "(") return readList();
+        if (ch === '"') return readQuoted();
+        let atom = "";
+        while (i < input.length && input[i] !== " " && input[i] !== ")") {
+          atom += input[i];
+          i++;
+        }
+        return atom === "NIL" ? null : atom;
+      };
+
+      const tokens: Token[] = [];
+      while (i < input.length) {
+        if (input[i] === " ") {
+          i++;
+          continue;
+        }
+        tokens.push(readToken());
+      }
+      return tokens;
+    };
+
+    const parseEnvelope = (mail: Partial<MailType>): Token[] => {
+      const wire = formatEnvelope(mail);
+      const parsed = parse(wire);
+      expect(parsed).toHaveLength(1);
+      const envelope = parsed[0];
+      if (!Array.isArray(envelope)) throw new Error("envelope is not a list");
+      // date subject from sender reply-to to cc bcc in-reply-to message-id
+      expect(envelope).toHaveLength(10);
+      return envelope;
+    };
+
+    describe("the test's own parser", () => {
+      // The reader is the measuring instrument for every case below, so pin
+      // that it actually rejects what it claims to reject.
+      it("rejects an unterminated string and a raw line break", () => {
+        expect(() => parse('("Bob\\" NIL)')).toThrow();
+        expect(() => parse('("A\nB")')).toThrow();
+      });
+
+      it("round-trips a legally escaped value", () => {
+        expect(parse('("a\\\\b" "c\\"d" NIL x)')).toEqual([
+          ["a\\b", 'c"d', null, "x"],
+        ]);
+      });
+    });
+
+    describe("backslash escaping (#762)", () => {
+      it("keeps the response parseable when a subject ends in a backslash", () => {
+        const subject = "Re: C:\\Users\\";
+        const envelope = parseEnvelope({ subject, messageId: "<id@example>" });
+        expect(envelope[1]).toBe(subject);
+        // The desync signature: if the trailing `\` escaped the terminator,
+        // the message-id slot would have swallowed the tokens after it.
+        expect(envelope[9]).toBe("<id@example>");
+      });
+
+      it("keeps the response parseable when a display name ends in a backslash", () => {
+        const envelope = parseEnvelope({
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "Bob\\", address: "bob@example.com" }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[2]).toEqual([["Bob\\", null, "bob", "example.com"]]);
+      });
+
+      it("escapes quotes in a Message-ID — a legal RFC 5322 quoted id-left", () => {
+        const messageId = '<"a\\"b"@example.com>';
+        const envelope = parseEnvelope({ subject: "hi", messageId });
+        expect(envelope[9]).toBe(messageId);
+      });
+
+      it("survives an envelope carrying both hazards at once", () => {
+        const envelope = parseEnvelope({
+          subject: "Re: C:\\Users\\ path",
+          messageId: '<"a\\"b"@example.com>',
+          from: {
+            text: "",
+            value: [{ name: "Bob\\", address: "bob@example.com" }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[1]).toBe("Re: C:\\Users\\ path");
+        expect(envelope[2]).toEqual([["Bob\\", null, "bob", "example.com"]]);
+        expect(envelope[9]).toBe('<"a\\"b"@example.com>');
+      });
+    });
+
+    describe("CR/LF exclusion (#767)", () => {
+      it("emits one line for a display name containing a line break", () => {
+        const mail = {
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "A\nB", address: "a@example.com" }],
+          },
+        } as Partial<MailType>;
+
+        const wire = formatEnvelope(mail);
+        expect(wire).not.toContain("\n");
+        expect(wire).not.toContain("\r");
+
+        const envelope = parseEnvelope(mail);
+        expect(envelope[2]).toEqual([["A B", null, "a", "example.com"]]);
+      });
+
+      it("collapses CRLF runs in a subject to a single space", () => {
+        const envelope = parseEnvelope({ subject: "one\r\n\r\ntwo" });
+        expect(envelope[1]).toBe("one two");
+      });
+
+      it("strips NUL, which is outside CHAR for the same grammar reason", () => {
+        const envelope = parseEnvelope({ subject: "a\0b" });
+        expect(envelope[1]).toBe("a b");
+      });
+    });
+
+    describe("BODYSTRUCTURE attachment params", () => {
+      const attachmentBody = (filename: string, contentType?: string) => {
+        const wire = formatBodyStructure({
+          text: "body",
+          attachments: [
+            { filename, contentType, size: 12 },
+          ] as AttachmentType[],
+        } as Partial<MailType>);
+        const parsed = parse(wire);
+        expect(parsed).toHaveLength(1);
+        const multipart = parsed[0];
+        if (!Array.isArray(multipart)) throw new Error("not a multipart list");
+        const attachment = multipart[1];
+        if (!Array.isArray(attachment)) throw new Error("not an attachment");
+        return attachment;
+      };
+
+      it("round-trips a filename containing a quote and a backslash", () => {
+        const filename = 'in"voice\\';
+        const attachment = attachmentBody(filename, "application/pdf");
+        expect(attachment[0]).toBe("application");
+        expect(attachment[1]).toBe("pdf");
+        expect(attachment[2]).toEqual(["NAME", filename]);
+        // extension data: MD5, disposition, language, location
+        expect(attachment[8]).toEqual(["ATTACHMENT", ["FILENAME", filename]]);
+      });
+
+      it("emits a real subtype when the stored contentType has no slash", () => {
+        const attachment = attachmentBody("a.bin", "application");
+        expect(attachment[0]).toBe("application");
+        expect(attachment[1]).toBe("octet-stream");
+      });
+
+      it("emits a real media type when the stored contentType has no type half", () => {
+        // "/pdf" splits to ["", "pdf"] — an empty string, not undefined, so a
+        // destructuring default would not fire and `"" "pdf"` would reach the
+        // wire as an empty media type.
+        const attachment = attachmentBody("a.bin", "/pdf");
+        expect(attachment[0]).toBe("application");
+        expect(attachment[1]).toBe("pdf");
+      });
+
+      it("routes the media type and subtype through the encoder", () => {
+        // contentType is stored per-attachment and is not validated, so the
+        // type halves are as attacker-influenced as the filename.
+        const attachment = attachmentBody("a.bin", 'ap"p/pd\\f');
+        expect(attachment[0]).toBe('ap"p');
+        expect(attachment[1]).toBe("pd\\f");
+      });
+
+      it("emits the same media type in the part header as in BODYSTRUCTURE", () => {
+        // A Content-Type with a missing half is unparseable, so a client that
+        // trusts the header renders the part inline as text while the
+        // BODYSTRUCTURE-driven list shows it as an attachment.
+        const shapes = ["application", "/pdf", "application/", undefined];
+        const emitted = shapes.map((contentType) => {
+          const attachment = attachmentBody("a.bin", contentType);
+          const { contentType: header } = attachmentPartHeaderFields({
+            contentType,
+            filename: "a.bin",
+          } as AttachmentType);
+          return {
+            stored: contentType,
+            bodystructure: `${attachment[0]}/${attachment[1]}`,
+            header,
+          };
+        });
+        expect(emitted).toEqual([
+          {
+            stored: "application",
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+          {
+            stored: "/pdf",
+            bodystructure: "application/pdf",
+            header: "application/pdf",
+          },
+          {
+            stored: "application/",
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+          {
+            stored: undefined,
+            bodystructure: "application/octet-stream",
+            header: "application/octet-stream",
+          },
+        ]);
+      });
+    });
+
+    describe("address local part and domain", () => {
+      // Both halves come from the stored address, which mailparser fills from
+      // the inbound header — a quoted local part is legal RFC 5322 and reaches
+      // the wire as a quoted string like every other stored value.
+      it("round-trips a local part containing a quote and a backslash", () => {
+        const envelope = parseEnvelope({
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "X", address: 'we"ird\\local@example.com' }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[2]).toEqual([
+          ["X", null, 'we"ird\\local', "example.com"],
+        ]);
+      });
+
+      it("round-trips a domain containing a quoted-special", () => {
+        const envelope = parseEnvelope({
+          subject: "hi",
+          from: {
+            text: "",
+            value: [{ name: "X", address: 'user@ex"ample.com' }],
+          },
+        } as Partial<MailType>);
+        expect(envelope[2]).toEqual([["X", null, "user", 'ex"ample.com']]);
+      });
+    });
+
+    describe("quoteString / formatNString", () => {
+      it("leaves an ordinary value untouched — no double escaping", () => {
+        expect(quoteString("Hello there")).toBe('"Hello there"');
+        expect(formatNString("Hello")).toBe('"Hello"');
+      });
+
+      it("escapes both quoted-specials", () => {
+        expect(quoteString('a"b')).toBe('"a\\"b"');
+        expect(quoteString("a\\b")).toBe('"a\\\\b"');
+        expect(quoteString("\\")).toBe('"\\\\"');
+      });
+
+      it("returns the bare atom NIL for an absent value", () => {
+        expect(formatNString(undefined)).toBe("NIL");
+        expect(formatNString(null)).toBe("NIL");
+        expect(formatNString("")).toBe("NIL");
+      });
     });
   });
 });

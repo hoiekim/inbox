@@ -32,16 +32,38 @@ export const headerQuotedParam = (value: string): string =>
   `"${headerFieldValue(value).replace(/[\\"]/g, "\\$&")}"`;
 
 /**
+ * The `type` and `subtype` halves of a stored `contentType`.
+ *
+ * Each half falls back on falsiness rather than through a destructuring
+ * default, which only fires on `undefined`: `"application"` leaves the subtype
+ * undefined, `"/pdf"` leaves the type an empty string, and `"application/"`
+ * leaves the subtype empty. A media type missing either half is unparseable,
+ * so a client falls back to `text/plain` and renders an attachment inline.
+ *
+ * BODYSTRUCTURE and the emitted part headers describe the same part, so both
+ * derive their media type here — a client comparing them must not be told two
+ * different things.
+ */
+export const mediaTypeParts = (
+  contentType?: string
+): { type: string; subtype: string } => {
+  const [rawType, rawSubtype] = (
+    contentType || "application/octet-stream"
+  ).split("/");
+  return {
+    type: rawType || "application",
+    subtype: rawSubtype || "octet-stream"
+  };
+};
+
+/**
  * The `Content-Type` value and quoted `filename` parameter for one attachment
  * part header.
  *
- * The fallbacks mirror `formatBodyStructure`'s (`application/octet-stream` /
- * `unnamed`) deliberately: BODYSTRUCTURE and the emitted part headers describe
- * the same part, and a client comparing them must not be told two different
- * things. They are `||` fallbacks rather than assertions because `attachments`
- * reaches here straight off the JSONB column with no model hydration, so a row
- * written before a field existed arrives `undefined` — which would throw on
- * `.replace` where the old raw interpolation merely emitted the literal
+ * The `filename` fallback mirrors `formatBodyStructure`'s (`unnamed`) for the
+ * same reason `mediaTypeParts` is shared. Both are `||` fallbacks rather than
+ * assertions because `attachments` reaches here straight off the JSONB column
+ * with no model hydration, so a row written before a field existed arrives
  * `undefined`.
  *
  * `Attachment`'s constructor (`common/models/mails/Mail.ts`) defaults the same
@@ -53,12 +75,13 @@ export const headerQuotedParam = (value: string): string =>
  */
 export const attachmentPartHeaderFields = (
   attachment: Pick<AttachmentType, "contentType" | "filename">
-): { contentType: string; filenameParam: string } => ({
-  contentType: headerFieldValue(
-    attachment.contentType || "application/octet-stream"
-  ),
-  filenameParam: headerQuotedParam(attachment.filename || "unnamed")
-});
+): { contentType: string; filenameParam: string } => {
+  const { type, subtype } = mediaTypeParts(attachment.contentType);
+  return {
+    contentType: headerFieldValue(`${type}/${subtype}`),
+    filenameParam: headerQuotedParam(attachment.filename || "unnamed")
+  };
+};
 
 /**
  * The MIME multipart boundary token derived from a mail's stable id.
@@ -79,6 +102,50 @@ export const attachmentPartHeaderFields = (
 export const boundaryToken = (stableId: string): string =>
   stableId.replace(/[^A-Za-z0-9_.-]/g, "_");
 
+/**
+ * RFC 3501 §9 quoted string:
+ *
+ * ```
+ * quoted          = DQUOTE *QUOTED-CHAR DQUOTE
+ * QUOTED-CHAR     = <any TEXT-CHAR except quoted-specials> / "\" quoted-specials
+ * quoted-specials = DQUOTE / "\"
+ * TEXT-CHAR       = <any CHAR except CR and LF>
+ * ```
+ *
+ * Two rules, and every value we put on the wire has to satisfy both:
+ *
+ * 1. `"` and `\` are backslash-escaped. Escaping only `"` is worse than not
+ *    escaping at all for a value that *ends* in a backslash: the emitted `\"`
+ *    reads as an escaped quote, so the client's parser never terminates the
+ *    string and re-terminates on some later opening quote — every remaining
+ *    token in that untagged response is mis-framed (#762).
+ * 2. CR and LF cannot appear at all, escaped or not. They split the untagged
+ *    response into two lines where the client expects one, so the remainder
+ *    arrives as an unparseable line and the connection desyncs (#767). They
+ *    carry no display meaning here, so each run collapses to a single space.
+ *    NUL is outside `CHAR` for the same grammar reason and goes with them.
+ *
+ * The inputs are attacker-controlled: `receive.ts` stores `message_id`,
+ * `subject`, and address display names verbatim from the inbound headers, so
+ * an external sender picks these bytes. Route every stored string through
+ * here rather than escaping at the call site — partial escaping at four sites
+ * is what produced both bugs.
+ *
+ * Scope note: this enforces the framing rules — the ones whose violation
+ * desyncs the connection. It deliberately passes 8-bit octets through, even
+ * though `CHAR` is strictly %x01-7F, because the server already emits UTF-8
+ * in quoted strings and clients read it. Encoding non-ASCII properly means
+ * emitting a literal (or negotiating UTF8=ACCEPT), which is a separate change.
+ */
+export const quoteString = (value: string): string => {
+  const sanitized = value.replace(/[\r\n\0]+/g, " ");
+  return `"${sanitized.replace(/[\\"]/g, "\\$&")}"`;
+};
+
+/** RFC 3501 §9 `nstring`: a quoted string, or the bare atom `NIL` when absent. */
+export const formatNString = (value: string | null | undefined): string =>
+  value ? quoteString(value) : "NIL";
+
 export const formatAddressList = (value?: MailAddressValueType[]): string => {
   if (!value || value.length === 0) return "NIL";
 
@@ -92,9 +159,9 @@ export const formatAddressList = (value?: MailAddressValueType[]): string => {
       // RFC 3501 §9: `addr-name = nstring`. A header that carried no display
       // name has no personal name at all — the bare atom NIL, not `""`, which
       // clients read as a present-but-empty name.
-      const addrName = name ? `"${name.replace(/"/g, '\\"')}"` : "NIL";
+      const addrName = formatNString(name);
 
-      return `(${addrName} NIL "${local}" "${domain}")`;
+      return `(${addrName} NIL ${quoteString(local)} ${quoteString(domain)})`;
     })
     .filter((item) => item !== null)
     .join(" ");
@@ -195,9 +262,7 @@ export const formatHeaders = (
 
 export const formatEnvelope = (mail: Partial<MailType>): string => {
   const date = mail.date ? `"${new Date(mail.date).toUTCString()}"` : "NIL";
-  const subject = mail.subject
-    ? `"${mail.subject.replace(/"/g, '\\"')}"`
-    : "NIL";
+  const subject = formatNString(mail.subject);
   const from = formatAddressList(mail.from?.value);
   const sender = from; // Usually same as from
   const replyTo = mail.replyTo ? formatAddressList(mail.replyTo.value) : "NIL";
@@ -205,7 +270,7 @@ export const formatEnvelope = (mail: Partial<MailType>): string => {
   const cc = formatAddressList(mail.cc?.value);
   const bcc = formatAddressList(mail.bcc?.value);
   const inReplyTo = "NIL"; // Not implemented
-  const messageId = mail.messageId ? `"${mail.messageId}"` : "NIL";
+  const messageId = formatNString(mail.messageId);
 
   // RFC 3501 §7.4.2 / §9: each address-list envelope member is either the
   // bare atom `NIL` (its header is absent) or a parenthesized `1*address`
@@ -284,9 +349,7 @@ export const formatBodyStructure = (
     buildTextPart("html", mail.html, mail.html_octets, mail.html_line_count);
 
   const buildAttachmentPart = (attachment: AttachmentType): string => {
-    const [type, subtype] = (
-      attachment.contentType || "application/octet-stream"
-    ).split("/");
+    const { type, subtype } = mediaTypeParts(attachment.contentType);
     const filename = attachment.filename || "unnamed";
     // base64 length calculation without actually encoding
     const size = attachment.size ? Math.ceil(attachment.size / 3) * 4 : 0;
@@ -294,11 +357,11 @@ export const formatBodyStructure = (
     const disposition = { type: "ATTACHMENT", params: { FILENAME: filename } };
 
     const parts = [
-      `"${type}"`,
-      `"${subtype}"`,
+      quoteString(type),
+      quoteString(subtype),
       Object.keys(params).length > 0
         ? `(${Object.entries(params)
-            .map(([k, v]) => `"${k}" "${v}"`)
+            .map(([k, v]) => `${quoteString(k)} ${quoteString(v)}`)
             .join(" ")})`
         : "NIL",
       "NIL", // body ID
@@ -310,8 +373,8 @@ export const formatBodyStructure = (
     if (extensible) {
       parts.push(
         "NIL", // MD5
-        `("${disposition.type}" (${Object.entries(disposition.params)
-          .map(([k, v]) => `"${k}" "${v}"`)
+        `(${quoteString(disposition.type)} (${Object.entries(disposition.params)
+          .map(([k, v]) => `${quoteString(k)} ${quoteString(v)}`)
           .join(" ")}))`,
         "NIL", // language
         "NIL" // location
