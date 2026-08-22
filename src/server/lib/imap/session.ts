@@ -50,6 +50,7 @@ import {
 } from "./message-ops";
 import {
   reconcileSequenceMapping,
+  setSequenceMapping,
   SequenceState,
 } from "./sequence-resolver";
 
@@ -114,19 +115,35 @@ export class ImapSession {
   /**
    * Re-advertise the selected mailbox to an IDLE client, announcing whatever
    * left it first (see `reconcileSequenceMapping`). Returns the new message
-   * count, or null when there is no mailbox to report on or it could not be
-   * read — in which case nothing reaches the wire and the client keeps the
-   * mapping it already has.
+   * count, or null when the session is no longer idling, there is no mailbox
+   * to report on, or it could not be read — in which case nothing reaches the
+   * wire and the client keeps the mapping it already has.
    */
   notifyMailboxUpdate = (): Promise<number | null> =>
     this.runSerial(async () => {
+      if (!this.isIdling) return null;
+
+      // RFC 3501 §7.4.1 forbids an EXPUNGE with no command in progress, so the
+      // announcement is held back until the session is known to still be
+      // idling at the moment it would reach the wire. IDLE can end either
+      // while this task waits its turn on the chain (DONE) or while its
+      // mailbox read is parked (the heartbeat's force-terminate, which runs
+      // off the chain entirely).
+      const advertised = [...this.seqState.seqToUid];
+      const pending: string[] = [];
       const total = await reconcileSequenceMapping(
         this.store,
         this.selectedMailbox,
         this.seqState,
-        this.write
+        (data: string) => pending.push(data)
       );
       if (total === null) return null;
+      if (!this.isIdling) {
+        setSequenceMapping(this.seqState, advertised);
+        return null;
+      }
+
+      for (const response of pending) this.write(response);
       this.write(`* ${total} EXISTS\r\n`);
       this.write(`* 0 RECENT\r\n`);
       return total;

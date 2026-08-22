@@ -22,14 +22,19 @@ const makeSession = (
       writes.push(data);
       return true;
     },
+    setTimeout: () => {},
   };
   const session = new ImapSession({ isTls: false } as never, socket as never);
   Object.assign(session as unknown as Record<string, unknown>, {
     store: { getAllUids } as unknown as Store,
     selectedMailbox: "INBOX",
     seqState: seqStateFor(advertised),
+    isIdling: true,
+    idleTag: "A1",
   });
-  return { session, writes, wire: () => writes.join("") };
+  const seqState = () =>
+    (session as unknown as { seqState: SequenceState }).seqState;
+  return { session, writes, seqState, wire: () => writes.join("") };
 };
 
 describe("ImapSession.notifyMailboxUpdate", () => {
@@ -48,13 +53,12 @@ describe("ImapSession.notifyMailboxUpdate", () => {
   });
 
   it("leaves the mapping alone when the mailbox cannot be read", async () => {
-    const { session } = makeSession([10, 20, 30], async () => null);
+    const { session, seqState } = makeSession([10, 20, 30], async () => null);
 
     await session.notifyMailboxUpdate();
 
-    const { seqState } = session as unknown as { seqState: SequenceState };
-    expect(seqState.seqToUid).toEqual([10, 20, 30]);
-    expect(seqState.uidToSeq.get(30)).toBe(3);
+    expect(seqState().seqToUid).toEqual([10, 20, 30]);
+    expect(seqState().uidToSeq.get(30)).toBe(3);
   });
 
   it("announces a departure once when two notifications overlap", async () => {
@@ -89,5 +93,51 @@ describe("ImapSession.notifyMailboxUpdate", () => {
     expect(wire()).toBe(
       "* 1 FETCH (BODY[] {4}\r\ndone)\r\n* 2 EXPUNGE\r\n* 2 EXISTS\r\n* 0 RECENT\r\n"
     );
+  });
+
+  it("skips the mailbox read entirely when the session is no longer idling", async () => {
+    let reads = 0;
+    const { session, writes } = makeSession([10, 20, 30], async () => {
+      reads++;
+      return [10, 20];
+    });
+    session.endIdle();
+    writes.length = 0;
+
+    expect(await session.notifyMailboxUpdate()).toBeNull();
+    expect(writes).toEqual([]);
+    expect(reads).toBe(0);
+  });
+
+  it("does not announce after a DONE queued ahead of it", async () => {
+    const reads = [[10, 20, 30], [10, 20]];
+    const { session, wire, seqState } = makeSession([10, 20, 30], async () => {
+      await delay(10);
+      return reads.shift() ?? [];
+    });
+
+    const first = session.notifyMailboxUpdate();
+    const done = session.runSerial(async () => session.endIdle());
+    const second = session.notifyMailboxUpdate();
+    await Promise.all([first, done, second]);
+
+    expect(await second).toBeNull();
+    expect(wire()).toBe(
+      "* 3 EXISTS\r\n* 0 RECENT\r\nA1 OK IDLE terminated\r\n"
+    );
+    expect(seqState().seqToUid).toEqual([10, 20, 30]);
+  });
+
+  it("does not announce when IDLE ends while its mailbox read is parked", async () => {
+    const { session, wire, seqState } = makeSession([10, 20, 30], async () => {
+      session.endIdle("timeout");
+      await delay(10);
+      return [10, 20];
+    });
+
+    expect(await session.notifyMailboxUpdate()).toBeNull();
+    expect(wire()).toBe("A1 OK IDLE terminated (timeout)\r\n");
+    expect(seqState().seqToUid).toEqual([10, 20, 30]);
+    expect(seqState().uidToSeq.get(30)).toBe(3);
   });
 });

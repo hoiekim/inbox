@@ -40,12 +40,19 @@ export async function buildSequenceMapping(
   const uids = await store.getAllUids(selectedMailbox);
   if (uids === null) return false;
 
+  setSequenceMapping(state, uids);
+  return true;
+}
+
+/**
+ * Point `state` at `uids` as the mailbox's 1..N sequence order.
+ */
+export function setSequenceMapping(state: SequenceState, uids: number[]): void {
   state.seqToUid = uids;
   state.uidToSeq.clear();
   for (let i = 0; i < uids.length; i++) {
     state.uidToSeq.set(uids[i], i + 1); // seq numbers are 1-indexed
   }
-  return true;
 }
 
 /**
