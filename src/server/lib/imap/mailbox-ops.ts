@@ -506,7 +506,12 @@ export async function selectMailbox(
 
     setSelected(cleanName, 0);
 
-    await buildSequenceMapping(store, cleanName, seqState);
+    if (!(await buildSequenceMapping(store, cleanName, seqState))) {
+      setSelected(null, 0);
+      clearSeqState();
+      write(`${tag} NO Failed to read mailbox\r\n`);
+      return;
+    }
 
     const countResult = await store.countMessages(cleanName);
 

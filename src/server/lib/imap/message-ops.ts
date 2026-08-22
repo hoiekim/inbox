@@ -47,7 +47,7 @@ import {
   uidToSeqNumber,
   countSequenceSetMessages,
   clampSequenceSetToFirst,
-  buildSequenceMapping,
+  reconcileSequenceMapping,
   SequenceState,
 } from "./sequence-resolver";
 
@@ -1062,24 +1062,22 @@ export async function moveMessageTyped(
     // the mailbox. Errors propagate so the outer try/catch writes a
     // tagged NO instead of falsely emitting OK + COPYUID against a
     // partial expunge.
-    const expungedUids = await store.expungeUids(selectedMailbox, sourceUids);
+    await store.expungeUids(selectedMailbox, sourceUids);
 
-    // Map UIDs back to seq numbers; emit high→low so the client's
-    // own message-index updates don't cascade-shift mid-response.
-    const expungedSeqs: number[] = [];
-    for (const uid of expungedUids) {
-      const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
-      if (seq !== undefined) expungedSeqs.push(seq);
+    // Announcing the diff rather than the moved set covers anything that left
+    // underneath the session too, so the baseline the next sequence-numbered
+    // command resolves against is one the client shares. A rebuild that fails
+    // propagates: the outer catch answers NO rather than claiming COPYUID
+    // against a mapping neither side agrees on.
+    const remaining = await reconcileSequenceMapping(
+      store,
+      selectedMailbox,
+      seqState,
+      write
+    );
+    if (remaining === null) {
+      throw new Error("Failed to rebuild the sequence mapping after MOVE");
     }
-    expungedSeqs.sort((a, b) => b - a);
-    for (const seq of expungedSeqs) {
-      write(`* ${seq} EXPUNGE\r\n`);
-    }
-
-    // Rebuild seqState so subsequent sequence-numbered commands operate
-    // on the post-expunge mapping. A stale seqState would surface as
-    // wrong FETCH results downstream.
-    await buildSequenceMapping(store, selectedMailbox, seqState);
 
     const uidValidity = await getImapUidValidity(user.id);
     const sourceSet = formatUidSet(sourceUids);
@@ -1232,23 +1230,17 @@ export async function expunge(
   }
 
   try {
-    const expungedUids = await store.expunge(selectedMailbox);
+    await store.expunge(selectedMailbox);
 
-    const seqNumbers: number[] = [];
-    for (const uid of expungedUids) {
-      const seq = uidToSeqNumber(seqState.seqToUid, seqState.uidToSeq, uid);
-      if (seq !== undefined) {
-        seqNumbers.push(seq);
-      }
+    const remaining = await reconcileSequenceMapping(
+      store,
+      selectedMailbox,
+      seqState,
+      write
+    );
+    if (remaining === null) {
+      throw new Error("Failed to rebuild the sequence mapping after EXPUNGE");
     }
-
-    seqNumbers.sort((a, b) => b - a);
-
-    for (const seq of seqNumbers) {
-      write(`* ${seq} EXPUNGE\r\n`);
-    }
-
-    await buildSequenceMapping(store, selectedMailbox, seqState);
 
     write(`${tag} OK EXPUNGE completed\r\n`);
   } catch (error) {

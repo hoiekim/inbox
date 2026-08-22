@@ -320,16 +320,17 @@ export class Store {
   };
 
   /**
-   * Get all UIDs in a mailbox, ordered by UID ascending.
-   * Used for building sequence number mapping.
+   * Get all UIDs in a mailbox, ordered by UID ascending, or null when the
+   * query failed. Used for building sequence number mapping, where an empty
+   * mailbox and an unreadable one have opposite meanings.
    */
-  getAllUids = async (box: string): Promise<number[]> => {
+  getAllUids = async (box: string): Promise<number[] | null> => {
     try {
       const { mailboxArg, isSent } = this.resolveMappedBox(box);
       return await pgGetAllUids(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
-      return [];
+      return null;
     }
   };
 
