@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { mailsTable } from "./models/mail";
 import { buildCreateIndex } from "./database";
 import { indexSpecs, maintenanceWork } from "./initialize";
+import { SEARCH_VECTOR_REINDEX_CHUNK_ROWS } from "./search-vector";
 
 const indexNameOf = (sql: string) => {
   const match = sql.match(/CREATE INDEX(?: CONCURRENTLY)? IF NOT EXISTS (\w+) /);
@@ -95,7 +96,7 @@ describe("initialize — GIN index coverage for the address containment filter",
 // drops it before rebuilding. A spec whose name doesn't match the index its own
 // SQL creates would slip past the sweep, and `CREATE INDEX CONCURRENTLY IF NOT
 // EXISTS` would then no-op against the leftover forever — a permanently
-// unusable index with a clean boot log (#746).
+// unusable index with a clean boot log.
 describe("initialize — index specs", () => {
   it("emits CONCURRENTLY for every index built at boot", () => {
     const specs = indexSpecs();
@@ -127,11 +128,26 @@ describe("initialize — index specs", () => {
     expect(search.map((s) => s.name)).toEqual(["idx_mails_search"]);
   });
 
-  // The reindex is a full-table UPDATE, so it belongs in the same non-fatal,
-  // long-budget phase as the index builds rather than in front of the listeners.
+  // The reindex rewrites rows rather than building an index, so it belongs in
+  // the same non-fatal, long-budget phase as the index builds rather than in
+  // front of the listeners.
   it("hands the search-vector reindex to the maintenance phase", () => {
     const { indexes, statements } = maintenanceWork();
     expect(indexes).toEqual(indexSpecs());
     expect(statements.map((s) => s.sql.includes("SET search_vector"))).toEqual([true]);
+  });
+
+  // The statement rewrites one bounded chunk per execution, so running it once
+  // leaves most of the table stale — silently, since nothing fails.
+  it("marks the reindex for draining, and no index build", () => {
+    expect(maintenanceWork().statements.map((s) => s.drain)).toEqual([true]);
+    expect(indexSpecs().filter((s) => s.drain)).toEqual([]);
+  });
+
+  // Without a bound, the UPDATE locks every row it rewrites until it commits,
+  // and concurrent flag writes queue behind it past the pool's 30s timeout.
+  it("bounds how many rows one reindex execution rewrites", () => {
+    const [reindex] = maintenanceWork().statements;
+    expect(reindex.sql).toContain(`LIMIT ${SEARCH_VECTOR_REINDEX_CHUNK_ROWS}`);
   });
 });

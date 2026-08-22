@@ -77,14 +77,14 @@ export interface CreateIndexOptions {
    * Emit `CREATE INDEX CONCURRENTLY`, which builds without taking a write
    * lock on the table. The trade-offs — cannot run inside a transaction, and
    * a failed build leaves an invalid index behind that has to be dropped
-   * before the next attempt — are handled by `indexes.ts`.
+   * before the next attempt — are handled by `maintenance.ts`.
    */
   concurrently?: boolean;
 }
 
 /**
  * The name `buildCreateIndex` embeds. Exposed separately because the
- * invalid-leftover sweep in `indexes.ts` has to name the same index the
+ * invalid-leftover sweep in `maintenance.ts` has to name the same index the
  * create statement would.
  */
 export function buildIndexName(

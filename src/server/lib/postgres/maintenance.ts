@@ -4,19 +4,19 @@
  * Everything else `initializePostgres` issues is O(1) catalog work — CREATE
  * TABLE, ALTER TABLE ADD COLUMN, trigger DDL. These two are not:
  *
- * - **Index builds.** ~278 ms per GIN index at 11,851 mails (#746).
- * - **The search-vector reindex.** A full-table UPDATE; the scan half alone
- *   measured ~4.2 s at 11,851 mails, so it reaches a 30s wall roughly 12x
- *   sooner than any index build does.
+ * - **Index builds.** ~278 ms per GIN index at 11,851 mails.
+ * - **The search-vector reindex.** A table-wide UPDATE, drained a chunk at a
+ *   time; the scan half alone measured ~4.2 s at 11,851 mails, so it reaches a
+ *   30s wall roughly 12x sooner than any index build does.
  *
- * Run through `pool.query` they carried the pool's 30s `statement_timeout`,
- * and an abort (57014) propagated out of `initializePostgres` into
- * `handleStartupFailure`, which exits the process — so `restart: always`
- * retried the same doomed statement forever with no port ever bound.
+ * On the pool's 30s `statement_timeout` an abort (57014) here is fatal:
+ * `initializePostgres` propagates it into `handleStartupFailure`, which exits
+ * the process, so `restart: always` retries the same doomed statement forever
+ * with no port ever bound.
  *
- * This module runs them instead on a dedicated session with a build-sized
- * budget, each statement independently fallible, serialized across instances
- * by its own advisory lock. It never throws. The caller starts it *after* the
+ * This module runs them on a dedicated session with a build-sized budget, each
+ * statement independently fallible, serialized across instances by its own
+ * advisory lock. It never throws. The caller starts it *after* the
  * listeners are bound and does not await it: index builds are `CONCURRENTLY`
  * precisely so the table stays writable during them, which is worth nothing
  * if the app isn't serving yet.
@@ -35,6 +35,13 @@ export interface Statement {
   /** Identifies the statement in logs; for an index, its index name. */
   name: string;
   sql: string;
+  /**
+   * Re-issue until it reports no rows. A statement that rewrites the whole
+   * table in one go locks every row it touches for the duration; the ones
+   * written to affect a bounded slice per execution are drained in a loop so
+   * the lock set stays small enough for live traffic to interleave.
+   */
+  drain?: boolean;
 }
 
 export interface MaintenanceWork {
@@ -164,6 +171,7 @@ export const runBootMaintenance = async (
   try {
     client = await pool.connect();
   } catch (error: unknown) {
+    if (signal?.aborted) return "skipped";
     logger.error("[Maintenance] Could not acquire a connection.", {}, error);
     return "incomplete";
   }
@@ -192,7 +200,11 @@ export const runBootMaintenance = async (
     onAbort = () => {
       if (pid === undefined) return;
       logger.info("[Maintenance] Cancelling in-flight statement for shutdown.");
-      void pool.query("SELECT pg_cancel_backend($1)", [pid]).catch(() => {});
+      void pool
+        .query("SELECT pg_cancel_backend($1)", [pid])
+        .catch((error: unknown) =>
+          logger.error("[Maintenance] Could not cancel the in-flight statement.", { pid }, error)
+        );
     };
     signal?.addEventListener("abort", onAbort);
     // `addEventListener` does not fire on an already-aborted signal, so an
@@ -230,7 +242,10 @@ export const runBootMaintenance = async (
       }
       if (unresolved.has(statement.name)) continue;
       try {
-        await runLongQuery(client, statement.sql);
+        do {
+          const { rowCount } = await runLongQuery(client, statement.sql);
+          if (!statement.drain || !rowCount) break;
+        } while (!signal?.aborted);
       } catch (error: unknown) {
         // A statement we cancelled ourselves is a shutdown, not a fault — and
         // it may be the last one, so the loop's own check would never see it.
@@ -243,9 +258,13 @@ export const runBootMaintenance = async (
         logger.error("[Maintenance] Statement failed.", { statement: statement.name }, error);
       }
     }
+    if (signal?.aborted) return "skipped";
     if (complete) logger.info("[Maintenance] Complete — schema is at target.");
     return complete ? "complete" : "incomplete";
   } catch (error: unknown) {
+    // A statement this module cancelled itself is a shutdown, not a fault —
+    // reporting it as one would page on every graceful stop.
+    if (signal?.aborted) return "skipped";
     logger.error("[Maintenance] Aborted.", {}, error);
     return "incomplete";
   } finally {

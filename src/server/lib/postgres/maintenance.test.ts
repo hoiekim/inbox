@@ -4,7 +4,7 @@
  * the catalog marked invalid, and `CREATE INDEX CONCURRENTLY IF NOT EXISTS`
  * then matches it by name and no-ops. Without the sweep the retry can never
  * succeed, and the failure mode is a boot log that looks clean forever while
- * the index stays unusable (#746).
+ * the index stays unusable.
  *
  * Same FakePool pattern the other postgres tests use.
  */
@@ -43,6 +43,9 @@ afterAll(() => {
   restoreLeaves();
   resetPool();
 });
+
+/** The shape `runLongQuery` passes to `client.query`. */
+type TimedConfig = { text: string; query_timeout?: number };
 
 const INDEXES = [
   { name: "idx_alpha", sql: "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_alpha ON t (a)" },
@@ -166,6 +169,90 @@ describe("runBootMaintenance — session and locking", () => {
   it("reports failure without throwing when every statement fails", async () => {
     arrange({ fail: ["CREATE INDEX", "UPDATE t"] });
     expect(await runBootMaintenance(work())).toBe("incomplete");
+  });
+
+  // pg reads `config.query_timeout || connectionParameters.query_timeout`, so a
+  // per-query 0 falls back to the pool's 30s: every build and the reindex would
+  // be killed client-side at 30s with the session's 10-minute budget, set one
+  // line later, still in place and the suite still green.
+  it("gives every long statement a client read timeout above the pool default", async () => {
+    const configs: TimedConfig[] = [];
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (typeof sql !== "string") configs.push(sql as TimedConfig);
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+
+    await runBootMaintenance(work());
+
+    expect(configs.map((c) => c.text)).toContain(INDEXES[0].sql);
+    const unbudgeted = configs.filter((c) => !((c.query_timeout ?? 0) > 30_000));
+    expect(unbudgeted.map((c) => c.text)).toEqual([]);
+  });
+});
+
+// A statement that rewrites the whole table locks every row it touches until
+// it commits, so the reindex is written to affect a bounded slice per
+// execution — which only finishes the job if the caller keeps issuing it.
+describe("runBootMaintenance — draining statements", () => {
+  const drainWork = (drain: boolean) => ({
+    indexes: [],
+    statements: [{ ...STATEMENTS[0], drain }],
+  });
+
+  /** Reports rows rewritten for the first `chunks` executions, then none. */
+  const arrangeChunks = (chunks: number) => {
+    let issued = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      if (text === STATEMENTS[0].sql) {
+        issued++;
+        return { rows: [], rowCount: issued <= chunks ? 1000 : 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    return () => issued;
+  };
+
+  it("re-issues a draining statement until it rewrites no rows", async () => {
+    const issued = arrangeChunks(3);
+    expect(await runBootMaintenance(drainWork(true))).toBe("complete");
+    expect(issued()).toBe(4);
+  });
+
+  // Index builds report no rows and must not be re-issued on that basis.
+  it("issues a non-draining statement exactly once, whatever it reports", async () => {
+    const issued = arrangeChunks(3);
+    expect(await runBootMaintenance(drainWork(false))).toBe("complete");
+    expect(issued()).toBe(1);
+  });
+
+  // Shutdown lands between chunks, so nothing throws and the loop's own
+  // per-statement check never runs again — the drain has to watch the signal.
+  it("stops draining, and reports skipped, once aborted", async () => {
+    const abort = new AbortController();
+    let issued = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      if (text === STATEMENTS[0].sql) {
+        issued++;
+        abort.abort();
+        return { rows: [], rowCount: 1000 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(drainWork(true), abort.signal)).toBe("skipped");
+    expect(issued).toBe(1);
   });
 });
 
