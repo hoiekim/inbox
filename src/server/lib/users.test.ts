@@ -42,6 +42,17 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
+const mockLoggerError = mock(() => {});
+const mockLoggerInfo = mock(() => {});
+mock.module("./logger", () => ({
+  logger: {
+    debug: mock(() => {}),
+    info: mockLoggerInfo,
+    warn: mock(() => {}),
+    error: mockLoggerError,
+  },
+}));
+
 // Import the subjects AND resetPool only after the pg mock is registered, so
 // `client.ts`'s `import { Pool } from "pg"` resolves to FakePool.
 const {
@@ -54,6 +65,7 @@ const {
   createToken,
   setUserInfo,
   startTimer,
+  deleteExpiredSignup,
   encryptPassword,
   expiryTimer,
 } = await import("./users");
@@ -591,5 +603,85 @@ describe("startTimer", () => {
     const secondTimer = expiryTimer["u-1"];
     expect(secondTimer).toBeDefined();
     expect(secondTimer).not.toBe(firstTimer);
+  });
+
+  it("logs a repository fault instead of rejecting unhandled", async () => {
+    mockLoggerError.mockClear();
+    const realSetTimeout = globalThis.setTimeout;
+    let fire: (() => void) | undefined;
+    globalThis.setTimeout = ((callback: () => void) => {
+      fire = callback;
+      return realSetTimeout(() => {}, 0);
+    }) as unknown as typeof globalThis.setTimeout;
+    try {
+      startTimer("u-1");
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+
+    mockQuery.mockRejectedValueOnce(new Error("connection terminated"));
+    expect(fire).toBeDefined();
+    expect(() => fire!()).not.toThrow();
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+
+    expect(mockLoggerError).toHaveBeenCalled();
+  });
+});
+
+const deleteStatements = () =>
+  mockQuery.mock.calls
+    .map(([sql]) => sql)
+    .filter((sql) => /^\s*DELETE\s+FROM\s+users/i.test(sql));
+
+describe("deleteExpiredSignup", () => {
+  const past = new Date(Date.now() - 1000).toISOString();
+  const future = new Date(Date.now() + 60_000).toISOString();
+
+  it("does not delete a registered account whose reset token expired", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: "hashed", token: "t", expiry: past }))
+    );
+
+    await deleteExpiredSignup("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("deletes an unclaimed sign-up whose window has passed", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: "t", expiry: past }))
+    );
+
+    await deleteExpiredSignup("u-1");
+
+    expect(deleteStatements()).toHaveLength(1);
+  });
+
+  it("leaves an unclaimed sign-up that is still inside its window", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: "t", expiry: future }))
+    );
+
+    await deleteExpiredSignup("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("leaves a placeholder that carries no expiry", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: null, expiry: null }))
+    );
+
+    await deleteExpiredSignup("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("reads the row without routing through toUser", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: "t", expiry: past }))
+    );
+
+    expect(deleteExpiredSignup("u-1")).resolves.toBeUndefined();
   });
 });
