@@ -167,7 +167,7 @@ describe("initializePostgres — fast-path integration", () => {
   // The schema half writes its own marker as soon as its own DDL succeeds, and
   // must NOT wait on the row-scaled half — gating it on maintenance would send
   // every boot back through this throwing block for as long as an index can't
-  // build, which is #746's crashloop entered by a different door.
+  // build, which is the same crashloop entered by a different door.
   it("writes the schema marker without waiting on boot maintenance", async () => {
     const { initializePostgres, CURRENT_SCHEMA_HASH } = await import("./initialize");
 
@@ -222,6 +222,12 @@ describe("bootMaintenance — marker gating", () => {
     expect(markerWrites.map(({ values }) => values)).toEqual([
       ["maintenance_hash", CURRENT_SCHEMA_HASH],
     ]);
+    // And it reads back under that key too: reading `schema_hash` here would
+    // match the marker `initializePostgres` just wrote and skip the whole
+    // phase after every DDL deploy — no index built, no reindex run, and the
+    // marker never written is never missed.
+    const markerRead = seen.find(({ sql }) => sql.includes("SELECT value FROM schema_meta"));
+    expect(markerRead?.values).toEqual(["maintenance_hash"]);
   });
 
   // Degrading instead of exiting removed the page `handleStartupFailure` used
@@ -289,7 +295,7 @@ describe("bootMaintenance — marker gating", () => {
 
   // The marker is what lets the next boot skip the DDL entirely. Writing it
   // while an index is missing would strand that index forever: every later
-  // boot fast-paths past the build with no error anywhere (#746).
+  // boot fast-paths past the build with no error anywhere.
   it("withholds the marker — without throwing — when an index build fails", async () => {
     const { bootMaintenance } = await import("./initialize");
 

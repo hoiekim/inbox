@@ -21,6 +21,10 @@ import {
 } from "./lib/crash-alarm";
 import { handleStartupFailure } from "./lib/startup-failure";
 
+// Module scope, not `start()`: the crash handler below is registered here too,
+// and has to be able to cancel the phase it cannot otherwise outlive.
+const maintenanceAbort = new AbortController();
+
 // Process-level error handlers (centralised here alongside SIGTERM/SIGINT).
 // Note: These fire before IMAP/SMTP servers are shut down.
 //
@@ -39,6 +43,12 @@ process.on("uncaughtException", async (error) => {
   console.error("Uncaught exception:", error);
   if (!claimCrashSequence()) return;
   await deliverCrashAlarm("Uncaught Exception", error);
+  // The maintenance phase holds a checked-out client, and `pool.end()` resolves
+  // only once every client is released — so without the abort, a crash during
+  // that window would wait out the full drain bound and leave the phase to die
+  // with the process instead of unwinding. The bound below is the backstop for
+  // a cancel that cannot be delivered at all.
+  maintenanceAbort.abort();
   await boundCrashStep(pool.end(), POOL_SHUTDOWN_TIMEOUT_MS);
   process.exit(1);
 });
@@ -58,7 +68,6 @@ const start = async () => {
   // throughout, and awaiting them would push first bind past the container
   // healthcheck's start period on a large table. `bootMaintenance` never
   // rejects; it alarms on its own if the work doesn't complete.
-  const maintenanceAbort = new AbortController();
   const maintenance = bootMaintenance(maintenanceAbort.signal);
 
   const shutdown = async (signal: string) => {

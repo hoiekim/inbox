@@ -53,6 +53,9 @@ const MAILS_SEARCH_INDEX_NAME = "idx_mails_search";
 /** Gates the row-scaled phase independently of the fatal schema DDL. */
 const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
 
+/** Ceiling on alarm delivery, so a wedged webhook cannot delay a stop. */
+const MAINTENANCE_ALARM_TIMEOUT_MS = 5_000;
+
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
 // `searchVector*`. Extracted as module-scoped constants so their literal
 // text is what feeds `CURRENT_SCHEMA_HASH` below — the same string
@@ -88,7 +91,9 @@ export const indexSpecs = (): Statement[] => {
 /** The statements `bootMaintenance` hands to the long-budget session. */
 export const maintenanceWork = (): MaintenanceWork => ({
   indexes: indexSpecs(),
-  statements: [{ name: "search_vector reindex", sql: searchVectorReindexSql() }],
+  statements: [
+    { name: "search_vector reindex", sql: searchVectorReindexSql(), drain: true },
+  ],
 });
 
 // Digest of every input the slow-path DDL consumes. Any code change to a
@@ -190,8 +195,8 @@ export const initializePostgres = async (): Promise<void> => {
  * It must not be fatal. A statement here failing means "too slow for its
  * budget", not "the schema is broken" — the app serves correctly without an
  * index, and with a stale search vector on rows nothing has touched. Exiting
- * for it just crashloops the container into the same doomed statement (#746),
- * with no port ever bound to diagnose from.
+ * for it just crashloops the container into the same doomed statement, with
+ * no port ever bound to diagnose from.
  *
  * And it must not gate the listeners. Index builds are `CONCURRENTLY` so the
  * table stays writable while they run, which buys nothing if HTTP/SMTP/IMAP
@@ -228,9 +233,15 @@ export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
       "Boot maintenance did not complete — an index or the search-vector reindex " +
       "is outstanding. The maintenance marker is withheld, so the next boot retries.";
     logger.warn(`[Maintenance] ${message}`);
-    // The old behavior paged through `handleStartupFailure`. Degrading instead
-    // of exiting must not also mean degrading silently.
-    await sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined);
+    // Degrading instead of exiting must not also mean degrading silently. The
+    // delivery is raced rather than awaited: `start.ts` awaits this phase on
+    // the graceful-shutdown path, and `sendAlarm`'s fetch carries no timeout of
+    // its own, so a wedged webhook would hold the stop open until compose's
+    // grace period expired and SIGKILL replaced the clean exit.
+    await Promise.race([
+      sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, MAINTENANCE_ALARM_TIMEOUT_MS)),
+    ]);
   } catch (error: unknown) {
     logger.error("[Maintenance] Phase failed unexpectedly.", {}, error);
   }

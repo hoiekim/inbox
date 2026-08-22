@@ -15,7 +15,6 @@
 
 export * from "./client";
 export * from "./initialize";
-export * from "./maintenance";
 export * from "./database";
 export * from "./models";
 export * from "./repositories";

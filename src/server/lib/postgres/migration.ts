@@ -317,11 +317,6 @@ export async function migrateTable(
 }
 
 /**
- * Run migrations for all provided tables within a transaction.
- * Returns true if successful, throws on fatal errors.
- * Uses a transaction to ensure atomicity - either all migrations succeed or none do.
- */
-/**
  * The two independently-gated halves of the boot DDL.
  *
  * `schema_hash` covers the O(1) catalog work — CREATE TABLE, migrations,
@@ -329,8 +324,7 @@ export async function migrateTable(
  * `maintenance_hash` covers the row-count-scaled statements, which are not
  * fatal. They need separate markers: gating the fatal half on the slow half
  * would send every boot back through the throwing DDL block for as long as an
- * index can't build, which is the crashloop #746 is about, entered by a
- * different door.
+ * index can't build, which is the same crashloop entered by a different door.
  */
 export type MarkerKey = "schema_hash" | "maintenance_hash";
 
@@ -338,6 +332,11 @@ export type MarkerKey = "schema_hash" | "maintenance_hash";
 // Using a hash of the string "inbox-schema-migration" (decimal: 0x696e62) = 6908002
 const MIGRATION_ADVISORY_LOCK_KEY = 6908002;
 
+/**
+ * Run migrations for all provided tables within a transaction.
+ * Returns true if successful, throws on fatal errors.
+ * Uses a transaction to ensure atomicity - either all migrations succeed or none do.
+ */
 export async function runMigrations(
   tables: Array<{ name: string; schema: Schema }>
 ): Promise<void> {
@@ -415,11 +414,11 @@ export async function runMigrations(
  * `expectedHash` derived from the current code's DDL inputs.
  *
  * On the happy path (steady-state boot, no DDL change deployed) this one
- * SELECT replaces the ~35+ DDL round-trips `initializePostgres` would
- * otherwise issue (CREATE TABLE IF NOT EXISTS × 10 + advisory-lock
- * migration transaction + CREATE INDEX IF NOT EXISTS × 20+ + trigger DDL
- * + reindex), each of which can queue behind concurrent PG work and hit
- * `statement_timeout`. Under a prod restart
+ * SELECT replaces the DDL round-trips its caller would otherwise issue —
+ * for `schema_hash`, CREATE TABLE IF NOT EXISTS × 10 + the advisory-lock
+ * migration transaction + trigger DDL; for `maintenance_hash`, every index
+ * build plus the search-vector reindex — each of which can queue behind
+ * concurrent PG work and hit `statement_timeout`. Under a prod restart
  * where the postgres instance is under load from other containers, the
  * old path can take the crashloop pattern seen at 2026-08-01
  * 17:19-17:22 PDT — 5 consecutive `Failed to create tables / Query read
@@ -442,7 +441,8 @@ export async function runMigrations(
  * Rolling deploys. If old and new versions coexist, an old boot with hash
  * X sees the newer marker Y → returns false → runs slow path → overwrites
  * to X. New boot sees X → returns false → runs slow path → overwrites to
- * Y. Flip-flopping is safe because the slow path is idempotent.
+ * Y. Flip-flopping is safe because both slow paths are idempotent — it costs
+ * a repeated tsvector recompute under `maintenance_hash`, not incorrectness.
  */
 export async function checkSchemaAtTarget(
   expectedHash: string,
