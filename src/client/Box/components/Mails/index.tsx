@@ -43,6 +43,7 @@ import {
   QueryCache,
   call,
   isSentMail,
+  canMarkSpam,
   processHtmlForViewer,
   useIsOnline,
   revalidateOnMountPolicy,
@@ -262,11 +263,7 @@ const RenderedMail = ({
   };
 
   const isSpamView = selectedCategory === Category.SpamMails;
-  // Spam is a received-mail concept only. A sent mail (in the Sent view, or a
-  // sent mail surfaced in the Saved/Search views) must not get the spam button:
-  // is_spam=TRUE + sent=TRUE is excluded from BOTH the Sent view and the Spam
-  // view, so it would orphan the mail with no un-mark path.
-  const canToggleSpam = !isSentMail(mail, domainName);
+  const canToggleSpam = canMarkSpam(mail, domainName, selectedCategory);
 
   const onClickSpam = () => {
     if (!isOnline) return;
