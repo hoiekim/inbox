@@ -42,37 +42,41 @@ describe("canMarkSpam", () => {
   const spoofed = makeMail("billing@hoie.kim");
   const outsider = makeMail("bad@spamtest.example");
 
-  const RECEIVED_ONLY = [Category.NewMails, Category.AllMails, Category.SpamMails];
-  const MIXED = [Category.SavedMails, Category.Search];
-
-  it("offers the toggle on a forged own-domain sender in every received-only view", () => {
-    expect(RECEIVED_ONLY.map((c) => canMarkSpam(spoofed, DOMAIN, c))).toEqual([
-      true,
-      true,
-      true,
-    ]);
+  it("offers the toggle on a forged own-domain sender in the spam view", () => {
+    expect(canMarkSpam(spoofed, DOMAIN, Category.SpamMails)).toBe(true);
   });
 
-  it("treats a forged own-domain sender the same as an outside sender there", () => {
-    for (const category of RECEIVED_ONLY) {
-      expect(canMarkSpam(spoofed, DOMAIN, category)).toBe(
-        canMarkSpam(outsider, DOMAIN, category)
-      );
-    }
+  it("withholds the toggle on an own-domain sender in every other view", () => {
+    const others = Object.values(Category).filter((c) => c !== Category.SpamMails);
+    expect(others.map((c) => canMarkSpam(spoofed, DOMAIN, c))).toEqual(
+      others.map(() => false)
+    );
   });
 
-  it("never offers the toggle in the Sent view", () => {
-    expect(canMarkSpam(outsider, DOMAIN, Category.SentMails)).toBe(false);
-    expect(canMarkSpam(spoofed, DOMAIN, Category.SentMails)).toBe(false);
+  it("offers the toggle on an outside sender in every view", () => {
+    const all = Object.values(Category);
+    expect(all.map((c) => canMarkSpam(outsider, DOMAIN, c))).toEqual(
+      all.map(() => true)
+    );
   });
 
-  it("falls back to the sender address in the views that match both sides", () => {
-    expect(MIXED.map((c) => canMarkSpam(spoofed, DOMAIN, c))).toEqual([false, false]);
-    expect(MIXED.map((c) => canMarkSpam(outsider, DOMAIN, c))).toEqual([true, true]);
+  it("pins an explicit answer for every category, so a new member is visible here", () => {
+    expect(
+      Object.fromEntries(
+        Object.values(Category).map((c) => [c, canMarkSpam(spoofed, DOMAIN, c)])
+      )
+    ).toEqual({
+      "New Mails": false,
+      "All Mails": false,
+      "Saved Mails": false,
+      "Sent Mails": false,
+      "Spam Mails": true,
+      Search: false,
+    });
   });
 
   it("offers the toggle when the sender address is missing", () => {
     expect(canMarkSpam(makeMail(undefined), DOMAIN, Category.AllMails)).toBe(true);
-    expect(canMarkSpam(makeMail(undefined), DOMAIN, Category.SavedMails)).toBe(true);
+    expect(canMarkSpam(makeMail(undefined), DOMAIN, Category.SpamMails)).toBe(true);
   });
 });
