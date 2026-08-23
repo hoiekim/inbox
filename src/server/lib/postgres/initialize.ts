@@ -12,6 +12,7 @@ import {
 } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
+import { withTimeout } from "../util";
 import {
   Table,
   Schema,
@@ -57,11 +58,10 @@ const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
 const MAINTENANCE_ALARM_TIMEOUT_MS = 5_000;
 
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
-// `searchVector*`. Extracted as module-scoped constants so their literal
-// text is what feeds `CURRENT_SCHEMA_HASH` below — the same string
-// `indexSpecs()` hands to the maintenance phase. That way any edit to a raw
-// block automatically changes the digest (no descriptive-sentinel discipline
-// required).
+// `searchVector*`. Extracted as a module-scoped constant so the literal text
+// `indexSpecs()` hands to the maintenance phase is the same string that feeds
+// `CURRENT_MAINTENANCE_HASH` below — any edit to it automatically changes the
+// digest, with no descriptive-sentinel discipline required.
 const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
   indexName: MAILS_SEARCH_INDEX_NAME,
   using: "gin",
@@ -96,24 +96,36 @@ export const maintenanceWork = (): MaintenanceWork => ({
   ],
 });
 
-// Digest of every input the slow-path DDL consumes. Any code change to a
-// table schema, its indexes, its constraints, `searchVectorDdl()`,
-// `searchVectorReindexSql()`, or the raw DDL constants above changes this
-// digest — the fast path only short-circuits when the DB reflects THIS
-// exact code's DDL, so trigger-body-only and index-only PRs (which a
-// name-check would silently miss) correctly fall through to the slow path.
+const digest = (parts: string[]): string =>
+  createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+
+// Digest of every input the slow-path DDL consumes, and of nothing else. Any
+// code change to a table schema, its constraints, or `searchVectorDdl()`
+// changes it — the fast path only short-circuits when the DB reflects THIS
+// exact code's DDL, so a trigger-body-only PR (which a name-check would
+// silently miss) correctly falls through to the slow path.
+//
+// The maintenance inputs are deliberately absent. This marker gates a block
+// that throws and exits the process, so folding an index or a tuning constant
+// into it would send every container back through that block for a change it
+// does not describe.
 export const CURRENT_SCHEMA_HASH: string = ((): string => {
   const parts: string[] = [];
   for (const t of tables) {
     parts.push(`t:${t.name}`);
     parts.push(JSON.stringify(t.schema));
-    parts.push(JSON.stringify(t.indexes));
     parts.push(JSON.stringify(t.constraints ?? []));
   }
   parts.push(...searchVectorDdl());
-  parts.push(searchVectorReindexSql());
-  parts.push(IDX_MAILS_SEARCH_SQL);
-  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+  return digest(parts);
+})();
+
+// The same discipline for the row-scaled phase: every index statement it
+// issues plus the reindex it drains, so an index-only or chunk-size-only
+// change re-runs that phase alone.
+export const CURRENT_MAINTENANCE_HASH: string = ((): string => {
+  const { indexes, statements } = maintenanceWork();
+  return digest([...indexes, ...statements].map((s) => `${s.name}:${s.sql}`));
 })();
 
 export const postgresIsAvailable = async (): Promise<void> => {
@@ -214,14 +226,14 @@ export const initializePostgres = async (): Promise<void> => {
  */
 export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
   try {
-    if (await checkSchemaAtTarget(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY)) {
+    if (await checkSchemaAtTarget(CURRENT_MAINTENANCE_HASH, MAINTENANCE_MARKER_KEY)) {
       logger.info("[Maintenance] Already at target — skipping.");
       return;
     }
 
     const result = await runBootMaintenance(maintenanceWork(), signal);
     if (result === "complete") {
-      await writeSchemaMarker(CURRENT_SCHEMA_HASH, MAINTENANCE_MARKER_KEY);
+      await writeSchemaMarker(CURRENT_MAINTENANCE_HASH, MAINTENANCE_MARKER_KEY);
       return;
     }
     // `skipped` means another instance is doing the work, or shutdown
@@ -238,10 +250,10 @@ export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
     // the graceful-shutdown path, and `sendAlarm`'s fetch carries no timeout of
     // its own, so a wedged webhook would hold the stop open until compose's
     // grace period expired and SIGKILL replaced the clean exit.
-    await Promise.race([
+    await withTimeout(
       sendAlarm("Boot Maintenance Incomplete", message).catch(() => undefined),
-      new Promise<void>((resolve) => setTimeout(resolve, MAINTENANCE_ALARM_TIMEOUT_MS)),
-    ]);
+      MAINTENANCE_ALARM_TIMEOUT_MS
+    );
   } catch (error: unknown) {
     logger.error("[Maintenance] Phase failed unexpectedly.", {}, error);
   }

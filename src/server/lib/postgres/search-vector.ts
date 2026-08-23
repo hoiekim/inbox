@@ -53,7 +53,15 @@ export const searchVectorDdl = (): string[] => [
  * Rows rewritten per execution of `searchVectorReindexSql`. An UPDATE holds a
  * row lock on everything it rewrites until it commits, so an unbounded rewrite
  * of `mails` would block concurrent flag writes past the pool's 30s
- * `statement_timeout`. One chunk commits far inside it.
+ * `statement_timeout`.
+ *
+ * The bound is on the lock set, not on duration: `LIMIT` inside the subquery
+ * forces it to materialize before the outer UPDATE takes a single row lock, so
+ * at most this many rows are ever locked at once however long the scan ran. The
+ * scan itself is not bounded by it — the predicate is not indexable, so one
+ * execution reads until it collects a full chunk and grows with the table. That
+ * is why the drain runs on the maintenance session's own budget rather than the
+ * pool's.
  */
 export const SEARCH_VECTOR_REINDEX_CHUNK_ROWS = 1000;
 

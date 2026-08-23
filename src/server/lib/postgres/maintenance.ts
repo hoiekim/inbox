@@ -52,10 +52,11 @@ export interface MaintenanceWork {
 }
 
 /**
- * Per-statement budget. Generous enough that reaching it means the statement
- * is pathological rather than merely large, but still finite: an unbounded
- * statement on a wedged session would hold the advisory lock for the lifetime
- * of the process.
+ * Per-statement budget, and the deadline a drain loop measures itself against.
+ * Generous enough that reaching it means the work is pathological rather than
+ * merely large, but still finite: an unbounded statement — or an unbounded
+ * number of bounded ones — on a wedged session would hold the advisory lock for
+ * the lifetime of the process.
  */
 export const MAINTENANCE_TIMEOUT_MS = 10 * 60_000;
 
@@ -241,11 +242,31 @@ export const runBootMaintenance = async (
         return "skipped";
       }
       if (unresolved.has(statement.name)) continue;
+      // The budget bounds one execution, and a drain issues many — so the loop
+      // carries its own deadline, or a backlog that live writes keep replenishing
+      // would hold the lock and a pooled connection for the life of the process.
+      // Stopping early costs nothing: every rewritten chunk is committed, so the
+      // next boot resumes from what is still stale.
+      const deadline = Date.now() + MAINTENANCE_TIMEOUT_MS;
+      let drained = false;
       try {
         do {
           const { rowCount } = await runLongQuery(client, statement.sql);
-          if (!statement.drain || !rowCount) break;
-        } while (!signal?.aborted);
+          if (!statement.drain || !rowCount) {
+            drained = true;
+            break;
+          }
+        } while (!signal?.aborted && Date.now() < deadline);
+        if (!drained) {
+          // An abort is a shutdown, reported by the checks below; only the
+          // deadline is a condition nothing else surfaces.
+          if (!signal?.aborted) {
+            logger.warn("[Maintenance] Drain budget exhausted before the backlog cleared.", {
+              statement: statement.name,
+            });
+          }
+          complete = false;
+        }
       } catch (error: unknown) {
         // A statement we cancelled ourselves is a shutdown, not a fault — and
         // it may be the last one, so the loop's own check would never see it.
@@ -258,7 +279,10 @@ export const runBootMaintenance = async (
         logger.error("[Maintenance] Statement failed.", { statement: statement.name }, error);
       }
     }
-    if (signal?.aborted) return "skipped";
+    // Only when something is actually outstanding: an abort landing after the
+    // last statement succeeded would otherwise withhold the marker and send the
+    // next boot back through every build to re-establish what already holds.
+    if (signal?.aborted && !complete) return "skipped";
     if (complete) logger.info("[Maintenance] Complete — schema is at target.");
     return complete ? "complete" : "incomplete";
   } catch (error: unknown) {

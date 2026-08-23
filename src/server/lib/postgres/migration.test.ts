@@ -212,16 +212,19 @@ describe("bootMaintenance — marker gating", () => {
   };
 
   it("writes the maintenance marker once every statement lands", async () => {
-    const { bootMaintenance, CURRENT_SCHEMA_HASH } = await import("./initialize");
+    const { bootMaintenance, CURRENT_MAINTENANCE_HASH, CURRENT_SCHEMA_HASH } =
+      await import("./initialize");
 
     const seen = collect();
     await bootMaintenance();
 
     const markerWrites = seen.filter(({ sql }) => sql.includes("INSERT INTO schema_meta"));
-    // Under its own key — never the schema one, which gates the fatal DDL.
+    // Under its own key, and over its own inputs — the schema digest gates a
+    // block that throws and exits, so a chunk-size edit must not invalidate it.
     expect(markerWrites.map(({ values }) => values)).toEqual([
-      ["maintenance_hash", CURRENT_SCHEMA_HASH],
+      ["maintenance_hash", CURRENT_MAINTENANCE_HASH],
     ]);
+    expect(CURRENT_MAINTENANCE_HASH).not.toBe(CURRENT_SCHEMA_HASH);
     // And it reads back under that key too: reading `schema_hash` here would
     // match the marker `initializePostgres` just wrote and skip the whole
     // phase after every DDL deploy — no index built, no reindex run, and the
@@ -274,14 +277,14 @@ describe("bootMaintenance — marker gating", () => {
   // Without its own marker every restart would re-run a full-table tsvector
   // recompute that changes nothing.
   it("skips the whole phase when the maintenance marker is already at target", async () => {
-    const { bootMaintenance, CURRENT_SCHEMA_HASH } = await import("./initialize");
+    const { bootMaintenance, CURRENT_MAINTENANCE_HASH } = await import("./initialize");
 
     const seen: string[] = [];
     mockQuery.mockImplementation(async (sql: string) => {
       const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
       seen.push(text);
       if (text.includes("SELECT value FROM schema_meta")) {
-        return { rows: [{ value: CURRENT_SCHEMA_HASH }], rowCount: 1 };
+        return { rows: [{ value: CURRENT_MAINTENANCE_HASH }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     });

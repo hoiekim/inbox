@@ -8,7 +8,7 @@
  *
  * Same FakePool pattern the other postgres tests use.
  */
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll, setSystemTime } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 
 const mockQuery = mock(
@@ -16,10 +16,14 @@ const mockQuery = mock(
     ({ rows: [] as unknown[], rowCount: 0 as number | null })
 );
 
+const checkOut = async () => ({ query: mockQuery, release: () => {} });
+/** Swapped per-test so the connection-acquire failure paths can be driven. */
+let connect = checkOut;
+
 class FakePool {
   query = mockQuery;
   end = async () => {};
-  connect = async () => ({ query: mockQuery, release: () => {} });
+  connect = () => connect();
   on() {}
 }
 
@@ -31,7 +35,7 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
-const { runBootMaintenance } = await import("./maintenance");
+const { runBootMaintenance, MAINTENANCE_TIMEOUT_MS } = await import("./maintenance");
 const { resetPool } = await import("./client");
 
 beforeAll(() => {
@@ -40,6 +44,8 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  connect = checkOut;
+  setSystemTime();
   restoreLeaves();
   resetPool();
 });
@@ -235,6 +241,48 @@ describe("runBootMaintenance — draining statements", () => {
 
   // Shutdown lands between chunks, so nothing throws and the loop's own
   // per-statement check never runs again — the drain has to watch the signal.
+  // The per-statement budget bounds one execution; a drain issues one per
+  // chunk. Without a deadline of its own, a backlog that live writes keep
+  // replenishing — a rolling deploy re-installing the previous trigger body is
+  // the documented case — has no exit at all, and holds the advisory lock and a
+  // pooled connection for as long as it lasts.
+  it("stops draining once its own deadline passes, and withholds the marker", async () => {
+    const start = new Date("2026-01-01T00:00:00Z").getTime();
+    setSystemTime(new Date(start));
+    let issued = 0;
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      if (text === STATEMENTS[0].sql) {
+        issued++;
+        // Each chunk burns a tenth of the budget, so the loop runs out of
+        // deadline long before the backlog it is never told about clears.
+        setSystemTime(new Date(start + issued * (MAINTENANCE_TIMEOUT_MS / 10)));
+        return { rows: [], rowCount: 1000 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    try {
+      // Not "complete": the marker must stay withheld or the next boot
+      // fast-paths past a backlog that is still there.
+      expect(await runBootMaintenance(drainWork(true))).toBe("incomplete");
+      expect(issued).toBe(10);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  // A statement that reports a full chunk and then nothing is finished, and the
+  // deadline must not be read as an outstanding-work signal on that run.
+  it("still reports complete when the backlog clears inside the deadline", async () => {
+    const issued = arrangeChunks(2);
+    expect(await runBootMaintenance(drainWork(true))).toBe("complete");
+    expect(issued()).toBe(3);
+  });
+
   it("stops draining, and reports skipped, once aborted", async () => {
     const abort = new AbortController();
     let issued = 0;
@@ -359,6 +407,78 @@ describe("runBootMaintenance — shutdown cancellation", () => {
       "DROP INDEX CONCURRENTLY IF EXISTS idx_alpha",
     ]);
     expect(seen.filter((s) => s.startsWith("CREATE INDEX"))).toEqual([]);
+  });
+
+  // `pool.end()` on the shutdown path rejects every pending acquire, so a phase
+  // that started just before SIGTERM fails here. Reporting that as "incomplete"
+  // pages on an ordinary graceful stop.
+  it("reports skipped, not incomplete, when the abort lands during connect", async () => {
+    const abort = new AbortController();
+    connect = async () => {
+      abort.abort();
+      throw new Error("Cannot use a pool after calling end on the pool");
+    };
+    try {
+      expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+    } finally {
+      connect = checkOut;
+    }
+    // And a genuine acquire failure still reports, or a wedged pool goes unseen.
+    connect = async () => {
+      throw new Error("timeout exceeded when trying to connect");
+    };
+    try {
+      expect(await runBootMaintenance(work())).toBe("incomplete");
+    } finally {
+      connect = checkOut;
+    }
+  });
+
+  // Same for the session setup that runs before the first statement: the
+  // cancelled `SET statement_timeout` throws past the per-statement catch,
+  // straight into the outer one.
+  it("reports skipped, not incomplete, when the abort lands during session setup", async () => {
+    const abort = new AbortController();
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.startsWith("SET statement_timeout")) {
+        abort.abort();
+        throw new Error("canceling statement due to user request");
+      }
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("skipped");
+
+    // Unaborted, the same failure is a real one.
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.startsWith("SET statement_timeout")) throw new Error("boom");
+      return { rows: [], rowCount: 0 };
+    });
+    expect(await runBootMaintenance(work())).toBe("incomplete");
+  });
+
+  // An abort landing after the last statement succeeded is a completed run.
+  // Discarding it would re-issue every build plus a full-table predicate scan
+  // on the next boot to re-establish what already holds.
+  it("keeps a run that finished before the abort, marker and all", async () => {
+    const abort = new AbortController();
+    mockQuery.mockImplementation(async (sql: string) => {
+      const text = typeof sql === "string" ? sql : (sql as { text: string }).text;
+      if (text.includes("pg_try_advisory_lock")) return { rows: [{ locked: true }], rowCount: 1 };
+      if (text.includes("pg_backend_pid")) return { rows: [{ pid: 4242 }], rowCount: 1 };
+      if (text.includes("FROM pg_index")) return { rows: [], rowCount: 0 };
+      // Shutdown lands on the last statement, after it has already landed.
+      if (text === STATEMENTS[0].sql) abort.abort();
+      return { rows: [], rowCount: 0 };
+    });
+
+    expect(await runBootMaintenance(work(), abort.signal)).toBe("complete");
   });
 
   it("does not connect at all when the signal is already aborted", async () => {

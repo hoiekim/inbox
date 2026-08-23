@@ -146,8 +146,11 @@ describe("initialize — index specs", () => {
 
   // Without a bound, the UPDATE locks every row it rewrites until it commits,
   // and concurrent flag writes queue behind it past the pool's 30s timeout.
+  // Matched as a whole value, not a substring: `LIMIT 1000` is a substring of
+  // `LIMIT 10000`, so a widened bound — the edit that would actually restore
+  // the lock-set problem — reads as a pass under `toContain`.
   it("bounds how many rows one reindex execution rewrites", () => {
     const [reindex] = maintenanceWork().statements;
-    expect(reindex.sql).toContain(`LIMIT ${SEARCH_VECTOR_REINDEX_CHUNK_ROWS}`);
+    expect(reindex.sql.match(/LIMIT (\d+)/)?.[1]).toBe(String(SEARCH_VECTOR_REINDEX_CHUNK_ROWS));
   });
 });
