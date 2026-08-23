@@ -20,8 +20,8 @@ export const isSentMail = (
  * views only Search, which filters neither, still finds it.
  *
  * The sender address cannot decide this. Inbound SMTP does not authenticate
- * `From`, so a remote sender can forge the user's own domain, and the header
- * payload of a forged inbound mail is identical to that of a genuine
+ * `From`, so a remote sender can forge the user's own domain, and a forged
+ * inbound mail is then indistinguishable *by sender address* from a genuine
  * self-addressed copy.
  *
  * The spam view needs no answer either way: there the action un-marks, which
