@@ -58,10 +58,7 @@ const MAINTENANCE_MARKER_KEY: MarkerKey = "maintenance_hash";
 const MAINTENANCE_ALARM_TIMEOUT_MS = 5_000;
 
 // Raw DDL that isn't captured by `table.schema` / `table.indexes` /
-// `searchVector*`. Extracted as a module-scoped constant so the literal text
-// `indexSpecs()` hands to the maintenance phase is the same string that feeds
-// `CURRENT_MAINTENANCE_HASH` below — any edit to it automatically changes the
-// digest, with no descriptive-sentinel discipline required.
+// `searchVector*`.
 const IDX_MAILS_SEARCH_SQL = buildCreateIndex("mails", "search_vector", {
   indexName: MAILS_SEARCH_INDEX_NAME,
   using: "gin",
@@ -125,7 +122,9 @@ export const CURRENT_SCHEMA_HASH: string = ((): string => {
 // change re-runs that phase alone.
 export const CURRENT_MAINTENANCE_HASH: string = ((): string => {
   const { indexes, statements } = maintenanceWork();
-  return digest([...indexes, ...statements].map((s) => `${s.name}:${s.sql}`));
+  return digest(
+    [...indexes, ...statements].map((s) => `${s.name}:${s.sql}:${s.drain ?? false}`),
+  );
 })();
 
 export const postgresIsAvailable = async (): Promise<void> => {

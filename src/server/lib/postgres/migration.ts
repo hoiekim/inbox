@@ -428,10 +428,10 @@ export async function runMigrations(
  * `expectedHash`. Returns `false` on any mismatch, missing marker, or
  * query error — the caller falls back to the authoritative slow path.
  *
- * Correctness. `expectedHash` is computed at import time from every input
- * the slow path emits DDL for: table schemas + indexes + constraints,
- * `searchVectorDdl()`, `searchVectorReindexSql()`, and the literal text of
- * each raw-DDL const in `initialize.ts` (currently `IDX_MAILS_SEARCH_SQL`).
+ * Correctness. Each marker's `expectedHash` is computed at import time from
+ * the inputs its own phase emits DDL for — `schema_hash` from table schemas
+ * and constraints plus `searchVectorDdl()`, `maintenance_hash` from every
+ * index statement plus `searchVectorReindexSql()` and its drain flag.
  * Because those same const strings are what the slow path also issues via
  * `pool.query`, any edit to a raw block automatically drifts the digest —
  * including trigger-body-only edits and index-only PRs that a name-check
