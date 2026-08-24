@@ -135,10 +135,9 @@ const mailSchema = {
   // FETCH uses). The lazy-populate fallback in `fetch-helpers.ts` stays as
   // a safety net for pre-migration rows.
   [RFC822_SIZE]: "BIGINT",
-  // Nullable — auto-migration stamps existing rows with NULL; new rows
-  // populate at INSERT time from the split of `text` / `html` (see
-  // saveMail), so post-migration only pre-existing rows sit NULL until
-  // their first BODYSTRUCTURE observation backfills them.
+  // Legacy, always NULL on new rows — nothing writes or reads them. They
+  // counted decoded lines, which is not what RFC 3501 §7.4.2's `lines`
+  // describes. Kept only until the columns are dropped.
   [TEXT_LINE_COUNT]: "INTEGER",
   [HTML_LINE_COUNT]: "INTEGER",
   [UPDATED]: "TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
