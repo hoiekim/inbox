@@ -22,7 +22,6 @@ import {
   utilityFolder,
   canonicalMailbox,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
-  SENT_MESSAGES_FOLDER,
 } from "./util";
 import { MailboxEntry, Store } from "./store";
 import { StatusItem } from "./types";
@@ -295,31 +294,51 @@ export async function statusMailbox(
 // LIST / LSUB helpers
 // ---------------------------------------------------------------------------
 
-export function getMailboxAttributes(box: string, allBoxes: string[]): string {
+/**
+ * Every proper ancestor path of the given names — `Projects/Work/Q3`
+ * contributes `Projects` and `Projects/Work`. Built in one pass
+ * (O(names × depth)) rather than re-scanning the set per candidate, which
+ * would be quadratic on an account with thousands of per-address boxes, and
+ * keyed on path segments so a `Project` that is merely a string prefix of
+ * `Projects/Work` is not treated as its parent.
+ */
+export const collectAncestors = (names: string[]): Set<string> => {
+  const ancestors = new Set<string>();
+  names.forEach((name) => {
+    const parts = name.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      ancestors.add(parts.slice(0, i).join("/"));
+    }
+  });
+  return ancestors;
+};
+
+/**
+ * Attributes for one LIST/LSUB row. `parentPaths` is the ancestor set of the
+ * whole listable mailbox set — build it once per command with
+ * `collectAncestors`, never per row, or the response goes quadratic on an
+ * account carrying thousands of per-address boxes.
+ *
+ * ```ts
+ * const parentPaths = collectAncestors(boxes);
+ * boxes.forEach((box) => write(`* LIST (${getMailboxAttributes(box, parentPaths)}) …`));
+ * ```
+ */
+export function getMailboxAttributes(box: string, parentPaths: ReadonlySet<string>): string {
+  // RFC 5258 §3: \HasChildren / \HasNoChildren is what a client keys its
+  // expand affordance off, so it has to follow the names actually listed.
+  const hierarchy = parentPaths.has(box) ? "\\HasChildren" : "\\HasNoChildren";
   // RFC 6154 §2: the special-use attribute travels alongside the ordinary ones
   // in a plain LIST response, which is how a client maps a role to a box name
   // without guessing at the name.
   const utility = utilityFolder(box);
   if (utility) {
-    // The CREATE guard only refuses the utility name itself, so `Drafts/sub`
-    // is a legal user box — scan for children like every other branch rather
-    // than asserting \HasNoChildren and contradicting the same LIST response.
-    const hasChildren = allBoxes.some((b) => b.startsWith(`${box}/`));
-    return `${utility.specialUse} ${hasChildren ? "\\HasChildren" : "\\HasNoChildren"}`;
+    return `${utility.specialUse} ${hierarchy}`;
   }
-  if (isAccountsFolder(box)) {
-    return "\\HasChildren \\Noselect";
+  if (isAccountsFolder(box) || isSentMessagesAccountsFolder(box)) {
+    return `${hierarchy} \\Noselect`;
   }
-  if (isSentMessagesAccountsFolder(box)) {
-    return "\\HasChildren \\Noselect";
-  }
-  if (box === SENT_MESSAGES_FOLDER) {
-    const hasSentAccountChildren = allBoxes.some((b) =>
-      b.startsWith(`${SENT_MESSAGES_ACCOUNTS_FOLDER}/`)
-    );
-    return hasSentAccountChildren ? "\\HasChildren" : "\\HasNoChildren";
-  }
-  return "\\HasNoChildren";
+  return hierarchy;
 }
 
 /**
@@ -370,12 +389,13 @@ export async function listMailboxes(
       return;
     }
     const boxes = await store.listMailboxes();
+    // Ancestors come from the unfiltered set: a child the pattern excludes
+    // still makes its parent \HasChildren.
+    const parentPaths = collectAncestors(boxes);
     boxes
       .filter((box) => matchesListPattern(reference, pattern, box))
       .forEach((box) => {
-        // Attributes are computed against the full set so \HasChildren stays
-        // correct even when the child rows are filtered out of the response.
-        const attrs = getMailboxAttributes(box, boxes);
+        const attrs = getMailboxAttributes(box, parentPaths);
         write(`* LIST (${attrs}) "/" "${box}"\r\n`);
       });
     write(`${tag} OK LIST completed\r\n`);
@@ -384,20 +404,6 @@ export async function listMailboxes(
     write(`${tag} NO LIST failed\r\n`);
   }
 }
-
-const collectAncestors = (names: string[]): Set<string> => {
-  const ancestors = new Set<string>();
-  names.forEach((name) => {
-    const parts = name.split("/");
-    for (let i = 1; i < parts.length; i++) {
-      ancestors.add(parts.slice(0, i).join("/"));
-    }
-  });
-  return ancestors;
-};
-
-const withHierarchyAttribute = (attrs: string, hasChildren: boolean): string =>
-  hasChildren ? attrs.replace("\\HasNoChildren", "\\HasChildren") : attrs;
 
 export async function listSubscribedMailboxes(
   tag: string,
@@ -442,10 +448,7 @@ export async function listSubscribedMailboxes(
         // An unsubscribed name is in this response only because it has a
         // subscribed descendant, hence \HasChildren unconditionally.
         const attrs = entry.subscribed
-          ? withHierarchyAttribute(
-              getMailboxAttributes(entry.name, allBoxes),
-              parentPaths.has(entry.name)
-            )
+          ? getMailboxAttributes(entry.name, parentPaths)
           : "\\HasChildren \\Noselect";
         write(`* LSUB (${attrs}) "/" "${entry.name}"\r\n`);
       });

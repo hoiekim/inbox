@@ -79,8 +79,7 @@ describe("LSUB honours the subscribed flag (#688)", () => {
   });
 
   it("takes 'Sent Messages' attributes from the full set even when its children are filtered out", async () => {
-    // getMailboxAttributes derives \HasChildren for "Sent Messages" by looking
-    // for a "Sent Messages/accounts/" entry. That lookup must see the full
+    // The ancestor set behind \HasChildren has to be built from the full
     // listable set, not the subscribed subset — otherwise dropping the
     // unsubscribed children would flip the parent to \HasNoChildren and a
     // client would prune a branch it can still SELECT.
@@ -167,6 +166,9 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     });
 
     it("reports a SUBSCRIBED parent \\HasChildren too, not \\HasNoChildren", async () => {
+      // A "%"-walker honouring \HasNoChildren would descend into the
+      // unsubscribed `Projects` above but not into a subscribed one, making
+      // the subscribed subtree the unreachable half.
       const lines = await emit(listSubscribedMailboxes, "", "%", [
         { name: "Projects", subscribed: true },
         { name: "Projects/Work", subscribed: true },
@@ -214,5 +216,34 @@ describe("LSUB honours the subscribed flag (#688)", () => {
     ]);
     expect(namesOf(lines)).toEqual(["Projects/Work"]);
     expect(lines).toContainEqual('* LSUB (\\HasChildren \\Noselect) "/" "Projects/Work"\r\n');
+  });
+});
+
+describe("LSUB — the attribute and the expansion agree", () => {
+  // LSUB already returns an unsubscribed name that sits between the root and a
+  // subscribed descendant, marked \Noselect (RFC 3501 §6.3.9), so a name whose
+  // parent is not itself a mailbox still reaches its child here. LIST has no
+  // such rule, which is why the two answer differently for such a name.
+  const boxes: MailboxEntry[] = [
+    { name: "INBOX", subscribed: true },
+    { name: "inbox/foo", subscribed: true },
+  ];
+
+  // TODO: the response below carries two rows for what RFC 3501 §5.1 calls one
+  // mailbox — `INBOX` selectable and `inbox` \Noselect. That is a defect in
+  // its own right, and the fix belongs where the aliasing name is accepted;
+  // this pins current behavior so the change is visible when it lands, not
+  // because the shape is right.
+  it("keeps its own two spellings self-consistent, wrong as the pair is", async () => {
+    const lines = await emit(listSubscribedMailboxes, "", "%", boxes);
+    expect(lines).toContainEqual('* LSUB (\\HasNoChildren) "/" "INBOX"\r\n');
+    expect(lines).toContainEqual('* LSUB (\\HasChildren \\Noselect) "/" "inbox"\r\n');
+  });
+
+  it("expands the name it synthesized, not the one it did not claim", async () => {
+    expect(namesOf(await emit(listSubscribedMailboxes, "", "inbox/%", boxes))).toEqual([
+      "inbox/foo",
+    ]);
+    expect(namesOf(await emit(listSubscribedMailboxes, "", "INBOX/%", boxes))).toEqual([]);
   });
 });

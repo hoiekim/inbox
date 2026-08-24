@@ -12,6 +12,7 @@ import {
   deleteMailbox,
   renameMailbox,
   getMailboxAttributes,
+  collectAncestors,
 } from "./mailbox-ops";
 import { Store } from "./store";
 import type { SignedUser } from "common";
@@ -87,18 +88,40 @@ describe("canonicalMailbox", () => {
 });
 
 describe("LIST attributes", () => {
+  const attributesOf = (box: string, boxes: string[]): string =>
+    getMailboxAttributes(box, collectAncestors(boxes));
+
   it("reports the RFC 6154 special-use attribute", () => {
-    expect(getMailboxAttributes("Drafts", NAMES)).toBe("\\Drafts \\HasNoChildren");
-    expect(getMailboxAttributes("Junk", NAMES)).toBe("\\Junk \\HasNoChildren");
-    expect(getMailboxAttributes("Starred", NAMES)).toBe("\\Flagged \\HasNoChildren");
-    expect(getMailboxAttributes("Trash", NAMES)).toBe("\\Trash \\HasNoChildren");
+    expect(attributesOf("Drafts", NAMES)).toBe("\\Drafts \\HasNoChildren");
+    expect(attributesOf("Junk", NAMES)).toBe("\\Junk \\HasNoChildren");
+    // #725 mapped-utility variants — RFC 6154 role discovery works only if
+    // LIST advertises the attribute for these too. Apple Mail's "Choose
+    // Mailbox Behaviors" screen keys off `\Flagged` / `\Trash` when the
+    // user picks which server folder is Starred / Trash.
+    expect(attributesOf("Starred", NAMES)).toBe("\\Flagged \\HasNoChildren");
+    expect(attributesOf("Trash", NAMES)).toBe("\\Trash \\HasNoChildren");
+  });
+
+  it("pairs the special-use attribute with \\HasChildren once a child exists", () => {
+    expect(attributesOf("Drafts", [...NAMES, "Drafts/sub"])).toBe(
+      "\\Drafts \\HasChildren"
+    );
   });
 
   it("leaves every other box's attributes alone", () => {
-    expect(getMailboxAttributes("Archive", ["Archive"])).toBe("\\HasNoChildren");
-    expect(getMailboxAttributes("INBOX/accounts", ["INBOX/accounts"])).toBe(
+    expect(attributesOf("Archive", ["Archive"])).toBe("\\HasNoChildren");
+    expect(attributesOf("INBOX/accounts", ["INBOX/accounts", "INBOX/accounts/work"])).toBe(
       "\\HasChildren \\Noselect"
     );
+  });
+
+  it("reports a childless accounts parent \\HasNoChildren, still \\Noselect", () => {
+    expect(attributesOf("INBOX/accounts", ["INBOX", "INBOX/accounts"])).toBe(
+      "\\HasNoChildren \\Noselect"
+    );
+    expect(
+      attributesOf("Sent Messages/accounts", ["Sent Messages", "Sent Messages/accounts"])
+    ).toBe("\\HasNoChildren \\Noselect");
   });
 });
 
