@@ -996,21 +996,21 @@ describe("IMAP util", () => {
     });
   });
 
-  // #762 (backslash escaping) + #767 (CR/LF). Both are desync bugs, not
-  // rendering bugs: a mis-escaped value makes the CLIENT's parser lose the
-  // string boundary and mis-frame every later token on the line. So these
-  // tests parse the emitted response with an independent RFC 3501 reader and
-  // assert the ORIGINAL values come back out — asserting the escaped bytes
-  // directly would just restate the implementation.
-  describe("quoted-string encoding (#762, #767)", () => {
+  // Mis-escaped backslashes and raw CR/LF are both desync bugs, not rendering
+  // bugs: either one makes the CLIENT's parser lose the string boundary and
+  // mis-frame every later token on the line. So these tests parse the emitted
+  // response with an independent RFC 3501 reader and assert the ORIGINAL
+  // values come back out — asserting the escaped bytes directly would just
+  // restate the implementation.
+  describe("quoted-string encoding", () => {
     type Token = string | null | Token[];
 
     /**
      * Minimal RFC 3501 §9 response reader: parenthesized lists, quoted
      * strings (with `\` escapes), NIL, and bare atoms. Throws on anything
      * the grammar forbids — an unterminated string, or a raw CR/LF inside a
-     * quoted string — which is exactly the client-side failure both issues
-     * describe.
+     * quoted string — which is exactly the client-side failure both encoding
+     * rules exist to prevent.
      */
     const parse = (input: string): Token[] => {
       let i = 0;
@@ -1108,7 +1108,7 @@ describe("IMAP util", () => {
       });
     });
 
-    describe("backslash escaping (#762)", () => {
+    describe("backslash escaping", () => {
       it("keeps the response parseable when a subject ends in a backslash", () => {
         const subject = "Re: C:\\Users\\";
         const envelope = parseEnvelope({ subject, messageId: "<id@example>" });
@@ -1150,7 +1150,7 @@ describe("IMAP util", () => {
       });
     });
 
-    describe("CR/LF exclusion (#767)", () => {
+    describe("CR/LF exclusion", () => {
       it("emits one line for a display name containing a line break", () => {
         const mail = {
           subject: "hi",

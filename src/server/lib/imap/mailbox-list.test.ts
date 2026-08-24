@@ -194,12 +194,12 @@ describe("listMailboxes — the attribute and the expansion agree", () => {
 });
 
 // A mailbox name is a user-supplied string that reaches the wire as a quoted
-// string, exactly like the ENVELOPE values in #762 / #767 — and `createMailbox`
-// validates no characters, so `CREATE "a\"b"` stores a name carrying a
-// quoted-special. Emitting it raw desyncs LIST/LSUB for the whole session,
-// which is worse than the per-message ENVELOPE case: the client cannot list
-// mailboxes at all until the row is gone.
-describe("LIST / LSUB quote mailbox names (#762 sibling)", () => {
+// string, exactly like the ENVELOPE values — and `createMailbox` validates no
+// characters, so `CREATE "a\"b"` stores a name carrying a quoted-special.
+// Emitting it raw desyncs LIST/LSUB for the whole session, which is worse than
+// the per-message ENVELOPE case: the client cannot list mailboxes at all until
+// the row is gone.
+describe("LIST / LSUB quote mailbox names", () => {
   const HOSTILE = ['a"b', "back\\slash", "tail\\"];
 
   const rawLines = async (

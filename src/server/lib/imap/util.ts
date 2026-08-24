@@ -118,18 +118,17 @@ export const boundaryToken = (stableId: string): string =>
  *    escaping at all for a value that *ends* in a backslash: the emitted `\"`
  *    reads as an escaped quote, so the client's parser never terminates the
  *    string and re-terminates on some later opening quote — every remaining
- *    token in that untagged response is mis-framed (#762).
+ *    token in that untagged response is mis-framed.
  * 2. CR and LF cannot appear at all, escaped or not. They split the untagged
  *    response into two lines where the client expects one, so the remainder
- *    arrives as an unparseable line and the connection desyncs (#767). They
+ *    arrives as an unparseable line and the connection desyncs. They
  *    carry no display meaning here, so each run collapses to a single space.
  *    NUL is outside `CHAR` for the same grammar reason and goes with them.
  *
  * The inputs are attacker-controlled: `receive.ts` stores `message_id`,
  * `subject`, and address display names verbatim from the inbound headers, so
  * an external sender picks these bytes. Route every stored string through
- * here rather than escaping at the call site — partial escaping at four sites
- * is what produced both bugs.
+ * here rather than escaping at the call site.
  *
  * Scope note: this enforces the framing rules — the ones whose violation
  * desyncs the connection. It deliberately passes 8-bit octets through, even
