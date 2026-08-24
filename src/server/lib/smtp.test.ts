@@ -64,7 +64,7 @@ const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockRetu
 // `DISCORD_ALARM_WEBHOOK` is unset (the early return in alarm.ts:15).
 
 // Import the actual SMTP handlers after mocks are set up
-import { onAuth, onData } from "./smtp";
+import { onAuth, onData, resolveOutgoingSender } from "./smtp";
 
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
@@ -493,6 +493,150 @@ describe("onData handler", () => {
     expect(mailData.senderFullName).toBe("admin");
   });
 
+  it("sends as the same-domain recipient named in the submission", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }, { address: "sales@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<dyn@example.com>",
+        from: {
+          text: "Admin <admin@test.com>",
+          value: [{ address: "admin@test.com", name: "Admin" }]
+        },
+        subject: "Hello",
+        html: "<p>body</p>",
+        text: "body",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    const mailData = mockSendMail.mock.calls[0][1] as {
+      sender: string;
+      to: string;
+    };
+    expect(mailData.sender).toBe("sales");
+    expect(mailData.to).toBe("recipient@other.com");
+    expect((mailData as { senderFullName: string }).senderFullName).toBe("Admin");
+  });
+
+  it("leaves a To recipient of the user's domain addressed", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<addressed@example.com>",
+        from: {
+          text: "Admin <admin@test.com>",
+          value: [{ address: "admin@test.com", name: "Admin" }]
+        },
+        to: {
+          text: "bob@test.com, friend@other.com",
+          value: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+        },
+        subject: "Hello",
+        html: "<p>body</p>",
+        text: "body",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    const mailData = mockSendMail.mock.calls[0][1] as {
+      sender: string;
+      to: string;
+    };
+    expect(mailData.sender).toBe("admin");
+    expect(mailData.to).toBe("bob@test.com,friend@other.com");
+  });
+
+  it("reads To recipients out of an RFC 5322 address group", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    mockSimpleParser.mockImplementation(() =>
+      Promise.resolve({
+        messageId: "<group@example.com>",
+        from: {
+          text: "Admin <admin@test.com>",
+          value: [{ address: "admin@test.com", name: "Admin" }]
+        },
+        to: {
+          text: "Team: bob@test.com, friend@other.com;",
+          value: [
+            {
+              name: "Team",
+              group: [
+                { address: "bob@test.com", name: "" },
+                { address: "friend@other.com", name: "" }
+              ]
+            }
+          ]
+        },
+        subject: "Hello",
+        html: "<p>body</p>",
+        text: "body",
+        date: new Date("2026-02-27T10:00:00Z"),
+        attachments: []
+      })
+    );
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    const mailData = mockSendMail.mock.calls[0][1] as {
+      sender: string;
+      to: string;
+    };
+    expect(mailData.sender).toBe("admin");
+    expect(mailData.to).toBe("bob@test.com,friend@other.com");
+  });
+
   it("maps attachments through the parsed attachment array", async () => {
     mockSimpleParser.mockImplementation(() =>
       Promise.resolve({
@@ -772,5 +916,154 @@ describe("initializeSmtp configuration", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveOutgoingSender", () => {
+  const resolve = (
+    from: { header?: string; envelope?: string },
+    recipients: string[],
+    addressedTo: string[] = []
+  ) => resolveOutgoingSender("admin", "test.com", from, recipients, addressedTo);
+
+  it("promotes the first same-domain recipient to sender and drops it", () => {
+    expect(
+      resolve({ header: "admin@test.com", envelope: "admin@test.com" }, [
+        "outside@other.com",
+        "sales@test.com",
+        "later@other.com"
+      ])
+    ).toEqual({
+      sender: "sales",
+      recipients: ["outside@other.com", "later@other.com"]
+    });
+  });
+
+  it("selects only the first same-domain recipient and keeps the rest", () => {
+    expect(
+      resolve({ envelope: "admin@test.com" }, [
+        "sales@test.com",
+        "support@test.com"
+      ])
+    ).toEqual({ sender: "sales", recipients: ["support@test.com"] });
+  });
+
+  it("keeps a From that already names another account of the domain", () => {
+    expect(
+      resolve({ header: "sales@test.com", envelope: "admin@test.com" }, [
+        "outside@other.com",
+        "support@test.com"
+      ])
+    ).toEqual({
+      sender: "sales",
+      recipients: ["outside@other.com", "support@test.com"]
+    });
+  });
+
+  it("treats the login account among the recipients as a real recipient", () => {
+    expect(
+      resolve({ envelope: "admin@test.com" }, [
+        "outside@other.com",
+        "admin@test.com"
+      ])
+    ).toEqual({
+      sender: "admin",
+      recipients: ["outside@other.com", "admin@test.com"]
+    });
+  });
+
+  it("matches the domain case-insensitively and normalizes the account", () => {
+    expect(
+      resolve({ envelope: "Admin@TEST.com" }, [
+        "Sales@Test.com",
+        "outside@other.com"
+      ])
+    ).toEqual({ sender: "sales", recipients: ["outside@other.com"] });
+  });
+
+  it("ignores a From header outside the user domain and falls back to the envelope", () => {
+    expect(
+      resolve({ header: "spoofed@evil.com", envelope: "admin@test.com" }, [
+        "outside@other.com"
+      ])
+    ).toEqual({ sender: "admin", recipients: ["outside@other.com"] });
+  });
+
+  it("never lets a From header outside the user domain supply the sender", () => {
+    expect(resolve({ header: "ceo@irs.gov" }, ["victim@other.com"])).toEqual({
+      sender: "admin",
+      recipients: ["victim@other.com"]
+    });
+    expect(
+      resolve({ header: "ceo@irs.gov", envelope: "@test.com" }, [
+        "victim@other.com"
+      ])
+    ).toEqual({ sender: "admin", recipients: ["victim@other.com"] });
+  });
+
+  it("lowercases a sender taken from the envelope", () => {
+    expect(
+      resolve({ envelope: "Bob@Test.com" }, ["outside@other.com"])
+    ).toEqual({ sender: "bob", recipients: ["outside@other.com"] });
+  });
+
+  it("leaves a To recipient of the user's domain addressed, not promoted", () => {
+    expect(
+      resolve(
+        { envelope: "admin@test.com" },
+        ["bob@test.com", "friend@other.com"],
+        ["bob@test.com", "friend@other.com"]
+      )
+    ).toEqual({
+      sender: "admin",
+      recipients: ["bob@test.com", "friend@other.com"]
+    });
+  });
+
+  it("promotes a Cc account while a To account of the same domain stays addressed", () => {
+    expect(
+      resolve(
+        { envelope: "admin@test.com" },
+        ["bob@test.com", "sales@test.com"],
+        ["bob@test.com"]
+      )
+    ).toEqual({ sender: "sales", recipients: ["bob@test.com"] });
+  });
+
+  it("keeps a lone same-domain recipient rather than emptying the recipient list", () => {
+    expect(resolve({ envelope: "admin@test.com" }, ["sales@test.com"])).toEqual({
+      sender: "admin",
+      recipients: ["sales@test.com"]
+    });
+  });
+
+  it("does not read a local part out of a two-at address", () => {
+    expect(
+      resolve({ header: "sales@evil.com@test.com", envelope: "admin@test.com" }, [
+        "outside@other.com"
+      ])
+    ).toEqual({ sender: "admin", recipients: ["outside@other.com"] });
+  });
+
+  it("falls back to the username when no address carries a local part", () => {
+    expect(resolve({ envelope: "@test.com" }, ["outside@other.com"])).toEqual({
+      sender: "admin",
+      recipients: ["outside@other.com"]
+    });
+  });
+
+  it("scopes selection to the caller's own domain, not the bare mail domain", () => {
+    expect(
+      resolveOutgoingSender(
+        "alice",
+        "alice.test.com",
+        { envelope: "alice@alice.test.com" },
+        ["outside@other.com", "team@alice.test.com", "admin@test.com"],
+        []
+      )
+    ).toEqual({
+      sender: "team",
+      recipients: ["outside@other.com", "admin@test.com"]
+    });
   });
 });
