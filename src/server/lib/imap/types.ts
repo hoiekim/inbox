@@ -416,6 +416,11 @@ export interface StoreRequest {
   operation: StoreOperation;
   flags: string[];
   silent?: boolean; // true for .SILENT operations
+  // RFC 7162 §3.1.3 UNCHANGEDSINCE modifier: `STORE <set> (UNCHANGEDSINCE
+  // <modseq>) <op> <flags>`. The flag change applies only to messages whose
+  // mod-sequence is ≤ this value; the rest come back in MODIFIED. Absent →
+  // an unconditional STORE.
+  unchangedSince?: number;
 }
 
 // COPY request

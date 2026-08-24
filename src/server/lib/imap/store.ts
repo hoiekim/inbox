@@ -19,7 +19,7 @@ import {
   getFirstUnseenUid as pgGetFirstUnseenUid,
   getHighestModseq as pgGetHighestModseq,
   SaveMailInput,
-  UpdatedMailFlags,
+  SetMailFlagsResult,
   StoreOperationType,
 } from "../postgres/repositories/mails";
 import { getMailboxesByUser } from "../postgres/repositories/mailboxes";
@@ -508,8 +508,9 @@ export class Store {
     end: number,
     flags: string[],
     useUid: boolean = false,
-    operation: StoreOperationType = "FLAGS"
-  ): Promise<UpdatedMailFlags[]> => {
+    operation: StoreOperationType = "FLAGS",
+    unchangedSince?: number
+  ): Promise<SetMailFlagsResult> => {
     try {
       const { mailboxArg, isSent } = this.resolveMappedBox(box);
       return await setMailFlags(
@@ -520,11 +521,12 @@ export class Store {
         end,
         flags,
         useUid,
-        operation
+        operation,
+        unchangedSince
       );
     } catch (error) {
       logger.error("Error setting flags", { component: "imap.store", box, flags }, error);
-      return [];
+      return { updated: [], failed: [] };
     }
   };
 
