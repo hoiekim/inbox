@@ -359,3 +359,25 @@ describe("Store.getMessages — replyTo mapping (#667)", () => {
     expect(mails.get("doc-2")?.replyTo).toBeUndefined();
   });
 });
+
+describe("Store.getAllUids", () => {
+  beforeEach(() => {
+    mockGetAllUids.mockClear();
+  });
+
+  it("returns the repository's UIDs", async () => {
+    mockGetAllUids.mockResolvedValue([4, 8, 15] as never);
+
+    const store = new Store(makeUser());
+
+    expect(await store.getAllUids("INBOX")).toEqual([4, 8, 15]);
+  });
+
+  it("reports a failed query as null, not as an empty mailbox", async () => {
+    mockGetAllUids.mockRejectedValue(new Error("connection terminated") as never);
+
+    const store = new Store(makeUser());
+
+    expect(await store.getAllUids("INBOX")).toBeNull();
+  });
+});

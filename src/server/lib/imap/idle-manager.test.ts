@@ -17,11 +17,13 @@ import type { ImapSession } from "./session";
 
 const makeSession = () => {
   const write = mock(() => {});
-  const countMailboxMessages = mock(() =>
-    Promise.resolve({ total: 3, unread: 1, maxUid: 3 })
-  );
-  const session = { write, countMailboxMessages } as unknown as ImapSession;
-  return { session, write, countMailboxMessages };
+  // The real method re-reads the mailbox and writes the untagged EXPUNGE /
+  // EXISTS / RECENT responses itself, returning the new count (null when the
+  // session has no selected mailbox). These suites cover which sessions get
+  // notified, so the stub just reports a count.
+  const notifyMailboxUpdate = mock(() => Promise.resolve(3));
+  const session = { write, notifyMailboxUpdate } as unknown as ImapSession;
+  return { session, write, notifyMailboxUpdate };
 };
 
 describe("IdleManager.notifyNewMail mailbox filtering", () => {
@@ -48,22 +50,22 @@ describe("IdleManager.notifyNewMail mailbox filtering", () => {
     await idleManager.notifyNewMail(["alice"], ["usps@hoie.kim"]);
 
     // INBOX is the aggregate view — always notified.
-    expect(inbox.countMailboxMessages).toHaveBeenCalledTimes(1);
-    expect(inbox.write).toHaveBeenCalled();
+    expect(inbox.notifyMailboxUpdate).toHaveBeenCalledTimes(1);
     // The targeted per-account mailbox is notified.
-    expect(usps.countMailboxMessages).toHaveBeenCalledTimes(1);
-    expect(usps.write).toHaveBeenCalled();
+    expect(usps.notifyMailboxUpdate).toHaveBeenCalledTimes(1);
     // A session watching an unrelated mailbox is NOT notified.
-    expect(drafts.countMailboxMessages).not.toHaveBeenCalled();
-    expect(drafts.write).not.toHaveBeenCalled();
+    expect(drafts.notifyMailboxUpdate).not.toHaveBeenCalled();
+    // The manager no longer writes to the socket itself — the session emits
+    // EXPUNGE/EXISTS/RECENT from inside notifyMailboxUpdate.
+    expect(inbox.write).not.toHaveBeenCalled();
   });
 
   it("notifies every session for the user when no mailbox filter is given", async () => {
     await idleManager.notifyNewMail(["alice"]);
 
-    expect(inbox.write).toHaveBeenCalled();
-    expect(usps.write).toHaveBeenCalled();
-    expect(drafts.write).toHaveBeenCalled();
+    expect(inbox.notifyMailboxUpdate).toHaveBeenCalled();
+    expect(usps.notifyMailboxUpdate).toHaveBeenCalled();
+    expect(drafts.notifyMailboxUpdate).toHaveBeenCalled();
   });
 
   it("does not notify sessions belonging to a different user", async () => {
@@ -72,7 +74,7 @@ describe("IdleManager.notifyNewMail mailbox filtering", () => {
 
     await idleManager.notifyNewMail(["alice"], ["usps@hoie.kim"]);
 
-    expect(bob.write).not.toHaveBeenCalled();
+    expect(bob.notifyMailboxUpdate).not.toHaveBeenCalled();
   });
 });
 

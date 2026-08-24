@@ -49,7 +49,8 @@ import {
   expunge as expungeOp,
 } from "./message-ops";
 import {
-  buildSequenceMapping,
+  reconcileSequenceMapping,
+  setSequenceMapping,
   SequenceState,
 } from "./sequence-resolver";
 
@@ -77,6 +78,29 @@ export class ImapSession {
     uidToSeq: new Map(),
   };
 
+  private serialTail: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `task` once everything already queued on this session has settled.
+   *
+   * The handler's command drain and the IDLE notifier both write untagged
+   * responses, and the notifier reaches the socket from a delivery callback
+   * rather than from the drain. Without a shared chain a notification parked
+   * on its DB read resumes in the middle of another command's response — RFC
+   * 3501 §7.4.1 forbids an EXPUNGE while answering FETCH, STORE or SEARCH,
+   * and renumbering mid-FETCH shifts the very sequence numbers that response
+   * is reporting. Two overlapping notifications would likewise diff against
+   * the same pre-rebuild snapshot and retire the same position twice.
+   */
+  runSerial = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = this.serialTail.then(task, task);
+    this.serialTail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  };
+
   constructor(
     private handler: ImapRequestHandler,
     public socket: Socket
@@ -89,17 +113,41 @@ export class ImapSession {
   };
 
   /**
-   * Count messages in a mailbox. Returns null if the store is not available.
-   * Used by IdleManager to send accurate EXISTS notifications.
+   * Re-advertise the selected mailbox to an IDLE client, announcing whatever
+   * left it first (see `reconcileSequenceMapping`). Returns the new message
+   * count, or null when the session is no longer idling, there is no mailbox
+   * to report on, or it could not be read — in which case nothing reaches the
+   * wire and the client keeps the mapping it already has.
    */
-  countMailboxMessages = async (
-    box: string
-  ): Promise<{ total: number; recent: number } | null> => {
-    if (!this.store) return null;
-    const result = await this.store.countMessages(box);
-    if (!result) return null;
-    return { total: result.total, recent: 0 };
-  };
+  notifyMailboxUpdate = (): Promise<number | null> =>
+    this.runSerial(async () => {
+      if (!this.isIdling) return null;
+
+      // RFC 3501 §7.4.1 forbids an EXPUNGE with no command in progress, so the
+      // announcement is held back until the session is known to still be
+      // idling at the moment it would reach the wire. IDLE can end either
+      // while this task waits its turn on the chain (DONE) or while its
+      // mailbox read is parked (the heartbeat's force-terminate, which runs
+      // off the chain entirely).
+      const advertised = [...this.seqState.seqToUid];
+      const pending: string[] = [];
+      const total = await reconcileSequenceMapping(
+        this.store,
+        this.selectedMailbox,
+        this.seqState,
+        (data: string) => pending.push(data)
+      );
+      if (total === null) return null;
+      if (!this.isIdling) {
+        setSequenceMapping(this.seqState, advertised);
+        return null;
+      }
+
+      for (const response of pending) this.write(response);
+      this.write(`* ${total} EXISTS\r\n`);
+      this.write(`* 0 RECENT\r\n`);
+      return total;
+    });
 
   bytesWritten = 0;
 
@@ -517,10 +565,14 @@ export class ImapSession {
       this.selectedMailbox,
       this.write,
       async () => {
-        await buildSequenceMapping(
+        // The mail is already stored, so a failed rebuild is reported by the
+        // store's own log rather than by turning a completed APPEND into a
+        // tagged NO the client would answer by sending it again.
+        await reconcileSequenceMapping(
           this.store,
           this.selectedMailbox,
-          this.seqState
+          this.seqState,
+          this.write
         );
       }
     );
