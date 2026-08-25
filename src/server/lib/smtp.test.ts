@@ -821,6 +821,15 @@ describe("splitEnvelopeRecipients", () => {
     expect(split).toEqual({ to: ["real@x.com"], cc: [], bcc: [] });
   });
 
+  it("assigns an address named by both headers to To, not Cc", () => {
+    const split = splitEnvelopeRecipients(
+      ["dup@x.com"],
+      ["dup@x.com"],
+      ["dup@x.com"]
+    );
+    expect(split).toEqual({ to: ["dup@x.com"], cc: [], bcc: [] });
+  });
+
   it("returns three empty lists for an empty envelope", () => {
     expect(splitEnvelopeRecipients([], ["a@x.com"], ["b@x.com"])).toEqual({
       to: [],

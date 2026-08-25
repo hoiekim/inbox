@@ -40,8 +40,8 @@ export const sendMailgunMail = async (
   const { sender, senderFullName, to, cc, bcc, subject, html, inReplyTo } =
     mail;
 
-  // Read at call time, not at module load: the filter below is only
-  // meaningful against the domain the process is actually serving.
+  // Read at call time: the filter below is only meaningful against the domain
+  // the process is actually serving.
   const { EMAIL_DOMAIN = "mydomain" } = process.env;
 
   const addresses = (list?: string) =>
@@ -51,13 +51,15 @@ export const sendMailgunMail = async (
       .filter(Boolean);
   const isExternal = (address: string) => !address.endsWith(`@${EMAIL_DOMAIN}`);
 
-  const tos = addresses(to);
-  const recipients = [...tos, ...addresses(cc), ...addresses(bcc)];
-  const envelopTo = tos.filter(isExternal);
+  const recipients = [...addresses(to), ...addresses(cc), ...addresses(bcc)];
   if (recipients.length && !recipients.some(isExternal)) {
     logger.info("All recipients are to myself, skipping Mailgun sending.");
     return;
   }
+
+  const externalTo = addresses(to).filter(isExternal);
+  const externalCc = addresses(cc).filter(isExternal);
+  const externalBcc = addresses(bcc).filter(isExternal);
 
   const text = getText(html);
   const userDomain = getUserDomain(username);
@@ -66,11 +68,15 @@ export const sendMailgunMail = async (
     ? `${senderFullName} <${fromAddress}>`
     : fromAddress;
 
-  // Mailgun rejects a message with no `to` (400 "to parameter is missing"),
-  // so a send whose visible recipients are all host-domain — or absent, as on
-  // a Bcc-only submission — is addressed to the sender. Promoting a cc or bcc
-  // address here would disclose exactly what this split exists to hide.
-  const visibleTo = envelopTo.length ? envelopTo : [fromAddress];
+  // Mailgun renders the visible `To:` header from the `to` parameter and
+  // rejects a message that carries none, so the address put there has to be
+  // both deliverable off this host and already disclosed to everyone on the
+  // message. An external addressee qualifies, and so does an external Cc — the
+  // `Cc:` header names it anyway. A Bcc address is disclosed to nobody but
+  // itself, so a send whose only external recipients are Bcc goes out as one
+  // message per recipient. Naming the sender instead hands Mailgun a
+  // host-domain recipient, which routes the copy back at our own MX.
+  const visibleTo = externalTo.length ? externalTo : externalCc;
 
   const mailgun = new Mailgun(FormData);
   const mg = mailgun.client({
@@ -79,19 +85,32 @@ export const sendMailgunMail = async (
     timeout: 30000
   });
 
-  const mailgunMessage: MailgunMessageData = {
+  const message = (
+    to: string[],
+    hidden?: { cc?: string; bcc?: string }
+  ): MailgunMessageData => ({
     from,
-    to: visibleTo,
-    cc,
-    bcc,
+    to,
+    cc: hidden?.cc,
+    bcc: hidden?.bcc,
     subject,
     html,
     text,
     attachment: getAttachments(files),
     "h:In-Reply-To": inReplyTo
-  };
+  });
 
-  const data = await mg.messages.create(EMAIL_DOMAIN, mailgunMessage);
+  // A per-recipient send carries no Cc: every Cc address is host-domain here,
+  // or one of them would have been the visible To.
+  const data = visibleTo.length
+    ? await mg.messages.create(EMAIL_DOMAIN, message(visibleTo, { cc, bcc }))
+    : (
+        await Promise.all(
+          externalBcc.map((address) =>
+            mg.messages.create(EMAIL_DOMAIN, message([address]))
+          )
+        )
+      )[0];
 
   logger.info("Email sending request succeeded");
 

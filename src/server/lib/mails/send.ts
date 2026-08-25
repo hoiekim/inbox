@@ -122,6 +122,14 @@ export const parseAddressList = (str: string) =>
 export const addressField = (list?: string) =>
   !list ? undefined : { value: parseAddressList(list), text: list };
 
+/**
+ * Builds the stored envelope recipient list — every address the submission was
+ * delivered to, across all three header fields. A Bcc-only send names nobody in
+ * `To:`, so a `to`-only list would leave the record with no recipients at all.
+ */
+export const envelopeRecipients = (...lists: (string | undefined)[]) =>
+  parseAddressList(lists.filter(Boolean).join(","));
+
 const getSentMail = async (
   user: SignedUser,
   mailToSend: MailDataToSend,
@@ -158,7 +166,7 @@ const getSentMail = async (
     cc: addressField(cc),
     bcc: addressField(bcc),
     envelopeFrom: [{ name: senderFullName || undefined, address: fromEmail }],
-    envelopeTo: parseAddressList([to, cc, bcc].filter(Boolean).join(",")),
+    envelopeTo: envelopeRecipients(to, cc, bcc),
     replyTo: {
       value: [{ name: senderFullName || undefined, address: fromEmail }],
       text: fromEmail

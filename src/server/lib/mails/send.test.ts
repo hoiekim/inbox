@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { addressField, parseAddressList } from "./send";
+import { addressField, envelopeRecipients, parseAddressList } from "./send";
 
 describe("parseAddressList — case normalization (#573)", () => {
   it("lowercases a single address", () => {
@@ -38,6 +38,34 @@ describe("addressField — stored recipient fields", () => {
   it("returns undefined for an empty list so the column stays NULL", () => {
     expect(addressField("")).toBeUndefined();
     expect(addressField(undefined)).toBeUndefined();
+  });
+});
+
+describe("envelopeRecipients — stored envelope_to union", () => {
+  it("unions the three recipient fields", () => {
+    expect(envelopeRecipients("a@x.com", "b@y.com", "c@z.com")).toEqual([
+      { address: "a@x.com" },
+      { address: "b@y.com" },
+      { address: "c@z.com" }
+    ]);
+  });
+
+  it("keeps a bcc-only submission's recipients", () => {
+    expect(envelopeRecipients("", undefined, "hidden@z.com")).toEqual([
+      { address: "hidden@z.com" }
+    ]);
+  });
+
+  it("keeps a cc when the submission has no addressee", () => {
+    expect(envelopeRecipients("", "seen@y.com", undefined)).toEqual([
+      { address: "seen@y.com" }
+    ]);
+  });
+
+  it("skips absent fields without leaving empty entries", () => {
+    expect(envelopeRecipients("a@x.com", undefined, undefined)).toEqual([
+      { address: "a@x.com" }
+    ]);
   });
 });
 

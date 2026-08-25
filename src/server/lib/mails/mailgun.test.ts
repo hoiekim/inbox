@@ -1,6 +1,10 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 
-process.env.EMAIL_DOMAIN = "mydomain";
+// The host domain is the sender's own domain, as it is for an admin in
+// production, so the visible-To assertions run against the shape that ships.
+// It also has to differ from the module's own "mydomain" default, or an
+// assertion about it passes just as well against a build that never reads it.
+process.env.EMAIL_DOMAIN = "example.com";
 process.env.MAILGUN_KEY = "test-key";
 
 // Mock fs first (before mailgun.ts is imported)
@@ -41,7 +45,9 @@ mock.module("../logger", () => ({
 }));
 
 // Mock server exports — only getUserDomain is mocked; getText uses real implementation
-// to avoid contaminating util.test.ts via bun's shared module registry
+// to avoid contaminating util.test.ts via bun's shared module registry. The
+// mapping matches the real one's shape: admin sits on the host domain itself,
+// every other user on a subdomain of it.
 mock.module("server", () => ({
   getUserDomain: (username: string) =>
     username === "admin" ? "example.com" : `${username}.example.com`,
@@ -67,7 +73,7 @@ describe("sendMailgunMail", () => {
     mockMessagesCreate.mockResolvedValue({ id: "msg-id-123", message: "Queued. Thank you." });
     mockReadFileSync.mockReset();
     mockReadFileSync.mockReturnValue(Buffer.from("file-content"));
-    process.env.EMAIL_DOMAIN = "mydomain";
+    process.env.EMAIL_DOMAIN = "example.com";
     process.env.MAILGUN_KEY = "test-key";
   });
 
@@ -98,7 +104,6 @@ describe("sendMailgunMail", () => {
   });
 
   it("should format from address with senderFullName when provided", async () => {
-    // getUserDomain mock returns "example.com" for admin
     const mail = new MailDataToSend({ ...baseMail, senderFullName: "Admin User" });
     await sendMailgunMail("admin", mail);
     const msgData = mockMessagesCreate.mock.calls[0][1];
@@ -131,36 +136,68 @@ describe("sendMailgunMail", () => {
     expect(msgData.bcc).toBe("bcc@external.com");
   });
 
-  it("should address a Bcc-only send to the sender rather than an empty To", async () => {
-    const mail = new MailDataToSend({
-      ...baseMail,
-      to: "",
-      bcc: "hidden@external.com",
-    });
-    await sendMailgunMail("admin", mail);
-    const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData.to).toEqual(["admin@example.com"]);
-    expect(msgData.bcc).toBe("hidden@external.com");
-  });
-
-  it("should never promote a bcc address into the visible To", async () => {
+  it("should send a Bcc-only submission one message per recipient", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
       to: "",
       bcc: "hidden@external.com, other@external.com",
     });
     await sendMailgunMail("admin", mail);
-    const toList = mockMessagesCreate.mock.calls[0][1].to as string[];
-    expect(toList).not.toContain("hidden@external.com");
-    expect(toList).not.toContain("other@external.com");
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(2);
+    const payloads = mockMessagesCreate.mock.calls.map((call) => call[1]);
+    expect(payloads.map((data) => data.to)).toEqual([
+      ["hidden@external.com"],
+      ["other@external.com"],
+    ]);
+  });
+
+  it("should never disclose one bcc recipient to another", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "hidden@external.com, other@external.com",
+    });
+    await sendMailgunMail("admin", mail);
+    mockMessagesCreate.mock.calls.forEach((call) => {
+      const data = call[1];
+      const toList = data.to as string[];
+      expect(toList).toHaveLength(1);
+      expect(data.bcc).toBeUndefined();
+      expect(data.cc).toBeUndefined();
+    });
+  });
+
+  it("should never hand Mailgun a host-domain recipient on a Bcc-only send", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "outside@gmail.com",
+    });
+    await sendMailgunMail("admin", mail);
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.from).toBe("admin@example.com");
+    expect(msgData.to).toEqual(["outside@gmail.com"]);
+  });
+
+  it("should keep a non-admin sender's own subdomain address out of the To", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      sender: "bob",
+      to: "",
+      bcc: "outside@gmail.com",
+    });
+    await sendMailgunMail("bob", mail);
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.from).toBe("bob@bob.example.com");
+    expect(msgData.to).toEqual(["outside@gmail.com"]);
   });
 
   it("should skip Mailgun only when every recipient across to/cc/bcc is host-domain", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
-      to: "inside@mydomain",
-      cc: "colleague@mydomain",
-      bcc: "another@mydomain",
+      to: "inside@example.com",
+      cc: "colleague@example.com",
+      bcc: "another@example.com",
     });
     await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).not.toHaveBeenCalled();
@@ -169,33 +206,46 @@ describe("sendMailgunMail", () => {
   it("should still send when the only external recipient sits in bcc", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
-      to: "inside@mydomain",
+      to: "inside@example.com",
       bcc: "outside@gmail.com",
     });
     await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData.bcc).toBe("outside@gmail.com");
-    // The host-domain To recipient is filtered, so the sender stands in —
-    // an empty `to` would be rejected by Mailgun.
-    expect(msgData.to).toEqual(["admin@example.com"]);
+    expect(msgData.to).toEqual(["outside@gmail.com"]);
   });
 
-  it("should still send when the only external recipient sits in cc", async () => {
+  it("should address the visible To to an external cc when no addressee is external", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
-      to: "inside@mydomain",
+      to: "inside@example.com",
       cc: "outside@gmail.com",
+      bcc: "hidden@external.com",
     });
     await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
-    expect(mockMessagesCreate.mock.calls[0][1].cc).toBe("outside@gmail.com");
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.to).toEqual(["outside@gmail.com"]);
+    expect(msgData.cc).toBe("outside@gmail.com");
+    expect(msgData.bcc).toBe("hidden@external.com");
+  });
+
+  it("should prefer an external addressee over an external cc for the visible To", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "addressee@gmail.com",
+      cc: "outside@yahoo.com",
+    });
+    await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate.mock.calls[0][1].to).toEqual([
+      "addressee@gmail.com",
+    ]);
   });
 
   it("should keep host-domain addresses out of the rendered To header", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
-      to: "inside@mydomain, outside@gmail.com",
+      to: "inside@example.com, outside@gmail.com",
     });
     await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate.mock.calls[0][1].to).toEqual(["outside@gmail.com"]);
