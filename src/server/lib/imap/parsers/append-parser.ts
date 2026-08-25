@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, AppendRequest } from '../types';
-import { parseAtom, parseString, parseFlag, skipWhitespace } from './primitive-parsers';
+import { parseString, parseFlag, parseLiteral, skipWhitespace } from './primitive-parsers';
 
 /**
  * Parse APPEND command
@@ -53,34 +53,19 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
       }
     }
 
-    // Parse message literal
-    // IMAP literals are in format {size}\r\n<data>
-    if (context.input[context.position] !== '{') {
-      return { success: false, error: 'Expected message literal', consumed: 0 };
+    // Parse the message literal. Shared with every other literal-bearing
+    // command: `{N}` counts octets, so the payload arrives out-of-band on
+    // `context.literals` rather than being sliced out of the UTF-16 input by
+    // a byte count.
+    const literal = parseLiteral(context);
+    if (!literal.success) {
+      return {
+        success: false,
+        error: literal.error || 'Expected message literal',
+        consumed: 0
+      };
     }
-
-    // Find the closing brace
-    const literalStart = context.position + 1;
-    const literalEnd = context.input.indexOf('}', literalStart);
-    if (literalEnd === -1) {
-      return { success: false, error: 'Invalid literal format', consumed: 0 };
-    }
-
-    const sizeStr = context.input.substring(literalStart, literalEnd);
-    const size = parseInt(sizeStr, 10);
-    if (isNaN(size)) {
-      return { success: false, error: 'Invalid literal size', consumed: 0 };
-    }
-
-    // Skip to after the }\r\n
-    context.position = literalEnd + 1;
-    if (context.input.substring(context.position, context.position + 2) === '\r\n') {
-      context.position += 2;
-    }
-
-    // Extract the message data
-    const message = context.input.substring(context.position, context.position + size);
-    context.position += size;
+    const message = literal.value!;
 
     const appendRequest: AppendRequest = {
       mailbox: mailbox.value!,
