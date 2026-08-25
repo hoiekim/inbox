@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 
+/**
+ * `useState` mirrored into `localStorage` under `key`.
+ *
+ * `sanitize` coerces the stored value on read and its result is persisted, so
+ * it must return the value it was given when it accepts it — a fresh object
+ * every call rewrites storage on every mount.
+ */
 export const useLocalStorage = <T>(
   key: string,
   initialValue: T,
@@ -14,8 +21,7 @@ export const useLocalStorage = <T>(
       // Persist the sanitized value, not just the state. Leaving storage on
       // the rejected value makes every later reader of the raw key — and any
       // effect that tests the state against it — disagree with what the hook
-      // returned, which is how the reset effect for a reloaded search became
-      // unreachable (#786).
+      // returned.
       if (item !== null && sanitized !== parsed) {
         window.localStorage.setItem(key, JSON.stringify(sanitized));
       }

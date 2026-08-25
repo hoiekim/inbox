@@ -52,6 +52,12 @@ import {
 } from "client";
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
+import {
+  bucketForCategory,
+  listsWholeBucket,
+  removeAccountFromBucket,
+  updateAccountInBucket
+} from "./accountsBucket";
 
 import "./index.scss";
 
@@ -218,30 +224,18 @@ const RenderedMail = ({
 
       accountsCache.set((oldData) => {
         if (!oldData) return oldData;
-
-        const newData = { ...oldData };
-
-        // Only update the array that matches the current view (received / sent /
-        // spam), so an address present in more than one isn't double-decremented.
-        const arrayKey =
-          selectedCategory === Category.SentMails
-            ? "sent"
-            : selectedCategory === Category.SpamMails
-            ? "spam"
-            : "received";
-        newData[arrayKey].find((account) => {
-          const { key, unread_doc_count } = account;
-          const found = key === selectedAccount;
-          if (found) {
-            if (!mail.read && unread_doc_count) {
-              account.unread_doc_count -= 1;
-            }
-            account.doc_count -= 1;
-          }
-          return found;
-        });
-
-        return newData;
+        return updateAccountInBucket(
+          oldData,
+          bucketForCategory(selectedCategory),
+          selectedAccount,
+          ({ doc_count, unread_doc_count }) => ({
+            doc_count: doc_count - 1,
+            unread_doc_count:
+              !mail.read && unread_doc_count
+                ? unread_doc_count - 1
+                : unread_doc_count
+          })
+        );
       });
 
       const mailsCache = new MailsCache(selectedAccount, selectedCategory);
@@ -308,26 +302,18 @@ const RenderedMail = ({
     // category's cached list.
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-
-      const newData = { ...oldData };
-
-      const arrayKey =
-        selectedCategory === Category.SentMails
-          ? "sent"
-          : isSpamView
-          ? "spam"
-          : "received";
-      newData[arrayKey].find((account) => {
-        const { key, unread_doc_count } = account;
-        const found = key === selectedAccount;
-        if (found) {
-          if (!mail.read && unread_doc_count) account.unread_doc_count -= 1;
-          account.doc_count -= 1;
-        }
-        return found;
-      });
-
-      return newData;
+      return updateAccountInBucket(
+        oldData,
+        bucketForCategory(selectedCategory),
+        selectedAccount,
+        ({ doc_count, unread_doc_count }) => ({
+          doc_count: doc_count - 1,
+          unread_doc_count:
+            !mail.read && unread_doc_count
+              ? unread_doc_count - 1
+              : unread_doc_count
+        })
+      );
     });
 
     const mailsCache = new MailsCache(selectedAccount, selectedCategory);
@@ -625,26 +611,19 @@ const RenderedMails = ({ page }: { page: number }) => {
   };
 
   const removeAccountFromQueryData = () => {
+    // Only a category that lists its bucket whole can conclude anything from
+    // its list emptying. Under New Mails or Saved Mails the account is still
+    // in `received` holding the mail the filter excluded — the counter updates
+    // above are what drop it from those two lists.
+    if (!listsWholeBucket(selectedCategory)) return;
+
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-
-      const key =
-        selectedCategory === Category.SentMails
-          ? "sent"
-          : selectedCategory === Category.SpamMails
-          ? "spam"
-          : "received";
-
-      // Replace the array rather than splicing it. A shallow spread leaves
-      // `newData[key]` pointing at `oldData[key]`, so an in-place splice edits
-      // both — react-query's structural sharing then keeps the previous
-      // `data` reference, and every effect keyed on it (including the
-      // re-anchor in <Accounts>) never re-runs. That is why evicting the last
-      // account healed only on reload (#786).
-      return {
-        ...oldData,
-        [key]: oldData[key].filter((account) => account.key !== selectedAccount)
-      };
+      return removeAccountFromBucket(
+        oldData,
+        bucketForCategory(selectedCategory),
+        selectedAccount
+      );
     });
   };
 
@@ -667,25 +646,14 @@ const RenderedMails = ({ page }: { page: number }) => {
 
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-
-      const newData = { ...oldData };
-
-      // Only update the array that matches the current view (received / sent /
-      // spam), so an address present in more than one isn't double-decremented.
-      const arrayKey =
-        selectedCategory === Category.SentMails
-          ? "sent"
-          : selectedCategory === Category.SpamMails
-          ? "spam"
-          : "received";
-      newData[arrayKey].find((account) => {
-        const { key, unread_doc_count } = account;
-        const found = key === selectedAccount;
-        if (found && unread_doc_count) account.unread_doc_count -= 1;
-        return found;
-      });
-
-      return newData;
+      return updateAccountInBucket(
+        oldData,
+        bucketForCategory(selectedCategory),
+        selectedAccount,
+        ({ unread_doc_count }) => ({
+          unread_doc_count: unread_doc_count ? unread_doc_count - 1 : 0
+        })
+      );
     });
   };
 
@@ -693,16 +661,19 @@ const RenderedMails = ({ page }: { page: number }) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      const newData = { ...oldData };
-      // Only update the array that matches the current view (received vs sent).
-      const arrayKey =
+      // Saved mail is counted on the received/sent account it belongs to; a
+      // spam view stars the received one, so this mapping is narrower than
+      // bucketForCategory's.
+      const bucket =
         selectedCategory === Category.SentMails ? "sent" : "received";
-      const found = newData[arrayKey].find((f) => f.key === selectedAccount);
-      if (found) {
-        if (save) found.saved_doc_count++;
-        else found.saved_doc_count--;
-      }
-      return newData;
+      return updateAccountInBucket(
+        oldData,
+        bucket,
+        selectedAccount,
+        ({ saved_doc_count }) => ({
+          saved_doc_count: save ? saved_doc_count + 1 : saved_doc_count - 1
+        })
+      );
     });
 
     Object.values(Category).forEach((e) => {
