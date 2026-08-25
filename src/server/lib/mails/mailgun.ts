@@ -85,6 +85,9 @@ export const sendMailgunMail = async (
     timeout: 30000
   });
 
+  // Built once: the per-recipient send below would otherwise hold a fresh copy
+  // of every attachment for every recipient, all alive in the same tick.
+  const attachment = getAttachments(files);
   const message = (
     to: string[],
     hidden?: { cc?: string; bcc?: string }
@@ -96,7 +99,7 @@ export const sendMailgunMail = async (
     subject,
     html,
     text,
-    attachment: getAttachments(files),
+    attachment,
     "h:In-Reply-To": inReplyTo
   });
 

@@ -171,9 +171,10 @@ describe("sendMailgunMail", () => {
     const mail = new MailDataToSend({
       ...baseMail,
       to: "",
-      bcc: "outside@gmail.com",
+      bcc: "inside@example.com, outside@gmail.com",
     });
     await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.from).toBe("admin@example.com");
     expect(msgData.to).toEqual(["outside@gmail.com"]);
@@ -190,6 +191,28 @@ describe("sendMailgunMail", () => {
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.from).toBe("bob@bob.example.com");
     expect(msgData.to).toEqual(["outside@gmail.com"]);
+  });
+
+  it("should read each attachment once regardless of the recipient count", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "one@external.com, two@external.com, three@external.com",
+    });
+    const mockFile = {
+      name: "test.pdf",
+      mimetype: "application/pdf",
+      size: 1024,
+      tempFilePath: "/tmp/uploaded-file.pdf",
+      data: Buffer.alloc(0),
+    };
+    await sendMailgunMail(
+      "admin",
+      mail,
+      mockFile as import("express-fileupload").UploadedFile
+    );
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(3);
+    expect(mockReadFileSync).toHaveBeenCalledTimes(1);
   });
 
   it("should skip Mailgun only when every recipient across to/cc/bcc is host-domain", async () => {

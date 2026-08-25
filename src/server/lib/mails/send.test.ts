@@ -69,11 +69,10 @@ describe("envelopeRecipients — stored envelope_to union", () => {
   });
 });
 
-describe("getSentMail — sender address normalization (#573)", () => {
+describe("getSentMail — fields unreachable without the DB", () => {
   // getSentMail builds the *stored* Mail (delivery uses the raw mailToSend via
-  // sendMailgunMail). It hits the DB for UID allocation, so the from-address
-  // lowercasing is pinned by source inspection rather than a live call. A
-  // mixed-case sender must not fragment the Sent account list.
+  // sendMailgunMail). It hits the DB for UID allocation, so these fields are
+  // pinned by source inspection rather than a live call.
   let fnSource: string;
 
   beforeAll(async () => {
@@ -88,9 +87,16 @@ describe("getSentMail — sender address normalization (#573)", () => {
     fnSource = match[0];
   });
 
+  // A mixed-case sender must not fragment the Sent account list.
   it("lowercases the constructed from email", () => {
     expect(fnSource).toMatch(
       /fromEmail\s*=\s*`\$\{sender\}@\$\{userDomain\}`\.toLowerCase\(\)/
     );
+  });
+
+  // A bcc-only send names nobody in `To:`, so a to-only envelope list would
+  // store no recipients at all.
+  it("builds the envelope recipient list from all three fields", () => {
+    expect(fnSource).toMatch(/envelopeTo:\s*envelopeRecipients\(to,\s*cc,\s*bcc\)/);
   });
 });
