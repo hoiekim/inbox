@@ -356,6 +356,100 @@ describe("postTokenRoute", () => {
   });
 });
 
+describe("postTokenRoute body shape", () => {
+  beforeEach(() => {
+    mockIsValidEmail.mockReset();
+    // The suite-wide stub answers `true` for every input, which cannot
+    // distinguish a guarded route from an unguarded one. The real
+    // `isValidEmail` opens with `email.split("@")`, so mirror that first
+    // statement: a non-string argument must blow up here, exactly as it does
+    // in production, or these cases pass against a route that never guards.
+    mockIsValidEmail.mockImplementation(
+      ((email: unknown) => (email as string).split("@").length === 2) as never
+    );
+    mockCreateToken.mockClear();
+    mockGetUser.mockClear();
+    mockSendMail.mockClear();
+    mockStartTimer.mockClear();
+  });
+
+  it("rejects a non-string email instead of throwing on email.split", async () => {
+    const { postTokenRoute } = await import("./post-token");
+
+    for (const email of [undefined, null, 123, {}, ["a@b.com"], true]) {
+      const req = makeReq({ body: { email } });
+      const result = await postTokenRoute.callback(req, makeRes(), noopStream);
+
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+      expect((result as ApiResponse<unknown>).message).toMatch(/invalid/i);
+    }
+
+    expect(mockCreateToken).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(mockStartTimer).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body that is not a plain object", async () => {
+    const { postTokenRoute } = await import("./post-token");
+
+    for (const body of [undefined, null, "user@example.com", 7, [{ email: "a@b.com" }]]) {
+      const req = makeReq({ body });
+      const result = await postTokenRoute.callback(req, makeRes(), noopStream);
+
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+      expect((result as ApiResponse<unknown>).message).toMatch(/invalid/i);
+    }
+
+    expect(mockCreateToken).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bodyless request, which express parses as {}", async () => {
+    const { postTokenRoute } = await import("./post-token");
+
+    const result = await postTokenRoute.callback(makeReq({ body: {} }), makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("still sends the magic link for a well-formed email", async () => {
+    const { postTokenRoute } = await import("./post-token");
+    mockGetUser.mockResolvedValueOnce({ id: "admin1", username: "admin" });
+    mockGetSignedUser.mockReturnValueOnce({ id: "admin1", username: "admin" });
+
+    const req = makeReq({ body: { email: "user@example.com" } });
+    const result = await postTokenRoute.callback(req, makeRes(), noopStream);
+
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+  });
+
+  // Both rejection branches must consume quota. A bad address already did, and
+  // a caller who can be refused without paying for it is the cheaper attack.
+  it.each([
+    ["a non-object body", "198.51.100.30", "notanobject"],
+    ["a non-string email", "198.51.100.31", { email: 123 }]
+  ])("counts %s against the IP quota", async (_label, ip, body) => {
+    const { postTokenRoute } = await import("./post-token");
+    const rateLimit = await import("../../rate-limit");
+    rateLimit.tokenLimiter.reset(ip as string);
+
+    const req = makeReq({ body, headers: { "x-real-ip": ip } });
+
+    for (let i = 0; i < 3; i++) {
+      const result = await postTokenRoute.callback(req, makeRes(), noopStream);
+      expect((result as ApiResponse<unknown>).status).toBe("failed");
+    }
+
+    const res = makeRes();
+    const next = mock(() => {});
+    rateLimit.tokenLimiter.middleware(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(429);
+  });
+});
+
 describe("postLoginRoute + loginLimiter integration (#504)", () => {
   beforeEach(() => {
     mockGetUser.mockClear();
