@@ -114,21 +114,44 @@ export const isValidEmail = (email: string) => {
   return localValid && domainValid;
 };
 
+/**
+ * `token` and `expiry` carry two unrelated meanings on the same columns: on a
+ * placeholder row `createToken` inserted for an address with no account yet
+ * they are an unclaimed sign-up, on a registered account they are a password
+ * reset in flight. A null `password` is what distinguishes them, so an expired
+ * placeholder is reclaimed by deleting the row while a registered account
+ * keeps its data and loses only the stale token.
+ *
+ * Reads the row as a model because `toUser` throws on a null password.
+ */
+export const reclaimExpiredToken = async (userId: string): Promise<void> => {
+  const model = await usersTable.queryOne({ [USER_ID]: userId });
+  if (!model) return;
+
+  const { expiry } = model;
+  if (!expiry || new Date(expiry).getTime() >= Date.now()) return;
+
+  if (model.password !== null) {
+    await usersTable.update(userId, { [TOKEN]: null, [EXPIRY]: null });
+    return;
+  }
+
+  if (await deleteUser(userId)) {
+    logger.info("Deleted an unclaimed sign-up.", { userId });
+  }
+};
+
 export const startTimer = (userId: string) => {
   // Clear any existing timer to prevent duplicate fires
   if (expiryTimer[userId]) clearTimeout(expiryTimer[userId]);
 
-  expiryTimer[userId] = setTimeout(async () => {
+  expiryTimer[userId] = setTimeout(() => {
     delete expiryTimer[userId];
-    const updatedUserInfo = await getUser({ id: userId });
-    if (!updatedUserInfo) return;
-    const { expiry } = updatedUserInfo;
-    if (expiry === undefined) return;
-    const expiryDate = expiry && new Date(expiry);
-    if (expiryDate && expiryDate.getTime() < Date.now()) {
-      await deleteUser(userId);
-      logger.info("Deleted user with expired token.", { userId });
-    }
+    // A repository fault here would otherwise be an unhandled rejection: the
+    // callback runs detached from any request, so nothing above it can catch.
+    reclaimExpiredToken(userId).catch((error) =>
+      logger.error("Failed to reclaim an expired token", { userId }, error)
+    );
   }, TOKEN_DURATION);
 };
 
@@ -156,19 +179,16 @@ export const setUserInfo = async (
     throw new Error("`setUserInfo` failed because token doesn't match.");
   }
 
-  const { id } = existingUser;
+  const { id, expiry } = existingUser;
+  if (expiry && new Date(expiry).getTime() < Date.now()) {
+    await reclaimExpiredToken(id);
+    throw new Error("Setting userInfo failed because user token is expired.");
+  }
+
+  const expiryTimeout = expiryTimer[id];
+  if (expiryTimeout) clearTimeout(expiryTimeout);
 
   if (!existingUser.username) {
-    const { expiry } = existingUser;
-    const expiryDate = expiry && new Date(expiry);
-    if (expiryDate && expiryDate.getTime() < Date.now()) {
-      await deleteUser(id);
-      throw new Error("Setting userInfo failed because user token is expired.");
-    }
-
-    const expiryTimeout = expiryTimer[id];
-    if (expiryTimeout) clearTimeout(expiryTimeout);
-
     const findUserInfoByUsername = await getUser({ username });
     if (findUserInfoByUsername) {
       throw new Error("`setUserInfo` failed because username already exists.");

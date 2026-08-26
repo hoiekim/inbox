@@ -17,9 +17,9 @@ import { User } from "common";
 // mock `pg` so the lazy pool in `postgres/client.ts` instantiates this
 // FakePool, then run the REAL `users.ts` functions against it. `mockQuery`
 // is the single seam every `usersTable` / `pgSearchUser` call funnels through
-// (`pool.query`). `afterAll(restoreLeaves)` re-mocks pg back to the preload's
-// real snapshot and `resetPool()` drops the cached FakePool so the next test
-// file in the same `bun test` process starts from the real Pool. No DI.
+// (`pool.query`). `afterAll` re-mocks pg back to the preload's real snapshot,
+// re-registers the real logger and `resetPool()` drops the cached FakePool, so
+// the next test file in the same `bun test` process starts clean. No DI.
 const mockQuery = mock(
   async (_sql: string, _values?: unknown[]) =>
     ({ rows: [] as unknown[], rowCount: 0 as number | null })
@@ -42,6 +42,24 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
+// `restoreLeaves` only snapshots `pg` and `web-push`, so this file captures the
+// real logger itself and re-registers it in `afterAll` — `mock.module` is
+// process-global and would otherwise stub every later file in the same run.
+const realLogger = await import("./logger");
+
+const mockLoggerError = mock(() => {});
+const mockLoggerInfo = mock(() => {});
+const loggerMock = () => ({
+  logger: {
+    debug: mock(() => {}),
+    info: mockLoggerInfo,
+    warn: mock(() => {}),
+    error: mockLoggerError,
+  },
+});
+
+mock.module("./logger", loggerMock);
+
 // Import the subjects AND resetPool only after the pg mock is registered, so
 // `client.ts`'s `import { Pool } from "pg"` resolves to FakePool.
 const {
@@ -54,6 +72,7 @@ const {
   createToken,
   setUserInfo,
   startTimer,
+  reclaimExpiredToken,
   encryptPassword,
   expiryTimer,
 } = await import("./users");
@@ -67,11 +86,13 @@ beforeAll(() => {
   // file's tests, so every query below hits FakePool — not real Postgres (which
   // is ECONNREFUSED on CI). This is the contract the lazy pool documents.
   mock.module("pg", pgMock);
+  mock.module("./logger", loggerMock);
   resetPool();
 });
 
 afterAll(() => {
   restoreLeaves();
+  mock.module("./logger", () => realLogger);
   resetPool();
 });
 
@@ -524,10 +545,104 @@ describe("setUserInfo", () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a registered account's expired reset token and clears it", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const expiredRow = makeUserRow({
+      user_id: "u-1",
+      username: "alice",
+      email: "a@b.c",
+      password: "hash",
+      token: "stale-token",
+      expiry: past,
+    });
+    mockQuery
+      .mockResolvedValueOnce(rows(expiredRow))
+      .mockResolvedValueOnce(rows(expiredRow))
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    await expect(
+      setUserInfo({
+        email: "a@b.c",
+        username: "attacker-choice",
+        password: "attacker-password",
+        token: "stale-token",
+      })
+    ).rejects.toThrow(/token is expired/);
+
+    // The stale token is nulled, and no write carries a password hash.
+    const updates = mockQuery.mock.calls.filter(([sql]) =>
+      /^\s*UPDATE\s+users\s+SET/i.test(sql)
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toEqual([null, null, "u-1"]);
+    const hashed = mockQuery.mock.calls
+      .flatMap(([, values]) => (values as unknown[]) ?? [])
+      .find((v) => typeof v === "string" && /^\$2[aby]\$/.test(v));
+    expect(hashed).toBeUndefined();
+  });
+
+  it("does not delete a registered account whose reset token expired", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const expiredRow = makeUserRow({
+      user_id: "u-1",
+      email: "a@b.c",
+      password: "hash",
+      token: "stale-token",
+      expiry: past,
+    });
+    mockQuery
+      .mockResolvedValueOnce(rows(expiredRow))
+      .mockResolvedValueOnce(rows(expiredRow))
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    await expect(
+      setUserInfo({
+        email: "a@b.c",
+        username: "attacker-choice",
+        password: "attacker-password",
+        token: "stale-token",
+      })
+    ).rejects.toThrow(/token is expired/);
+
+    const deletes = mockQuery.mock.calls.filter(([sql]) =>
+      /^\s*DELETE\s+FROM\s+users/i.test(sql)
+    );
+    expect(deletes).toHaveLength(0);
+  });
+
+  it("never reaches the expiry gate for an unclaimed sign-up", async () => {
+    // `getUser` routes through `toUser`, which rejects a password-less row, so
+    // a placeholder cannot get as far as the expiry check. Reclaiming those
+    // rows is the timer's job.
+    mockQuery.mockResolvedValueOnce(
+      rows(
+        makeUserRow({
+          user_id: "u-1",
+          username: "user_abc12345",
+          email: "a@b.c",
+          password: null,
+          token: "stale-token",
+          expiry: new Date(Date.now() - 1000).toISOString(),
+        })
+      )
+    );
+
+    await expect(
+      setUserInfo({
+        email: "a@b.c",
+        username: "alice",
+        password: "p",
+        token: "stale-token",
+      })
+    ).rejects.toThrow(/no password set/);
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
   it("updates the row on matching token for a user whose username is already set", async () => {
-    // existingUser.username is set → setUserInfo skips the new-account path
-    // (expiry / collision checks) and goes straight to UPDATE with the new
-    // password, clearing token+expiry. The existing username wins over input.
+    // existingUser.username is set → setUserInfo skips the collision check and
+    // goes straight to UPDATE with the new password, clearing token+expiry.
+    // The existing username wins over input.
     mockQuery
       .mockResolvedValueOnce(
         rows(
@@ -591,5 +706,150 @@ describe("startTimer", () => {
     const secondTimer = expiryTimer["u-1"];
     expect(secondTimer).toBeDefined();
     expect(secondTimer).not.toBe(firstTimer);
+  });
+
+  it("logs a repository fault instead of rejecting unhandled", async () => {
+    mockLoggerError.mockClear();
+    const realSetTimeout = globalThis.setTimeout;
+    let fire: (() => void) | undefined;
+    globalThis.setTimeout = ((callback: () => void) => {
+      fire = callback;
+      return realSetTimeout(() => {}, 0);
+    }) as unknown as typeof globalThis.setTimeout;
+    try {
+      startTimer("u-1");
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+
+    mockQuery.mockRejectedValueOnce(new Error("connection terminated"));
+    expect(fire).toBeDefined();
+    expect(() => fire!()).not.toThrow();
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+
+    expect(mockLoggerError).toHaveBeenCalled();
+  });
+});
+
+const deleteStatements = () =>
+  mockQuery.mock.calls
+    .map(([sql]) => sql)
+    .filter((sql) => /^\s*DELETE\s+FROM\s+users/i.test(sql));
+
+const updateStatements = () =>
+  mockQuery.mock.calls.filter(([sql]) =>
+    /^\s*UPDATE\s+users\s+SET/i.test(sql)
+  );
+
+describe("reclaimExpiredToken", () => {
+  const past = new Date(Date.now() - 1000).toISOString();
+  const future = new Date(Date.now() + 60_000).toISOString();
+
+  it("does not delete a registered account whose reset token expired", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: "hashed", token: "t", expiry: past }))
+    );
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("nulls token and expiry on a registered account whose reset token expired", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: "hashed", token: "stale", expiry: past }))
+    );
+
+    await reclaimExpiredToken("u-1");
+
+    const updates = updateStatements();
+    expect(updates).toHaveLength(1);
+    const [sql, values] = updates[0];
+    expect(sql).toMatch(/token = \$\d+/);
+    expect(sql).toMatch(/expiry = \$\d+/);
+    expect(values).toEqual([null, null, "u-1"]);
+  });
+
+  it("leaves a registered account alone while its reset token is live", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: "hashed", token: "live", expiry: future }))
+    );
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+    expect(updateStatements()).toHaveLength(0);
+  });
+
+  it("deletes an unclaimed sign-up whose window has passed", async () => {
+    mockLoggerInfo.mockClear();
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(makeUserRow({ password: null, token: "t", expiry: past }))
+      )
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(1);
+    expect(mockLoggerInfo).toHaveBeenCalled();
+  });
+
+  it("does not report a reclaim when the DELETE itself fails", async () => {
+    mockLoggerInfo.mockClear();
+    mockLoggerError.mockClear();
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(makeUserRow({ password: null, token: "t", expiry: past }))
+      )
+      .mockRejectedValueOnce(new Error("canceling statement due to timeout"));
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(1);
+    expect(mockLoggerError).toHaveBeenCalled();
+    expect(mockLoggerInfo).not.toHaveBeenCalled();
+  });
+
+  it("does not report a reclaim when the DELETE matches no row", async () => {
+    mockLoggerInfo.mockClear();
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(makeUserRow({ password: null, token: "t", expiry: past }))
+      )
+      .mockResolvedValueOnce(rows());
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(1);
+    expect(mockLoggerInfo).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unclaimed sign-up that is still inside its window", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: "t", expiry: future }))
+    );
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("leaves a placeholder that carries no expiry", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: null, expiry: null }))
+    );
+
+    await reclaimExpiredToken("u-1");
+
+    expect(deleteStatements()).toHaveLength(0);
+  });
+
+  it("reads the row without routing through toUser", async () => {
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password: null, token: "t", expiry: past }))
+    );
+
+    await expect(reclaimExpiredToken("u-1")).resolves.toBeUndefined();
   });
 });
