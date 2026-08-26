@@ -80,8 +80,8 @@ describe("useAnchoredSelectedAccount", () => {
     expect(settled).toBe("first@x.com");
   });
 
-  // Issue 786's shape: a search term left in `selectedAccount` by a reload out
-  // of Search mode. No row highlights it and no affordance recovers it.
+  // A search term left in `selectedAccount` by a reload out of Search mode.
+  // No row highlights it and no affordance recovers it.
   it("re-anchors a name no list contains, in one write", async () => {
     const { writes, settled } = await drive("keyword", Category.AllMails, {
       received,
@@ -126,9 +126,9 @@ describe("useAnchoredSelectedAccount", () => {
     expect(settled).toBe("keyword");
   });
 
-  // A pending accounts fetch has no lists yet. Doubly covered — the resolver
-  // also declines an empty payload — so this asserts the property, not the
-  // `!lists` guard, which is type narrowing.
+  // A pending accounts fetch has no lists at all, which is not the same as
+  // three empty ones: accountsForCategory destructures its payload, so
+  // reaching the resolver with nothing loaded throws rather than declining.
   it("writes nothing before the payload has loaded", async () => {
     const { writes, settled } = await drive(
       "second@x.com",
