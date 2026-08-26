@@ -514,6 +514,10 @@ describe("onData handler", () => {
           text: "Admin <admin@test.com>",
           value: [{ address: "admin@test.com", name: "Admin" }]
         },
+        to: {
+          text: "recipient@other.com",
+          value: [{ address: "recipient@other.com", name: "" }]
+        },
         subject: "Hello",
         html: "<p>body</p>",
         text: "body",
