@@ -44,8 +44,9 @@ import { MailsSynchronizer } from "client/Box";
 import { mergeSavedAccounts } from "./savedAccounts";
 import {
   accountsForCategory,
-  resolveSelectedAccount
+  categoryForAccount
 } from "./selectableAccounts";
+import { useAnchoredSelectedAccount } from "./useAnchoredSelectedAccount";
 
 import "./index.scss";
 
@@ -167,22 +168,12 @@ const Accounts = ({
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
-  // Keep selectedAccount on an account the current category lists — picking
-  // its first one on a fresh login, and re-anchoring a name the list does not
-  // contain. Outside Search the value is an account key, so such a name is
-  // unreachable state rather than a selection: a search term left behind by a
-  // reload out of Search mode, or an account whose last mail here was deleted.
-  // No row highlights, the pane has nothing to render, and no affordance
-  // recovers it.
-  useEffect(() => {
-    if (!query.isSuccess || !query.data) return;
-    const resolved = resolveSelectedAccount(
-      selectedAccount,
-      selectedCategory,
-      query.data
-    );
-    if (resolved !== null) setSelectedAccount(resolved);
-  }, [selectedAccount, selectedCategory, query.isSuccess, query.data]);
+  useAnchoredSelectedAccount(
+    selectedAccount,
+    selectedCategory,
+    query.isSuccess ? query.data : undefined,
+    setSelectedAccount
+  );
 
   const touchStartHandler = () => setShowSortOptions(false);
 
@@ -242,12 +233,14 @@ const Accounts = ({
       const accountName = data.key;
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
-        // A found account in the search side-tab jumps to that account's All
-        // view (the search term lives in selectedAccount, so we must switch
-        // category as well as the account).
+        // A found account in the search side-tab jumps to the category that
+        // lists it (the search term lives in selectedAccount, so we must
+        // switch category as well as the account).
         if (selectedCategory === Category.Search) {
           setPage(1);
-          setSelectedCategory(Category.AllMails);
+          setSelectedCategory(
+            categoryForAccount(accountName, { received, sent, spam })
+          );
           setSelectedAccount(accountName);
           if (viewSize.width <= 750) setIsAccountsOpen(false);
           return;

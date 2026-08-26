@@ -37,18 +37,22 @@ export const accountsForCategory = (
 };
 
 /**
- * The `selectedAccount` the current category requires, or `null` when the
- * stored one already belongs to it and nothing has to change.
+ * The `selectedAccount` the current category requires, or `null` when nothing
+ * has to change.
  *
- * Deciding validity and the fallback in one place is what keeps the caller
- * loop-free. Split across two effects reading two different lists, each write
- * is rejected by the other on the next render whenever the current category
- * lists nothing.
+ * Deciding validity and the fallback together is what keeps the caller
+ * loop-free: the only value ever returned is a member of the category's own
+ * list, and a member is accepted on the next pass.
  *
- * A payload holding no accounts at all resolves to `null`: the accounts route
- * answers `success` with three empty lists when its stats query fails, so
- * reading that as "this user owns no address" would let a transient server
- * error erase a selection that is about to be valid again.
+ * A category listing nothing resolves to `null` rather than clearing. The
+ * sidebar reads "This category is empty" either way, so clearing buys nothing
+ * and costs a real selection — the trip back to a populated category would
+ * re-anchor to its first account instead of the one the user chose. It also
+ * covers the payload the accounts route answers `success` with when its stats
+ * queries fail: three empty lists, which read as "this user owns no address"
+ * would let a transient server error erase a live selection. A partial failure
+ * — one bucket empty while the others return — is still indistinguishable from
+ * truth here.
  */
 export const resolveSelectedAccount = (
   selectedAccount: string,
@@ -57,14 +61,35 @@ export const resolveSelectedAccount = (
 ): string | null => {
   if (category === Category.Search) return null;
 
-  const { received = [], sent = [], spam = [] } = lists;
-  if (!received.length && !sent.length && !spam.length) return null;
-
   const listed = accountsForCategory(category, lists);
+  if (!listed.length) return null;
   if (selectedAccount && listed.some((a) => a.key === selectedAccount)) {
     return null;
   }
 
-  const resolved = listed.length ? listed[0].key : "";
-  return resolved === selectedAccount ? null : resolved;
+  return listed[0].key;
+};
+
+/**
+ * The category whose list hosts `accountKey`, for a jump made outside the
+ * category tabs.
+ *
+ * The search side-tab is fed by a query that spans spam as well as the
+ * spam-excluded received mail, so an address whose only match is spam is
+ * listed there and absent from `received`. Landing that click on All Mails
+ * would select a name that category cannot host, and the anchor would move it
+ * straight off the account the user clicked.
+ */
+export const categoryForAccount = (
+  accountKey: string,
+  lists: AccountLists
+): Category => {
+  const hosting = [
+    Category.AllMails,
+    Category.SpamMails,
+    Category.SentMails
+  ].find((category) =>
+    accountsForCategory(category, lists).some((a) => a.key === accountKey)
+  );
+  return hosting ?? Category.AllMails;
 };

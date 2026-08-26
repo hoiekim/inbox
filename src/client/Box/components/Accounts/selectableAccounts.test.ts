@@ -3,6 +3,7 @@ import { Account } from "common";
 import { Category } from "client";
 import {
   accountsForCategory,
+  categoryForAccount,
   resolveSelectedAccount
 } from "./selectableAccounts";
 
@@ -100,18 +101,41 @@ describe("resolveSelectedAccount", () => {
     );
   });
 
-  it("clears a selection the category cannot host", () => {
+  // A category with nothing to offer must not spend the selection: the
+  // sidebar says the category is empty either way, and the trip back to a
+  // populated category would then re-anchor to its first account rather than
+  // this one.
+  it("keeps a real selection when the category lists nothing", () => {
     expect(
-      resolveSelectedAccount("read@x.com", Category.SentMails, {
+      resolveSelectedAccount("starred@x.com", Category.SentMails, {
         received,
         sent: []
       })
-    ).toBe("");
+    ).toBe(null);
+    expect(
+      resolveSelectedAccount("starred@x.com", Category.SpamMails, {
+        received,
+        spam: []
+      })
+    ).toBe(null);
   });
 
-  // The infinite-loop guard: with the category list empty and nothing
-  // selected there is no next value, so the effect must not write. Returning
-  // "" here instead of null makes <Accounts> set state on every render.
+  it("never resolves to an account the category does not list", () => {
+    const offered: string[] = [];
+    for (const category of Object.values(Category)) {
+      for (const start of ["", "phantom@x.com", "read@x.com", "sender@x.com"]) {
+        const next = resolveSelectedAccount(start, category, lists);
+        if (next === null) continue;
+        const listed = accountsForCategory(category, lists).map((a) => a.key);
+        if (!listed.includes(next)) offered.push(`${category} | "${start}"`);
+      }
+    }
+    expect(offered).toEqual([]);
+  });
+
+  // With the category list empty there is no next value, so the caller must
+  // not write. Returning "" here instead of null makes <Accounts> set state on
+  // every render.
   it("returns null rather than re-clearing an already-empty selection", () => {
     expect(
       resolveSelectedAccount("", Category.SentMails, { received, sent: [] })
@@ -127,9 +151,7 @@ describe("resolveSelectedAccount", () => {
   });
 
   // Loop-freedom as a property: feeding the resolver its own output back has
-  // to settle, for every category and every payload shape. The two-effect
-  // shape this replaced never settled when the current category listed
-  // nothing — it alternated between "" and received[0] forever.
+  // to settle, for every category and every payload shape.
   it("settles in at most one step from any selection, category and payload", () => {
     const payloads: [string, Parameters<typeof resolveSelectedAccount>[2]][] = [
       ["all populated", lists],
@@ -188,5 +210,53 @@ describe("resolveSelectedAccount", () => {
         spam: []
       })
     ).toBe(null);
+  });
+});
+
+describe("categoryForAccount", () => {
+  it("sends a received account to All Mails", () => {
+    expect(categoryForAccount("read@x.com", lists)).toBe(Category.AllMails);
+  });
+
+  // The search side-tab spans spam, which the received list excludes, so a
+  // spam-only match has to land on the spam view or the anchor moves it off
+  // the account the user clicked.
+  it("sends a spam-only account to Spam Mails", () => {
+    expect(categoryForAccount("spammy@x.com", lists)).toBe(Category.SpamMails);
+  });
+
+  it("sends a sent-only account to Sent Mails", () => {
+    expect(categoryForAccount("sender@x.com", lists)).toBe(Category.SentMails);
+  });
+
+  // An address that also holds ordinary received mail belongs on its primary
+  // view, not on whichever list the matching mail happened to sit in.
+  it("prefers All Mails when more than one list holds the account", () => {
+    const alsoSent = {
+      received: [makeAccount("me@x.com")],
+      sent: [makeAccount("me@x.com")]
+    };
+    expect(categoryForAccount("me@x.com", alsoSent)).toBe(Category.AllMails);
+
+    const alsoSpam = {
+      received: [makeAccount("me@x.com")],
+      spam: [makeAccount("me@x.com")]
+    };
+    expect(categoryForAccount("me@x.com", alsoSpam)).toBe(Category.AllMails);
+  });
+
+  it("falls back to All Mails for an account no list holds", () => {
+    expect(categoryForAccount("phantom@x.com", lists)).toBe(Category.AllMails);
+  });
+
+  // Every category it can answer with must actually host the account, or the
+  // click lands on a list the selection is not in.
+  it("only answers with a category that lists the account", () => {
+    for (const key of ["read@x.com", "sender@x.com", "spammy@x.com"]) {
+      const category = categoryForAccount(key, lists);
+      expect(accountsForCategory(category, lists).map((a) => a.key)).toContain(
+        key
+      );
+    }
   });
 });

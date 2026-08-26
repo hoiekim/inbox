@@ -59,3 +59,17 @@ export const removeAccountFromBucket = (
   ...data,
   [bucket]: data[bucket].filter((account) => account.key !== key)
 });
+
+/**
+ * Drops the account from the bucket `category` lists, or hands `data` back
+ * untouched when the category only shows a filtered view of one — the emptied
+ * list there is a counter reaching zero, not the account leaving the bucket.
+ */
+export const evictAccountFromCategory = (
+  data: AccountsGetResponse,
+  category: Category,
+  key: string
+): AccountsGetResponse =>
+  listsWholeBucket(category)
+    ? removeAccountFromBucket(data, bucketForCategory(category), key)
+    : data;

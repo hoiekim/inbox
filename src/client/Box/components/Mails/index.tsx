@@ -54,8 +54,7 @@ import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
 import {
   bucketForCategory,
-  listsWholeBucket,
-  removeAccountFromBucket,
+  evictAccountFromCategory,
   updateAccountInBucket
 } from "./accountsBucket";
 
@@ -611,17 +610,11 @@ const RenderedMails = ({ page }: { page: number }) => {
   };
 
   const removeAccountFromQueryData = () => {
-    // Only a category that lists its bucket whole can conclude anything from
-    // its list emptying. Under New Mails or Saved Mails the account is still
-    // in `received` holding the mail the filter excluded — the counter updates
-    // above are what drop it from those two lists.
-    if (!listsWholeBucket(selectedCategory)) return;
-
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      return removeAccountFromBucket(
+      return evictAccountFromCategory(
         oldData,
-        bucketForCategory(selectedCategory),
+        selectedCategory,
         selectedAccount
       );
     });
@@ -661,9 +654,8 @@ const RenderedMails = ({ page }: { page: number }) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      // Saved mail is counted on the received/sent account it belongs to; a
-      // spam view stars the received one, so this mapping is narrower than
-      // bucketForCategory's.
+      // A starred spam mail is counted on the received account rather than
+      // the spam one, so this mapping is narrower than bucketForCategory's.
       const bucket =
         selectedCategory === Category.SentMails ? "sent" : "received";
       return updateAccountInBucket(

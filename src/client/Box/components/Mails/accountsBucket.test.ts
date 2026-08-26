@@ -3,6 +3,7 @@ import { Account } from "common";
 import { Category } from "client";
 import {
   bucketForCategory,
+  evictAccountFromCategory,
   listsWholeBucket,
   removeAccountFromBucket,
   updateAccountInBucket
@@ -110,5 +111,57 @@ describe("removeAccountFromBucket", () => {
     expect(next.sent.map((a) => a.key)).toEqual(["me@x.com"]);
     expect(next.received).not.toBe(before.received);
     expect(before.received).toHaveLength(2);
+  });
+});
+
+describe("evictAccountFromCategory", () => {
+  it("drops the account from the bucket a whole-bucket category lists", () => {
+    expect(
+      evictAccountFromCategory(
+        data(),
+        Category.AllMails,
+        "me@x.com"
+      ).received.map((a) => a.key)
+    ).toEqual(["other@x.com"]);
+    expect(
+      evictAccountFromCategory(data(), Category.SentMails, "me@x.com").sent
+    ).toEqual([]);
+    expect(
+      evictAccountFromCategory(data(), Category.SpamMails, "spammy@x.com").spam
+    ).toEqual([]);
+  });
+
+  it("leaves the other buckets alone", () => {
+    const next = evictAccountFromCategory(
+      data(),
+      Category.AllMails,
+      "me@x.com"
+    );
+    expect(next.sent.map((a) => a.key)).toEqual(["me@x.com"]);
+    expect(next.spam.map((a) => a.key)).toEqual(["spammy@x.com"]);
+  });
+
+  // Trashing the last unread mail empties the New Mails list without the
+  // account leaving `received` — it still holds every read mail. Evicting on
+  // that signal strands a real account out of every other view until a
+  // refetch.
+  it("keeps the account when the category only filters a bucket", () => {
+    for (const category of [Category.NewMails, Category.SavedMails]) {
+      expect(
+        evictAccountFromCategory(data(), category, "me@x.com").received.map(
+          (a) => a.key
+        )
+      ).toEqual(["me@x.com", "other@x.com"]);
+    }
+  });
+
+  it("hands back the same payload for a category that lists no bucket", () => {
+    const before = data();
+    expect(
+      evictAccountFromCategory(before, Category.NewMails, "me@x.com")
+    ).toBe(before);
+    expect(evictAccountFromCategory(before, Category.Search, "me@x.com")).toBe(
+      before
+    );
   });
 });
