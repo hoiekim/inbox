@@ -7,6 +7,7 @@ import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
 import { UploadedFile } from "express-fileupload";
 import { logger } from "../logger";
+import { sendAlarm } from "../alarm";
 
 const { MAILGUN_KEY = "mailgun_key" } = process.env;
 
@@ -30,6 +31,22 @@ const getAttachments = (files?: UploadedFileDynamicArray): CustomFile[] => {
   if (Array.isArray(files)) return files.map(parseFile);
   else if (files) return [parseFile(files)];
   else return [];
+};
+
+// One multipart upload per address against a 30s-timeout client, so an
+// unbounded Bcc list would otherwise put every upload in flight in one tick.
+const MAX_CONCURRENT_SENDS = 5;
+
+const sendBatched = async <T>(
+  addresses: string[],
+  send: (address: string) => Promise<T>
+): Promise<PromiseSettledResult<T>[]> => {
+  const results: PromiseSettledResult<T>[] = [];
+  for (let i = 0; i < addresses.length; i += MAX_CONCURRENT_SENDS) {
+    const batch = addresses.slice(i, i + MAX_CONCURRENT_SENDS);
+    results.push(...(await Promise.allSettled(batch.map(send))));
+  }
+  return results;
 };
 
 export const sendMailgunMail = async (
@@ -103,19 +120,48 @@ export const sendMailgunMail = async (
     "h:In-Reply-To": inReplyTo
   });
 
-  // A per-recipient send carries no Cc: every Cc address is host-domain here,
-  // or one of them would have been the visible To.
-  const data = visibleTo.length
-    ? await mg.messages.create(EMAIL_DOMAIN, message(visibleTo, { cc, bcc }))
-    : (
-        await Promise.all(
-          externalBcc.map((address) =>
-            mg.messages.create(EMAIL_DOMAIN, message([address]))
-          )
-        )
-      )[0];
+  // Only external addresses go to Mailgun: a host-domain Cc or Bcc handed to
+  // the relay comes back at our own MX on an unauthenticated leg, which is
+  // refused with a 450 and retried for Mailgun's full window.
+  if (visibleTo.length) {
+    const data = await mg.messages.create(
+      EMAIL_DOMAIN,
+      message(visibleTo, {
+        cc: externalCc.join(",") || undefined,
+        bcc: externalBcc.join(",") || undefined
+      })
+    );
+    logger.info("Email sending request succeeded");
+    return data;
+  }
+
+  const results = await sendBatched(externalBcc, (address) =>
+    mg.messages.create(EMAIL_DOMAIN, message([address]))
+  );
+  const delivered = results.find((result) => result.status === "fulfilled");
+  const failed = externalBcc.filter((_, i) => results[i].status === "rejected");
+
+  if (!delivered) {
+    const [firstRejection] = results.filter(
+      (result) => result.status === "rejected"
+    );
+    throw firstRejection
+      ? firstRejection.reason
+      : new Error("No deliverable recipient");
+  }
+
+  // Some recipients already hold the message, so rejecting the whole send
+  // would leave the user resending to everyone and no Sent record for the
+  // copies that landed. Keep the send successful and alarm the gap instead.
+  if (failed.length) {
+    logger.error("Some Bcc recipients were not delivered", { failed });
+    sendAlarm(
+      "Mail Send Partially Failed",
+      `**Undelivered Bcc recipients:** ${failed.join(", ")}`
+    ).catch(() => undefined);
+  }
 
   logger.info("Email sending request succeeded");
 
-  return data;
+  return delivered.value;
 };

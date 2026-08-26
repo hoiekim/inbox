@@ -538,6 +538,7 @@ describe("onData handler", () => {
     };
     expect(mailData.sender).toBe("sales");
     expect(mailData.to).toBe("recipient@other.com");
+    expect((mailData as { bcc?: string }).bcc).toBeUndefined();
     expect((mailData as { senderFullName: string }).senderFullName).toBe("Admin");
   });
 

@@ -123,6 +123,25 @@ describe("validateMailData", () => {
       expect(result.error).toBe("Recipient email address is required");
     });
 
+    // Separators alone parse to zero addresses, and a send admitted here
+    // reaches nobody while the compose UI is told it succeeded.
+    it("should reject a recipient field holding only separators", () => {
+      const result = validateMailData({ sender: "admin", to: "," });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("Recipient email address is required");
+    });
+
+    it("should reject separator-only text across every recipient field", () => {
+      const result = validateMailData({
+        sender: "admin",
+        to: " , ",
+        cc: ",,",
+        bcc: " ",
+      });
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe("Recipient email address is required");
+    });
+
     it("should reject invalid email in recipient list", () => {
       const result = validateMailData({
         sender: "admin",

@@ -333,4 +333,77 @@ describe("sendMailgunMail", () => {
     const mail = new MailDataToSend({ ...baseMail });
     await expect(sendMailgunMail("admin", mail)).rejects.toThrow("Mailgun API error");
   });
+
+  // A host-domain address handed to the relay is delivered back at our own MX
+  // on an unauthenticated leg, which answers 450 and buys a full retry window.
+  it("should keep host-domain cc and bcc out of the forwarded message", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "outside@gmail.com",
+      cc: "inside@example.com, seen@gmail.com",
+      bcc: "admin@example.com, hidden@gmail.com",
+    });
+    await sendMailgunMail("admin", mail);
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.cc).toBe("seen@gmail.com");
+    expect(msgData.bcc).toBe("hidden@gmail.com");
+  });
+
+  it("should omit cc and bcc entirely when every one of them is host-domain", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "outside@gmail.com",
+      cc: "inside@example.com",
+      bcc: "admin@example.com",
+    });
+    await sendMailgunMail("admin", mail);
+    const msgData = mockMessagesCreate.mock.calls[0][1];
+    expect(msgData.cc).toBeUndefined();
+    expect(msgData.bcc).toBeUndefined();
+  });
+
+  // The copies that landed cannot be recalled, so failing the whole send would
+  // have the user resend to everyone with no Sent record for those copies.
+  it("should report success when part of a bcc fan-out fails", async () => {
+    mockMessagesCreate.mockImplementation((_domain: string, data: { to: string[] }) =>
+      data.to[0] === "two@external.com"
+        ? Promise.reject(new Error("Mailgun 429"))
+        : Promise.resolve({ id: `msg-${data.to[0]}`, message: "Queued. Thank you." })
+    );
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "one@external.com, two@external.com, three@external.com",
+    });
+    const result = await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(3);
+    expect(result).toEqual({ id: "msg-one@external.com", message: "Queued. Thank you." });
+  });
+
+  it("should throw when every recipient of a bcc fan-out fails", async () => {
+    mockMessagesCreate.mockRejectedValue(new Error("Mailgun 429"));
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "one@external.com, two@external.com",
+    });
+    await expect(sendMailgunMail("admin", mail)).rejects.toThrow("Mailgun 429");
+  });
+
+  it("should cap how many bcc uploads are in flight at once", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    mockMessagesCreate.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+      return { id: "msg-id-123", message: "Queued. Thank you." };
+    });
+    const bcc = Array.from({ length: 12 }, (_, i) => `b${i}@external.com`).join(",");
+    const mail = new MailDataToSend({ ...baseMail, to: "", bcc });
+    await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(12);
+    expect(peak).toBeLessThanOrEqual(5);
+  });
 });

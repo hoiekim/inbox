@@ -90,13 +90,15 @@ describe("getSentMail — fields unreachable without the DB", () => {
   // A mixed-case sender must not fragment the Sent account list.
   it("lowercases the constructed from email", () => {
     expect(fnSource).toMatch(
-      /fromEmail\s*=\s*`\$\{sender\}@\$\{userDomain\}`\.toLowerCase\(\)/
+      /fromEmail\s*=\s*`\$\{sender\}@\$\{userDomain\}`\.toLowerCase\(\);\n/
     );
   });
 
   // A bcc-only send names nobody in `To:`, so a to-only envelope list would
   // store no recipients at all.
   it("builds the envelope recipient list from all three fields", () => {
-    expect(fnSource).toMatch(/envelopeTo:\s*envelopeRecipients\(to,\s*cc,\s*bcc\)/);
+    expect(fnSource).toMatch(
+      /envelopeTo:\s*envelopeRecipients\(to,\s*cc,\s*bcc\),\n/
+    );
   });
 });

@@ -9,18 +9,19 @@ export interface ValidationResult {
   error?: string;
 }
 
+const splitAddresses = (emails: string | undefined): string[] =>
+  (emails ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+
 const validateEmailList = (
   emails: string | undefined,
   fieldName: string
 ): ValidationResult => {
   if (!emails) return { valid: true };
 
-  const list = emails
-    .split(",")
-    .map((e) => e.trim())
-    .filter(Boolean);
-
-  for (const email of list) {
+  for (const email of splitAddresses(emails)) {
     if (!isValidEmail(email)) {
       return { valid: false, error: `Invalid ${fieldName} address: ${email}` };
     }
@@ -55,7 +56,7 @@ export const validateMailData = (
     isAddressList(to) &&
     isAddressList(cc) &&
     isAddressList(bcc) &&
-    [to, cc, bcc].some((list) => list?.trim());
+    [to, cc, bcc].some((list) => splitAddresses(list).length);
   if (!hasRecipient) {
     return { valid: false, error: "Recipient email address is required" };
   }
