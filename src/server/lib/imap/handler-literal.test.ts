@@ -576,4 +576,25 @@ describe("IMAP credential logging", () => {
       debugSpy.mockRestore();
     }
   });
+
+  // A credential that non-conformant framing strands on a line of its own is a
+  // bare astring, and the anchored redactor has no `LOGIN` prefix to key on —
+  // so it reaches both the journal and the wire verbatim. Pinned rather than
+  // fixed: the fallback that would cover it changes what the server journals
+  // for every unparseable line.
+  it("leaves a credential stranded on its own line un-redacted", async () => {
+    const debugSpy = spyOn(logger, "debug");
+    try {
+      const { socket } = makeHarness();
+      debugSpy.mockClear();
+
+      socket.emit("data", Buffer.from("A1 LOGIN {5+}\r\nadmin\r\nhunter2\r\n"));
+      await settle();
+
+      expect(journal(debugSpy)).toContain("hunter2");
+      expect(socket.writes).toContain("hunter2 BAD Invalid command\r\n");
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
 });

@@ -156,9 +156,11 @@ export class ImapRequestHandler {
 
     // Parse and dispatch one complete command. `input` is the assembled
     // command text — `{N}` markers, never payloads, which travel out of band
-    // on `literals`. The credential it can still carry is the plain-argument
-    // form (`A1 LOGIN admin hunter2`), so scrub it before it reaches the
-    // journal.
+    // on `literals`. `redactCredentials` is anchored, so it scrubs a credential
+    // only while that credential sits inside a `LOGIN` / `AUTHENTICATE`-prefixed
+    // string: the plain-argument form (`A1 LOGIN admin hunter2`) is covered, a
+    // payload that non-conformant framing strands on a line of its own arrives
+    // as a bare astring and is not.
     const executeCommand = async (
       input: string,
       literals?: string[]
@@ -310,12 +312,14 @@ export class ImapRequestHandler {
               // start. Completeness alone cannot decide it either: `SEARCH
               // SUBJECT {3+}` parses on its own yet legally chains ` FROM {3+}`.
               // The residual: a pipelined command that opens with SP *and*
-              // ends in `{N}` is absorbed as an argument tail, and the pending
-              // command goes with it — neither gets a tagged completion, and a
-              // synchronizing `{N}` draws a continuation for a literal no client
-              // asked for. RFC 3501 §9 gives a command line no leading SP, so
-              // only a hand-crafted client reaches it, and the absorbed text
-              // still never reaches the wire.
+              // ends in `{N}` is absorbed as an argument tail. A synchronizing
+              // `{N}` takes the pending command with it — the continuation
+              // drawn is for a literal no client asked for, and until that
+              // payload arrives neither command gets a tagged completion; a
+              // non-synchronizing `{N+}` carrying its payload inline still
+              // completes the pending command. RFC 3501 §9 gives a command line
+              // no leading SP, so only a hand-crafted client reaches it, and the
+              // absorbed text still never reaches the wire.
               const chained =
                 complete && !/^\s/.test(line)
                   ? null
