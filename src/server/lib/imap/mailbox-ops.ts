@@ -21,6 +21,7 @@ import {
   isUtilityFolder,
   utilityFolder,
   canonicalMailbox,
+  quoteString,
   SENT_MESSAGES_ACCOUNTS_FOLDER,
 } from "./util";
 import { MailboxEntry, Store } from "./store";
@@ -295,7 +296,7 @@ export async function statusMailbox(
       }
     });
 
-    write(`* STATUS "${mailbox}" (${statusItems.join(" ")})\r\n`);
+    write(`* STATUS ${quoteString(mailbox)} (${statusItems.join(" ")})\r\n`);
     write(`${tag} OK STATUS completed\r\n`);
   } catch (error) {
     logger.error("Error getting mailbox status", { component: "imap", mailbox }, error);
@@ -397,7 +398,7 @@ export async function listMailboxes(
     // An empty pattern is a special request for the hierarchy delimiter and the
     // root name of the reference (RFC 3501 §6.3.8); no mailboxes are returned.
     if (pattern === "") {
-      write(`* LIST (\\Noselect) "/" "${reference}"\r\n`);
+      write(`* LIST (\\Noselect) "/" ${quoteString(reference)}\r\n`);
       write(`${tag} OK LIST completed\r\n`);
       return;
     }
@@ -409,7 +410,7 @@ export async function listMailboxes(
       .filter((box) => matchesListPattern(reference, pattern, box))
       .forEach((box) => {
         const attrs = getMailboxAttributes(box, parentPaths);
-        write(`* LIST (${attrs}) "/" "${box}"\r\n`);
+        write(`* LIST (${attrs}) "/" ${quoteString(box)}\r\n`);
       });
     write(`${tag} OK LIST completed\r\n`);
   } catch (error) {
@@ -427,7 +428,7 @@ export async function listSubscribedMailboxes(
 ): Promise<void> {
   try {
     if (pattern === "") {
-      write(`* LSUB (\\Noselect) "/" "${reference}"\r\n`);
+      write(`* LSUB (\\Noselect) "/" ${quoteString(reference)}\r\n`);
       write(`${tag} OK LSUB completed\r\n`);
       return;
     }
@@ -463,7 +464,7 @@ export async function listSubscribedMailboxes(
         const attrs = entry.subscribed
           ? getMailboxAttributes(entry.name, parentPaths)
           : "\\HasChildren \\Noselect";
-        write(`* LSUB (${attrs}) "/" "${entry.name}"\r\n`);
+        write(`* LSUB (${attrs}) "/" ${quoteString(entry.name)}\r\n`);
       });
     write(`${tag} OK LSUB completed\r\n`);
   } catch (error) {

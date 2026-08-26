@@ -113,6 +113,49 @@ describe("mailbox-existence validation (#595)", () => {
       false
     );
   });
+
+  // Same class as the LIST/LSUB cases in mailbox-list.test.ts: a mailbox name
+  // is a stored, user-supplied string emitted as an RFC 3501 quoted string, and
+  // `createMailbox` validates no characters. Without this the STATUS half of
+  // the fix is unpinned — reverting it leaves the whole suite green.
+  it("quotes a mailbox name containing a quoted-special", async () => {
+    const hostile = 'a"b\\';
+    const lines: string[] = [];
+    await statusMailbox(
+      "A1",
+      hostile,
+      ["MESSAGES"],
+      fakeStore([hostile]),
+      (data: string) => {
+        lines.push(data);
+        return true;
+      }
+    );
+
+    const statusLine = lines.find((l) => l.startsWith("* STATUS "));
+    expect(statusLine).toBeDefined();
+
+    // Read the quoted name back with the RFC 3501 escaping rules; an
+    // unterminated string or an illegal escape is the desync signature.
+    const line = statusLine!;
+    let i = line.indexOf('"') + 1;
+    let name = "";
+    for (;;) {
+      expect(i).toBeLessThan(line.length);
+      const ch = line[i];
+      if (ch === "\\") {
+        const next = line[i + 1];
+        expect(next === '"' || next === "\\").toBe(true);
+        name += next;
+        i += 2;
+        continue;
+      }
+      if (ch === '"') break;
+      name += ch;
+      i++;
+    }
+    expect(name).toBe(hostile);
+  });
 });
 
 describe("Store.mailboxExists (#595)", () => {
