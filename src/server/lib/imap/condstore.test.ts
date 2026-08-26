@@ -159,7 +159,8 @@ describe("CONDSTORE — ENABLE handshake", () => {
 const fakeSelectStore = (highest: number): Store =>
   ({
     mailboxExists: async () => true,
-    countMessages: async () => ({ total: 2, unread: 0, maxUid: 9 }),
+    countMessages: async () => ({ total: 2, unread: 0 }),
+    getUidNext: async () => 10,
     getAllUids: async () => [8, 9],
     getFirstUnseenUid: async () => null,
     getHighestModseq: async () => highest,
@@ -213,7 +214,8 @@ describe("CONDSTORE — SELECT / EXAMINE HIGHESTMODSEQ", () => {
 const fakeStatusStore = (highest: number): Store =>
   ({
     mailboxExists: async () => true,
-    countMessages: async () => ({ total: 3, unread: 1, maxUid: 5 }),
+    countMessages: async () => ({ total: 3, unread: 1 }),
+    getUidNext: async () => 6,
     getHighestModseq: async () => highest,
     getUser: () => ({ id: "user-123", username: "admin" } as SignedUser),
   }) as unknown as Store;

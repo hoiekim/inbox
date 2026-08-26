@@ -3,7 +3,7 @@ import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
-const mockCountMessages = mock(() => Promise.resolve({ total: 0, unread: 0, maxUid: 0 }));
+const mockCountMessages = mock(() => Promise.resolve({ total: 0, unread: 0 }));
 const mockGetMailsByRange = mock(() => Promise.resolve(new Map()));
 const mockSetMailFlags = mock(() => Promise.resolve());
 const mockSearchMailsByUid = mock(() => Promise.resolve([]));
@@ -13,6 +13,7 @@ const mockGetAllUids = mock(() => Promise.resolve([]));
 const mockGetFirstUnseenUid = mock<(...args: unknown[]) => Promise<number | null>>(() =>
   Promise.resolve(null)
 );
+const mockGetUidNext = mock<(...args: unknown[]) => Promise<number>>(() => Promise.resolve(1));
 
 mock.module("../postgres/repositories/mails", () => ({
   getAccountStats: mockGetAccountStats,
@@ -24,6 +25,7 @@ mock.module("../postgres/repositories/mails", () => ({
   expungeDeletedMails: mockExpunge,
   getAllUids: mockGetAllUids,
   getFirstUnseenUid: mockGetFirstUnseenUid,
+  getUidNext: mockGetUidNext,
 }));
 
 const mockGetMailboxesByUser = mock(() => Promise.resolve([]));
@@ -38,6 +40,7 @@ mock.module("server", () => ({
 }));
 
 import { Store, simplifyCriterion } from "./store";
+import { UTILITY_FOLDERS } from "./util";
 
 const makeUser = (overrides: Partial<{ id: string; username: string; email: string }> = {}) =>
   new SignedUser({
@@ -379,5 +382,106 @@ describe("Store.getAllUids", () => {
     const store = new Store(makeUser());
 
     expect(await store.getAllUids("INBOX")).toBeNull();
+  });
+});
+
+/**
+ * `Store.getUidNext` must peek the counter row its box's WRITE path reserves
+ * through, and there are three of them: the domain counter, the per-mailbox
+ * counter, and the per-account counter. Reading any other row means COALESCE
+ * falls through to a seed over rows the box does not own, and UIDNEXT comes
+ * back at or below UIDs already handed out.
+ *
+ * Two edits would silently restore that, which is why the axis is asserted per
+ * UID-space class rather than per path shape: harmonising this with its
+ * `resolveMappedBox` siblings (giving the peek a raw-box-path scope nothing
+ * writes), and collapsing the three branches back onto the address axis
+ * (which puts `Drafts`/`Junk`/`Starred`/`Trash` on counters nothing writes).
+ */
+describe("Store.getUidNext — counter key axis", () => {
+  beforeEach(() => {
+    mockGetUidNext.mockClear();
+    mockGetUidNext.mockResolvedValue(1);
+  });
+
+  const scopeFor = async (box: string) => {
+    mockGetUidNext.mockClear();
+    const store = new Store(makeUser());
+    await store.getUidNext(box);
+    return mockGetUidNext.mock.calls[0][1];
+  };
+
+  it("reads the domain counter for every box whose UIDs come from mails.uid_domain", async () => {
+    // INBOX and unified Sent Messages hold no mapping rows; Drafts and Junk are
+    // predicates over the same domain UID space. All four are written by
+    // getDomainUidNext, so all four must peek the kind="domain" row.
+    for (const [box, sent] of [
+      ["INBOX", false],
+      ["Sent Messages", true],
+      ["Drafts", false],
+      ["Junk", false],
+    ] as const) {
+      expect(await scopeFor(box)).toEqual({ kind: "domain", sent });
+    }
+  });
+
+  it("reads the per-mailbox counter for a mapped-utility box, with no sent axis", async () => {
+    // Starred/Trash are one mailbox each, reserved through getMailboxUidNext
+    // under the literal box name — the same string mail_mailbox_uid.mailbox holds.
+    expect(await scopeFor("Starred")).toEqual({ kind: "mailbox", mailbox: "Starred" });
+    expect(await scopeFor("Trash")).toEqual({ kind: "mailbox", mailbox: "Trash" });
+  });
+
+  it("canonicalizes a mapped-utility box before using it as the counter scope", async () => {
+    // utilityFolder matches case-insensitively but the pivot rows carry the
+    // canonical spelling, so a lowercased SELECT must not open a second counter.
+    expect(await scopeFor("starred")).toEqual({ kind: "mailbox", mailbox: "Starred" });
+  });
+
+  it("reads the per-account counter keyed by ADDRESS, not the box path", async () => {
+    expect(await scopeFor("INBOX/accounts/bob")).toEqual({
+      kind: "account",
+      account: "bob@alice.example.com",
+      sent: false,
+    });
+    expect(await scopeFor("Sent Messages/accounts/bob")).toEqual({
+      kind: "account",
+      account: "bob@alice.example.com",
+      sent: true,
+    });
+    // `boxToAccount("Archive")` -> "Archive@<domain>", the same string the
+    // COPY/MOVE write path reserves under.
+    expect(await scopeFor("Archive")).toEqual({
+      kind: "account",
+      account: "Archive@alice.example.com",
+      sent: false,
+    });
+  });
+
+  it("never passes a raw box path as an account scope", async () => {
+    for (const box of ["INBOX/accounts/bob", "Sent Messages/accounts/bob", "Archive"]) {
+      const scope = await scopeFor(box);
+      expect(scope.kind).toBe("account");
+      expect(scope.account).not.toBe(box);
+      expect(scope.account).toContain("@");
+    }
+  });
+
+  it("gives every declared utility folder the UID space its declaration names", async () => {
+    // Derived from UTILITY_FOLDERS rather than a hand-written list: a fifth
+    // folder added with either uidSpace is covered the moment it is declared,
+    // which is how Drafts/Junk slipped onto the account counter unnoticed.
+    for (const folder of UTILITY_FOLDERS) {
+      const scope = await scopeFor(folder.name);
+      expect(scope.kind).toBe(folder.uidSpace === "domain" ? "domain" : "mailbox");
+      expect(scope.kind).not.toBe("account");
+    }
+  });
+
+  it("propagates a repository failure instead of substituting a floor", async () => {
+    // A swallowed fault would surface as a too-low UIDNEXT — the bug itself.
+    mockGetUidNext.mockImplementation(() => Promise.reject(new Error("DB down")));
+    const store = new Store(makeUser());
+    await expect(store.getUidNext("INBOX")).rejects.toThrow("DB down");
   });
 });

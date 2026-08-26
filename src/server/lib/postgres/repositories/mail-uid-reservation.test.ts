@@ -3,6 +3,10 @@ import { describe, it, expect } from "bun:test";
 import {
   buildDomainUidQuery,
   buildAccountUidQuery,
+  buildDomainUidNextQuery,
+  buildAccountUidNextQuery,
+  buildMailboxUidQuery,
+  buildMailboxUidNextQuery,
 } from "./mails";
 import { mailUidCountersTable } from "../models";
 import { USER_ID, UID_KIND, UID_SCOPE, SENT, LAST_UID } from "../models";
@@ -77,5 +81,114 @@ describe("buildAccountUidQuery", () => {
     expect(values[3]).toBe(true);
     expect(sql).not.toContain("to_address @>");
     expect(sql).not.toContain("from_address @>");
+  });
+});
+
+/**
+ * UIDNEXT peek.
+ *
+ * UIDNEXT must exceed every UID ever assigned in the mailbox and must never
+ * decrease (RFC 3501 §2.3.1.1). Deriving it from a `MAX(uid)` over the
+ * mailbox's surviving rows violates both the moment the highest-UID mail is
+ * expunged or hard-deleted, so it has to read `mail_uid_counters` — the same
+ * row the reservation increments — without consuming a UID.
+ */
+describe("UIDNEXT peek", () => {
+  it("reads the counter row without allocating — no INSERT, no DO UPDATE", () => {
+    for (const { sql } of [
+      buildDomainUidNextQuery(userId, false),
+      buildAccountUidNextQuery(userId, "user@hoie.kim", false),
+    ]) {
+      expect(sql).toContain(`FROM ${mailUidCountersTable.name}`);
+      expect(sql).not.toContain("INSERT");
+      expect(sql).not.toContain("DO UPDATE");
+      // The counter holds the LAST assigned UID, so UIDNEXT is that plus one.
+      expect(sql).toContain(`SELECT ${LAST_UID} + 1`);
+    }
+  });
+
+  it("targets the same counter row the reservation writes", () => {
+    const peek = buildDomainUidNextQuery(userId, true);
+    const reserve = buildDomainUidQuery(userId, true);
+
+    // Pin the peek's WHERE predicate as a WHOLE, not column-by-column. A
+    // `toContain(col)` loop cannot catch a dropped `AND sent = $4`, because
+    // the seed subquery in the same string carries its own `sent = $4` — the
+    // substring is present either way, and the peek would silently read the
+    // other sent-lane's counter row.
+    const where = peek.sql
+      .replace(/\s+/g, " ")
+      .match(/WHERE ([^)]*?) \)/)?.[1];
+    expect(where).toBe(
+      `${USER_ID} = $1 AND ${UID_KIND} = $2 AND ${UID_SCOPE} = $3 AND ${SENT} = $4`
+    );
+
+    expect(peek.values.slice(0, 4)).toEqual(reserve.values.slice(0, 4));
+
+    const accountPeek = buildAccountUidNextQuery(userId, "user@hoie.kim", false);
+    const accountReserve = buildAccountUidQuery(userId, "user@hoie.kim", false);
+    expect(accountPeek.values).toEqual(accountReserve.values);
+  });
+
+  it("falls back to the reservation's own seed when no counter row exists yet", () => {
+    // A scope that has never reserved (legacy mail predating the counter) must
+    // still report a UIDNEXT above its existing UIDs. COALESCEing onto the
+    // identical seed the first reservation would insert is what makes the
+    // peek and that first allocation agree.
+    const domain = buildDomainUidNextQuery(userId, false);
+    expect(domain.sql).toContain("COALESCE(");
+    expect(domain.sql).toContain("COALESCE(MAX(uid_domain), 0) + 1");
+
+    const account = buildAccountUidNextQuery(userId, "user@hoie.kim", false);
+    expect(account.sql).toContain("COALESCE(MAX(uid), 0) + 1 FROM mail_mailbox_uid");
+    expect(account.values[4]).toBe("INBOX/accounts/user");
+    expect(account.values[5]).toBe("user");
+  });
+
+  it("keeps the seed fallback unfiltered — a filtered MAX is the regression", () => {
+    // The COALESCE fallback DOES read `MAX(uid_domain)` off `mails`; that is
+    // fine because it spans expunged rows (it is "highest ever assigned", not
+    // "highest surviving") and only fires when no counter row exists. What
+    // must never appear is an `expunged = FALSE` filter on it — that is the
+    // shape that drops when the highest-UID mail leaves.
+    for (const { sql } of [
+      buildDomainUidNextQuery(userId, false),
+      buildAccountUidNextQuery(userId, "user@hoie.kim", false),
+    ]) {
+      expect(sql).not.toContain("expunged");
+    }
+  });
+});
+
+describe("buildMailboxUidNextQuery", () => {
+  it("targets the same counter row buildMailboxUidQuery writes", () => {
+    // Starred/Trash reserve through getMailboxUidNext under the literal box
+    // name. A peek that reads any other row reports a UIDNEXT unrelated to the
+    // UIDs the box actually holds, which is what SELECT Starred did while this
+    // peek did not exist and the read fell through to the account counter.
+    const peek = buildMailboxUidNextQuery(userId, "Starred");
+    const reserve = buildMailboxUidQuery(userId, "Starred");
+    expect(peek.values).toEqual(reserve.values);
+    expect(peek.values.slice(0, 4)).toEqual([userId, "mailbox", "Starred", false]);
+  });
+
+  it("reads the counter, never a MAX over surviving pivot rows", () => {
+    const { sql } = buildMailboxUidNextQuery(userId, "Trash");
+    expect(sql).toContain(`FROM ${mailUidCountersTable.name}`);
+    expect(sql).toContain(`SELECT ${LAST_UID} + 1`);
+    expect(sql).not.toContain("INSERT");
+    expect(sql).not.toContain("DO UPDATE");
+    // The MAX that remains is the COALESCE seed, which only fires when no
+    // counter row exists — and it must stay unfiltered for the same reason
+    // the domain and account seeds do.
+    expect(sql).not.toContain("expunged");
+  });
+
+  it("carries no sent axis — one mailbox, not a received/sent pair", () => {
+    const starred = buildMailboxUidNextQuery(userId, "Starred");
+    expect(starred.values[3]).toBe(false);
+    // Distinct scopes must not collapse onto one counter row.
+    const trash = buildMailboxUidNextQuery(userId, "Trash");
+    expect(starred.values[2]).not.toBe(trash.values[2]);
   });
 });
