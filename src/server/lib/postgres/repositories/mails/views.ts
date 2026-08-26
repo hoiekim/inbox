@@ -104,7 +104,3 @@ export const membershipCondition = (
   const expression = membershipExpression(mailbox, sent, prefix);
   return expression === "TRUE" ? "" : ` AND ${expression}`;
 };
-
-/** Whether the box shows a strict subset of the rows its scope selects. */
-export const filtersMembership = (mailbox: string | null, sent: boolean): boolean =>
-  Object.keys(membershipFilter(mailbox, sent)).length > 0;
