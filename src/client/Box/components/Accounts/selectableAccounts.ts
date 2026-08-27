@@ -37,22 +37,39 @@ export const accountsForCategory = (
 };
 
 /**
- * The `selectedAccount` the current category requires, or `null` when nothing
- * has to change.
+ * Whether any list holds `accountKey` — the test for whether the name refers to
+ * a real account at all, as opposed to whether the current category shows it.
+ */
+const isKnownAccount = (
+  accountKey: string,
+  { received = [], sent = [], spam = [] }: AccountLists
+): boolean =>
+  [received, sent, spam].some((list) =>
+    list.some((a) => a.key === accountKey)
+  );
+
+/**
+ * The `selectedAccount` the current category requires, `""` to clear a name no
+ * list holds, or `null` when nothing has to change.
+ *
+ * Realness and listing are separate tests, and collapsing them into one loses a
+ * case either way. A name every list agrees is absent is unreachable state — a
+ * search term left behind by a reload, or an account whose last mail was
+ * deleted — and it has to go, or the header renders it over an empty pane with
+ * no affordance to recover. A real account the current category cannot show is
+ * a selection rather than a phantom: keep it, so the trip back to a category
+ * that lists it lands where the user left off instead of on its first row.
  *
  * Deciding validity and the fallback together is what keeps the caller
- * loop-free: the only value ever returned is a member of the category's own
+ * loop-free: the only account ever returned is a member of the category's own
  * list, and a member is accepted on the next pass.
  *
- * A category listing nothing resolves to `null` rather than clearing. The
- * sidebar reads "This category is empty" either way, so clearing buys nothing
- * and costs a real selection — the trip back to a populated category would
- * re-anchor to its first account instead of the one the user chose. It also
- * covers the payload the accounts route answers `success` with when its stats
- * queries fail: three empty lists, which read as "this user owns no address"
- * would let a transient server error erase a live selection. A partial failure
- * — one bucket empty while the others return — is still indistinguishable from
- * truth here.
+ * A payload holding no accounts at all is indistinguishable from the one the
+ * accounts route answers `success` with when its stats queries fail, so
+ * clearing there can drop a live selection on a transient error. It clears
+ * anyway: that costs one selection and rights itself on the next payload,
+ * whereas keeping it strands the user who just deleted their only account's
+ * last mail, with nothing left to click.
  */
 export const resolveSelectedAccount = (
   selectedAccount: string,
@@ -62,9 +79,13 @@ export const resolveSelectedAccount = (
   if (category === Category.Search) return null;
 
   const listed = accountsForCategory(category, lists);
-  if (!listed.length) return null;
   if (selectedAccount && listed.some((a) => a.key === selectedAccount)) {
     return null;
+  }
+
+  if (!listed.length) {
+    if (!selectedAccount || isKnownAccount(selectedAccount, lists)) return null;
+    return "";
   }
 
   return listed[0].key;

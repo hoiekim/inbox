@@ -101,10 +101,10 @@ describe("resolveSelectedAccount", () => {
     );
   });
 
-  // A category with nothing to offer must not spend the selection: the
-  // sidebar says the category is empty either way, and the trip back to a
-  // populated category would then re-anchor to its first account rather than
-  // this one.
+  // A category with nothing to offer must not spend a selection that some
+  // other list still holds: the sidebar says the category is empty either way,
+  // and the trip back to a populated category would then re-anchor to its
+  // first account rather than this one.
   it("keeps a real selection when the category lists nothing", () => {
     expect(
       resolveSelectedAccount("starred@x.com", Category.SentMails, {
@@ -120,14 +120,45 @@ describe("resolveSelectedAccount", () => {
     ).toBe(null);
   });
 
+  // Realness spans every list, not just `received`: an address can hold sent or
+  // spam mail and no received mail at all, and judging it against `received`
+  // alone would clear a selection the Sent or Spam view still lists.
+  it("keeps a sent-only or spam-only selection when the category lists nothing", () => {
+    expect(
+      resolveSelectedAccount("sender@x.com", Category.SpamMails, {
+        received: [],
+        sent,
+        spam: []
+      })
+    ).toBe(null);
+    expect(
+      resolveSelectedAccount("spammy@x.com", Category.SentMails, {
+        received: [],
+        sent: [],
+        spam
+      })
+    ).toBe(null);
+  });
+
   it("never resolves to an account the category does not list", () => {
+    const payloads: Parameters<typeof resolveSelectedAccount>[2][] = [
+      lists,
+      { received, sent: [], spam: [] },
+      { received: [], sent, spam },
+      {}
+    ];
     const offered: string[] = [];
-    for (const category of Object.values(Category)) {
-      for (const start of ["", "phantom@x.com", "read@x.com", "sender@x.com"]) {
-        const next = resolveSelectedAccount(start, category, lists);
-        if (next === null) continue;
-        const listed = accountsForCategory(category, lists).map((a) => a.key);
-        if (!listed.includes(next)) offered.push(`${category} | "${start}"`);
+    for (const payload of payloads) {
+      for (const category of Object.values(Category)) {
+        for (const start of ["", "phantom@x.com", "read@x.com", "sender@x.com"]) {
+          const next = resolveSelectedAccount(start, category, payload);
+          if (next === null) continue;
+          const listed = accountsForCategory(category, payload).map((a) => a.key);
+          // "" is a clear, not an account, and is only ever right where the
+          // category has no row to anchor to.
+          const ok = next === "" ? !listed.length : listed.includes(next);
+          if (!ok) offered.push(`${category} | "${start}" -> "${next}"`);
+        }
       }
     }
     expect(offered).toEqual([]);
@@ -197,18 +228,42 @@ describe("resolveSelectedAccount", () => {
     expect(resolveSelectedAccount("", Category.Search, lists)).toBe(null);
   });
 
-  // The accounts route answers `success` with three empty lists when its stats
-  // query fails, so an empty payload is not evidence the selection is stale.
-  it("keeps the selection when the payload holds no accounts at all", () => {
-    expect(resolveSelectedAccount("read@x.com", Category.AllMails, {})).toBe(
-      null
-    );
+  // Realness is judged against every list, listing against the current
+  // category's own. A name no list holds is unreachable state wherever it came
+  // from, and an empty category is not a reason to keep it: deleting the last
+  // mail of the only account leaves exactly this payload, and staying put is
+  // the stranding the whole hook exists to end.
+  it("clears a name no list holds when the category lists nothing", () => {
     expect(
-      resolveSelectedAccount("read@x.com", Category.AllMails, {
+      resolveSelectedAccount("search term", Category.SentMails, {
+        received,
+        sent: []
+      })
+    ).toBe("");
+    expect(resolveSelectedAccount("gone@x.com", Category.AllMails, {})).toBe("");
+    expect(
+      resolveSelectedAccount("gone@x.com", Category.AllMails, {
         received: [],
         sent: [],
         spam: []
       })
+    ).toBe("");
+  });
+
+  // Clearing hands the pane back to <GettingStarted>, which is gated on an
+  // empty selection — the affordance the phantom state has none of.
+  it("clears rather than re-anchors when no category can host the name", () => {
+    const afterLastMailDeleted = { received: [], sent: [], spam: [] };
+    let selected = "gone@x.com";
+    const resolved = resolveSelectedAccount(
+      selected,
+      Category.AllMails,
+      afterLastMailDeleted
+    );
+    expect(resolved).toBe("");
+    selected = resolved as string;
+    expect(
+      resolveSelectedAccount(selected, Category.AllMails, afterLastMailDeleted)
     ).toBe(null);
   });
 });
