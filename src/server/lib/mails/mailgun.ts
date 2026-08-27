@@ -88,8 +88,8 @@ export const sendMailgunMail = async (
   // Mailgun renders the visible `To:` header from the `to` parameter and
   // rejects a message that carries none, so the address put there has to be
   // both deliverable off this host and already disclosed to everyone on the
-  // message. An external addressee qualifies, and so does an external Cc — the
-  // `Cc:` header names it anyway. A Bcc address is disclosed to nobody but
+  // message. An external addressee qualifies, and so does an external Cc,
+  // which every recipient already sees. A Bcc address is disclosed to nobody but
   // itself, so a send whose only external recipients are Bcc goes out as one
   // message per recipient. Naming the sender instead hands Mailgun a
   // host-domain recipient, which routes the copy back at our own MX.
@@ -127,7 +127,9 @@ export const sendMailgunMail = async (
     const data = await mg.messages.create(
       EMAIL_DOMAIN,
       message(visibleTo, {
-        cc: externalCc.join(",") || undefined,
+        // A promoted Cc already IS the visible To; repeating it here renders
+        // the same address in both the `To:` and `Cc:` header lines.
+        cc: (externalTo.length ? externalCc.join(",") : "") || undefined,
         bcc: externalBcc.join(",") || undefined
       })
     );

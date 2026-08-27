@@ -35,10 +35,11 @@ mock.module("mailgun.js", () => {
 });
 
 // Mock logger
+const mockLoggerError = mock(() => {});
 mock.module("../logger", () => ({
   logger: {
     info: mock(() => {}),
-    error: mock(() => {}),
+    error: mockLoggerError,
     warn: mock(() => {}),
     debug: mock(() => {}),
   },
@@ -73,6 +74,7 @@ describe("sendMailgunMail", () => {
     mockMessagesCreate.mockResolvedValue({ id: "msg-id-123", message: "Queued. Thank you." });
     mockReadFileSync.mockReset();
     mockReadFileSync.mockReturnValue(Buffer.from("file-content"));
+    mockLoggerError.mockReset();
     process.env.EMAIL_DOMAIN = "example.com";
     process.env.MAILGUN_KEY = "test-key";
   });
@@ -249,7 +251,7 @@ describe("sendMailgunMail", () => {
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.to).toEqual(["outside@gmail.com"]);
-    expect(msgData.cc).toBe("outside@gmail.com");
+    expect(msgData.cc).toBeUndefined();
     expect(msgData.bcc).toBe("hidden@external.com");
   });
 
@@ -378,6 +380,21 @@ describe("sendMailgunMail", () => {
     const result = await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalledTimes(3);
     expect(result).toEqual({ id: "msg-one@external.com", message: "Queued. Thank you." });
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      "Some Bcc recipients were not delivered",
+      { failed: ["two@external.com"] }
+    );
+  });
+
+  it("should not report undelivered recipients when the whole fan-out lands", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "one@external.com, two@external.com",
+    });
+    await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(2);
+    expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
   it("should throw when every recipient of a bcc fan-out fails", async () => {
