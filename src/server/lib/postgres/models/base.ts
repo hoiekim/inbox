@@ -241,6 +241,17 @@ export abstract class Table<
     return result.rows.map((row: unknown) => new this.ModelClass(row));
   }
 
+  async count(
+    filters: TypeSafeFilters<TSchema> = {}
+  ): Promise<number> {
+    const { sql, values } = buildSelectWithFilters(this.name, ["COUNT(*)::int AS count"], {
+      filters,
+      excludeDeleted: this.supportsSoftDelete,
+    });
+    const result = await pool.query(sql, values);
+    return result.rows[0]?.count ?? 0;
+  }
+
   async queryOne(
     filters: TypeSafeFilters<TSchema>
   ): Promise<TModel | null> {
