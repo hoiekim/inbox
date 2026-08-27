@@ -240,17 +240,21 @@ describe("sendMailgunMail", () => {
     expect(msgData.to).toEqual(["outside@gmail.com"]);
   });
 
-  it("should address the visible To to an external cc when no addressee is external", async () => {
+  // The promoted list is the only carrier those recipients have — dropping the
+  // cc parameter for them means a short `to` is silent non-delivery, so more
+  // than one address has to be driven here to tell a complete one from a
+  // truncated one.
+  it("should address the visible To to every external cc when no addressee is external", async () => {
     const mail = new MailDataToSend({
       ...baseMail,
       to: "inside@example.com",
-      cc: "outside@gmail.com",
+      cc: "outside@gmail.com, second@yahoo.com",
       bcc: "hidden@external.com",
     });
     await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
     const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData.to).toEqual(["outside@gmail.com"]);
+    expect(msgData.to).toEqual(["outside@gmail.com", "second@yahoo.com"]);
     expect(msgData.cc).toBeUndefined();
     expect(msgData.bcc).toBe("hidden@external.com");
   });
