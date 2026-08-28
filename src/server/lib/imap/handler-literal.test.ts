@@ -495,6 +495,107 @@ describe("IMAP literal continuation", () => {
     expect(socket.writes).toEqual([]);
   });
 
+  it("still chains a separated literal when the first payload arrives alone", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // The crossed cell: a command that already parses AND a payload flushed in
+    // its own segment. Either axis alone is safe — the sibling test above is
+    // already-parses with the tail in the buffer, and the LOGIN tests are
+    // flushed-alone with a prefix that cannot parse. Together they are the one
+    // shape where an empty buffer does not mean "the client is finished".
+    socket.emit("data", Buffer.from("A1 SEARCH SUBJECT {3+}\r\nfoo"));
+    await tick();
+    socket.emit("data", Buffer.from(" FROM {3+}\r\nbar\r\n"));
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1"]);
+    expect(dispatched[0].request).toEqual({
+      type: "SEARCH",
+      data: {
+        criteria: [
+          { type: "SUBJECT", value: "foo" },
+          { type: "FROM", value: "bar" }
+        ]
+      }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("draws one continuation per declaration for a chained SEARCH flushed alone", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // Synchronizing form of the same shape. A short dispatch here also puts a
+    // `BAD` on a tag the client never issued, so the wire is asserted whole.
+    for (const chunk of ["A1 SEARCH SUBJECT {3}\r\n", "foo", " FROM {3}\r\n", "bar\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(socket.writes).toEqual(["+ go ahead\r\n", "+ go ahead\r\n"]);
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1"]);
+    expect(dispatched[0].request).toEqual({
+      type: "SEARCH",
+      data: {
+        criteria: [
+          { type: "SUBJECT", value: "foo" },
+          { type: "FROM", value: "bar" }
+        ]
+      }
+    });
+  });
+
+  it("chains a separated literal onto a SEARCH whose payload spans two segments", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    for (const chunk of ["A1 SEARCH SUBJECT {6+}\r\nfoo", "bar", " FROM {3+}\r\nbaz\r\n"]) {
+      socket.emit("data", Buffer.from(chunk));
+      await tick();
+    }
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1"]);
+    expect(dispatched[0].request).toEqual({
+      type: "SEARCH",
+      data: {
+        criteria: [
+          { type: "SUBJECT", value: "foobar" },
+          { type: "FROM", value: "baz" }
+        ]
+      }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
+  it("chains through the UID wrapper when the payload arrives alone", async () => {
+    const { socket, dispatched } = makeHarness();
+
+    // UID wraps its subcommand rather than replacing it, so the unbounded
+    // criteria list reaches the gate one level down.
+    socket.emit("data", Buffer.from("A1 UID SEARCH SUBJECT {3+}\r\nfoo"));
+    await tick();
+    socket.emit("data", Buffer.from(" FROM {3+}\r\nbar\r\n"));
+    await settle();
+
+    expect(dispatched.map((d) => d.tag)).toEqual(["A1"]);
+    expect(dispatched[0].request).toEqual({
+      type: "UID",
+      data: {
+        command: "SEARCH",
+        request: {
+          type: "SEARCH",
+          data: {
+            criteria: [
+              { type: "SUBJECT", value: "foo" },
+              { type: "FROM", value: "bar" }
+            ]
+          }
+        }
+      }
+    });
+    expect(socket.writes).toEqual([]);
+  });
+
   it("keeps an unseparated literal tail chaining while the command is incomplete", async () => {
     const { socket, dispatched } = makeHarness();
 

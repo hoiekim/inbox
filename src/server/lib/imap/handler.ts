@@ -33,6 +33,17 @@ const INTERESTING_RESPONSE_BYTES = 4096;
 // and the server answers a continuation to a command that already completed.
 const LITERAL_DECLARATION = /(?:^|\s)\{(\d+)(\+?)\}\s*$/;
 
+// A command whose grammar admits more arguments than it has already consumed.
+// SEARCH is `1*(SP search-key)` (RFC 3501 §6.4.4), so parsing is not evidence
+// that the client is finished: `A1 SEARCH SUBJECT {3+}` is a whole command on
+// its own and still legally chains ` FROM {3+}`. Every other literal-bearing
+// command has fixed arity, so for those a parse success does mean the last
+// argument arrived. UID wraps its subcommand rather than replacing it, so
+// `UID SEARCH` inherits the same unbounded list.
+const chainsUnboundedArguments = (request: ImapRequest): boolean =>
+  request.type === "SEARCH" ||
+  (request.type === "UID" && chainsUnboundedArguments(request.data.request));
+
 // Tag of a command line. RFC 3501 §7 requires a tagged completion for every
 // command, including one that failed to parse, so an unparseable line still
 // needs its first token. Reads the first token of the FIRST line — a
@@ -278,9 +289,20 @@ export class ImapRequestHandler {
               // knows whether the declared literal was the last argument:
               // `A1 LOGIN {7+}` + ["admin\r\n"] fails (keep waiting), while
               // `a1 APPEND INBOX {13+}` + ["Hello World\r\n"] succeeds.
+              //
+              // Parsing is necessary but not sufficient, for the same reason
+              // the chained-tail gate below carries a second discriminator: a
+              // command with an unbounded argument list parses while more of it
+              // is still in flight. Dispatching one on an empty buffer drops
+              // every argument the client had not flushed yet and answers OK on
+              // a result computed from the rest, then reads the remainder as a
+              // fresh command line and puts a `BAD` on a tag the client never
+              // issued.
+              const pending = parseCommand(pendingCommand, pendingLiterals);
               if (
                 buffer.length === 0 &&
-                parseCommand(pendingCommand, pendingLiterals).success
+                pending.success &&
+                !chainsUnboundedArguments(pending.value!.request)
               ) {
                 const input = pendingCommand;
                 const literals = pendingLiterals;
