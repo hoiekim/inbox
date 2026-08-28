@@ -240,6 +240,20 @@ describe("sendMailgunMail", () => {
     expect(msgData.to).toEqual(["outside@gmail.com"]);
   });
 
+  // The egress guard reads the union of all three lists, and a cc-only send is
+  // the one shape where cc is the member holding it open — every other fixture
+  // with an external cc carries a second external recipient elsewhere.
+  it("should send when the only external recipient sits in cc", async () => {
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "inside@example.com",
+      cc: "outside@gmail.com",
+    });
+    await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(1);
+    expect(mockMessagesCreate.mock.calls[0][1].to).toEqual(["outside@gmail.com"]);
+  });
+
   // The promoted list is the only carrier those recipients have — dropping the
   // cc parameter for them means a short `to` is silent non-delivery, so more
   // than one address has to be driven here to tell a complete one from a
@@ -384,6 +398,27 @@ describe("sendMailgunMail", () => {
     const result = await sendMailgunMail("admin", mail);
     expect(mockMessagesCreate).toHaveBeenCalledTimes(3);
     expect(result).toEqual({ id: "msg-one@external.com", message: "Queued. Thank you." });
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      "Some Bcc recipients were not delivered",
+      { failed: ["two@external.com"] }
+    );
+  });
+
+  // The alarm names addresses the send was actually attempted against, so a
+  // host-domain bcc that never reached the relay must not appear in it.
+  it("should report only external recipients as undelivered", async () => {
+    mockMessagesCreate.mockImplementation((_domain: string, data: { to: string[] }) =>
+      data.to[0] === "two@external.com"
+        ? Promise.reject(new Error("Mailgun 429"))
+        : Promise.resolve({ id: `msg-${data.to[0]}`, message: "Queued. Thank you." })
+    );
+    const mail = new MailDataToSend({
+      ...baseMail,
+      to: "",
+      bcc: "inside@example.com, one@external.com, two@external.com",
+    });
+    await sendMailgunMail("admin", mail);
+    expect(mockMessagesCreate).toHaveBeenCalledTimes(2);
     expect(mockLoggerError).toHaveBeenCalledWith(
       "Some Bcc recipients were not delivered",
       { failed: ["two@external.com"] }
