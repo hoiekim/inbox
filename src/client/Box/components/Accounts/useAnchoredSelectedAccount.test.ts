@@ -69,6 +69,54 @@ const drive = async (
   return { writes, settled };
 };
 
+/**
+ * Mounts with no payload, then supplies one — the transition a real session
+ * makes when the accounts fetch resolves. Neither `selectedAccount` nor
+ * `selectedCategory` moves across it, so only an effect that lists `lists`
+ * among its dependencies runs a second time and sees the payload at all.
+ */
+const driveLoad = async (
+  selection: string,
+  category: Category,
+  lists: AccountLists
+) => {
+  const { createElement, useState, act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { useAnchoredSelectedAccount } = await import(
+    "./useAnchoredSelectedAccount"
+  );
+
+  const writes: string[] = [];
+
+  const Probe = ({ loaded }: { loaded: boolean }) => {
+    const [selected, setSelected] = useState(selection);
+    useAnchoredSelectedAccount(
+      selected,
+      category,
+      loaded ? lists : undefined,
+      (next) => {
+        writes.push(next);
+        setSelected(next);
+      }
+    );
+    return null;
+  };
+
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(createElement(Probe, { loaded: false }));
+  });
+  await act(async () => {
+    root.render(createElement(Probe, { loaded: true }));
+  });
+  await act(async () => root.unmount());
+  container.remove();
+
+  return writes;
+};
+
 describe("useAnchoredSelectedAccount", () => {
   it("picks the category's first account on a fresh login", async () => {
     const { writes, settled } = await drive("", Category.AllMails, {
@@ -174,12 +222,25 @@ describe("useAnchoredSelectedAccount", () => {
     });
   });
 
-  // Two lines the render-driven cases above cannot reach. The call site has to
-  // withhold the payload until the query succeeds, or a failed fetch's absent
-  // data destructures to three empty lists and clears a live selection; the
-  // effect has to re-run on every input the resolver reads. Read via `Bun.file`
-  // rather than `fs` — sibling suites `mock.module("fs", ...)`, which is
-  // process-global in Bun.
+  it("re-anchors when the payload arrives, not only when the selection moves", async () => {
+    const writes = await driveLoad("phantom@x.com", Category.AllMails, {
+      received,
+      sent,
+      spam
+    });
+    expect(writes).toEqual(["first@x.com"]);
+  });
+
+  // The one line no render reaches: the call site decides when a payload counts
+  // as loaded, and the hook's own `if (!lists) return` sits downstream of that
+  // choice and cannot audit it. Dropping to `query.data` is not caught by the
+  // undefined guard — react-query v3's error action spreads the previous state
+  // without clearing `data` (`core/query.js`), so a failed refetch leaves the
+  // last payload in place while `isSuccess` goes false, and the resolver would
+  // re-anchor against membership the server has since contradicted. Read via
+  // `Bun.file` rather than `fs`: sibling suites `mock.module("fs", ...)`, which
+  // is process-global in Bun. Whitespace is stripped, not collapsed, so a
+  // rewrap is not a failure.
   it("withholds the payload from the hook until the accounts query succeeds", async () => {
     const source = await Bun.file(
       new URL("./index.tsx", import.meta.url)
@@ -188,16 +249,9 @@ describe("useAnchoredSelectedAccount", () => {
     if (start === -1) throw new Error("hook call site missing from Accounts");
     const end = source.indexOf(");", start);
     if (end === -1) throw new Error("hook call site never closes in Accounts");
-    expect(source.slice(start, end + 2).replace(/\s+/g, " ")).toBe(
-      "useAnchoredSelectedAccount( selectedAccount, selectedCategory, " +
-        "query.isSuccess ? query.data : undefined, setSelectedAccount );"
+    expect(source.slice(start, end + 2).replace(/\s+/g, "")).toBe(
+      "useAnchoredSelectedAccount(selectedAccount,selectedCategory," +
+        "query.isSuccess?query.data:undefined,setSelectedAccount);"
     );
-  });
-
-  it("re-runs the effect on every input the resolver reads", async () => {
-    const source = await Bun.file(
-      new URL("./useAnchoredSelectedAccount.ts", import.meta.url)
-    ).text();
-    expect(source).toContain("}, [selectedAccount, selectedCategory, lists]);");
   });
 });

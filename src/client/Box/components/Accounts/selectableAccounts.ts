@@ -55,9 +55,11 @@ const isKnownAccount = (
  * A name every list agrees is absent is unreachable state — a search term left
  * behind by a reload, or an account whose last mail was deleted — and it has to
  * go, or the header renders it over an empty pane with no affordance to
- * recover. A real account the current category cannot show is a selection
- * rather than a phantom: keep it, so the trip back to a category that lists it
- * lands where the user left off instead of on its first row.
+ * recover. A real account this category cannot show is a selection rather than
+ * a phantom, so an empty category keeps it: clicking an empty tab and clicking
+ * back lands where the user left off instead of on a first row. A category that
+ * does list accounts re-anchors to its first one either way — some row has to
+ * highlight.
  *
  * Deciding validity and the fallback together is what keeps the caller
  * loop-free: the only account ever returned is a member of the category's own
