@@ -654,13 +654,9 @@ const RenderedMails = ({ page }: { page: number }) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      // A starred spam mail is counted on the received account rather than
-      // the spam one, so this mapping is narrower than bucketForCategory's.
-      const bucket =
-        selectedCategory === Category.SentMails ? "sent" : "received";
       return updateAccountInBucket(
         oldData,
-        bucket,
+        bucketForCategory(selectedCategory),
         selectedAccount,
         ({ saved_doc_count }) => ({
           saved_doc_count: save ? saved_doc_count + 1 : saved_doc_count - 1

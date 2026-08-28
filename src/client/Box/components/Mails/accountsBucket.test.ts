@@ -165,3 +165,32 @@ describe("evictAccountFromCategory", () => {
     );
   });
 });
+
+// The helper is pinned above, but nothing renders `Mails`, so a call site that
+// hand-rolls the mapping is invisible to every other assertion here — and the
+// counter it writes stays plausible until the next payload lands.
+// `getAccountStats` builds `received` under `AND is_spam = FALSE`, so a
+// Spam-view star credited to `received` goes to the one bucket the server will
+// never count it in. Read via `Bun.file` rather than `fs`: sibling suites
+// `mock.module("fs", ...)`, which is process-global in Bun. Whitespace is
+// stripped, not collapsed, so a rewrap is not a failure.
+describe("the optimistic account edits in Mails", () => {
+  it("names its bucket through bucketForCategory at every call site", async () => {
+    const source = await Bun.file(
+      new URL("./index.tsx", import.meta.url)
+    ).text();
+
+    const call = "updateAccountInBucket(";
+    const expected =
+      "updateAccountInBucket(oldData,bucketForCategory(selectedCategory)," +
+      "selectedAccount,";
+
+    const sites: string[] = [];
+    for (let at = source.indexOf(call); at !== -1; at = source.indexOf(call, at + 1)) {
+      const stripped = source.slice(at, at + 200).replace(/\s+/g, "");
+      sites.push(stripped.slice(0, expected.length));
+    }
+
+    expect(sites).toEqual([expected, expected, expected, expected]);
+  });
+});
