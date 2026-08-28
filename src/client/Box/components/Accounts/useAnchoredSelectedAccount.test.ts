@@ -117,6 +117,56 @@ const driveLoad = async (
   return writes;
 };
 
+/**
+ * Mounts, then applies one external change: a category switch, or a
+ * `selectedAccount` write from outside the hook as `onClickRefresh` makes.
+ * One `lists` identity is held across both renders, so only a dependency array
+ * naming the axis under test re-runs the effect — and neither case writes on
+ * mount, so the log is the change alone.
+ */
+const driveRerender = async (
+  selection: string,
+  category: Category,
+  lists: AccountLists,
+  change: { category?: Category; selection?: string }
+) => {
+  const { createElement, useState, act } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { useAnchoredSelectedAccount } = await import(
+    "./useAnchoredSelectedAccount"
+  );
+
+  const writes: string[] = [];
+  let setExternally: ((account: string) => void) | undefined;
+
+  const Probe = ({ category: rendered }: { category: Category }) => {
+    const [selected, setSelected] = useState(selection);
+    setExternally = setSelected;
+    useAnchoredSelectedAccount(selected, rendered, lists, (next) => {
+      writes.push(next);
+      setSelected(next);
+    });
+    return null;
+  };
+
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(createElement(Probe, { category }));
+  });
+  await act(async () => {
+    if (change.selection !== undefined) setExternally?.(change.selection);
+    root.render(
+      createElement(Probe, { category: change.category ?? category })
+    );
+  });
+  await act(async () => root.unmount());
+  container.remove();
+
+  return writes;
+};
+
 describe("useAnchoredSelectedAccount", () => {
   it("picks the category's first account on a fresh login", async () => {
     const { writes, settled } = await drive("", Category.AllMails, {
@@ -231,13 +281,37 @@ describe("useAnchoredSelectedAccount", () => {
     expect(writes).toEqual(["first@x.com"]);
   });
 
+  // `onClickRefresh` clears `selectedAccount` synchronously and moves neither
+  // the category nor the payload, so an effect blind to that axis leaves the
+  // sidebar with no highlighted row until the next payload reference arrives —
+  // a window focus, or the ten-minute refetch.
+  it("re-anchors when the selection is cleared from outside the hook", async () => {
+    const writes = await driveRerender(
+      "first@x.com",
+      Category.AllMails,
+      { received, sent, spam },
+      { selection: "" }
+    );
+    expect(writes).toEqual(["first@x.com"]);
+  });
+
+  it("re-anchors when the category moves under a held payload", async () => {
+    const writes = await driveRerender(
+      "sender@x.com",
+      Category.SentMails,
+      { received, sent, spam },
+      { category: Category.AllMails }
+    );
+    expect(writes).toEqual(["first@x.com"]);
+  });
+
   // The one line no render reaches: the call site decides when a payload counts
   // as loaded, and the hook's own `if (!lists) return` sits downstream of that
-  // choice and cannot audit it. Dropping to `query.data` is not caught by the
-  // undefined guard — react-query v3's error action spreads the previous state
-  // without clearing `data` (`core/query.js`), so a failed refetch leaves the
-  // last payload in place while `isSuccess` goes false, and the resolver would
-  // re-anchor against membership the server has since contradicted. Read via
+  // choice and cannot audit it. Dropping to `query.data` is not caught by that
+  // guard — react-query v3's error action spreads the previous state without
+  // clearing `data` (`core/query.js`), so a failed refetch leaves the last
+  // payload in place, and `isSuccess` is the only expression the client has for
+  // whether what it holds is current. Read via
   // `Bun.file` rather than `fs`: sibling suites `mock.module("fs", ...)`, which
   // is process-global in Bun. Whitespace is stripped, not collapsed, so a
   // rewrap is not a failure.
