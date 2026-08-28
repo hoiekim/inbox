@@ -139,14 +139,65 @@ describe("useAnchoredSelectedAccount", () => {
     expect(settled).toBe("second@x.com");
   });
 
+  // The clear is a write of `""`, not the absence of one: the consumer keeps it
+  // by testing `resolved !== null`, and the obvious `if (resolved)` reads as an
+  // equivalent simplification while dropping every clear. Assert the raw value
+  // — filtering the log for truthiness would erase the artifact under test.
+  it("clears a phantom to the empty string when no list holds it", async () => {
+    const { writes, settled } = await drive(
+      "phantom@x.com",
+      Category.SentMails,
+      { received, sent: [], spam }
+    );
+    expect(writes).toEqual([""]);
+    expect(settled).toBe("");
+  });
+
   // The convergence claim, driven rather than argued: every category over a
   // payload whose New/Saved/Sent views are empty, from a selection none of
-  // them list.
-  it("settles in at most one write from any category", async () => {
+  // them list. Asserted as one map so a divergence names its category.
+  it("settles in one write of the right value from any category", async () => {
     const lists = { received: [makeAccount("only@x.com")], sent: [], spam: [] };
+    const writesByCategory: Partial<Record<Category, string[]>> = {};
     for (const category of Object.values(Category)) {
-      const { writes } = await drive("phantom@x.com", category, lists);
-      expect(writes.length).toBeLessThanOrEqual(1);
+      writesByCategory[category] = (
+        await drive("phantom@x.com", category, lists)
+      ).writes;
     }
+    expect(writesByCategory).toEqual({
+      [Category.NewMails]: [""],
+      [Category.AllMails]: ["only@x.com"],
+      [Category.SavedMails]: [""],
+      [Category.SentMails]: [""],
+      [Category.SpamMails]: [""],
+      [Category.Search]: []
+    });
+  });
+
+  // Two lines the render-driven cases above cannot reach. The call site has to
+  // withhold the payload until the query succeeds, or a failed fetch's absent
+  // data destructures to three empty lists and clears a live selection; the
+  // effect has to re-run on every input the resolver reads. Read via `Bun.file`
+  // rather than `fs` — sibling suites `mock.module("fs", ...)`, which is
+  // process-global in Bun.
+  it("withholds the payload from the hook until the accounts query succeeds", async () => {
+    const source = await Bun.file(
+      new URL("./index.tsx", import.meta.url)
+    ).text();
+    const start = source.indexOf("useAnchoredSelectedAccount(");
+    if (start === -1) throw new Error("hook call site missing from Accounts");
+    const end = source.indexOf(");", start);
+    if (end === -1) throw new Error("hook call site never closes in Accounts");
+    expect(source.slice(start, end + 2).replace(/\s+/g, " ")).toBe(
+      "useAnchoredSelectedAccount( selectedAccount, selectedCategory, " +
+        "query.isSuccess ? query.data : undefined, setSelectedAccount );"
+    );
+  });
+
+  it("re-runs the effect on every input the resolver reads", async () => {
+    const source = await Bun.file(
+      new URL("./useAnchoredSelectedAccount.ts", import.meta.url)
+    ).text();
+    expect(source).toContain("}, [selectedAccount, selectedCategory, lists]);");
   });
 });

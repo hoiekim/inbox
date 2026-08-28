@@ -52,13 +52,12 @@ const isKnownAccount = (
  * The `selectedAccount` the current category requires, `""` to clear a name no
  * list holds, or `null` when nothing has to change.
  *
- * Realness and listing are separate tests, and collapsing them into one loses a
- * case either way. A name every list agrees is absent is unreachable state — a
- * search term left behind by a reload, or an account whose last mail was
- * deleted — and it has to go, or the header renders it over an empty pane with
- * no affordance to recover. A real account the current category cannot show is
- * a selection rather than a phantom: keep it, so the trip back to a category
- * that lists it lands where the user left off instead of on its first row.
+ * A name every list agrees is absent is unreachable state — a search term left
+ * behind by a reload, or an account whose last mail was deleted — and it has to
+ * go, or the header renders it over an empty pane with no affordance to
+ * recover. A real account the current category cannot show is a selection
+ * rather than a phantom: keep it, so the trip back to a category that lists it
+ * lands where the user left off instead of on its first row.
  *
  * Deciding validity and the fallback together is what keeps the caller
  * loop-free: the only account ever returned is a member of the category's own
@@ -66,10 +65,12 @@ const isKnownAccount = (
  *
  * A payload holding no accounts at all is indistinguishable from the one the
  * accounts route answers `success` with when its stats queries fail, so
- * clearing there can drop a live selection on a transient error. It clears
- * anyway: that costs one selection and rights itself on the next payload,
- * whereas keeping it strands the user who just deleted their only account's
- * last mail, with nothing left to click.
+ * clearing there can drop a live selection on a transient error. A partial
+ * failure is the same case rather than a safer one: realness spans all three
+ * lists, so a single bucket coming back empty clears a selection only that
+ * bucket held. It clears anyway: that costs one selection and rights itself on
+ * the next payload, whereas keeping it strands the user who just deleted their
+ * only account's last mail, with nothing left to click.
  */
 export const resolveSelectedAccount = (
   selectedAccount: string,
