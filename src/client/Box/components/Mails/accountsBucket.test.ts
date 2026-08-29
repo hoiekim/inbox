@@ -1,12 +1,14 @@
 import { describe, it, expect } from "bun:test";
-import { Account } from "common";
+import { Account, MailHeaderData } from "common";
 import { Category } from "client";
 import {
-  bucketForCategory,
+  bucketsForCategory,
+  bucketsForMail,
   evictAccountFromCategory,
   listsWholeBucket,
   removeAccountFromBucket,
-  updateAccountInBucket
+  updateAccountInBucket,
+  updateAccountInBuckets
 } from "./accountsBucket";
 
 const makeAccount = (key: string, doc = 5, unread = 2, saved = 1) =>
@@ -24,13 +26,128 @@ const data = () => ({
   spam: [makeAccount("spammy@x.com")]
 });
 
-describe("bucketForCategory", () => {
-  it("maps each category to the list carrying its counters", () => {
-    expect(bucketForCategory(Category.SentMails)).toBe("sent");
-    expect(bucketForCategory(Category.SpamMails)).toBe("spam");
-    expect(bucketForCategory(Category.AllMails)).toBe("received");
-    expect(bucketForCategory(Category.NewMails)).toBe("received");
-    expect(bucketForCategory(Category.SavedMails)).toBe("received");
+const addresses = (...values: string[]) => ({
+  value: values.map((address) => ({ address })),
+  text: values.join(", ")
+});
+
+const mail = (parts: Partial<MailHeaderData>) => new MailHeaderData(parts);
+
+describe("bucketsForCategory", () => {
+  it("names the lists each category draws its mail from", () => {
+    expect(bucketsForCategory(Category.SentMails)).toEqual(["sent"]);
+    expect(bucketsForCategory(Category.SpamMails)).toEqual(["spam"]);
+    expect(bucketsForCategory(Category.AllMails)).toEqual(["received"]);
+    expect(bucketsForCategory(Category.NewMails)).toEqual(["received"]);
+  });
+
+  it("names both lists for Saved Mails and none for Search", () => {
+    expect(bucketsForCategory(Category.SavedMails)).toEqual([
+      "received",
+      "sent"
+    ]);
+    expect(bucketsForCategory(Category.Search)).toEqual([]);
+  });
+});
+
+describe("bucketsForMail", () => {
+  const sentByMe = mail({
+    from: addresses("me@x.com"),
+    to: addresses("them@y.com")
+  });
+  const sentToMe = mail({
+    from: addresses("them@y.com"),
+    to: addresses("me@x.com")
+  });
+
+  it("answers the category's own lists outside Saved Mails", () => {
+    expect(bucketsForMail(Category.SentMails, sentByMe, "me@x.com")).toEqual([
+      "sent"
+    ]);
+    expect(bucketsForMail(Category.AllMails, sentByMe, "me@x.com")).toEqual([
+      "received"
+    ]);
+    expect(bucketsForMail(Category.SpamMails, sentToMe, "me@x.com")).toEqual([
+      "spam"
+    ]);
+  });
+
+  // `selectedAccount` holds the live search term there, and the search query
+  // applies no address, sent or spam condition — so no account's counters
+  // follow from a row being listed.
+  it("names no list under Search", () => {
+    expect(bucketsForMail(Category.Search, sentToMe, "me@x.com")).toEqual([]);
+  });
+
+  // Saved Mails lists `(from_address matches OR a recipient matches)`, and the
+  // server groups `sent` by the sender and `received` by the recipients, so an
+  // address that only ever sent is counted in `sent` alone.
+  it("follows the addresses under Saved Mails", () => {
+    expect(bucketsForMail(Category.SavedMails, sentByMe, "me@x.com")).toEqual([
+      "sent"
+    ]);
+    expect(bucketsForMail(Category.SavedMails, sentToMe, "me@x.com")).toEqual([
+      "received"
+    ]);
+  });
+
+  it("counts a mail an account both sent and received in both lists", () => {
+    const toSelf = mail({
+      from: addresses("me@x.com"),
+      to: addresses("me@x.com")
+    });
+    expect(bucketsForMail(Category.SavedMails, toSelf, "me@x.com")).toEqual([
+      "received",
+      "sent"
+    ]);
+  });
+
+  // Copying yourself on your own mail is the case the recipient headers decide
+  // on their own: the sender test already answers `sent`, so `received` is
+  // reached only if cc and bcc count alongside `to`.
+  it("reads cc and bcc as recipients", () => {
+    const cced = mail({
+      from: addresses("me@x.com"),
+      to: addresses("them@y.com"),
+      cc: addresses("me@x.com")
+    });
+    const bcced = mail({
+      from: addresses("me@x.com"),
+      to: addresses("them@y.com"),
+      bcc: addresses("me@x.com")
+    });
+    expect(bucketsForMail(Category.SavedMails, cced, "me@x.com")).toEqual([
+      "received",
+      "sent"
+    ]);
+    expect(bucketsForMail(Category.SavedMails, bcced, "me@x.com")).toEqual([
+      "received",
+      "sent"
+    ]);
+  });
+
+  // `envelope_to` matches the received condition on the server and is absent
+  // from the header payload, so a row the account did not send is received
+  // whether or not a visible recipient header names it.
+  it("reads a mail it did not send as received under Saved Mails", () => {
+    const envelopeOnly = mail({
+      from: addresses("them@y.com"),
+      to: addresses("list@y.com")
+    });
+    expect(
+      bucketsForMail(Category.SavedMails, envelopeOnly, "me@x.com")
+    ).toEqual(["received"]);
+  });
+
+  it("ignores the sent flag, which names the user rather than the address", () => {
+    const fromMyOtherAddress = mail({
+      sent: true,
+      from: addresses("alias@x.com"),
+      to: addresses("me@x.com")
+    });
+    expect(
+      bucketsForMail(Category.SavedMails, fromMyOtherAddress, "me@x.com")
+    ).toEqual(["received"]);
   });
 });
 
@@ -103,6 +220,27 @@ describe("updateAccountInBucket", () => {
   });
 });
 
+describe("updateAccountInBuckets", () => {
+  it("applies the update in every named bucket", () => {
+    const next = updateAccountInBuckets(
+      data(),
+      ["received", "sent"],
+      "me@x.com",
+      ({ saved_doc_count }) => ({ saved_doc_count: saved_doc_count - 1 })
+    );
+    expect(next.received.map((a) => a.saved_doc_count)).toEqual([0, 1]);
+    expect(next.sent.map((a) => a.saved_doc_count)).toEqual([0]);
+    expect(next.spam.map((a) => a.saved_doc_count)).toEqual([1]);
+  });
+
+  it("hands the payload back untouched when no bucket is named", () => {
+    const before = data();
+    expect(updateAccountInBuckets(before, [], "me@x.com", () => ({}))).toBe(
+      before
+    );
+  });
+});
+
 describe("removeAccountFromBucket", () => {
   it("drops the account from the named bucket only", () => {
     const before = data();
@@ -166,29 +304,35 @@ describe("evictAccountFromCategory", () => {
   });
 });
 
-// The helper is pinned above, but nothing renders `Mails`, so a call site that
-// hand-rolls the mapping is invisible to every other assertion here — and the
-// counter it writes stays plausible until the next payload lands.
+// The helpers are pinned above, but nothing renders `Mails`, so a call site
+// that hand-rolls the mapping is invisible to every other assertion here — and
+// the counter it writes stays plausible until the next payload lands.
 // `getAccountStats` builds `received` under `AND is_spam = FALSE`, so a
 // Spam-view star credited to `received` goes to the one bucket the server will
 // never count it in. Read via `Bun.file` rather than `fs`: sibling suites
-// `mock.module("fs", ...)`, which is process-global in Bun. Whitespace is
-// stripped, not collapsed, so a rewrap is not a failure.
+// `mock.module("fs", ...)`, which is process-global in Bun. The whole source is
+// stripped of whitespace before matching, so reflow and indentation are not
+// failures; what it pins is the argument each existing call passes, not the
+// absence of an edit written without the helper at all.
 describe("the optimistic account edits in Mails", () => {
-  it("names its bucket through bucketForCategory at every call site", async () => {
+  it("names its buckets through bucketsForMail at every call site", async () => {
     const source = await Bun.file(
       new URL("./index.tsx", import.meta.url)
     ).text();
+    const stripped = source.replace(/\s+/g, "");
 
-    const call = "updateAccountInBucket(";
+    const call = "updateAccountInBuckets(";
     const expected =
-      "updateAccountInBucket(oldData,bucketForCategory(selectedCategory)," +
-      "selectedAccount,";
+      "updateAccountInBuckets(oldData,bucketsForMail(selectedCategory,mail," +
+      "selectedAccount),selectedAccount,";
 
     const sites: string[] = [];
-    for (let at = source.indexOf(call); at !== -1; at = source.indexOf(call, at + 1)) {
-      const stripped = source.slice(at, at + 200).replace(/\s+/g, "");
-      sites.push(stripped.slice(0, expected.length));
+    for (
+      let at = stripped.indexOf(call);
+      at !== -1;
+      at = stripped.indexOf(call, at + 1)
+    ) {
+      sites.push(stripped.slice(at, at + expected.length));
     }
 
     expect(sites).toEqual([expected, expected, expected, expected]);

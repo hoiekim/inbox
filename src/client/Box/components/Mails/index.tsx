@@ -53,9 +53,9 @@ import {
 import { AccountsCache } from "client/Box/components/Accounts";
 import { getMailsQueryUrl } from "./mailsQuery";
 import {
-  bucketForCategory,
+  bucketsForMail,
   evictAccountFromCategory,
-  updateAccountInBucket
+  updateAccountInBuckets
 } from "./accountsBucket";
 
 import "./index.scss";
@@ -223,9 +223,9 @@ const RenderedMail = ({
 
       accountsCache.set((oldData) => {
         if (!oldData) return oldData;
-        return updateAccountInBucket(
+        return updateAccountInBuckets(
           oldData,
-          bucketForCategory(selectedCategory),
+          bucketsForMail(selectedCategory, mail, selectedAccount),
           selectedAccount,
           ({ doc_count, unread_doc_count }) => ({
             doc_count: doc_count - 1,
@@ -301,9 +301,9 @@ const RenderedMail = ({
     // category's cached list.
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      return updateAccountInBucket(
+      return updateAccountInBuckets(
         oldData,
-        bucketForCategory(selectedCategory),
+        bucketsForMail(selectedCategory, mail, selectedAccount),
         selectedAccount,
         ({ doc_count, unread_doc_count }) => ({
           doc_count: doc_count - 1,
@@ -639,9 +639,9 @@ const RenderedMails = ({ page }: { page: number }) => {
 
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      return updateAccountInBucket(
+      return updateAccountInBuckets(
         oldData,
-        bucketForCategory(selectedCategory),
+        bucketsForMail(selectedCategory, mail, selectedAccount),
         selectedAccount,
         ({ unread_doc_count }) => ({
           unread_doc_count: unread_doc_count ? unread_doc_count - 1 : 0
@@ -654,9 +654,9 @@ const RenderedMails = ({ page }: { page: number }) => {
     const mailId = mail.id;
     accountsCache.set((oldData) => {
       if (!oldData) return oldData;
-      return updateAccountInBucket(
+      return updateAccountInBuckets(
         oldData,
-        bucketForCategory(selectedCategory),
+        bucketsForMail(selectedCategory, mail, selectedAccount),
         selectedAccount,
         ({ saved_doc_count }) => ({
           saved_doc_count: save ? saved_doc_count + 1 : saved_doc_count - 1
