@@ -20,42 +20,56 @@ export const bucketsForCategory = (category: Category): AccountsBucket[] => {
   return ["received"];
 };
 
+// `value` arrives as a bare object rather than a one-element array for some
+// rows, which is why the header component normalizes cc and bcc before reading
+// them; this runs from a click handler on whatever the payload held.
 const holdsAddress = (
   addresses: MailAddressType | undefined,
   accountKey: string
-): boolean => !!addresses?.value?.some((e) => e.address === accountKey);
+): boolean => {
+  const value = addresses?.value;
+  if (!value) return false;
+  const list = Array.isArray(value) ? value : [value];
+  return list.some((e) => e.address === accountKey);
+};
 
 /**
- * The lists holding the counters a mail shown under `category` contributes to
- * for `accountKey`. Only those are touched, so an address present in a list the
- * mail doesn't count towards isn't decremented.
+ * The account lists whose counters a mail contributes to for `accountKey`.
  *
- * Where the category names two, the mail's own addresses pick between them: the
- * server groups `sent` by `from_address` and `received` by the recipient
- * headers, so an account that both sent and received a mail is counted in both.
- * `mail.sent` cannot stand in for the sender test — it says the user sent the
- * mail, not that this account is the address it went out from.
+ * Which lists a mail counts towards is a property of the mail, not of the view
+ * it was acted on from: the server groups `sent` by `from_address` and
+ * `received` by the recipient headers, so an account that both sent a mail and
+ * was copied on it is counted in both, and two edits made from two categories
+ * have to agree or a star and its unstar stop cancelling. `mail.sent` cannot
+ * stand in for the sender test — it says the user sent the mail, not that this
+ * account is the address it went out from.
+ *
+ * The category answers only what the payload cannot. `is_spam` is not a header
+ * field and a spam mail is counted in `spam` alone. `envelope_to` is one of the
+ * columns the received condition matches on and no header column carries it, so
+ * for a mail the account also sent, the received side is settled by the query
+ * that returned the row: a category listing received mail proves it matched.
  */
 export const bucketsForMail = (
   category: Category,
   mail: MailHeaderData,
   accountKey: string
 ): AccountsBucket[] => {
-  const buckets = bucketsForCategory(category);
-  if (category !== Category.SavedMails) return buckets;
+  if (category === Category.Search) return [];
+  if (category === Category.SpamMails) return ["spam"];
 
+  const listedByRecipientCondition =
+    category === Category.AllMails || category === Category.NewMails;
   const isSender = holdsAddress(mail.from, accountKey);
-  // A row this account didn't send is listed because a recipient header
-  // matched, and `envelope_to` is one of those while the header payload omits
-  // it — so absence from to/cc/bcc rules the received side out only for a mail
-  // the account did send.
   const isRecipient =
+    listedByRecipientCondition ||
     !isSender ||
     [mail.to, mail.cc, mail.bcc].some((e) => holdsAddress(e, accountKey));
 
-  return buckets.filter((bucket) =>
-    bucket === "sent" ? isSender : isRecipient
-  );
+  const buckets: AccountsBucket[] = [];
+  if (isRecipient) buckets.push("received");
+  if (isSender) buckets.push("sent");
+  return buckets;
 };
 
 /**

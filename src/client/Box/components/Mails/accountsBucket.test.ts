@@ -60,16 +60,27 @@ describe("bucketsForMail", () => {
     to: addresses("me@x.com")
   });
 
-  it("answers the category's own lists outside Saved Mails", () => {
+  it("follows the addresses under every category that counts them", () => {
     expect(bucketsForMail(Category.SentMails, sentByMe, "me@x.com")).toEqual([
       "sent"
     ]);
-    expect(bucketsForMail(Category.AllMails, sentByMe, "me@x.com")).toEqual([
+    expect(bucketsForMail(Category.SentMails, sentToMe, "me@x.com")).toEqual([
       "received"
     ]);
+    expect(bucketsForMail(Category.NewMails, sentToMe, "me@x.com")).toEqual([
+      "received"
+    ]);
+  });
+
+  // The spam folder is `is_spam = TRUE`, and both counted lists are its
+  // complement, so a mail acted on there reaches neither of them.
+  it("names the spam list alone under Spam Mails", () => {
     expect(bucketsForMail(Category.SpamMails, sentToMe, "me@x.com")).toEqual([
       "spam"
     ]);
+    expect(
+      bucketsForMail(Category.SpamMails, sentByMe, "me@x.com")
+    ).toEqual(["spam"]);
   });
 
   // `selectedAccount` holds the live search term there, and the search query
@@ -98,6 +109,39 @@ describe("bucketsForMail", () => {
     });
     expect(bucketsForMail(Category.SavedMails, toSelf, "me@x.com")).toEqual([
       "received",
+      "sent"
+    ]);
+  });
+
+  // A star applied in one list and removed from another has to cancel: the
+  // counters the edits reach are the server's, and it groups the same row into
+  // both lists regardless of which view the user was in.
+  it("answers the same lists for one mail across every category listing it", () => {
+    const ccSelf = mail({
+      from: addresses("me@x.com"),
+      to: addresses("them@y.com"),
+      cc: addresses("me@x.com")
+    });
+    const both = ["received", "sent"];
+    expect(bucketsForMail(Category.AllMails, ccSelf, "me@x.com")).toEqual(both);
+    expect(bucketsForMail(Category.NewMails, ccSelf, "me@x.com")).toEqual(both);
+    expect(bucketsForMail(Category.SavedMails, ccSelf, "me@x.com")).toEqual(
+      both
+    );
+    expect(bucketsForMail(Category.SentMails, ccSelf, "me@x.com")).toEqual(
+      both
+    );
+  });
+
+  // The received condition covers `envelope_to`, which no header column
+  // carries, so a category that lists received mail is the only evidence that
+  // a mail the account also sent reached its received counters.
+  it("reads a category listing received mail as proof of the received side", () => {
+    expect(bucketsForMail(Category.AllMails, sentByMe, "me@x.com")).toEqual([
+      "received",
+      "sent"
+    ]);
+    expect(bucketsForMail(Category.SavedMails, sentByMe, "me@x.com")).toEqual([
       "sent"
     ]);
   });
@@ -137,6 +181,27 @@ describe("bucketsForMail", () => {
     expect(
       bucketsForMail(Category.SavedMails, envelopeOnly, "me@x.com")
     ).toEqual(["received"]);
+  });
+
+  // The header component repairs cc and bcc in place during render, so a click
+  // handler reading the same object sees an array only because an unrelated
+  // component ran first.
+  it("reads a recipient field the payload delivered unwrapped", () => {
+    const unwrappedCc = mail({
+      from: addresses("them@y.com"),
+      to: addresses("them@y.com"),
+      cc: { value: { address: "me@x.com" }, text: "me@x.com" }
+    } as unknown as Partial<MailHeaderData>);
+    expect(bucketsForMail(Category.SavedMails, unwrappedCc, "me@x.com")).toEqual(
+      ["received"]
+    );
+    const unwrappedFrom = mail({
+      from: { value: { address: "me@x.com" }, text: "me@x.com" },
+      to: addresses("them@y.com")
+    } as unknown as Partial<MailHeaderData>);
+    expect(
+      bucketsForMail(Category.SentMails, unwrappedFrom, "me@x.com")
+    ).toEqual(["sent"]);
   });
 
   it("ignores the sent flag, which names the user rather than the address", () => {
