@@ -41,7 +41,6 @@ import {
   useIsOnline
 } from "client";
 import { MailsSynchronizer } from "client/Box";
-import { mergeSavedAccounts } from "./savedAccounts";
 import {
   accountsForCategory,
   categoryForAccount
@@ -274,21 +273,14 @@ const Accounts = ({
       );
     };
 
-    let sortedAccountData: Account[] = [];
-
-    if (selectedCategory === Category.NewMails) {
-      sortedAccountData = received.filter((e) => e.unread_doc_count);
-    } else if (selectedCategory === Category.AllMails) {
-      sortedAccountData = received;
-    } else if (selectedCategory === Category.SavedMails) {
-      sortedAccountData = mergeSavedAccounts(received, sent);
-    } else if (selectedCategory === Category.SentMails) {
-      sortedAccountData = sent;
-    } else if (selectedCategory === Category.SpamMails) {
-      sortedAccountData = spam;
-    } else if (selectedCategory === Category.Search) {
-      sortedAccountData = searchAccountsQuery.data || [];
-    }
+    // The rows rendered here and the selections `resolveSelectedAccount`
+    // accepts have to be the same set, or a highlighted name sits over an empty
+    // pane again. Search is the one list the resolver does not decide: its
+    // side-tab is fed by the search query, and `selectedAccount` holds the term.
+    const sortedAccountData: Account[] =
+      selectedCategory === Category.Search
+        ? searchAccountsQuery.data || []
+        : accountsForCategory(selectedCategory, { received, sent, spam });
 
     const sortingFactor = 2 * +sortAscending - 1;
 

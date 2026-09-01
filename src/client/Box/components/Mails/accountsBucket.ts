@@ -4,22 +4,6 @@ import { Category } from "client";
 
 export type AccountsBucket = "received" | "sent" | "spam";
 
-/**
- * The account lists `category` draws its mail from.
- *
- * Most categories name exactly one. Saved Mails names two — its rows are
- * `(from_address matches OR a recipient header matches)`, so it lists sent and
- * received mail side by side — and Search names none, since `selectedAccount`
- * carries the search term there rather than an account key.
- */
-export const bucketsForCategory = (category: Category): AccountsBucket[] => {
-  if (category === Category.Search) return [];
-  if (category === Category.SentMails) return ["sent"];
-  if (category === Category.SpamMails) return ["spam"];
-  if (category === Category.SavedMails) return ["received", "sent"];
-  return ["received"];
-};
-
 // `value` arrives as a bare object rather than a one-element array for some
 // rows, which is why the header component normalizes cc and bcc before reading
 // them; this runs from a click handler on whatever the payload held.
@@ -73,17 +57,24 @@ export const bucketsForMail = (
 };
 
 /**
- * Whether `category` lists a whole bucket rather than a filtered view of one.
+ * The list `category` shows whole, or `null` when it shows a filtered view of
+ * one — the test for whether an emptied sidebar list means the account left a
+ * bucket.
  *
  * New Mails and Saved Mails are `unread_doc_count` / `saved_doc_count` filters
  * over the buckets they draw from, so one of those lists running empty means a
- * counter reached zero — not that the account left the bucket. It still holds
- * the mail behind the other counters.
+ * counter reached zero, not that the account left the bucket: it still holds
+ * the mail behind the other counters. Search shows no bucket at all, since
+ * `selectedAccount` carries the search term there rather than an account key.
  */
-export const listsWholeBucket = (category: Category): boolean =>
-  category === Category.AllMails ||
-  category === Category.SentMails ||
-  category === Category.SpamMails;
+export const wholeBucketForCategory = (
+  category: Category
+): AccountsBucket | null => {
+  if (category === Category.AllMails) return "received";
+  if (category === Category.SentMails) return "sent";
+  if (category === Category.SpamMails) return "spam";
+  return null;
+};
 
 /**
  * Replaces the matching account with an updated copy.
@@ -138,10 +129,7 @@ export const evictAccountFromCategory = (
   data: AccountsGetResponse,
   category: Category,
   key: string
-): AccountsGetResponse =>
-  listsWholeBucket(category)
-    ? bucketsForCategory(category).reduce(
-        (evicted, bucket) => removeAccountFromBucket(evicted, bucket, key),
-        data
-      )
-    : data;
+): AccountsGetResponse => {
+  const bucket = wholeBucketForCategory(category);
+  return bucket ? removeAccountFromBucket(data, bucket, key) : data;
+};

@@ -2,13 +2,12 @@ import { describe, it, expect } from "bun:test";
 import { Account, MailHeaderData } from "common";
 import { Category } from "client";
 import {
-  bucketsForCategory,
   bucketsForMail,
   evictAccountFromCategory,
-  listsWholeBucket,
   removeAccountFromBucket,
   updateAccountInBucket,
-  updateAccountInBuckets
+  updateAccountInBuckets,
+  wholeBucketForCategory
 } from "./accountsBucket";
 
 const makeAccount = (key: string, doc = 5, unread = 2, saved = 1) =>
@@ -32,23 +31,6 @@ const addresses = (...values: string[]) => ({
 });
 
 const mail = (parts: Partial<MailHeaderData>) => new MailHeaderData(parts);
-
-describe("bucketsForCategory", () => {
-  it("names the lists each category draws its mail from", () => {
-    expect(bucketsForCategory(Category.SentMails)).toEqual(["sent"]);
-    expect(bucketsForCategory(Category.SpamMails)).toEqual(["spam"]);
-    expect(bucketsForCategory(Category.AllMails)).toEqual(["received"]);
-    expect(bucketsForCategory(Category.NewMails)).toEqual(["received"]);
-  });
-
-  it("names both lists for Saved Mails and none for Search", () => {
-    expect(bucketsForCategory(Category.SavedMails)).toEqual([
-      "received",
-      "sent"
-    ]);
-    expect(bucketsForCategory(Category.Search)).toEqual([]);
-  });
-});
 
 describe("bucketsForMail", () => {
   const sentByMe = mail({
@@ -141,6 +123,10 @@ describe("bucketsForMail", () => {
       "received",
       "sent"
     ]);
+    expect(bucketsForMail(Category.NewMails, sentByMe, "me@x.com")).toEqual([
+      "received",
+      "sent"
+    ]);
     expect(bucketsForMail(Category.SavedMails, sentByMe, "me@x.com")).toEqual([
       "sent"
     ]);
@@ -216,19 +202,19 @@ describe("bucketsForMail", () => {
   });
 });
 
-describe("listsWholeBucket", () => {
-  it("is true for the categories that list a bucket whole", () => {
-    expect(listsWholeBucket(Category.AllMails)).toBe(true);
-    expect(listsWholeBucket(Category.SentMails)).toBe(true);
-    expect(listsWholeBucket(Category.SpamMails)).toBe(true);
+describe("wholeBucketForCategory", () => {
+  it("names the bucket each whole-bucket category shows", () => {
+    expect(wholeBucketForCategory(Category.AllMails)).toBe("received");
+    expect(wholeBucketForCategory(Category.SentMails)).toBe("sent");
+    expect(wholeBucketForCategory(Category.SpamMails)).toBe("spam");
   });
 
   // New Mails and Saved Mails filter `received` by a counter, so an emptied
   // list there says the counter hit zero, not that the account left `received`.
-  it("is false for the counter-filtered views and Search", () => {
-    expect(listsWholeBucket(Category.NewMails)).toBe(false);
-    expect(listsWholeBucket(Category.SavedMails)).toBe(false);
-    expect(listsWholeBucket(Category.Search)).toBe(false);
+  it("names none for the counter-filtered views and Search", () => {
+    expect(wholeBucketForCategory(Category.NewMails)).toBeNull();
+    expect(wholeBucketForCategory(Category.SavedMails)).toBeNull();
+    expect(wholeBucketForCategory(Category.Search)).toBeNull();
   });
 });
 
