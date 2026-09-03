@@ -1,12 +1,17 @@
 /**
  * A failed `DELETE FROM sessions` must reach the session store's caller.
- * These tests drive the real `PostgresSessionStore` through the pg FakePool
- * seam (same pattern as `postgres/database.test.ts`), so a swallowed delete
- * error fails here rather than surfacing as a logout that answers success
- * while the session row survives.
+ * These tests drive the real `PostgresSessionStore` against a stubbed
+ * `pool.query`, so a swallowed delete error fails here rather than surfacing
+ * as a logout that answers success while the session row survives.
+ *
+ * The stub is installed through the pool Proxy's set trap instead of
+ * `mock.module("pg", ...)` — the pg module registry is process-global and
+ * which `Pool` binding is live depends on test-file order, which differs
+ * between platforms.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from "bun:test";
-import { restoreLeaves } from "test-helpers";
+import { pool, resetPool } from "../client";
+import { PostgresSessionStore } from "./sessions";
 
 type DeleteMode = "ok" | "nomatch" | "throw";
 let deleteMode: DeleteMode = "ok";
@@ -32,10 +37,12 @@ const liveSessionRow = () => ({
 });
 
 const issuedSql: string[] = [];
+const isSessionDelete = (sql: string) =>
+  sql.startsWith("DELETE FROM sessions WHERE session_id = $1");
 
 const mockQuery = mock(async (sql: string, _values?: unknown[]) => {
   issuedSql.push(sql);
-  if (sql.startsWith("DELETE FROM sessions WHERE session_id = $1")) {
+  if (isSessionDelete(sql)) {
     if (deleteMode === "throw") {
       throw new Error("permission denied for table sessions");
     }
@@ -48,36 +55,25 @@ const mockQuery = mock(async (sql: string, _values?: unknown[]) => {
   return { rows: [] as unknown[], rowCount: 0 as number | null };
 });
 
-class FakePool {
-  query = mockQuery;
-  end = async () => {};
-  connect = async () => ({ query: mockQuery, release: () => {} });
-  on() {}
-}
+const installQueryStub = () => {
+  // The pool export is a Proxy whose set trap forwards to the live instance,
+  // so this shadows `query` on whatever Pool the current module state built.
+  (pool as unknown as { query: typeof mockQuery }).query = mockQuery;
+};
 
-const pgMock = () => ({
-  Pool: FakePool,
-  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
-  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
-});
-
-mock.module("pg", pgMock);
-
-const { PostgresSessionStore } = await import("./sessions");
-const { resetPool } = await import("../client");
+resetPool();
+installQueryStub();
+const store = new PostgresSessionStore();
 
 afterAll(() => {
-  restoreLeaves();
   resetPool();
 });
 
 beforeEach(() => {
   deleteMode = "ok";
   issuedSql.length = 0;
-  resetPool();
+  installQueryStub();
 });
-
-const store = new PostgresSessionStore();
 
 const destroyResult = (session_id: string) =>
   new Promise<unknown>((resolve) => {
@@ -121,9 +117,6 @@ describe("PostgresSessionStore.destroy", () => {
   it("still issues the DELETE without a callback and does not reject", async () => {
     deleteMode = "throw";
     await store.destroy(SESSION_ID);
-    const deletes = issuedSql.filter((sql) =>
-      sql.startsWith("DELETE FROM sessions WHERE session_id = $1")
-    );
-    expect(deletes.length).toBe(1);
+    expect(issuedSql.filter(isSessionDelete).length).toBe(1);
   });
 });
