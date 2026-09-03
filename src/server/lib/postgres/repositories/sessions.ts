@@ -82,15 +82,12 @@ export const updateSession = async (
 /**
  * Deletes a session object with given session_id.
  * @param session_id
- * @returns A promise to be a success boolean.
+ * @returns A promise to be true when a row was deleted, false when no row
+ * matched. A failed DELETE rejects so callers can tell failure from a
+ * missing row.
  */
 export const deleteSession = async (session_id: string): Promise<boolean> => {
-  try {
-    return await sessionsTable.hardDelete(session_id);
-  } catch (error) {
-    logger.error("Failed to delete session", {}, error);
-    return false;
-  }
+  return sessionsTable.hardDelete(session_id);
 };
 
 /**
@@ -231,12 +228,15 @@ export class PostgresSessionStore extends Store {
    * @returns
    */
   destroy = async (session_id: string, callback?: (err?: unknown) => void) => {
-    if (!callback) return;
     try {
       await deleteSession(session_id);
-      return callback(null);
+      callback?.(null);
     } catch (error) {
-      return callback(error);
+      if (!callback) {
+        logger.error("Failed to delete session", { session_id }, error);
+        return;
+      }
+      callback(error);
     }
   };
 }

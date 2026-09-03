@@ -220,27 +220,41 @@ describe("deleteLoginRoute", () => {
     expect((req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.destroy).toHaveBeenCalled();
   });
 
-  it("throws when session.destroy calls back with an error", async () => {
+  it("rejects and never answers success when session.destroy calls back with an error", async () => {
     const { deleteLoginRoute } = await import("./delete-login");
 
     const req = makeReq({ method: "DELETE" });
     (req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.destroy = mock((cb: (err: Error) => void) => cb(new Error("session store error")));
     const res = makeRes();
 
-    // The implementation calls destroy and if error occurs, throws inside the cb
-    // but since the callback fires synchronously in this mock, the throw happens
-    // inside the Promise-less callback. The route itself doesn't await destroy,
-    // so it returns success while the error is swallowed in the callback.
-    // We verify the callback was called and the route still returns.
-    let threw = false;
-    try {
-      await deleteLoginRoute.callback(req, res, noopStream);
-    } catch {
-      threw = true;
-    }
-    // Either throws or returns (depending on sync/async behavior of mock)
-    // The important thing is the route attempted session.destroy
-    expect((req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.destroy).toHaveBeenCalled();
+    await expect(deleteLoginRoute.callback(req, res, noopStream)).rejects.toThrow(
+      "session store error"
+    );
+  });
+
+  it("waits for the destroy callback before answering", async () => {
+    const { deleteLoginRoute } = await import("./delete-login");
+
+    const req = makeReq({ method: "DELETE" });
+    let settleDestroy: (() => void) | undefined;
+    (req as unknown as { session: { destroy: ReturnType<typeof mock> } }).session.destroy = mock(
+      (cb: (err: Error | null) => void) => {
+        settleDestroy = () => cb(null);
+      }
+    );
+    const res = makeRes();
+
+    let answered = false;
+    const pending = deleteLoginRoute.callback(req, res, noopStream).then((result) => {
+      answered = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(answered).toBe(false);
+
+    settleDestroy?.();
+    const result = await pending;
+    expect((result as ApiResponse<unknown>).status).toBe("success");
   });
 });
 
