@@ -18,9 +18,20 @@ export const postTokenRoute = new Route<TokenPostResponse>(
   "/token",
   async (req) => {
     const ip = getClientIp(req);
-    const email = req.body.email as string;
+    const body = req.body;
 
-    if (!isValidEmail(email)) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      tokenLimiter.recordFailure(ip);
+      return { status: "failed", message: "Invalid request body." };
+    }
+
+    const { email } = body as Record<string, unknown>;
+
+    // `isValidEmail` opens with `email.split("@")`, so every non-string value
+    // throws there instead of failing the address check. An absent JSON body
+    // reaches it as `undefined`, which is why the guard covers the shape as
+    // well as the type.
+    if (typeof email !== "string" || !isValidEmail(email)) {
       tokenLimiter.recordFailure(ip);
       return {
         status: "failed",
