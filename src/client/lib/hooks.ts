@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 
+/**
+ * `useState` mirrored into `localStorage` under `key`.
+ *
+ * `sanitize` coerces the stored value on read and its result is persisted, so
+ * it must return the value it was given when it accepts it — a fresh object
+ * every call rewrites storage on every mount.
+ */
 export const useLocalStorage = <T>(
   key: string,
   initialValue: T,
@@ -9,7 +16,16 @@ export const useLocalStorage = <T>(
     try {
       const item = window.localStorage.getItem(key);
       const parsed: T = item ? JSON.parse(item) : initialValue;
-      return sanitize ? sanitize(parsed) : parsed;
+      if (!sanitize) return parsed;
+      const sanitized = sanitize(parsed);
+      // Persist the sanitized value, not just the state. Leaving storage on
+      // the rejected value makes every later reader of the raw key — and any
+      // effect that tests the state against it — disagree with what the hook
+      // returned.
+      if (item !== null && sanitized !== parsed) {
+        window.localStorage.setItem(key, JSON.stringify(sanitized));
+      }
+      return sanitized;
     } catch (error) {
       console.error(error);
       return initialValue;

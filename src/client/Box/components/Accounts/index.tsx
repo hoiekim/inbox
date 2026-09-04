@@ -41,7 +41,11 @@ import {
   useIsOnline
 } from "client";
 import { MailsSynchronizer } from "client/Box";
-import { mergeSavedAccounts } from "./savedAccounts";
+import {
+  accountsForCategory,
+  categoryForAccount
+} from "./selectableAccounts";
+import { useAnchoredSelectedAccount } from "./useAnchoredSelectedAccount";
 
 import "./index.scss";
 
@@ -163,22 +167,12 @@ const Accounts = ({
       searchInputDom.focus();
   }, [searchInputDom, isAccountsOpen, isWriterOpen]);
 
-  // Auto-select the first received account on fresh login when no account is
-  // stored in localStorage (e.g., first visit or cleared storage). Skipped in
-  // Search mode, where an empty selectedAccount is the empty search term (a
-  // fresh, not-yet-typed search) — auto-selecting an account there would turn
-  // that account's address into a stray search keyword.
-  useEffect(() => {
-    if (
-      !selectedAccount &&
-      selectedCategory !== Category.Search &&
-      query.isSuccess &&
-      query.data?.received?.length
-    ) {
-      const firstKey = query.data.received[0].key;
-      if (firstKey) setSelectedAccount(firstKey);
-    }
-  }, [selectedAccount, selectedCategory, query.isSuccess, query.data]);
+  useAnchoredSelectedAccount(
+    selectedAccount,
+    selectedCategory,
+    query.isSuccess ? query.data : undefined,
+    setSelectedAccount
+  );
 
   const touchStartHandler = () => setShowSortOptions(false);
 
@@ -238,12 +232,14 @@ const Accounts = ({
       const accountName = data.key;
       const unreadNo = data.unread_doc_count;
       const onClickAccount = () => {
-        // A found account in the search side-tab jumps to that account's All
-        // view (the search term lives in selectedAccount, so we must switch
-        // category as well as the account).
+        // A found account in the search side-tab jumps to the category that
+        // lists it (the search term lives in selectedAccount, so we must
+        // switch category as well as the account).
         if (selectedCategory === Category.Search) {
           setPage(1);
-          setSelectedCategory(Category.AllMails);
+          setSelectedCategory(
+            categoryForAccount(accountName, { received, sent, spam })
+          );
           setSelectedAccount(accountName);
           if (viewSize.width <= 750) setIsAccountsOpen(false);
           return;
@@ -277,21 +273,14 @@ const Accounts = ({
       );
     };
 
-    let sortedAccountData: Account[] = [];
-
-    if (selectedCategory === Category.NewMails) {
-      sortedAccountData = received.filter((e) => e.unread_doc_count);
-    } else if (selectedCategory === Category.AllMails) {
-      sortedAccountData = received;
-    } else if (selectedCategory === Category.SavedMails) {
-      sortedAccountData = mergeSavedAccounts(received, sent);
-    } else if (selectedCategory === Category.SentMails) {
-      sortedAccountData = sent;
-    } else if (selectedCategory === Category.SpamMails) {
-      sortedAccountData = spam;
-    } else if (selectedCategory === Category.Search) {
-      sortedAccountData = searchAccountsQuery.data || [];
-    }
+    // The rows rendered here and the selections `resolveSelectedAccount`
+    // accepts have to be the same set, or a highlighted name sits over an empty
+    // pane again. Search is the one list the resolver does not decide: its
+    // side-tab is fed by the search query, and `selectedAccount` holds the term.
+    const sortedAccountData: Account[] =
+      selectedCategory === Category.Search
+        ? searchAccountsQuery.data || []
+        : accountsForCategory(selectedCategory, { received, sent, spam });
 
     const sortingFactor = 2 * +sortAscending - 1;
 
@@ -338,12 +327,7 @@ const Accounts = ({
             ? preSearchAccount.current
             : selectedAccount;
 
-        let targetAccounts: Account[];
-        if (e === Category.SentMails) targetAccounts = sent;
-        else if (e === Category.NewMails) targetAccounts = received.filter((a) => a.unread_doc_count);
-        else if (e === Category.SavedMails) targetAccounts = mergeSavedAccounts(received, sent);
-        else if (e === Category.SpamMails) targetAccounts = spam;
-        else targetAccounts = received;
+        const targetAccounts = accountsForCategory(e, { received, sent, spam });
 
         setSelectedCategory(e);
         if (candidate && targetAccounts.some((a) => a.key === candidate)) {
