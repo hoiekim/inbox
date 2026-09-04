@@ -1,5 +1,4 @@
 import { Route } from "../route";
-import { logger } from "../../../logger";
 
 export type LoginDeleteResponse = undefined;
 
@@ -7,11 +6,8 @@ export const deleteLoginRoute = new Route<LoginDeleteResponse>(
   "DELETE",
   "/login",
   async (req) => {
-    req.session.destroy((error) => {
-      if (error) {
-        logger.error("Failed to destroy session", {}, error);
-        throw new Error("Failed to destroy session.");
-      }
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((error) => (error ? reject(error) : resolve()));
     });
     return { status: "success" };
   }
