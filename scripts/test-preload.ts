@@ -44,11 +44,23 @@ const realWebPush = require("web-push");
 const realServer = require("server");
 (globalThis as Record<string, unknown>).__REAL_SERVER = { ...realServer };
 
-// `fs` snapshot — mirrors `__REAL_SERVER`. Files that mock `fs` via
-// `mock.module("fs", ...)` restore it in `afterAll` to stop the mock
-// from leaking into subsequent test files' fs consumers.
+// `fs` / `net` / `tls` snapshots — mirror `__REAL_SERVER`. Files that
+// mock any of these builtins via `mock.module(name, ...)` restore
+// them in `afterAll` to stop the mock from leaking into subsequent
+// test files' consumers. Any additional builtin that gets mocked
+// process-globally in the future belongs on this list too.
 const realFs = require("fs");
 (globalThis as Record<string, unknown>).__REAL_FS = {
   ...realFs,
   default: realFs.default ?? realFs,
+};
+const realNet = require("net");
+(globalThis as Record<string, unknown>).__REAL_NET = {
+  ...realNet,
+  default: realNet.default ?? realNet,
+};
+const realTls = require("tls");
+(globalThis as Record<string, unknown>).__REAL_TLS = {
+  ...realTls,
+  default: realTls.default ?? realTls,
 };
