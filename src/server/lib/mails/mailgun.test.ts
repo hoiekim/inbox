@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 
 // The host domain is the sender's own domain, as it is for an admin in
 // production, so the visible-To assertions run against the shape that ships.
@@ -56,6 +56,19 @@ mock.module("server", () => ({
 
 import { sendMailgunMail } from "./mailgun";
 import { MailDataToSend } from "common";
+
+// Restore the process-global `fs` mock at end of file. `mock.module("fs", ...)`
+// above replaces the export graph-wide, so `fs.readFileSync` returns
+// `Buffer.from("file-content")` for every test file that loads after this
+// one — including `fetch-helpers.test.ts` and `starttls.test.ts` whose
+// attachment size arithmetic and source-scan reads then fail. Bun 1.4.0
+// happens to load files in an order that hides the leak locally; bun
+// 1.3.14 in CD exposes it (2026-09-03 CD break, 19 fail across 2337).
+// Preload captures the real `fs` onto `__REAL_FS`; this re-mocks it back.
+afterAll(() => {
+  const realFs = (globalThis as Record<string, unknown>).__REAL_FS;
+  if (realFs) mock.module("fs", () => realFs);
+});
 
 const baseMail = new MailDataToSend({
   sender: "admin",
