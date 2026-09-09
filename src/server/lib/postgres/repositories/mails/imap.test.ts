@@ -1030,32 +1030,25 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     // `getAllUids` (the seq→UID map) against an unfiltered `countMessages`
     // makes EXISTS exceed the addressable sequence range.
     let source: string;
-    let setFlagsSource: string;
 
     beforeAll(async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
       source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
-      setFlagsSource = await fs.readFile(
-        path.join(import.meta.dir, "set-flags-query.ts"),
-        "utf8"
-      );
     });
 
-    const sourceOf = (file: string) => (file === "imap.ts" ? source : setFlagsSource);
-
-    // [public name, symbol that actually builds the SQL, file] —
-    // getMailsByRange is a single-flight wrapper whose query lives in the
-    // uncoalesced impl, and setMailFlags builds none of its own SQL.
-    const fns: [string, string, string][] = [
-      ["countMessages", "countMessages", "imap.ts"],
-      ["getMailsByRange", "getMailsByRangeUncoalesced", "imap.ts"],
-      ["setMailFlags", "buildSetMailFlagsQueries", "set-flags-query.ts"],
-      ["searchMailsByUid", "searchMailsByUid", "imap.ts"],
-      ["getAllUids", "getAllUids", "imap.ts"],
-      ["getFirstUnseenUid", "getFirstUnseenUid", "imap.ts"],
-      ["expungeDeletedMails", "expungeDeletedMails", "imap.ts"],
-      ["expungeMailsByUid", "expungeMailsByUid", "imap.ts"],
+    // [public name, symbol that actually builds the SQL] — getMailsByRange is
+    // a single-flight wrapper whose query lives in the uncoalesced impl.
+    // setMailFlags builds none of its own SQL: `set-flags-query.test.ts` reads
+    // the rule off the SQL its builder emits.
+    const fns: [string, string][] = [
+      ["countMessages", "countMessages"],
+      ["getMailsByRange", "getMailsByRangeUncoalesced"],
+      ["searchMailsByUid", "searchMailsByUid"],
+      ["getAllUids", "getAllUids"],
+      ["getFirstUnseenUid", "getFirstUnseenUid"],
+      ["expungeDeletedMails", "expungeDeletedMails"],
+      ["expungeMailsByUid", "expungeMailsByUid"],
     ];
 
     // Applications per function — one per SQL-bearing branch. Counting helper
@@ -1067,16 +1060,13 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
     // from the `mailbox === null` branch of getAllUids (INBOX's own seq->UID
     // map) is one guarded mutation: quarantined UIDs reappear past the
     // filtered EXISTS and `FETCH <last seq>` addresses a message the client
-    // was told does not exist. Dropping it from setMailFlags' domain UID
-    // branch is the other: `UID STORE 1:* +FLAGS (\Deleted)` on INBOX followed
-    // by EXPUNGE destroys quarantined spam the client was never shown.
+    // was told does not exist.
     // Counts are of SQL application sites only: `applicationSites` strips
     // comments first, so an occurrence of the word "membership" in prose
     // cannot inflate them.
     const applications: Record<string, number> = {
       countMessages: 4, // total + unread FILTER, in each of the two branches
       getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch
-      buildSetMailFlagsQueries: 4, // two domain WHERE clauses, plus the mapping branch's pair
       searchMailsByUid: 1, // one conditions list serves both branches
       getAllUids: 2, // one per branch
       getFirstUnseenUid: 2,
@@ -1119,8 +1109,8 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       return direct + uses;
     };
 
-    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol, file) => {
-      const body = sourceOf(file).match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
+    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol) => {
+      const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
       expect(body, `body not found for ${symbol}`).not.toBeNull();
       expect(applicationSites(body![0])).toBeGreaterThanOrEqual(
         applications[symbol]
@@ -1154,64 +1144,6 @@ describe("every mailbox applies its membership rule (#605, #725)", () => {
       // The idempotence guard must survive — a re-mark of the same value has to
       // match no row so the reserved value goes unused.
       expect(body).toContain("is_spam IS DISTINCT FROM $1");
-    });
-
-    it("keeps the seq-number OFFSET list in step with getAllUids", () => {
-      // Mapping rows outlive the expunge that hid their mail, so the OFFSET
-      // subquery has to filter `sent` and `expunged` exactly as getAllUids
-      // does — membership alone leaves every position after an expunged row
-      // off by one. `membershipExpression` renders `TRUE` on a box that shows
-      // spam, so a join gated on the membership rule drops those filters for
-      // exactly the boxes that still need them.
-      const body = setFlagsSource.match(
-        /export const buildSetMailFlagsQueries[\s\S]*?\n};/
-      )![0];
-      const join = body.match(/const membershipJoin =[\s\S]*?`;/)![0];
-      expect(join).toContain("z.${SENT} = $2");
-      expect(join).toContain("z.${EXPUNGED} = FALSE");
-      expect(join).toContain('membershipExpression(mailbox, sent, "z.")');
-      // Both halves of "unconditional": nothing gates the assignment, and
-      // nothing gates a filter from inside the template. The positive
-      // assertions above pass either way — a ternary branch still contains
-      // the text they look for. Optional chains are stripped first so the
-      // conditional test is about conditionals only.
-      expect(join).toMatch(/^const membershipJoin = `/);
-      expect(join.replace(/\?\./g, "")).not.toContain("?");
-    });
-
-    it("addresses no expunged mail in any branch", () => {
-      // A STORE that reaches an expunged mail bumps a modseq no client can
-      // resolve, and on the sequence-number branches it shifts every position
-      // after the expunged row — so the EXPUNGE behind a `\Deleted` store
-      // destroys the wrong message.
-      const body = setFlagsSource.match(
-        /export const buildSetMailFlagsQueries[\s\S]*?\n};/
-      )![0];
-      // Each branch closes by binding its own parameter list, so the text
-      // before each `baseValues =` is exactly one branch's SQL construction.
-      const branches = body.split("baseValues = ").slice(0, 4);
-      expect(branches).toHaveLength(4);
-      // Matched on the interpolated form so the prose in the preamble comment
-      // cannot satisfy it.
-      for (const branch of branches) {
-        expect(branch).toContain("${EXPUNGED} = FALSE");
-      }
-    });
-
-    it("indexes the sequence-number branches 1-based and honours the range end", () => {
-      // IMAP sequence numbers are 1-based while OFFSET is 0-based, and a
-      // `STORE 2:5` has to reach four messages, not one.
-      const body = setFlagsSource.match(
-        /export const buildSetMailFlagsQueries[\s\S]*?\n};/
-      )![0];
-      const seqBindings = [...body.matchAll(/baseValues = \[([^\]]*)\];/g)]
-        .map((m) => m[1])
-        .filter((binding) => binding.includes("start - 1"));
-      expect(seqBindings).toHaveLength(2);
-      for (const binding of seqBindings) {
-        expect(binding).toContain("end - start + 1");
-      }
-      expect(body).not.toMatch(/OFFSET \$\d+ LIMIT 1/);
     });
   });
 });
