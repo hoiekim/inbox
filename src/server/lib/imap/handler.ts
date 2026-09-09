@@ -6,7 +6,7 @@ import { Socket } from "net";
 import { ImapSession } from "./session";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
-import { imapTrace, redactCredentials } from "./trace";
+import { clip, imapTrace, redactCredentials } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
@@ -44,12 +44,108 @@ const chainsUnboundedArguments = (request: ImapRequest): boolean =>
   request.type === "SEARCH" ||
   (request.type === "UID" && chainsUnboundedArguments(request.data.request));
 
-// Tag of a command line. RFC 3501 §7 requires a tagged completion for every
-// command, including one that failed to parse, so an unparseable line still
-// needs its first token. Reads the first token of the FIRST line — a
-// literal-bearing command spans several.
-const commandTag = (input: string): string =>
-  /^\s*(\S+)/.exec(input)?.[1] || "BAD";
+// Tag of a command line, and the only source of the tag on the wire. A line
+// that parses goes through it too, rather than carrying the tag `parseCommand`
+// returned: that one is `parseAtom` output, which scans to the next
+// atom-special with no length of its own — and the peer picks whether its own
+// line parses, so a bound on one branch is a bound it opts out of. RFC 3501 §7
+// requires a tagged completion for every command, including one that failed to
+// parse, so an unparseable line still needs its first token. Reads the first
+// token of the FIRST line — a literal-bearing command spans several.
+//
+// Held to `1*<ASTRING-CHAR except "+">` (RFC 3501 §9) and to a length, because
+// not every line reaching here is a command: a peer that ships the payload of
+// a refused synchronizing literal anyway has those octets read as command
+// text, and an unbounded first token writes the whole payload back to it
+// inside a BAD completion. A token longer than the ceiling does not match at
+// all, so the payload is answered untagged rather than clipped and echoed.
+//
+// The ceiling only has to sit far below a payload, not close above a tag: a
+// conforming tag it refuses is a command answered untagged and never run, so
+// the peer retries it rather than losing the completion for a side effect that
+// already landed. RFC 3501 §9 puts no length on a tag and UUID-shaped ones run
+// 36 octets, so 128 clears every shape in use while staying 64x under
+// MAX_LITERAL_BYTES.
+//
+// The class stops at \x7f because a regex quantifier counts UTF-16 code
+// units: admitting \x80 and up would let 128 of them reach 512 octets on the
+// wire, four times the bound this constant's name states. ASTRING-CHAR is
+// CHAR = %x01-7F, so nothing conforming is lost by making the two equal.
+const MAX_COMMAND_TAG_BYTES = 128;
+const COMMAND_TAG = new RegExp(
+  `^\\s*([^\\s(){%*"\\\\+\\x00-\\x1f\\x7f-\\uffff]{1,${MAX_COMMAND_TAG_BYTES}})(?=\\s|$)`
+);
+const commandTag = (input: string): string | null =>
+  COMMAND_TAG.exec(input)?.[1] ?? null;
+
+// What a line with no answerable tag is completed with. `BAD` reads like one
+// and is a legal tag, so a peer holding a real BAD-tagged command would match
+// the completion to that one instead.
+const UNTAGGED = "*";
+
+// Verb of a command line, uppercased. Second token of the FIRST line, so it
+// still reads correctly once `pendingCommand` spans several lines.
+const commandVerb = (input: string): string =>
+  /^\s*\S+\s+(\S+)/.exec(input)?.[1]?.toUpperCase() ?? "";
+
+// Literal ceilings. Without them a single unauthenticated socket pins arbitrary
+// heap: `a1 APPEND INBOX {999999999+}` makes the drain hold a gigabyte, and the
+// buffer fills before LOGIN is ever parsed. Against the container's memory
+// ceiling one connection takes IMAP down for every user.
+//
+// APPEND carries a whole RFC 5322 message, so its ceiling is the largest
+// message a client may file into Sent or Drafts. Nothing else in the process
+// bounds a message: the composer's `fileSize: 25 * 1024 * 1024` is per FILE
+// and no limit caps the file count, and the relay declares no SIZE ceiling of
+// its own — so this number is a judgment about how much one socket may hold,
+// not a value derived from a limit that already exists. 35 MiB clears the
+// message sizes mainstream providers accept.
+//
+// It is offered only to an authenticated session. `session.append` answers
+// `NO Not authenticated` either way, so a pre-auth declaration buys nothing
+// but heap — and that is what holds the worst case to one payload per
+// AUTHENTICATED socket rather than one per connected socket, of which
+// `imap/index.ts` admits IMAP_MAX_CONNECTIONS.
+const MAX_APPEND_LITERAL_BYTES = 35 * 1024 * 1024;
+
+// Every other literal is a mailbox name, a credential, or a SEARCH string.
+// RFC 2683 §3.2.1.5 asks servers to accept at least 8000 octets of command
+// text; 8 KiB covers that with nothing left over for an attacker.
+const MAX_LITERAL_BYTES = 8 * 1024;
+
+// Command text held for a drain that has not consumed it. Past this the
+// session stops reading from the socket until the drain catches up, so the
+// buffer holds only what a command needs and TCP's own window absorbs the
+// rest. Sized to hold the longest plausible real command (a UID set naming
+// thousands of messages) with room to spare, so a client whose commands the
+// drain is keeping up with never feels it.
+const MAX_UNCONSUMED_COMMAND_BYTES = 64 * 1024;
+
+// The per-literal cap alone does not bound a COMMAND: literal declarations
+// chain, so N declarations each under the cap still accumulate N payloads on
+// `pendingLiterals` and N line fragments on `pendingCommand`. Only the header
+// line of a command reaches `waitForCommandSlot()`, so a chain is not paced
+// either. Both are new surface — before literals were generalized, only APPEND
+// could hold literal state and it could not chain at all.
+//
+// No real command comes close to either bound. The most literals any command
+// this server implements takes is a handful (LOGIN's two credentials, RENAME's
+// two mailbox names, a SEARCH with several strings), and the only command that
+// carries megabytes is APPEND, whose single message literal is already capped.
+const MAX_LITERALS_PER_COMMAND = 64;
+const MAX_PENDING_COMMAND_BYTES = MAX_APPEND_LITERAL_BYTES + 64 * 1024;
+
+// Verdict on a literal declaration. `closed` is distinct from `refused`
+// because the drain must stop reading, not just skip the declaration.
+type LiteralOutcome = "accepted" | "refused" | "closed";
+
+// Cap for the literal `commandText` is about to declare. Only an authenticated
+// session is offered the message-sized ceiling; before that every literal a
+// client can legitimately send is a command argument.
+const literalCapFor = (commandText: string, authenticated: boolean): number =>
+  authenticated && commandVerb(commandText) === "APPEND"
+    ? MAX_APPEND_LITERAL_BYTES
+    : MAX_LITERAL_BYTES;
 
 // Short human-readable summary of a request for the per-command diagnostic
 // log. Never emits mail contents. Cap at ~200 chars so a runaway pipeline of
@@ -160,8 +256,22 @@ export class ImapRequestHandler {
     // the payload landed and the remainder of that line is still to come.
     let pendingCommand: string | null = null;
     let pendingLiterals: string[] = [];
+    // Octets held on `pendingLiterals`, carried rather than recomputed: the
+    // chain ceiling is checked once per link, and re-measuring every retained
+    // payload each time makes the accounting itself quadratic in the chain.
+    let pendingLiteralBytes = 0;
     let awaitingLiteral = false;
     let literalBytesNeeded = 0;
+
+    // Over-cap LITERAL+ recovery state. A non-synchronizing `{N+}` payload is
+    // already inbound by the time the declaration is read, so it cannot be
+    // refused — only counted and thrown away. `discardToEndOfCommand` then
+    // swallows the rest of that command line, because resuming the line
+    // splitter mid-command would hand the remaining arguments to the parser as
+    // a fresh command, putting a LOGIN password in the journal and on the
+    // wire.
+    let discardBytesRemaining = 0;
+    let discardToEndOfCommand = false;
 
     // pendingSaslTag is stored on this (class property) so session can set it
 
@@ -178,21 +288,144 @@ export class ImapRequestHandler {
     ): Promise<void> => {
       try {
         const parseResult = parseCommand(input, literals);
+        const tag = commandTag(input);
         if (parseResult.success && parseResult.value) {
-          const { tag, request } = parseResult.value;
-          await this.handleRequest(tag, request);
+          // Refused before dispatch, not merely worded differently.
+          // `handleRequest` switches straight into `session.*`, so a line whose
+          // tag has no answer would land an APPEND / STORE / EXPUNGE side
+          // effect and then be retried by a peer whose own tag never completed.
+          if (tag === null) {
+            session.write(`${UNTAGGED} BAD Command tag too long\r\n`);
+            return;
+          }
+          await this.handleRequest(tag, parseResult.value.request);
         } else {
           logger.debug("Parse failed", {
             component: "imap.parser",
-            input: redactCredentials(input),
+            input: clip(redactCredentials(input)),
             error: parseResult.error
           });
           const errorMsg = parseResult.error || "Invalid command syntax";
-          session.write(`${commandTag(input)} BAD ${errorMsg}\r\n`);
+          session.write(`${tag ?? UNTAGGED} BAD ${clip(errorMsg)}\r\n`);
         }
       } catch (error) {
         logger.error("Error processing command", { component: "imap" }, error);
-        session.write(`${commandTag(input)} BAD Internal server error\r\n`);
+        session.write(
+          `${commandTag(input) ?? UNTAGGED} BAD Internal server error\r\n`
+        );
+      }
+    };
+
+    // Enforce the literal ceiling on a declaration. Anything but `accepted`
+    // means the caller must NOT enter accumulation — the whole point is that
+    // the octets never get held — and `closed` means the session is gone, so
+    // the drain has to stop rather than read on.
+    const refuseOversizedLiteral = (
+      commandText: string,
+      declaredBytes: number,
+      isSynchronizing: boolean,
+      // What a chain has left before MAX_PENDING_COMMAND_BYTES. A granted
+      // continuation may not carry the pending command past it, so the
+      // per-literal cap is the smaller of the two.
+      chainBudget = Infinity
+    ): LiteralOutcome => {
+      const cap = Math.min(
+        literalCapFor(commandText, session.isAuthenticated()),
+        chainBudget
+      );
+      if (declaredBytes <= cap) return "accepted";
+
+      // A LITERAL+ payload is already in flight, so the only recovery is to
+      // count its octets out of the stream — and past the ceiling any real
+      // command has to fit under, that recovery provably buys nothing. At
+      // `{4000000000+}` the peer must ship four gigabytes, every octet a memcpy
+      // in the `data` handler, before one further command is served, and each
+      // segment resets SOCKET_TIMEOUT_MS so the socket never idles out either.
+      // No client recovers from that, so it ends the session on the same terms
+      // as the chain cap rather than paying for a discard nobody uses.
+      if (!isSynchronizing && declaredBytes > MAX_PENDING_COMMAND_BYTES) {
+        logger.info("IMAP literal past the command ceiling; closing session", {
+          component: "imap",
+          cmd: commandVerb(commandText),
+          declaredBytes,
+          cap: MAX_PENDING_COMMAND_BYTES,
+          remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
+        });
+        session.write("* BYE Command too long\r\n");
+        if (!socket.destroyed) socket.destroy();
+        return "closed";
+      }
+
+      logger.info("IMAP literal over cap; refusing", {
+        component: "imap",
+        cmd: commandVerb(commandText),
+        declaredBytes,
+        cap,
+        synchronizing: isSynchronizing,
+        remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
+      });
+      // `[TOOBIG]` is the established response code for a literal the server
+      // will not accept, so a client can tell this apart from a generic
+      // failure and stop retrying the same oversized message.
+      session.write(
+        `${commandTag(commandText) ?? UNTAGGED} NO [TOOBIG] Literal exceeds ${cap} octets\r\n`
+      );
+
+      pendingCommand = null;
+      pendingLiterals = [];
+      pendingLiteralBytes = 0;
+      awaitingLiteral = false;
+      literalBytesNeeded = 0;
+
+      if (!isSynchronizing) {
+        // LITERAL+: the client did not wait for permission, so the payload is
+        // already in flight. It can only be counted out of the stream and
+        // dropped — along with the rest of the command line, so its remaining
+        // arguments are not read as a command of their own.
+        discardBytesRemaining = declaredBytes;
+        discardToEndOfCommand = true;
+      }
+      // Synchronizing `{N}`: the continuation was withheld, so a conforming
+      // client never sends the payload. Discarding here would swallow its NEXT
+      // command instead.
+      return "refused";
+    };
+
+    // Octets buffered that the drain has not agreed to receive. The one thing
+    // it has agreed to is an announced literal payload, whose declaration
+    // `refuseOversizedLiteral` has already held to the cap for its command;
+    // what remains is command text nothing has read yet — terminated or not,
+    // since a peer whose junk ends in CRLF every kilobyte keeps the unfinished
+    // line at zero while `buffer` grows by every octet it writes.
+    const unconsumedCommandBytes = (): number => {
+      const awaited = awaitingLiteral ? literalBytesNeeded : 0;
+      return Math.max(0, buffer.length - awaited);
+    };
+
+    // Stop reading once more command text is held than any command can be, and
+    // read again once the drain has consumed it. Pausing rather than closing,
+    // because a flood and a client whose APPEND declaration is merely queued
+    // behind a parked drain are the same picture from here — the second
+    // resumes the moment its declaration is read, and the first is left as an
+    // idle socket for SOCKET_TIMEOUT_MS to end.
+    //
+    // `paused` is tracked here rather than read back off the socket so the
+    // socket is only ever touched on a transition.
+    let paused = false;
+    const applyBackpressure = (): void => {
+      if (generation !== this.generation || socket.destroyed) return;
+      const over = unconsumedCommandBytes() > MAX_UNCONSUMED_COMMAND_BYTES;
+      if (over === paused) return;
+      paused = over;
+      if (over) {
+        logger.info("IMAP unread command text over cap; pausing socket", {
+          component: "imap",
+          bufferedBytes: buffer.length,
+          remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
+        });
+        socket.pause();
+      } else {
+        socket.resume();
       }
     };
 
@@ -232,9 +465,39 @@ export class ImapRequestHandler {
               buffer = Buffer.alloc(0);
               pendingCommand = null;
               pendingLiterals = [];
-              literalBytesNeeded = 0;
+              pendingLiteralBytes = 0;
               awaitingLiteral = false;
+              literalBytesNeeded = 0;
+              discardBytesRemaining = 0;
+              discardToEndOfCommand = false;
               return;
+            }
+
+            // Recovery from an over-cap LITERAL+ declaration: swallow the
+            // announced octets, then the remainder of that command line, without
+            // holding any of it. Runs ahead of literal accumulation so the
+            // discarded payload can never reach `pendingLiterals`.
+            if (discardBytesRemaining > 0) {
+              const take = Math.min(discardBytesRemaining, buffer.length);
+              buffer = Buffer.concat([buffer.subarray(take) as Uint8Array]);
+              discardBytesRemaining -= take;
+              if (discardBytesRemaining > 0) return;
+              continue;
+            }
+            if (discardToEndOfCommand) {
+              const end = buffer.indexOf("\r\n");
+              // The tail can arrive in pieces. Drop what is here and wait for the
+              // terminator rather than retaining it, so no length cap is needed
+              // in this state — nothing accumulates. A peer that never sends the
+              // terminator is holding an idle socket, which SOCKET_TIMEOUT_MS
+              // already ends.
+              if (end === -1) {
+                buffer = Buffer.alloc(0);
+                return;
+              }
+              buffer = Buffer.concat([buffer.subarray(end + 2) as Uint8Array]);
+              discardToEndOfCommand = false;
+              continue;
             }
 
             // Literal octets are payload, never commands. Consume them before the
@@ -252,6 +515,11 @@ export class ImapRequestHandler {
                 .subarray(0, literalBytesNeeded)
                 .toString("utf8");
               pendingLiterals.push(payload);
+              // The declared count, not a re-measure of the decoded string:
+              // it is the exact number of octets just sliced out of the
+              // buffer, and an invalid UTF-8 sequence decodes to U+FFFD and
+              // re-encodes to three octets that were never on the wire.
+              pendingLiteralBytes += literalBytesNeeded;
               // COPY the residual rather than viewing it. `subarray` returns a
               // view that keeps the whole parent allocation alive, so after a
               // multi-MB APPEND the session would sit on the full message for as
@@ -308,6 +576,7 @@ export class ImapRequestHandler {
                 const literals = pendingLiterals;
                 pendingCommand = null;
                 pendingLiterals = [];
+                pendingLiteralBytes = 0;
                 await executeCommand(input, literals);
               }
               continue;
@@ -347,10 +616,54 @@ export class ImapRequestHandler {
                   ? null
                   : LITERAL_DECLARATION.exec(line);
               if (chained) {
+                const declaredBytes = parseInt(chained[1], 10);
+                const isSynchronizing = !chained[2];
+                // The payloads live on `pendingLiterals`; `pendingCommand` keeps
+                // only the `{N}` markers, some thirty octets per link. Measuring
+                // the command text therefore measures none of what is held, so
+                // the byte ceiling has to sum the payloads themselves.
+                const heldBytes =
+                  pendingLiteralBytes + Buffer.byteLength(pendingCommand);
+                // A LITERAL+ declaration's octets are in flight already, so they
+                // are held whatever the session decides. A synchronizing one is
+                // held by nothing until the continuation is granted, and it is
+                // granted below only within what the chain has left — so a
+                // synchronizing chain over the ceiling is refused with the
+                // session up, the same answer an unchained one gets.
+                const pendingBytes =
+                  heldBytes + (isSynchronizing ? 0 : declaredBytes);
+                // A chain that has outgrown any real command is an accumulator
+                // attack, not a client the session can keep negotiating with, so
+                // it ends the session rather than answering `NO` and inviting the
+                // next one.
+                if (
+                  pendingLiterals.length >= MAX_LITERALS_PER_COMMAND ||
+                  pendingBytes > MAX_PENDING_COMMAND_BYTES
+                ) {
+                  logger.info("IMAP literal chain over cap; closing session", {
+                    component: "imap",
+                    literals: pendingLiterals.length,
+                    pendingBytes,
+                    remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
+                  });
+                  session.write("* BYE Command too long\r\n");
+                  if (!socket.destroyed) socket.destroy();
+                  return;
+                }
+                // Cap-check before mutating any state: the verb and the tag both
+                // come off the command assembled so far, not off this tail line.
+                const outcome = refuseOversizedLiteral(
+                  pendingCommand,
+                  declaredBytes,
+                  isSynchronizing,
+                  MAX_PENDING_COMMAND_BYTES - heldBytes
+                );
+                if (outcome === "closed") return;
+                if (outcome === "refused") continue;
                 pendingCommand += line.trimEnd();
-                literalBytesNeeded = parseInt(chained[1], 10);
+                literalBytesNeeded = declaredBytes;
                 awaitingLiteral = true;
-                if (!chained[2]) session.write("+ go ahead\r\n");
+                if (isSynchronizing) session.write("+ go ahead\r\n");
                 continue;
               }
               // If the command already parses without this line, the payload
@@ -363,16 +676,17 @@ export class ImapRequestHandler {
               const input = complete ? pendingCommand : pendingCommand + line;
               pendingCommand = null;
               pendingLiterals = [];
+              pendingLiteralBytes = 0;
               await executeCommand(input, literals);
               if (!complete) continue;
-              // `line` is the pipelined NEXT command, and it is about to be read
-              // by the rest of this iteration rather than by a fresh one — so
-              // the top-of-loop generation guard is already behind us. A
-              // literal-declaring `STARTTLS` swaps the socket inside the
-              // `executeCommand` above, and without this check the attacker's
-              // pipelined remainder would be answered inside the victim's
-              // encrypted channel (RFC 2595 §2.1, CVE-2011-0411 class).
-              if (generation !== this.generation) return;
+              // The command just executed may have been STARTTLS — the parser
+              // accepts `a1 STARTTLS {N+}`, so a literal declaration reaches
+              // this path too — and the fall-through below reads `line` as a
+              // fresh command WITHOUT passing the top-of-loop check again.
+              // That line rode in the attacker's cleartext segment and would
+              // be answered inside the victim's TLS channel. Re-enter the loop
+              // so the check discards it (RFC 2595 §2.1).
+              if (generation !== this.generation) continue;
             }
 
             // Handle SASL challenge response (client sends base64 after "+ " challenge)
@@ -405,7 +719,7 @@ export class ImapRequestHandler {
 
             logger.debug("IMAP command received", {
               component: "imap",
-              command: redactCredentials(line.trim()),
+              command: clip(redactCredentials(line.trim())),
               mailbox: session.selectedMailbox
             });
             imapTrace("in", session.getSessionId(), line.trim());
@@ -425,8 +739,16 @@ export class ImapRequestHandler {
             // the continuation. Accumulate for any command, not just APPEND.
             const literalMatch = LITERAL_DECLARATION.exec(line);
             if (literalMatch) {
+              const outcome = refuseOversizedLiteral(
+                line,
+                parseInt(literalMatch[1], 10),
+                !literalMatch[2]
+              );
+              if (outcome === "closed") return;
+              if (outcome === "refused") continue;
               pendingCommand = line.trimEnd();
               pendingLiterals = [];
+              pendingLiteralBytes = 0;
               literalBytesNeeded = parseInt(literalMatch[1], 10);
               awaitingLiteral = true;
               // Synchronizing literals {N} (without +) require a continuation
@@ -448,6 +770,9 @@ export class ImapRequestHandler {
         }
       } finally {
         draining = false;
+        // Consumption happens only in here, so this is where a paused socket
+        // earns the right to be read again.
+        applyBackpressure();
       }
     };
 
@@ -467,6 +792,11 @@ export class ImapRequestHandler {
         if (!socket.destroyed) socket.destroy();
         return;
       }
+
+      // `drainCommands` runs inside `session.runSerial`, so an IDLE delivery
+      // callback's DB round-trip parks it for as long as that takes while this
+      // handler keeps concatenating. The bound goes where the buffer grows.
+      applyBackpressure();
       // Fire-and-forget: `drainCommands` self-serializes via `draining`.
       // Errors inside are already logged; catch here just to prevent an
       // unhandled-rejection.
