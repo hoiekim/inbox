@@ -256,7 +256,7 @@ const RenderedMail = ({
   };
 
   const isSpamView = selectedCategory === Category.SpamMails;
-  const canToggleSpam = canMarkSpam(mail, domainName, selectedCategory);
+  const canToggleSpam = canMarkSpam(mail, selectedCategory);
 
   const onClickSpam = () => {
     if (!isOnline) return;

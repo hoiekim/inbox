@@ -20,19 +20,21 @@ export const isSentMail = (
  * views only Search, which filters neither, still finds it.
  *
  * The sender address cannot decide this. Inbound SMTP does not authenticate
- * `From`, so a remote sender can forge the user's own domain, and a forged
+ * `From`, so a remote sender can put the user's own domain there and a forged
  * inbound mail is then indistinguishable *by sender address* from a genuine
- * self-addressed copy.
+ * self-addressed copy. `sent` is decided by the server from the lane the mail
+ * arrived on — hardcoded on the MX path, taken from the destination mailbox on
+ * IMAP — so no remote sender can reach it.
  *
  * The spam view needs no answer either way: there the action un-marks, which
  * moves a mail into a view that lists it rather than out of every view that
- * does.
+ * does. Answering it unconditionally keeps that un-mark path reachable even
+ * from a payload that omits `sent`.
  */
 export const canMarkSpam = (
-  mail: Pick<MailHeaderData, "from">,
-  userDomain: string,
+  mail: Pick<MailHeaderData, "sent">,
   category: Category
 ): boolean => {
   if (category === Category.SpamMails) return true;
-  return !isSentMail(mail, userDomain);
+  return !mail.sent;
 };

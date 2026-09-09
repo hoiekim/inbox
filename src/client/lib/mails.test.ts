@@ -3,9 +3,10 @@ import { MailHeaderData } from "common";
 import { Category } from "client";
 import { isSentMail, canMarkSpam } from "./mails";
 
-const makeMail = (fromAddress: string | undefined) =>
+const makeMail = (fromAddress: string | undefined, sent = false) =>
   new MailHeaderData({
     from: fromAddress ? { value: [{ address: fromAddress }], text: fromAddress } : undefined,
+    sent,
   });
 
 describe("isSentMail", () => {
@@ -39,31 +40,38 @@ describe("isSentMail", () => {
 
 describe("canMarkSpam", () => {
   const DOMAIN = "hoie.kim";
-  const spoofed = makeMail("billing@hoie.kim");
-  const outsider = makeMail("bad@spamtest.example");
+  // Delivered over MX, so the server wrote sent = FALSE, but the unauthenticated
+  // `From` header names the user's own domain.
+  const spoofed = makeMail(`billing@${DOMAIN}`, false);
+  // The user's own outbound copy, addressed to themselves.
+  const selfAddressed = makeMail(`hoie@${DOMAIN}`, true);
+  const outsider = makeMail("bad@spamtest.example", false);
 
-  it("offers the toggle on a forged own-domain sender in the spam view", () => {
-    expect(canMarkSpam(spoofed, DOMAIN, Category.SpamMails)).toBe(true);
+  it("offers the toggle on a forged own-domain sender in every view", () => {
+    const all = Object.values(Category);
+    expect(all.map((c) => canMarkSpam(spoofed, c))).toEqual(all.map(() => true));
   });
 
-  it("withholds the toggle on an own-domain sender in every other view", () => {
+  it("withholds the toggle on the user's own outbound mail outside the spam view", () => {
     const others = Object.values(Category).filter((c) => c !== Category.SpamMails);
-    expect(others.map((c) => canMarkSpam(spoofed, DOMAIN, c))).toEqual(
+    expect(others.map((c) => canMarkSpam(selfAddressed, c))).toEqual(
       others.map(() => false)
     );
   });
 
   it("offers the toggle on an outside sender in every view", () => {
     const all = Object.values(Category);
-    expect(all.map((c) => canMarkSpam(outsider, DOMAIN, c))).toEqual(
-      all.map(() => true)
-    );
+    expect(all.map((c) => canMarkSpam(outsider, c))).toEqual(all.map(() => true));
+  });
+
+  it("offers the toggle in the spam view even when the payload omits sent", () => {
+    expect(canMarkSpam(new MailHeaderData(), Category.SpamMails)).toBe(true);
   });
 
   it("pins an explicit answer for every category, so a new member is visible here", () => {
     expect(
       Object.fromEntries(
-        Object.values(Category).map((c) => [c, canMarkSpam(spoofed, DOMAIN, c)])
+        Object.values(Category).map((c) => [c, canMarkSpam(selfAddressed, c)])
       )
     ).toEqual({
       "New Mails": false,
@@ -73,10 +81,5 @@ describe("canMarkSpam", () => {
       "Spam Mails": true,
       Search: false,
     });
-  });
-
-  it("offers the toggle when the sender address is missing", () => {
-    expect(canMarkSpam(makeMail(undefined), DOMAIN, Category.AllMails)).toBe(true);
-    expect(canMarkSpam(makeMail(undefined), DOMAIN, Category.SpamMails)).toBe(true);
   });
 });
