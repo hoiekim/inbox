@@ -9,6 +9,7 @@
 import webPush, { PushSubscription } from "web-push";
 import { SignedUser, ComputedPushSubscription } from "common";
 import * as pushSubscriptionsRepo from "./postgres/repositories/push_subscriptions";
+import { validatePushSubscription } from "./push-validation";
 import { getActiveUsers as realGetActiveUsers } from "./users";
 import { getNotifications as realGetNotifications } from "./mails/notifications";
 import { idleManager as realIdleManager } from "./imap/idle-manager";
@@ -61,7 +62,17 @@ export const createPush = (
     userId: string,
     push_subscription: PushSubscription,
   ) => {
-    return repo.storeSubscription(userId, push_subscription);
+    const validation = validatePushSubscription(push_subscription);
+
+    if (!validation.valid) {
+      logger.warn("Refused to store an unusable push subscription", {
+        component: "push",
+        reason: validation.message,
+      });
+      return undefined;
+    }
+
+    return repo.storeSubscription(userId, validation.subscription);
   };
 
   const deleteSubscription = (push_subscription_id: string) => {

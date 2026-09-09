@@ -123,6 +123,52 @@ describe("postSubscribeRoute", () => {
     expect(mockStoreSubscription).toHaveBeenCalledWith("u1", fakeSub);
   });
 
+  const expectNoStore = async (subscription: unknown, reason: RegExp) => {
+    const { postSubscribeRoute } = await import("./post-subscribe");
+    const req = makeReq({ body: { subscription } });
+    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toMatch(reason);
+    expect(mockStoreSubscription).not.toHaveBeenCalled();
+  };
+
+  it("rejects a non-https endpoint without writing", async () => {
+    await expectNoStore(
+      { endpoint: "http://fcm.example.com/s", keys: { p256dh: "abc", auth: "xyz" } },
+      /https/,
+    );
+  });
+
+  it("rejects a loopback endpoint without writing", async () => {
+    await expectNoStore(
+      { endpoint: "https://127.0.0.1:6379/s", keys: { p256dh: "abc", auth: "xyz" } },
+      /not by IP/,
+    );
+  });
+
+  it("rejects a link-local metadata endpoint without writing", async () => {
+    await expectNoStore(
+      { endpoint: "https://169.254.169.254/latest/meta-data/", keys: { p256dh: "abc", auth: "xyz" } },
+      /not by IP/,
+    );
+  });
+
+  it("rejects a malformed subscription without writing", async () => {
+    await expectNoStore(undefined, /subscription must be an object/);
+  });
+
+  it("rejects missing keys without writing", async () => {
+    await expectNoStore({ endpoint: "https://fcm.example.com/s" }, /keys must be an object/);
+  });
+
+  it("rejects a non-object body without writing", async () => {
+    const { postSubscribeRoute } = await import("./post-subscribe");
+    const req = makeReq({ body: "subscription=1" });
+    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect(mockStoreSubscription).not.toHaveBeenCalled();
+  });
+
   it("returns failed when store returns null", async () => {
     const { postSubscribeRoute } = await import("./post-subscribe");
     const fakeSub = { endpoint: "https://fcm.example.com", keys: { p256dh: "abc", auth: "xyz" } };
