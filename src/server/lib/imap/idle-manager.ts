@@ -169,6 +169,7 @@ export class IdleManager {
     this.idleSessions.forEach((idleSession, _) => {
       try {
         idleSession.session.write("* BYE Server shutting down\r\n");
+        idleSession.session.close();
       } catch {
         // Ignore errors during shutdown
       }

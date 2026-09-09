@@ -352,7 +352,7 @@ export class ImapRequestHandler {
           remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
         });
         session.write("* BYE Command too long\r\n");
-        if (!socket.destroyed) socket.destroy();
+        session.close();
         return "closed";
       }
 
@@ -647,7 +647,7 @@ export class ImapRequestHandler {
                     remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
                   });
                   session.write("* BYE Command too long\r\n");
-                  if (!socket.destroyed) socket.destroy();
+                  session.close();
                   return;
                 }
                 // Cap-check before mutating any state: the verb and the tag both
@@ -824,9 +824,7 @@ export class ImapRequestHandler {
     socket.on("timeout", () => {
       logger.info("IMAP socket timeout", { component: "imap" });
       session.write("* BYE Timeout\r\n");
-      if (!socket.destroyed) {
-        socket.destroy();
-      }
+      session.close();
     });
   };
 

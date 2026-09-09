@@ -54,6 +54,14 @@ import {
   SequenceState,
 } from "./sequence-resolver";
 
+/**
+ * Grace period for a final response to reach the wire before the socket is
+ * destroyed. Generous for a peer that is merely slow, short enough that a peer
+ * which has stopped reading cannot hold the connection — and short enough to
+ * fit inside the shutdown budget `start.ts` closes the IMAP servers under.
+ */
+const CLOSE_FLUSH_TIMEOUT_MS = 2000;
+
 export class ImapSession {
   public selectedMailbox: string | null = null;
   private selectedMailboxMessageCount: number = 0;
@@ -169,6 +177,41 @@ export class ImapSession {
       logger.error("Error writing to socket", { component: "imap" }, error);
       return false;
     }
+  };
+
+  /**
+   * Close the connection, letting everything already written reach the wire.
+   *
+   * `socket.destroy()` drops whatever is still queued, and a final untagged
+   * `BYE` is written on exactly the sessions whose peer has stopped reading —
+   * a socket torn down for over-buffering is past its high-water mark by
+   * definition, so the response a client most needs is the one likeliest to be
+   * discarded. RFC 3501 §7.1.5's untagged `BYE` is what marks the disconnect
+   * as the server's decision rather than a network fault, which is the
+   * difference between a client that stops retrying and one that reconnects
+   * immediately.
+   *
+   * `end` flushes the write queue ahead of the FIN; the timer is what stops a
+   * peer that never reads from holding the socket open on the strength of that
+   * promise. Dropping the reader first is load-bearing: `destroy` used to end
+   * the read side outright, and a teardown fires on peers that are abusing it,
+   * so nothing more may be parsed off this socket during the flush window.
+   */
+  close = () => {
+    const socket = this.socket;
+    if (socket.destroyed) return;
+
+    socket.removeAllListeners("data");
+
+    // Armed before the `end` that can satisfy it: a socket with an empty write
+    // queue closes synchronously, and the timer has to be clearable by then.
+    const timer = setTimeout(() => {
+      if (!socket.destroyed) socket.destroy();
+    }, CLOSE_FLUSH_TIMEOUT_MS);
+    timer.unref();
+    socket.once("close", () => clearTimeout(timer));
+
+    socket.end();
   };
 
   /**
@@ -630,7 +673,7 @@ export class ImapSession {
     this.authenticated = false;
     this.write("* BYE IMAP4rev1 Server logging out\r\n");
     this.write(`${tag} OK LOGOUT completed\r\n`);
-    this.socket.end();
+    this.close();
   };
 
   // ---------------------------------------------------------------------------
