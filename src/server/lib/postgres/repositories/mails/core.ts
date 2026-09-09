@@ -19,6 +19,11 @@ import {
   writeMailboxUid,
 } from "./counters";
 import {
+  decideMappingWrites,
+  type MappingScope,
+  type MappingWrite,
+} from "./mapping-decisions";
+import {
   computeFullMessageSize,
   type FetchMailInput,
 } from "../../../imap/session-utils";
@@ -120,7 +125,77 @@ export interface SaveMailInput {
     deleted?: boolean;
   };
   mailbox?: string;
+  /**
+   * A domain view this mail also belongs to (`INBOX`), recorded in
+   * `mail_mailbox_uid` against `uid_domain`. Independent of `mailbox` above,
+   * which names the mapped destination and carries `uid_mailbox`: a received
+   * mail belongs to its per-account view and to INBOX at once.
+   */
+  domain_mailbox?: string;
 }
+
+// `mail_mailbox_uid` is UNIQUE on `(user_id, mailbox, uid)` while `mails`
+// constrains only `(user_id, message_id)`, so two received rows can hold the
+// same `uid_domain` — rows written before UID reservation became atomic still
+// do, and the merge branch files them under their historical value. A domain
+// view row is a scope marker whose UID is already authoritative in
+// `mails.uid_domain`, so losing one costs a marker no read consults; aborting
+// would cost the delivery it rides on, which on the SMTP path is a NACK the
+// sender retries into the same deterministic failure. The mapped destination
+// keeps aborting — it is the only UID source its box has.
+//
+// A skipped marker is silent past the warn line, so it is a debt the read
+// cutover has to settle before it can select on this table: no received,
+// unexpunged row may lack its domain view row. The repair for a colliding pair
+// is to renumber the loser to a fresh `uid_domain` above the counter — that
+// column is the authority and the duplicates are a legacy artifact — rather
+// than to leave one of the two unmarked and invisible.
+const writeOneMapping = async (
+  write: typeof writeMailboxUid,
+  user_id: string,
+  mailbox: string,
+  mail_id: string,
+  uid: number,
+  scope: MappingScope
+): Promise<number | undefined> => {
+  try {
+    return await write(user_id, mailbox, mail_id, uid);
+  } catch (error) {
+    const duplicate = (error as { code?: string }).code === "23505";
+    if (scope !== "domain" || !duplicate) throw error;
+    logger.warn("Skipping a domain view mapping row whose UID is already taken", {
+      user_id,
+      mailbox,
+      mail_id,
+      uid,
+    });
+    return undefined;
+  }
+};
+
+/**
+ * Issues the mapping writes for one row and returns the UID persisted for the
+ * mapped destination, which `storeMail` reconciles onto `mail.uid.account`.
+ * The rows are independent, so the round trips overlap.
+ *
+ * `write` is a seam: this is the only place the decided rows become round
+ * trips, and there is no other way to drive it without a pool.
+ */
+export const recordMappings = async (
+  user_id: string,
+  mail_id: string,
+  writes: MappingWrite[],
+  mappedDestination: string | undefined,
+  write: typeof writeMailboxUid = writeMailboxUid
+): Promise<number | undefined> => {
+  const persisted = await Promise.all(
+    writes.map(async ({ mailbox, uid, scope }) => ({
+      mailbox,
+      uid: await writeOneMapping(write, user_id, mailbox, mail_id, uid, scope),
+    }))
+  );
+  return persisted.find(({ mailbox }) => mailbox === mappedDestination)?.uid;
+};
 
 export const saveMail = async (
   input: SaveMailInput
@@ -214,15 +289,18 @@ export const saveMail = async (
     const row = await mailsTable.insert(data, [MAIL_ID]);
     if (row) {
       const inserted_id = row[MAIL_ID] as string;
-      let persistedUid: number | undefined;
-      if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
-        persistedUid = await writeMailboxUid(
-          input.user_id,
-          input.mailbox,
-          inserted_id,
-          input.uid_mailbox as number
-        );
-      }
+      const persistedUid = await recordMappings(
+        input.user_id,
+        inserted_id,
+        decideMappingWrites({
+          mailbox: input.mailbox,
+          uid_mailbox: input.uid_mailbox,
+          domain_mailbox: input.domain_mailbox,
+          uid_domain: input.uid_domain,
+          sent: input.sent ?? false,
+        }),
+        input.mailbox
+      );
       // Mapped-utility invariant sync — see `syncMappedPivotsForRow`. A
       // fresh row has no prior pivot, so we only issue the write when the
       // flag is TRUE (pass `undefined` otherwise to skip).
@@ -296,15 +374,24 @@ export const saveMail = async (
         );
       }
 
-      let persistedUid: number | undefined;
-      if (input.mailbox && (input.uid_mailbox ?? 0) > 0) {
-        persistedUid = await writeMailboxUid(
-          input.user_id,
-          input.mailbox,
-          existing.mail_id,
-          input.uid_mailbox as number
-        );
-      }
+      // The domain view describes the SURVIVING row, so its `uid_domain` and
+      // `sent` come off `existing` — the caller's reservation belongs to an
+      // INSERT that never happened, and its `sent` describes a different
+      // delivery of the same Message-ID. The mapped destination is the
+      // caller's own: this delivery's account box is exactly what the merge
+      // exists to record.
+      const persistedUid = await recordMappings(
+        input.user_id,
+        existing.mail_id,
+        decideMappingWrites({
+          mailbox: input.mailbox,
+          uid_mailbox: input.uid_mailbox,
+          domain_mailbox: input.domain_mailbox,
+          uid_domain: existing.uid_domain,
+          sent: existing.sent,
+        }),
+        input.mailbox
+      );
       // Mirror the placement flip into the mapped-utility pivots — same
       // helper as the INSERT branch above. A placement that transitions
       // `saved` to TRUE (COPY into `Starred` for a same-Message-ID row) has

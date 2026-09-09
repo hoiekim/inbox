@@ -17,6 +17,7 @@ import {
 import {
   saveMail as pgSaveMail,
   SaveMailInput,
+  INBOX_VIEW,
   getDomainUidNext as pgGetDomainUidNext,
   getAccountUidNext as pgGetAccountUidNext,
 } from "../postgres/repositories/mails";
@@ -155,6 +156,12 @@ export const saveMail = async (
     spam_score: spamResult?.score ?? 0,
     spam_reasons: spamResult?.reasons ?? null,
     is_spam: spamResult?.isSpam ?? false,
+    // Received mail is in the INBOX tree; the per-account view above is a
+    // sub-view beneath it, and records its own row against `uid_mailbox`.
+    // Whether the row that ends up written may hold that membership is
+    // `decideMappingWrites`' question — it gates on the written row's own
+    // `sent`, which on the merge branch is the surviving row's, not this one's.
+    domain_mailbox: INBOX_VIEW,
   };
 
   try {

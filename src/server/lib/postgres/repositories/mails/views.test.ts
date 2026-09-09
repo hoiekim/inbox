@@ -8,6 +8,9 @@ import {
   membershipExpression,
   membershipFilter,
   usesDomainUidSpace,
+  domainViewForDestination,
+  isInboxTree,
+  INBOX_VIEW,
 } from "./views";
 
 describe("utility views", () => {
@@ -139,6 +142,98 @@ describe("the IMAP-side folder table agrees with the predicate", () => {
     const { isDomainScoped } = await import("../../../imap/util");
     for (const view of [DRAFTS_VIEW, JUNK_VIEW]) {
       expect(isDomainScoped(view)).toBe(usesDomainUidSpace(view));
+    }
+  });
+});
+
+describe("domainViewForDestination — which writes record INBOX membership", () => {
+  it("records the unified view for every box in the INBOX tree", () => {
+    expect(domainViewForDestination("INBOX")).toBe(INBOX_VIEW);
+    expect(domainViewForDestination("INBOX/accounts/admin")).toBe(INBOX_VIEW);
+  });
+
+  it("matches INBOX case-insensitively and stores the canonical spelling", async () => {
+    // RFC 3501 section 5.1 makes INBOX the one case-insensitive mailbox name, so
+    // `COPY 1 inbox` has to record the same membership `COPY 1 INBOX` does — and
+    // under the one spelling a read would join on.
+    const { canonicalMailbox } = await import("../../../imap/util");
+    expect(INBOX_VIEW).toBe(canonicalMailbox("inbox"));
+    expect(domainViewForDestination("inbox")).toBe(INBOX_VIEW);
+    // Only INBOX itself is case-insensitive — the sub-tree is an ordinary
+    // hierarchical name, which the read side also matches case-sensitively.
+    expect(domainViewForDestination("Inbox/accounts/admin")).toBeUndefined();
+    expect(isInboxTree("Inbox/accounts/admin", false)).toBe(false);
+  });
+
+  it("records nothing for a destination outside the tree", () => {
+    // The defect this membership exists to close: a COPY / MOVE into any of
+    // these creates a received, non-spam row, which the INBOX predicate matches
+    // on its own. Recording INBOX for them would carry that over.
+    expect(domainViewForDestination("Archive")).toBeUndefined();
+    expect(domainViewForDestination("Sent Messages")).toBeUndefined();
+    expect(domainViewForDestination("Sent Messages/accounts/admin")).toBeUndefined();
+  });
+
+  it("records the unified view for the flag-derived utility destinations", () => {
+    // These hold a received-lane row in the user's own domain space with no
+    // mapping row of their own, and a flag is the only thing keeping it out of
+    // INBOX. Once INBOX selects on the mapping table, a write that recorded no
+    // scope leaves the mail in NO mailbox the moment the client clears that
+    // flag — `APPEND Junk` then "not spam", `APPEND Drafts` then
+    // `STORE -FLAGS (\Draft)`.
+    expect(domainViewForDestination(JUNK_VIEW)).toBe(INBOX_VIEW);
+    expect(domainViewForDestination(DRAFTS_VIEW)).toBe(INBOX_VIEW);
+    // Matched the same case-insensitive way the IMAP-side folder lookup is.
+    expect(domainViewForDestination("junk")).toBe(INBOX_VIEW);
+    expect(domainViewForDestination("DRAFTS")).toBe(INBOX_VIEW);
+  });
+
+  it("records nothing for the mapped utility destinations", () => {
+    // Starred and Trash take a mapping row of their own at their own UID, and
+    // the row a COPY files there is a distinct clone — scoping it to INBOX is
+    // exactly the over-counting this membership exists to close. The MOVE
+    // clone, which has no original left behind, is left unscoped by the same
+    // rule; giving it a home is a prerequisite of the read cutover, not of
+    // this write rule.
+    expect(domainViewForDestination("Starred")).toBeUndefined();
+    expect(domainViewForDestination("Trash")).toBeUndefined();
+  });
+
+  it("scopes every domain-scoped utility folder the IMAP side declares", async () => {
+    // The list is read from `UTILITY_FOLDERS` rather than restated, so a folder
+    // added there as `uidSpace: "domain"` cannot start recording no scope
+    // silently.
+    const { UTILITY_FOLDERS } = await import("../../../imap/util");
+    for (const { name, uidSpace } of UTILITY_FOLDERS) {
+      expect(domainViewForDestination(name), name).toBe(
+        uidSpace === "domain" ? INBOX_VIEW : undefined
+      );
+    }
+  });
+
+  it("does not treat a user box whose name merely starts with INBOX as the tree", () => {
+    // `CREATE INBOXER` and `CREATE "INBOX/keep"` are both legal user boxes. Only
+    // the exact name and the accounts/ sub-tree are INBOX.
+    expect(domainViewForDestination("INBOXER")).toBeUndefined();
+    expect(domainViewForDestination("INBOX/keep")).toBeUndefined();
+  });
+
+  it("agrees with the read-side twin on every box both can name", () => {
+    // `isInboxTree` decides which boxes apply the INBOX predicate; this decides
+    // which writes record a row under INBOX. A box the first counts and the
+    // second skips is a mail INBOX can show with no row to select it by. The
+    // utility views are not in the list: their read applies a flag predicate of
+    // their own, so `isInboxTree` is not the twin of their scope decision.
+    const cases: Array<[string, string | null]> = [
+      ["INBOX", null],
+      ["INBOX/accounts/admin", "INBOX/accounts/admin"],
+      ["Archive", "Archive"],
+      ["Sent Messages/accounts/admin", "Sent Messages/accounts/admin"],
+    ];
+    for (const [destination, readSide] of cases) {
+      expect(domainViewForDestination(destination) !== undefined, destination).toBe(
+        isInboxTree(readSide, false)
+      );
     }
   });
 });
