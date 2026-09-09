@@ -139,19 +139,52 @@ describe("getPushPublicKey + isPushEnabled", () => {
 });
 
 describe("storeSubscription", () => {
+  const validSubscription = {
+    endpoint: "https://fcm.googleapis.com/fcm/send/f4Kx9",
+    keys: { p256dh: "p", auth: "a" },
+  } as PushSubscription;
+
   it("delegates to repository with the same arguments", async () => {
     const m = makeMocks();
     const push = m.make();
-    const sub = {
-      endpoint: "https://x",
-      keys: { p256dh: "p", auth: "a" },
-    } as PushSubscription;
 
-    const result = await push.storeSubscription("user-1", sub);
+    const result = await push.storeSubscription("user-1", validSubscription);
 
     expect(m.repo.storeSubscription).toHaveBeenCalledTimes(1);
-    expect(m.repo.storeSubscription.mock.calls[0]).toEqual(["user-1", sub] as never);
+    expect(m.repo.storeSubscription.mock.calls[0]).toEqual([
+      "user-1",
+      validSubscription,
+    ] as never);
     expect(result).toEqual({ _id: "sub-1" } as never);
+  });
+
+  // The route validates too, so this covers any other caller: the endpoint is
+  // a URL this module later POSTs to, and the write is the last place that
+  // can refuse an internal one.
+  it("refuses an endpoint pointing inside the deployment's network", async () => {
+    const m = makeMocks();
+    const push = m.make();
+
+    const result = await push.storeSubscription("user-1", {
+      endpoint: "https://169.254.169.254/latest/meta-data/",
+      keys: { p256dh: "p", auth: "a" },
+    } as PushSubscription);
+
+    expect(result).toBeUndefined();
+    expect(m.repo.storeSubscription).not.toHaveBeenCalled();
+    expect(m.logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a subscription whose keys are missing", async () => {
+    const m = makeMocks();
+    const push = m.make();
+
+    const result = await push.storeSubscription("user-1", {
+      endpoint: "https://fcm.googleapis.com/fcm/send/f4Kx9",
+    } as PushSubscription);
+
+    expect(result).toBeUndefined();
+    expect(m.repo.storeSubscription).not.toHaveBeenCalled();
   });
 });
 
