@@ -42,7 +42,7 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
-// `restoreLeaves` only snapshots `pg` and `web-push`, so this file captures the
+// `restoreLeaves` covers node-module leaves only, so this file captures the
 // real logger itself and re-registers it in `afterAll` — `mock.module` is
 // process-global and would otherwise stub every later file in the same run.
 const realLogger = await import("./logger");

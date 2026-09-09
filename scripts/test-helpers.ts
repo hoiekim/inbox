@@ -36,11 +36,12 @@ import { join } from "path";
 interface RealLeaves {
   __REAL_PG: Record<string, unknown> & { default: unknown };
   __REAL_WEB_PUSH: Record<string, unknown> & { default: unknown };
+  __REAL_BCRYPT: Record<string, unknown> & { default: unknown };
 }
 
 const realLeaves = (): RealLeaves => {
   const g = globalThis as unknown as Partial<RealLeaves>;
-  if (!g.__REAL_PG || !g.__REAL_WEB_PUSH) {
+  if (!g.__REAL_PG || !g.__REAL_WEB_PUSH || !g.__REAL_BCRYPT) {
     throw new Error(
       "test-helpers: real leaf snapshots missing on globalThis. " +
         "Run tests via `bun test` (which preloads `scripts/test-preload.ts`).",
@@ -50,14 +51,15 @@ const realLeaves = (): RealLeaves => {
 };
 
 /**
- * Re-mock the standard set of leaf deps (`pg`, `web-push`) back to the
- * real module exports captured by the preload. Pass directly to
+ * Re-mock the standard set of leaf deps (`pg`, `web-push`, `bcryptjs`) back
+ * to the real module exports captured by the preload. Pass directly to
  * `afterAll(restoreLeaves)`.
  */
 export const restoreLeaves = (): void => {
-  const { __REAL_PG, __REAL_WEB_PUSH } = realLeaves();
+  const { __REAL_PG, __REAL_WEB_PUSH, __REAL_BCRYPT } = realLeaves();
   mock.module("pg", () => __REAL_PG);
   mock.module("web-push", () => __REAL_WEB_PUSH);
+  mock.module("bcryptjs", () => __REAL_BCRYPT);
 };
 
 /**

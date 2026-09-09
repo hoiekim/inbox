@@ -2,7 +2,8 @@
  * Tests for user route handlers: post-login, delete-login, get-login,
  * post-set-info, post-token
  */
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { restoreLeaves } from "test-helpers";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,8 @@ mock.module("bcryptjs", () => ({
   default: { compare: mockBcryptCompare },
   compare: mockBcryptCompare,
 }));
+
+afterAll(restoreLeaves);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
