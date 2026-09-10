@@ -64,8 +64,10 @@ describe("canMarkSpam", () => {
     expect(all.map((c) => canMarkSpam(outsider, c))).toEqual(all.map(() => true));
   });
 
-  it("offers the toggle in the spam view even when the payload omits sent", () => {
-    expect(canMarkSpam(new MailHeaderData(), Category.SpamMails)).toBe(true);
+  it("offers the un-mark toggle in the spam view even when the payload claims sent", () => {
+    expect(canMarkSpam(new MailHeaderData({ sent: true }), Category.SpamMails)).toBe(
+      true
+    );
   });
 
   it("pins an explicit answer for every category, so a new member is visible here", () => {

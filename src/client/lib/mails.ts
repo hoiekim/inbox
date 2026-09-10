@@ -26,10 +26,12 @@ export const isSentMail = (
  * arrived on — hardcoded on the MX path, taken from the destination mailbox on
  * IMAP — so no remote sender can reach it.
  *
- * The spam view needs no answer either way: there the action un-marks, which
+ * The spam view answers `true` unconditionally: there the action un-marks, which
  * moves a mail into a view that lists it rather than out of every view that
- * does. Answering it unconditionally keeps that un-mark path reachable even
- * from a payload that omits `sent`.
+ * does. That keeps the un-mark path open even for a payload that stamps
+ * `sent: true` on a mail the spam view is rendering — a value the view's own
+ * `sent = FALSE` predicate contradicts, and which would otherwise strand the
+ * mail in spam with no control to bring it back.
  */
 export const canMarkSpam = (
   mail: Pick<MailHeaderData, "sent">,
