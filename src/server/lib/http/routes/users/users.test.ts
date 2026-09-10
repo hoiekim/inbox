@@ -40,7 +40,11 @@ mock.module("bcryptjs", () => ({
   compare: mockBcryptCompare,
 }));
 
-afterAll(restoreLeaves);
+afterAll(() => {
+  restoreLeaves();
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
+  if (realServer) mock.module("server", () => realServer);
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
