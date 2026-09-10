@@ -50,7 +50,13 @@ function makeMockSocket() {
   socket.destroy = () => {
     socket.destroyed = true;
   };
-  socket.end = () => {};
+  // `end` completes the close on a socket with an empty write queue, which is
+  // every socket this fixture builds; a no-op would report a session torn down
+  // through the teardown primitive as one that was never closed.
+  socket.end = () => {
+    socket.destroyed = true;
+    socket.emit("close");
+  };
   return socket;
 }
 

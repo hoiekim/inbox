@@ -11,6 +11,7 @@ import { getUser } from "server";
 import { logger } from "server";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "../auth-rate-limit";
 import { Store } from "./store";
+import { closeSocket } from "./close-socket";
 
 // Dummy hash used to prevent username enumeration via timing attacks.
 const DUMMY_HASH =
@@ -51,7 +52,7 @@ export async function handleAuthenticate(
 
   if (isAuthRateLimited(ip)) {
     write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-    socket.end();
+    closeSocket(socket);
     return null;
   }
 
@@ -79,7 +80,7 @@ export async function handleAuthenticate(
       const limited = await recordAuthFailure(ip);
       if (limited) {
         write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-        socket.end();
+        closeSocket(socket);
         return null;
       }
       write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
@@ -131,7 +132,7 @@ export async function handleLogin(
 
   if (isAuthRateLimited(ip)) {
     write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-    socket.end();
+    closeSocket(socket);
     return null;
   }
 
@@ -152,7 +153,7 @@ export async function handleLogin(
     const limited = await recordAuthFailure(ip);
     if (limited) {
       write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-      socket.end();
+      closeSocket(socket);
       return null;
     }
     write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);

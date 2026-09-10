@@ -24,7 +24,7 @@ import { idleManager } from "./idle-manager";
 
 const FILL = "* 1 FETCH (BODY[] {1000}\r\n" + "x".repeat(1000) + ")\r\n";
 const MAX_FILL_WRITES = 20000;
-// Mirrors `CLOSE_FLUSH_TIMEOUT_MS` in session.ts.
+// Mirrors `CLOSE_FLUSH_TIMEOUT_MS` in close-socket.ts.
 const CLOSE_FLUSH_TIMEOUT_MS = 2000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
