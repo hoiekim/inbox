@@ -37,7 +37,7 @@ const accountCopies = async (run: () => void | Promise<void>) => {
 const readLine = (buffer: SessionBuffer): string | null => {
   const end = buffer.indexOfCrlf();
   if (end === -1) return null;
-  const line = buffer.toString(0, end);
+  const line = buffer.decode(0, end);
   buffer.consume(end + 2);
   return line;
 };
@@ -56,25 +56,69 @@ describe("SessionBuffer accumulation", () => {
     expect(buffer.length).toBe(512 * 4096);
 
     const reading = await accountCopies(() => {
-      expect(buffer.toString(0, 8)).toBe("AAAAAAAA");
+      expect(buffer.decode(0, 8)).toBe("AAAAAAAA");
     });
     expect(reading.calls).toBe(1);
     expect(reading.bytes).toBe(512 * 4096);
   });
 
-  it("joins early once the pending segment list reaches its ceiling", async () => {
+  it("merges the run that reached the ceiling, not everything held", async () => {
     const buffer = new SessionBuffer();
+    const held = 1024 * 1024;
+    buffer.push(Buffer.alloc(held, 0x41));
+    buffer.decode(0, 1);
     const octet = Buffer.from("x");
 
     // A peer sets the segment size, so deferring forever trades a bounded copy
-    // for an unbounded number of retained segment objects.
+    // for an unbounded number of retained segment objects. Rebuilding what is
+    // already held alongside the run would re-copy every octet once per
+    // ceiling crossed, which is the same quadratic at 1/4096 the frequency.
     const arriving = await accountCopies(() => {
       for (let i = 0; i < SEGMENT_CEILING; i++) buffer.push(octet);
     });
 
     expect(arriving.calls).toBe(1);
-    expect(buffer.length).toBe(SEGMENT_CEILING);
-    expect(buffer.toString(0, 4)).toBe("xxxx");
+    expect(arriving.bytes).toBe(SEGMENT_CEILING);
+    expect(buffer.length).toBe(held + SEGMENT_CEILING);
+    expect(buffer.decode(held, held + 4)).toBe("xxxx");
+  });
+
+  it("keeps the octets moved linear across repeated ceilings", async () => {
+    const buffer = new SessionBuffer();
+    const octet = Buffer.from("x");
+    const total = SEGMENT_CEILING * 8;
+
+    const arriving = await accountCopies(() => {
+      for (let i = 0; i < total; i++) buffer.push(octet);
+    });
+
+    // Each octet is merged into a run once and never again, so the total is
+    // the wire — not the wire times the number of ceilings it crossed.
+    expect(arriving.bytes).toBe(total);
+    expect(buffer.length).toBe(total);
+    expect(buffer.decode(total - 2, total)).toBe("xx");
+  });
+
+  it("scans an unterminated command line without joining", async () => {
+    const buffer = new SessionBuffer();
+    const segment = Buffer.alloc(64, 0x41);
+    const segments = 1024;
+
+    // The shape the drain loop actually produces, and the one the earlier
+    // accumulation tests miss by pushing everything before they read: every
+    // arriving segment wakes the drain, which reaches the line splitter while
+    // the line is still unterminated. Searching by joining would copy
+    // everything held per segment — 32 MiB of `memcpy` for 64 KiB of wire, on
+    // a path that runs before LOGIN.
+    const scanning = await accountCopies(() => {
+      for (let i = 0; i < segments; i++) {
+        buffer.push(segment);
+        expect(buffer.indexOfCrlf()).toBe(-1);
+      }
+    });
+
+    expect(scanning.bytes).toBe(0);
+    expect(buffer.length).toBe(segments * 64);
   });
 
   it("ignores an empty segment", () => {
@@ -86,6 +130,41 @@ describe("SessionBuffer accumulation", () => {
 });
 
 describe("SessionBuffer reads", () => {
+  it("finds a CRLF straddling the boundary a scan stopped at", () => {
+    const buffer = new SessionBuffer();
+    buffer.push(Buffer.from("A1 NO"));
+    expect(buffer.indexOfCrlf()).toBe(-1);
+    buffer.push(Buffer.from("OP\r"));
+    expect(buffer.indexOfCrlf()).toBe(-1);
+    buffer.push(Buffer.from("\nA2 NOOP\r\n"));
+
+    // The `\r` is the last octet the second scan saw, so a resume that starts
+    // where it stopped rather than one octet back never sees the pair, and the
+    // session wedges on a command line it has already been sent in full.
+    expect(readLine(buffer)).toBe("A1 NOOP");
+    expect(readLine(buffer)).toBe("A2 NOOP");
+    expect(buffer.length).toBe(0);
+  });
+
+  it("resumes the search from the right place after a consume", () => {
+    const buffer = new SessionBuffer();
+    // Longer than the line behind it, so a resume offset left where the first
+    // line ended lands past the second line's terminator rather than short of
+    // it — the shape that actually loses the terminator.
+    const first = `A1 SEARCH SUBJECT ${"x".repeat(64)}`;
+    buffer.push(Buffer.from(first));
+    expect(buffer.indexOfCrlf()).toBe(-1);
+    buffer.push(Buffer.from("\r\nA2 NOOP\r\n"));
+
+    // Consuming shifts every remaining octet toward the front, so a resume
+    // offset carried across one has to shift with them. One that does not
+    // skips a terminator already on the wire, and the session wedges holding a
+    // command it was sent in full.
+    expect(readLine(buffer)).toBe(first);
+    expect(readLine(buffer)).toBe("A2 NOOP");
+    expect(buffer.length).toBe(0);
+  });
+
   it("finds a CRLF straddling two segments", () => {
     const buffer = new SessionBuffer();
     buffer.push(Buffer.from("A1 NOOP\r"));
@@ -97,6 +176,22 @@ describe("SessionBuffer reads", () => {
     expect(buffer.length).toBe(0);
   });
 
+  it("finds a CRLF straddling the joined block and a new segment", () => {
+    const buffer = new SessionBuffer();
+    buffer.push(Buffer.from("A1 NOOP\r\nA2 NOOP\r"));
+    expect(readLine(buffer)).toBe("A1 NOOP");
+
+    // That read joined, so the `\r` left behind is the block's last octet and
+    // the `\n` answering it arrives as a segment. A search that walks the two
+    // halves independently reads straight past the pair and hands the drain
+    // two commands as one line.
+    buffer.push(Buffer.from("\nA3 NOOP\r\n"));
+
+    expect(readLine(buffer)).toBe("A2 NOOP");
+    expect(readLine(buffer)).toBe("A3 NOOP");
+    expect(buffer.length).toBe(0);
+  });
+
   it("reassembles a payload delivered one octet at a time", () => {
     const buffer = new SessionBuffer();
     const payload = "héllo wörld";
@@ -104,7 +199,7 @@ describe("SessionBuffer reads", () => {
 
     const octets = Buffer.byteLength(payload);
     expect(buffer.length).toBe(octets);
-    expect(buffer.toString(0, octets)).toBe(payload);
+    expect(buffer.decode(0, octets)).toBe(payload);
   });
 
   it("counts octets, not code units", () => {
@@ -112,7 +207,7 @@ describe("SessionBuffer reads", () => {
     // Two octets each; a UTF-16 length would read them as one.
     buffer.push(Buffer.from("ééé"));
     expect(buffer.length).toBe(6);
-    expect(buffer.toString(0, 2)).toBe("é");
+    expect(buffer.decode(0, 2)).toBe("é");
   });
 
   it("keeps reads correct across the compaction the cursor triggers", () => {
@@ -149,7 +244,7 @@ describe("SessionBuffer consumption", () => {
     buffer.push(Buffer.alloc(payload, 0x41));
     buffer.push(Buffer.from(" tail\r\n"));
 
-    expect(buffer.toString(0, 1)).toBe("A");
+    expect(buffer.decode(0, 1)).toBe("A");
     buffer.consume(payload);
 
     // A view would keep the whole payload alive for as long as the session
@@ -179,7 +274,7 @@ describe("SessionBuffer consumption", () => {
   it("forgets everything on clear", () => {
     const buffer = new SessionBuffer();
     buffer.push(Buffer.from("A1 NOOP\r\n"));
-    buffer.toString(0, 2);
+    buffer.decode(0, 2);
     buffer.push(Buffer.from("A2 NOOP\r\n"));
 
     buffer.clear();

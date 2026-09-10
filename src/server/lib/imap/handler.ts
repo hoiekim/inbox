@@ -124,10 +124,10 @@ const MAX_UNCONSUMED_COMMAND_BYTES = 64 * 1024;
 
 // The per-literal cap alone does not bound a COMMAND: literal declarations
 // chain, so N declarations each under the cap still accumulate N payloads on
-// `pendingLiterals` and N line fragments on `pendingCommand`. Only the header
-// line of a command reaches `waitForCommandSlot()`, so a chain is not paced
-// either. Both are new surface — before literals were generalized, only APPEND
-// could hold literal state and it could not chain at all.
+// `pendingLiterals` and N line fragments on `pendingCommand`. New surface —
+// before literals were generalized, only APPEND could hold literal state and
+// it could not chain at all. This bounds how many links one command may hold;
+// how fast a session may spend them is paced where the chain is read.
 //
 // No real command comes close to either bound. The most literals any command
 // this server implements takes is a handful (LOGIN's two credentials, RENAME's
@@ -515,7 +515,7 @@ export class ImapRequestHandler {
             // skip — leaving the queue short by one and the parse failing.
             if (pendingCommand !== null && awaitingLiteral) {
               if (buffer.length < literalBytesNeeded) return;
-              const payload = buffer.toString(0, literalBytesNeeded);
+              const payload = buffer.decode(0, literalBytesNeeded);
               pendingLiterals.push(payload);
               // The declared count, not a re-measure of the decoded string:
               // it is the exact number of octets just sliced out of the
@@ -576,7 +576,7 @@ export class ImapRequestHandler {
             const lineEnd = buffer.indexOfCrlf();
             if (lineEnd === -1) return;
 
-            const line = buffer.toString(0, lineEnd);
+            const line = buffer.decode(0, lineEnd);
             buffer.consume(lineEnd + 2);
 
             // Text following a consumed payload on the same line: either it

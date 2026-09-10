@@ -1,9 +1,9 @@
 /**
  * Octets a session's socket has delivered and its drain loop has not read yet.
  *
- * A plain `Buffer` cannot hold them at a bounded cost, because the two things
- * the drain does to it — take a segment, consume a prefix — are both whole
- * copies:
+ * A plain `Buffer` cannot hold them at a bounded cost, because everything the
+ * drain does to it — take a segment, search for a line terminator, consume a
+ * prefix — is a whole copy:
  *
  * - **Taking a segment.** `Buffer.concat([held, segment])` copies everything
  *   received so far, once per TCP segment, so a payload arriving in `n`
@@ -14,6 +14,11 @@
  *   message sizes mainstream providers accept make that ordinary iOS Mail
  *   traffic, not only an attack. Segments are held on a list instead, and
  *   joined once — when a read actually needs them contiguous.
+ *
+ * - **Searching for the terminator.** The line splitter wakes on every segment
+ *   too, and it runs before authentication, so joining in order to search puts
+ *   the same `O(n²)` back on command text that carries no CRLF. The search
+ *   walks the held octets in place and joins only once it has found one.
  *
  * - **Consuming a prefix.** Copying the residual out on every read is
  *   `O(residual)` per read, so a command chaining `k` literals copies its own
@@ -29,14 +34,18 @@
 const EMPTY = Buffer.alloc(0);
 
 const CRLF = Buffer.from("\r\n") as unknown as Uint8Array;
+const CR = 0x0d;
+const LF = 0x0a;
 
-// Segments held unjoined. Deferring the join trades octets moved for segment
+// Segments held unmerged. Deferring the join trades octets moved for segment
 // objects retained, and the peer sets the exchange rate — one object per TCP
 // segment, so a payload dribbled an octet at a time buys far more bookkeeping
-// than payload. Reaching the ceiling joins early: that copy is bounded and
-// rare, while the object count is bounded always. A `data` event carries up to
-// 64 KiB, so a message-sized literal at any realistic segmentation never gets
-// near it.
+// than payload. Reaching the ceiling merges that run into a single segment and
+// leaves everything already held alone, so each octet is copied into a run once
+// and never again: the object count is bounded, and the total stays linear in
+// the wire rather than quadratic at 1/4096 the frequency. A `data` event
+// carries up to 64 KiB, so a message-sized literal at any realistic
+// segmentation never reaches it.
 const MAX_PENDING_SEGMENTS = 4096;
 
 export class SessionBuffer {
@@ -46,6 +55,10 @@ export class SessionBuffer {
   /** Segments taken since the last join, in arrival order. */
   private segments: Uint8Array[] = [];
   private segmentBytes = 0;
+  /** Leading `segments` entries already merged into runs of their own. */
+  private mergedRuns = 0;
+  /** Unread octets a search has already found to hold no terminator. */
+  private scannedUpTo = 0;
 
   /** Unread octets, joined and unjoined alike. */
   get length(): number {
@@ -56,7 +69,9 @@ export class SessionBuffer {
     if (segment.length === 0) return;
     this.segments.push(segment as unknown as Uint8Array);
     this.segmentBytes += segment.length;
-    if (this.segments.length >= MAX_PENDING_SEGMENTS) this.join();
+    if (this.segments.length - this.mergedRuns >= MAX_PENDING_SEGMENTS) {
+      this.mergePendingRun();
+    }
   }
 
   clear(): void {
@@ -64,20 +79,31 @@ export class SessionBuffer {
     this.cursor = 0;
     this.segments = [];
     this.segmentBytes = 0;
+    this.mergedRuns = 0;
+    this.scannedUpTo = 0;
   }
 
   /**
    * Index of the first CRLF among the unread octets, relative to the first of
-   * them, or -1. Joins, because a terminator can straddle two segments.
+   * them, or -1.
+   *
+   * `scannedUpTo` carries across calls, so a prefix already known to hold no
+   * terminator is not walked again per arriving segment. The resumed search
+   * starts one octet back, because the `\r` of a pair can be the last octet
+   * the previous call saw.
    */
   indexOfCrlf(): number {
+    const at = this.findCrlf(Math.max(0, this.scannedUpTo - 1));
+    if (at === -1) {
+      this.scannedUpTo = this.length;
+      return -1;
+    }
     this.join();
-    const at = this.block.indexOf(CRLF, this.cursor);
-    return at === -1 ? -1 : at - this.cursor;
+    return at;
   }
 
   /** UTF-8 decode of unread octets `[start, end)`. Does not consume them. */
-  toString(start: number, end: number): string {
+  decode(start: number, end: number): string {
     this.join();
     return this.block.toString("utf8", this.cursor + start, this.cursor + end);
   }
@@ -90,6 +116,7 @@ export class SessionBuffer {
     // head of the next command.
     if (count > this.block.length - this.cursor) this.join();
     this.cursor += count;
+    this.scannedUpTo = Math.max(0, this.scannedUpTo - count);
     if (this.cursor >= this.block.length) {
       this.block = EMPTY;
       this.cursor = 0;
@@ -105,12 +132,55 @@ export class SessionBuffer {
     }
   }
 
+  /**
+   * First CRLF at or after unread offset `from`, or -1. Walks the block and
+   * then each held segment, carrying a trailing `\r` across every boundary,
+   * and copies nothing.
+   */
+  private findCrlf(from: number): number {
+    // Unread offset of a `\r` ending the piece just walked, or -1.
+    let danglingCr = -1;
+    let base = this.block.length - this.cursor;
+    if (base > from) {
+      const at = this.block.indexOf(CRLF, this.cursor + from);
+      if (at !== -1) return at - this.cursor;
+      if (this.block[this.block.length - 1] === CR) danglingCr = base - 1;
+    }
+    for (const held of this.segments) {
+      const segment = held as unknown as Buffer;
+      const end = base + segment.length;
+      if (end <= from) {
+        base = end;
+        danglingCr = -1;
+        continue;
+      }
+      const start = Math.max(0, from - base);
+      if (start === 0 && danglingCr !== -1 && segment[0] === LF) {
+        return danglingCr;
+      }
+      const at = segment.indexOf(CRLF, start);
+      if (at !== -1) return base + at;
+      danglingCr = segment[segment.length - 1] === CR ? end - 1 : -1;
+      base = end;
+    }
+    return -1;
+  }
+
+  private mergePendingRun(): void {
+    const run = this.segments.splice(this.mergedRuns);
+    let runBytes = 0;
+    for (const segment of run) runBytes += segment.length;
+    this.segments.push(Buffer.concat(run, runBytes) as unknown as Uint8Array);
+    this.mergedRuns = this.segments.length;
+  }
+
   private join(): void {
     if (this.segmentBytes === 0) return;
     this.block = this.rebuild(this.segments, this.segmentBytes);
     this.cursor = 0;
     this.segments = [];
     this.segmentBytes = 0;
+    this.mergedRuns = 0;
   }
 
   /**
