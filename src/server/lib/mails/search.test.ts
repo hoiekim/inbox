@@ -100,6 +100,15 @@ describe("searchMail", () => {
     expect(results[0].to).toBeUndefined();
   });
 
+  it("should forward sent so the spam gate sees the delivery lane", async () => {
+    mockSearchMails.mockResolvedValue([
+      { mail_id: "m-sent", subject: "s", date: "2024-01-01T00:00:00Z", read: false, saved: false, sent: true },
+      { mail_id: "m-received", subject: "r", date: "2024-01-01T00:00:00Z", read: false, saved: false, sent: false },
+    ] as never);
+    const result = await searchMail(mockUser, "q");
+    expect(result.map((m) => m.sent)).toEqual([true, false]);
+  });
+
   it("should map cc and bcc addresses when present", async () => {
     const mockMailModel = {
       mail_id: "mail-cc",

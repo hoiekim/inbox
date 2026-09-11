@@ -12,9 +12,6 @@ export const searchMail = async (
 
   const mailModels = await searchMails(user.id, value, field);
 
-  // `sent` is intentionally NOT forwarded into MailHeaderData. The column is
-  // deprecated; sent/received state is derived from the sender address
-  // against the user's domain. See MailHeaderDataType.sent for context.
   return mailModels.map((m: SearchMailModel) => {
     return new MailHeaderData({
       id: m.mail_id,
@@ -28,6 +25,7 @@ export const searchMail = async (
         : undefined,
       read: m.read,
       saved: m.saved,
+      sent: m.sent,
       insight: m.insight as Insight | undefined,
       cc: m.cc_address
         ? { value: m.cc_address as MailAddressValueType[], text: m.cc_text || "" }
