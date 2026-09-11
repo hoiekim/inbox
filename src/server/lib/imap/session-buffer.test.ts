@@ -34,6 +34,24 @@ const accountCopies = async (run: () => void | Promise<void>) => {
   }
 };
 
+/**
+ * `segments` slots the reader indexed while `run` executed. The in-place
+ * search reads no new octet to step over an entry it has already walked, so
+ * list steps — not octets — are what its cost is denominated in.
+ */
+const accountSegmentWalk = (buffer: SessionBuffer, run: () => void) => {
+  const internals = buffer as unknown as { segments: Uint8Array[] };
+  let steps = 0;
+  internals.segments = new Proxy(internals.segments, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && Number.isInteger(Number(key))) steps++;
+      return Reflect.get(target, key, receiver);
+    }
+  });
+  run();
+  return steps;
+};
+
 const readLine = (buffer: SessionBuffer): string | null => {
   const end = buffer.indexOfCrlf();
   if (end === -1) return null;
@@ -119,6 +137,76 @@ describe("SessionBuffer accumulation", () => {
 
     expect(scanning.bytes).toBe(0);
     expect(buffer.length).toBe(segments * 64);
+  });
+
+  it("resumes the walk where the last scan stopped, not at the head of the list", () => {
+    const buffer = new SessionBuffer();
+    const octet = Buffer.from("x");
+    // Under the ceiling, so the walk is the only thing being counted.
+    const segments = SEGMENT_CEILING - 96;
+
+    // The same wire as the scan above, in the units its cost is actually paid
+    // in. Copying nothing is not the whole property: a search that carries the
+    // octet count alone still steps over every entry already walked to find
+    // where it left off, so the octet account reads zero under both
+    // implementations while one of them is quadratic in the segment count.
+    const steps = accountSegmentWalk(buffer, () => {
+      for (let i = 0; i < segments; i++) {
+        buffer.push(octet);
+        expect(buffer.indexOfCrlf()).toBe(-1);
+      }
+    });
+
+    // Resuming visits the entry it stopped in and the ones that arrived since
+    // — a constant here, against the `segments / 2` a walk from index 0 pays.
+    expect(steps).toBeLessThan(4 * segments);
+    expect(buffer.length).toBe(segments);
+  });
+
+  it("keeps the resume point on the entry a merged run became", () => {
+    const buffer = new SessionBuffer();
+    const octet = Buffer.from("x");
+    const segments = SEGMENT_CEILING + 64;
+
+    // The ceiling collapses the run the search was walking into a single
+    // entry, so a resume point still indexing the run's own entries indexes
+    // past the end of the list — and a search that walks nothing finds no
+    // terminator, on a line the peer has already finished sending.
+    for (let i = 0; i < segments; i++) {
+      buffer.push(octet);
+      expect(buffer.indexOfCrlf()).toBe(-1);
+    }
+    buffer.push(Buffer.from("\r\n"));
+
+    expect(buffer.indexOfCrlf()).toBe(segments);
+    expect(buffer.decode(0, 3)).toBe("xxx");
+  });
+
+  it("resumes from the shifted position after a consume that leaves segments held", () => {
+    const buffer = new SessionBuffer();
+    buffer.push(Buffer.from("A1 NOOP\r\nPREFIX"));
+    expect(readLine(buffer)).toBe("A1 NOOP");
+
+    const octet = Buffer.from("x");
+    const segments = 512;
+    for (let i = 0; i < segments; i++) {
+      buffer.push(octet);
+      expect(buffer.indexOfCrlf()).toBe(-1);
+    }
+
+    // The discard path consumes octets it never read, so the block shrinks
+    // while the segments behind it stay where they are. Every unread offset
+    // ahead of them moves toward the front, and a resume point that moves with
+    // them by the wrong amount indexes the wrong segment at the wrong offset.
+    buffer.consume(3);
+    for (let i = 0; i < segments; i++) {
+      buffer.push(octet);
+      expect(buffer.indexOfCrlf()).toBe(-1);
+    }
+    buffer.push(Buffer.from("\r\n"));
+
+    expect(buffer.indexOfCrlf()).toBe(3 + 2 * segments);
+    expect(buffer.decode(0, 3)).toBe("FIX");
   });
 
   it("ignores an empty segment", () => {

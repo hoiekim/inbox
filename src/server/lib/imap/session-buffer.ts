@@ -59,6 +59,22 @@ export class SessionBuffer {
   private mergedRuns = 0;
   /** Unread octets a search has already found to hold no terminator. */
   private scannedUpTo = 0;
+  /**
+   * Where the search that scanned them stopped: the `segments` entry it was
+   * walking, and the unread offset that entry begins at. Carrying the octet
+   * count alone still leaves every search re-deriving that position one entry
+   * at a time, which is `O(#segments)` per arriving segment whether or not it
+   * reads a single new octet — the same quadratic, paid in list steps rather
+   * than in `memcpy`.
+   *
+   * `scanBase` is where `segments[scanIndex]` begins, so it moves with the
+   * octets ahead of it and starts over whenever the list does. A search
+   * resumes only while it is behind the octet that search starts from, which
+   * makes a position left stale by a future caller cost one full walk rather
+   * than a terminator already on the wire.
+   */
+  private scanIndex = 0;
+  private scanBase = 0;
 
   /** Unread octets, joined and unjoined alike. */
   get length(): number {
@@ -81,16 +97,18 @@ export class SessionBuffer {
     this.segmentBytes = 0;
     this.mergedRuns = 0;
     this.scannedUpTo = 0;
+    this.scanIndex = 0;
+    this.scanBase = 0;
   }
 
   /**
    * Index of the first CRLF among the unread octets, relative to the first of
    * them, or -1.
    *
-   * `scannedUpTo` carries across calls, so a prefix already known to hold no
-   * terminator is not walked again per arriving segment. The resumed search
-   * starts one octet back, because the `\r` of a pair can be the last octet
-   * the previous call saw.
+   * `scannedUpTo` and the list position beside it carry across calls, so a
+   * prefix already known to hold no terminator is neither walked nor stepped
+   * over again per arriving segment. The resumed search starts one octet back,
+   * because the `\r` of a pair can be the last octet the previous call saw.
    */
   indexOfCrlf(): number {
     const at = this.findCrlf(Math.max(0, this.scannedUpTo - 1));
@@ -117,6 +135,7 @@ export class SessionBuffer {
     if (count > this.block.length - this.cursor) this.join();
     this.cursor += count;
     this.scannedUpTo = Math.max(0, this.scannedUpTo - count);
+    this.scanBase = Math.max(0, this.scanBase - count);
     if (this.cursor >= this.block.length) {
       this.block = EMPTY;
       this.cursor = 0;
@@ -140,14 +159,24 @@ export class SessionBuffer {
   private findCrlf(from: number): number {
     // Unread offset of a `\r` ending the piece just walked, or -1.
     let danglingCr = -1;
+    let index = 0;
     let base = this.block.length - this.cursor;
-    if (base > from) {
+    // A stored position at or before `from` puts every octet ahead of it —
+    // the block's included — behind the resume point, so neither is walked.
+    if (this.scanIndex > 0 && this.scanBase <= from) {
+      index = this.scanIndex;
+      base = this.scanBase;
+    } else if (base > from) {
       const at = this.block.indexOf(CRLF, this.cursor + from);
       if (at !== -1) return at - this.cursor;
       if (this.block[this.block.length - 1] === CR) danglingCr = base - 1;
     }
-    for (const held of this.segments) {
-      const segment = held as unknown as Buffer;
+    let stoppedAt = index;
+    let stoppedBase = base;
+    for (; index < this.segments.length; index++) {
+      stoppedAt = index;
+      stoppedBase = base;
+      const segment = this.segments[index] as unknown as Buffer;
       const end = base + segment.length;
       if (end <= from) {
         base = end;
@@ -163,6 +192,8 @@ export class SessionBuffer {
       danglingCr = segment[segment.length - 1] === CR ? end - 1 : -1;
       base = end;
     }
+    this.scanIndex = stoppedAt;
+    this.scanBase = stoppedBase;
     return -1;
   }
 
@@ -172,6 +203,12 @@ export class SessionBuffer {
     for (const segment of run) runBytes += segment.length;
     this.segments.push(Buffer.concat(run, runBytes) as unknown as Uint8Array);
     this.mergedRuns = this.segments.length;
+    // The entries the run collapsed into are gone, so a resume point indexing
+    // them indexes past the end of the list — and a search that walks nothing
+    // finds no terminator. Starting over costs one walk of the merged entries,
+    // once per ceiling crossed, against the 4096 pushes that reached it.
+    this.scanIndex = 0;
+    this.scanBase = this.block.length - this.cursor;
   }
 
   private join(): void {
@@ -181,6 +218,8 @@ export class SessionBuffer {
     this.segments = [];
     this.segmentBytes = 0;
     this.mergedRuns = 0;
+    this.scanIndex = 0;
+    this.scanBase = this.block.length;
   }
 
   /**
