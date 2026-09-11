@@ -2,7 +2,7 @@
  * Test preload — runs ONCE before any test file in `bun test`.
  *
  * Captures real exports of leaf node-modules that tests commonly mock
- * (`pg`, `web-push`) onto `globalThis.__REAL_*` so test files can
+ * (`pg`, `web-push`, `bcryptjs`) onto `globalThis.__REAL_*` so test files can
  * `afterAll`-restore via `scripts/test-helpers.ts#restoreLeaves` and
  * not leak per-file `mock.module(...)` overrides into the next file.
  *
@@ -24,6 +24,7 @@
 
 const realPg = require("pg");
 const realWebPush = require("web-push");
+const realBcrypt = require("bcryptjs");
 
 (globalThis as Record<string, unknown>).__REAL_PG = {
   ...realPg,
@@ -32,6 +33,10 @@ const realWebPush = require("web-push");
 (globalThis as Record<string, unknown>).__REAL_WEB_PUSH = {
   ...realWebPush,
   default: realWebPush.default ?? realWebPush,
+};
+(globalThis as Record<string, unknown>).__REAL_BCRYPT = {
+  ...realBcrypt,
+  default: realBcrypt.default ?? realBcrypt,
 };
 
 // The `server` barrel is captured here too so files that
