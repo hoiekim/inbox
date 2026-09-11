@@ -25,6 +25,7 @@ import { getTlsCredentials } from "../tls";
 import { ImapRequestHandler } from "./handler";
 import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
 import { imapTrace } from "./trace";
+import { closeSocket } from "./close-socket";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -170,6 +171,9 @@ export class ImapSession {
       return false;
     }
   };
+
+  /** Tear the connection down through the shared IMAP teardown primitive. */
+  close = () => closeSocket(this.socket);
 
   /**
    * Write a large Buffer with socket-level backpressure. Chunks the payload
@@ -630,7 +634,7 @@ export class ImapSession {
     this.authenticated = false;
     this.write("* BYE IMAP4rev1 Server logging out\r\n");
     this.write(`${tag} OK LOGOUT completed\r\n`);
-    this.socket.end();
+    this.close();
   };
 
   // ---------------------------------------------------------------------------

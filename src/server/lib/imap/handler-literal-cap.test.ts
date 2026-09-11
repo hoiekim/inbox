@@ -63,7 +63,14 @@ function makeMockSocket() {
   socket.destroy = () => {
     socket.destroyed = true;
   };
-  socket.end = () => {};
+  // A teardown closes the session with `end` so a queued final `BYE` is
+  // flushed rather than discarded. Nothing is ever queued on this fixture, and
+  // a real socket with an empty write queue completes its close — so modelling
+  // `end` as a no-op would report a session that was never closed.
+  socket.end = () => {
+    socket.destroyed = true;
+    socket.emit("close");
+  };
   return socket;
 }
 
