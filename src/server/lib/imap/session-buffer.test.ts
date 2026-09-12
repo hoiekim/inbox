@@ -194,18 +194,30 @@ describe("SessionBuffer accumulation", () => {
       expect(buffer.indexOfCrlf()).toBe(-1);
     }
 
+    // Two conditions decide whether an unshifted resume point is reachable at
+    // all, and missing either one makes the shift and its absence return the
+    // same index. The entry the search stopped in has to be longer than what
+    // the consume takes, or the unshifted position is far enough ahead of the
+    // octet the next search starts from to fail the guard, and the full walk
+    // it falls back to rewrites the position correctly. And the terminator has
+    // to arrive in the first search after the consume, because any further
+    // push puts the position ahead of that octet again and heals it the same
+    // way.
+    const tail = Buffer.from("yyyyyyyyyy");
+    buffer.push(tail);
+    expect(buffer.indexOfCrlf()).toBe(-1);
+
     // The discard path consumes octets it never read, so the block shrinks
     // while the segments behind it stay where they are. Every unread offset
-    // ahead of them moves toward the front, and a resume point that moves with
-    // them by the wrong amount indexes the wrong segment at the wrong offset.
+    // ahead of them moves toward the front, and a resume point that does not
+    // move with them reads the entry it stopped in as beginning later than it
+    // does — a terminator found at an index past the one the peer sent, so the
+    // line handed to the parser keeps a trailing `\r` and the consume that
+    // follows eats the first octet of the next command.
     buffer.consume(3);
-    for (let i = 0; i < segments; i++) {
-      buffer.push(octet);
-      expect(buffer.indexOfCrlf()).toBe(-1);
-    }
     buffer.push(Buffer.from("\r\n"));
 
-    expect(buffer.indexOfCrlf()).toBe(3 + 2 * segments);
+    expect(buffer.indexOfCrlf()).toBe(3 + segments + tail.length);
     expect(buffer.decode(0, 3)).toBe("FIX");
   });
 
