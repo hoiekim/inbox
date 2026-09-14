@@ -84,9 +84,10 @@ Required for full functionality:
 - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DATABASE` — PostgreSQL connection
 - `SECRET` — Express session secret
 - `EMAIL_DOMAIN` — Domain used for `*@EMAIL_DOMAIN` mail addresses
-- `ADMIN_PASSWORD` — Password for the built-in `admin` user
+- `ADMIN_PASSWORD` — Password the built-in `admin` user is created with, on the boot that creates it
 
 Optional:
+- `ADMIN_PASSWORD_RESET` — Set to `1` for one boot to replace `admin`'s stored password with `ADMIN_PASSWORD`
 - `APP_HOSTNAME` — Server hostname for IMAP/SMTP TLS (falls back to `EMAIL_DOMAIN`)
 - `PUSH_VAPID_PUBLIC_KEY`, `PUSH_VAPID_PRIVATE_KEY` — For push notifications
 - `MAILGUN_KEY` — For outbound email via Mailgun

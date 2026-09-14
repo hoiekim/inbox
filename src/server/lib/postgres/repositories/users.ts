@@ -1,7 +1,16 @@
 import bcrypt from "bcryptjs";
 import { MaskedUser, User, usersTable, USER_ID, EMAIL, IMAP_UID_VALIDITY } from "../models";
 
-export type IndexUserInput = Omit<User, "user_id"> & { user_id?: string };
+export type IndexUserInput = Omit<User, "user_id" | "password"> & {
+  user_id?: string;
+  /**
+   * Omit to leave an existing row's stored password untouched: the column is
+   * dropped from the INSERT, and `buildUpsert` carries onto the conflict clause
+   * only the columns the INSERT wrote. A row created without one has no
+   * password and cannot sign in until one is set.
+   */
+  password?: string;
+};
 export type PartialUser = { user_id: string } & Partial<User>;
 
 export const maskUser = (user: User): MaskedUser => {

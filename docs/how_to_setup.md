@@ -24,7 +24,10 @@ For detailed instruction, please keep reading this document.
    APP_HOSTNAME             // Domain name that hosts inbox web app.
 
    SECRET                   // Encoding secret for session data. Any value works.
-   ADMIN_PASSWORD           // Password to login to Inbox as admin user.
+   ADMIN_PASSWORD           // Password the admin user is created with, on first run.
+
+   ADMIN_PASSWORD_RESET     // (optional) Set to 1 for one boot to reset admin's password
+                            // to ADMIN_PASSWORD. Remove it afterwards.
 
    MAILGUN_KEY              // (optional) API key issued by Mailgun. Used to send emails.
 
@@ -95,4 +98,4 @@ Default port number is 3004. So you can connect to Inbox at http://(your-server-
 
 For development mode, use port number 3000 instead.
 
-Admin username is `admin`, password is equal to the value of environment variable called `ADMIN_PASSWORD`
+Admin username is `admin`. On the first run its password is the value of the environment variable called `ADMIN_PASSWORD`. After that, the password stored in the database wins — changing `ADMIN_PASSWORD` and restarting does not overwrite a password you changed in the app. To reset a password you have lost, boot once with `ADMIN_PASSWORD_RESET=1` and then remove that variable.

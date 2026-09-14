@@ -258,14 +258,102 @@ export const bootMaintenance = async (signal?: AbortSignal): Promise<void> => {
   }
 };
 
+/** Published in `.env.example`, so it is a credential only until an operator
+ *  supplies their own. */
+const DEFAULT_ADMIN_PASSWORD = "inbox";
+
+export type AdminPasswordPlan =
+  /** No admin row yet — this boot creates one and its password is the seed. */
+  | { action: "seed"; password: string; usingDefault: boolean }
+  /** An operator asked, through the environment, for the stored password to be
+   *  replaced by ADMIN_PASSWORD. */
+  | { action: "reset"; password: string }
+  /** The stored password survives the boot untouched. */
+  | { action: "keep"; resetWithoutPassword: boolean };
+
+/**
+ * Decides what a boot may do to admin's password column.
+ *
+ * The stored password is the live credential: the reset flow writes it, and a
+ * boot that re-derives it from the environment silently undoes that write on
+ * the next restart. So the environment seeds the column and otherwise only
+ * touches it when ADMIN_PASSWORD_RESET explicitly asks.
+ *
+ * @example
+ * planAdminPassword({ adminExists: true, adminPassword: "hunter2" });
+ * // => { action: "keep", resetWithoutPassword: false }
+ */
+export const planAdminPassword = ({
+  adminExists,
+  adminPassword,
+  adminPasswordReset,
+}: {
+  adminExists: boolean;
+  adminPassword?: string;
+  adminPasswordReset?: string;
+}): AdminPasswordPlan => {
+  if (!adminExists) {
+    return {
+      action: "seed",
+      password: adminPassword || DEFAULT_ADMIN_PASSWORD,
+      usingDefault: !adminPassword,
+    };
+  }
+  if (adminPasswordReset !== "1") return { action: "keep", resetWithoutPassword: false };
+  // Resetting to the published default is the outcome nobody asks for, so an
+  // empty ADMIN_PASSWORD refuses the reset rather than honouring it.
+  if (!adminPassword) return { action: "keep", resetWithoutPassword: true };
+  return { action: "reset", password: adminPassword };
+};
+
+const logAdminPasswordPlan = (plan: AdminPasswordPlan, adminPassword?: string): void => {
+  if (plan.action === "seed" && plan.usingDefault) {
+    logger.warn(
+      `[CONFIG WARNING] ADMIN_PASSWORD is not set. The admin account was created with '${DEFAULT_ADMIN_PASSWORD}',\n` +
+        "  the value published in .env.example — anyone who can reach this server can sign in as admin.\n" +
+        "  Set ADMIN_PASSWORD in your .env file, then boot once with ADMIN_PASSWORD_RESET=1 to apply it."
+    );
+    return;
+  }
+  if (plan.action === "reset") {
+    logger.warn(
+      "[CONFIG WARNING] ADMIN_PASSWORD_RESET=1 replaced the stored admin password with ADMIN_PASSWORD.\n" +
+        "  Remove ADMIN_PASSWORD_RESET from the environment: while it is set, every restart applies\n" +
+        "  ADMIN_PASSWORD again and discards whatever password the admin set afterwards."
+    );
+    return;
+  }
+  if (plan.action === "keep" && plan.resetWithoutPassword) {
+    logger.warn(
+      "[CONFIG WARNING] ADMIN_PASSWORD_RESET=1 is set but ADMIN_PASSWORD is empty.\n" +
+        "  The stored admin password is unchanged — set ADMIN_PASSWORD and restart to apply the reset."
+    );
+    return;
+  }
+  if (adminPassword) {
+    logger.info(
+      "Admin already exists, so ADMIN_PASSWORD was not applied. Boot once with " +
+        "ADMIN_PASSWORD_RESET=1 to replace the stored password with it."
+    );
+  }
+};
+
 export const initializeAdminUser = async (): Promise<void> => {
-  const { ADMIN_PASSWORD } = process.env;
+  const { ADMIN_PASSWORD, ADMIN_PASSWORD_RESET } = process.env;
 
   const existingAdminUser = await searchUser({ username: "admin" });
+  const plan = planAdminPassword({
+    adminExists: !!existingAdminUser,
+    adminPassword: ADMIN_PASSWORD,
+    adminPasswordReset: ADMIN_PASSWORD_RESET,
+  });
+
   const indexingAdminUserResult = await writeUser({
     user_id: existingAdminUser?.user_id,
     username: "admin",
-    password: ADMIN_PASSWORD || "inbox",
+    // Undefined drops the column from the INSERT, which drops it from the
+    // conflict clause too, so the stored hash survives the boot.
+    password: plan.action === "keep" ? undefined : plan.password,
     // Pull the domain from EMAIL_DOMAIN so admin's identity stays consistent
     // with `getDomain()` everywhere else. Hardcoding `admin@localhost` made the
     // UI's default-account lookup miss every cloned mail in sandbox/dev
@@ -278,6 +366,8 @@ export const initializeAdminUser = async (): Promise<void> => {
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
 
   logger.info("Successfully initialized PostgreSQL database and setup admin user.");
+
+  logAdminPasswordPlan(plan, ADMIN_PASSWORD);
 
   // Warn if EMAIL_DOMAIN is not explicitly configured.
   // Without a correct domain, getAccountStats() filters all emails out (domain condition)
