@@ -269,7 +269,7 @@ export type AdminPasswordPlan =
    *  replaced by ADMIN_PASSWORD. */
   | { action: "reset"; password: string }
   /** The stored password survives the boot untouched. */
-  | { action: "keep"; resetWithoutPassword: boolean };
+  | { action: "keep"; resetWithoutPassword: boolean; unrecognizedReset: boolean };
 
 /**
  * Decides what a boot may do to admin's password column.
@@ -281,7 +281,7 @@ export type AdminPasswordPlan =
  *
  * @example
  * planAdminPassword({ adminExists: true, adminPassword: "hunter2" });
- * // => { action: "keep", resetWithoutPassword: false }
+ * // => { action: "keep", resetWithoutPassword: false, unrecognizedReset: false }
  */
 export const planAdminPassword = ({
   adminExists,
@@ -296,22 +296,30 @@ export const planAdminPassword = ({
     return {
       action: "seed",
       password: adminPassword || DEFAULT_ADMIN_PASSWORD,
-      usingDefault: !adminPassword,
+      usingDefault: !adminPassword || adminPassword === DEFAULT_ADMIN_PASSWORD,
     };
   }
-  if (adminPasswordReset !== "1") return { action: "keep", resetWithoutPassword: false };
+  if (adminPasswordReset !== "1") {
+    return {
+      action: "keep",
+      resetWithoutPassword: false,
+      unrecognizedReset: !!adminPasswordReset,
+    };
+  }
   // Resetting to the published default is the outcome nobody asks for, so an
   // empty ADMIN_PASSWORD refuses the reset rather than honouring it.
-  if (!adminPassword) return { action: "keep", resetWithoutPassword: true };
+  if (!adminPassword)
+    return { action: "keep", resetWithoutPassword: true, unrecognizedReset: false };
   return { action: "reset", password: adminPassword };
 };
 
 const logAdminPasswordPlan = (plan: AdminPasswordPlan, adminPassword?: string): void => {
   if (plan.action === "seed" && plan.usingDefault) {
     logger.warn(
-      `[CONFIG WARNING] ADMIN_PASSWORD is not set. The admin account was created with '${DEFAULT_ADMIN_PASSWORD}',\n` +
-        "  the value published in .env.example — anyone who can reach this server can sign in as admin.\n" +
-        "  Set ADMIN_PASSWORD in your .env file, then boot once with ADMIN_PASSWORD_RESET=1 to apply it."
+      `[CONFIG WARNING] The admin account was created with '${DEFAULT_ADMIN_PASSWORD}', the value\n` +
+        "  published in .env.example — anyone who can reach this server can sign in as admin.\n" +
+        "  Set ADMIN_PASSWORD in your .env file to something else, then boot once with\n" +
+        "  ADMIN_PASSWORD_RESET=1 to apply it."
     );
     return;
   }
@@ -327,6 +335,13 @@ const logAdminPasswordPlan = (plan: AdminPasswordPlan, adminPassword?: string): 
     logger.warn(
       "[CONFIG WARNING] ADMIN_PASSWORD_RESET=1 is set but ADMIN_PASSWORD is empty.\n" +
         "  The stored admin password is unchanged — set ADMIN_PASSWORD and restart to apply the reset."
+    );
+    return;
+  }
+  if (plan.action === "keep" && plan.unrecognizedReset) {
+    logger.warn(
+      "[CONFIG WARNING] ADMIN_PASSWORD_RESET is set to a value other than '1', so it was ignored\n" +
+        "  and the stored admin password is unchanged. Only the exact string '1' requests a reset."
     );
     return;
   }

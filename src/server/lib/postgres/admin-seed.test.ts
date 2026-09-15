@@ -24,8 +24,12 @@ const mockWriteUser = mock(async (user: WrittenUser) => {
   return { _id: user.user_id ?? "generated-id" };
 });
 
+// Bun mutates the live namespace object in place when a mock installs, so the
+// baseline has to be copied out of it before that happens.
+const REAL_REPOSITORIES = { ...realRepositories };
+
 mock.module("./repositories", () => ({
-  ...realRepositories,
+  ...REAL_REPOSITORIES,
   searchUser: mockSearchUser,
   writeUser: mockWriteUser,
 }));
@@ -33,7 +37,7 @@ mock.module("./repositories", () => ({
 // `mock.module` is process-global with no unmock API — hand the real module
 // back so the next file in the same run does not inherit these stubs.
 afterAll(() => {
-  mock.module("./repositories", () => realRepositories);
+  mock.module("./repositories", () => REAL_REPOSITORIES);
 });
 
 const EXISTING_ADMIN = {
@@ -70,10 +74,16 @@ describe("planAdminPassword", () => {
     });
   });
 
+  it("treats a configured password equal to the published default as the default", () => {
+    expect(
+      planAdminPassword({ adminExists: false, adminPassword: "inbox" })
+    ).toEqual({ action: "seed", password: "inbox", usingDefault: true });
+  });
+
   it("leaves an existing account's password alone", () => {
     expect(
       planAdminPassword({ adminExists: true, adminPassword: "configured" })
-    ).toEqual({ action: "keep", resetWithoutPassword: false });
+    ).toEqual({ action: "keep", resetWithoutPassword: false, unrecognizedReset: false });
   });
 
   it("applies the configured password when a reset is requested", () => {
@@ -89,11 +99,11 @@ describe("planAdminPassword", () => {
   it("refuses a reset that would install the published default", () => {
     expect(
       planAdminPassword({ adminExists: true, adminPasswordReset: "1" })
-    ).toEqual({ action: "keep", resetWithoutPassword: true });
+    ).toEqual({ action: "keep", resetWithoutPassword: true, unrecognizedReset: false });
   });
 
-  it.each(["", "0", "true", "yes"])(
-    "treats ADMIN_PASSWORD_RESET=%p as no reset",
+  it.each(["0", "true", "yes", "1 "])(
+    "treats ADMIN_PASSWORD_RESET=%p as an unrecognized reset request",
     (adminPasswordReset) => {
       expect(
         planAdminPassword({
@@ -101,9 +111,19 @@ describe("planAdminPassword", () => {
           adminPassword: "configured",
           adminPasswordReset,
         })
-      ).toEqual({ action: "keep", resetWithoutPassword: false });
+      ).toEqual({ action: "keep", resetWithoutPassword: false, unrecognizedReset: true });
     }
   );
+
+  it("treats an empty ADMIN_PASSWORD_RESET as the variable being unset", () => {
+    expect(
+      planAdminPassword({
+        adminExists: true,
+        adminPassword: "configured",
+        adminPasswordReset: "",
+      })
+    ).toEqual({ action: "keep", resetWithoutPassword: false, unrecognizedReset: false });
+  });
 });
 
 describe("initializeAdminUser", () => {
@@ -139,7 +159,18 @@ describe("initializeAdminUser", () => {
     await runInitialize();
 
     expect(written[0].password).toBe("inbox");
-    expect(warnSpy.mock.calls.flat().join("\n")).toContain("ADMIN_PASSWORD is not set");
+    expect(warnSpy.mock.calls.flat().join("\n")).toContain("created with 'inbox'");
+    warnSpy.mockRestore();
+  });
+
+  it("warns when ADMIN_PASSWORD is set to the password published in the repository", async () => {
+    process.env.ADMIN_PASSWORD = "inbox";
+    existingRow = null;
+    const warnSpy = spyOn(logger, "warn");
+
+    await runInitialize();
+
+    expect(warnSpy.mock.calls.flat().join("\n")).toContain("created with 'inbox'");
     warnSpy.mockRestore();
   });
 
@@ -181,6 +212,21 @@ describe("initializeAdminUser", () => {
 
     expect(written[0].password).toBeUndefined();
     expect(warnSpy.mock.calls.flat().join("\n")).toContain("ADMIN_PASSWORD is empty");
+    warnSpy.mockRestore();
+  });
+
+  it("names the variable when ADMIN_PASSWORD_RESET holds a value it does not recognize", async () => {
+    process.env.ADMIN_PASSWORD = "configured";
+    process.env.ADMIN_PASSWORD_RESET = "true";
+    existingRow = EXISTING_ADMIN;
+    const warnSpy = spyOn(logger, "warn");
+
+    await runInitialize();
+
+    expect(written[0].password).toBeUndefined();
+    expect(warnSpy.mock.calls.flat().join("\n")).toContain(
+      "ADMIN_PASSWORD_RESET is set to a value other than '1'"
+    );
     warnSpy.mockRestore();
   });
 });
