@@ -252,7 +252,10 @@ async function _processFetchMessages(
         condstoreEnabled,
         store.getUser().id
       );
-      await writeFetchResponse(write, writeChunked, writeStream, seqNum, response);
+      await writeFetchResponse(write, writeChunked, writeStream, seqNum, response, {
+        mailbox: selectedMailbox,
+        uid,
+      });
 
       if (shouldMarkAsRead(fetchRequest.dataItems)) {
         await markRead(store.getUser().id, id);

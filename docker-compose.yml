@@ -6,6 +6,12 @@ services:
     build: ./
     env_file:
       - ./.env.local
+    # Container-level RSS ceiling, workaround leg of #757 while the
+    # per-BODY[] instrumentation lives in tree (IMAP_MEM_TRACE=1). See
+    # docs/OPS_MEMORY_PRESSURE.md — prod may set the cgroup limit
+    # externally (systemd unit / `docker run --memory`), in which case
+    # this compose value is not the authority.
+    mem_limit: 384m
     ports:
       - "3004:3004"
       - "25:2525"

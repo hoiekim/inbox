@@ -26,6 +26,12 @@ import { ImapRequestHandler } from "./handler";
 import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
 import { imapTrace } from "./trace";
 import { closeSocket } from "./close-socket";
+import {
+  fetchNeedsMemoryGuard,
+  getRssSoftLimitBytes,
+  isOverRssSoftLimit,
+  snapshotMemory,
+} from "./mem-guard";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -445,6 +451,23 @@ export class ImapSession {
     }
     if (!this.selectedMailbox) {
       return this.write(`${tag} BAD No mailbox selected\r\n`);
+    }
+    if (fetchNeedsMemoryGuard(fetchRequest.dataItems)) {
+      const rss = snapshotMemory().rss;
+      const threshold = getRssSoftLimitBytes();
+      if (isOverRssSoftLimit(rss, threshold)) {
+        logger.warn("IMAP FETCH refused: RSS above soft limit", {
+          component: "imap",
+          rss,
+          threshold,
+          tag,
+        });
+        this.write(
+          `${tag} NO [SERVERBUG] server memory pressure - retry\r\n`
+        );
+        this.close();
+        return;
+      }
     }
     // RFC 4551 §3.3.1: the CHANGEDSINCE modifier implicitly enables CONDSTORE
     // for the session — subsequent FETCH/STORE responses carry MODSEQ, and

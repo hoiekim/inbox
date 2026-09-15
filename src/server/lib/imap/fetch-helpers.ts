@@ -41,6 +41,11 @@ import {
 import { withBodyBudgetStream } from "./body-budget";
 import { withStreamMutex } from "./stream-mutex";
 import { updateRfc822Size } from "../postgres/repositories/mails/core";
+import {
+  isImapMemTraceEnabled,
+  snapshotMemory,
+  formatMemTraceLine,
+} from "./mem-guard";
 // Only the stream form of the budget is used now: every body-bearing
 // section streams, and the sections that still materialize (header-like)
 // are a few KiB each — gating those would queue them behind multi-MB
@@ -803,14 +808,23 @@ export type WriteChunked = (payload: Buffer) => Promise<void>;
  */
 export type WriteStream = (chunks: AsyncIterable<Buffer>) => Promise<void>;
 
+/** Optional context for per-BODY[] `RSS_DELTA` instrumentation. */
+export interface FetchEmissionContext {
+  mailbox: string;
+  uid?: number;
+}
+
 export async function writeFetchResponse(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
   writeStream: WriteStream,
   seqNum: number,
-  parts: FetchResponsePart[]
+  parts: FetchResponsePart[],
+  ctx?: FetchEmissionContext
 ): Promise<void> {
   write(`* ${seqNum} FETCH (`);
+
+  const memTrace = ctx !== undefined && isImapMemTraceEnabled();
 
   for (let i = 0; i < parts.length; i++) {
     if (i > 0) write(" ");
@@ -831,7 +845,21 @@ export async function writeFetchResponse(
       // emit-set), then the generator's chunks flow through the
       // stream writer with backpressure.
       write(`${part.header} {${part.length}}\r\n`);
+      const before = memTrace ? snapshotMemory() : null;
       await writeStream(part.stream);
+      if (memTrace && before && ctx) {
+        logger.info(
+          formatMemTraceLine({
+            cmd: part.header,
+            uid: ctx.uid,
+            mailbox: ctx.mailbox,
+            bytesOut: part.length,
+            before,
+            after: snapshotMemory(),
+          }),
+          { component: "imap" }
+        );
+      }
     } else {
       write(part.content);
     }
