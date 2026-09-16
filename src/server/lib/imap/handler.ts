@@ -4,6 +4,7 @@
 
 import { Socket } from "net";
 import { ImapSession } from "./session";
+import { SessionBuffer } from "./session-buffer";
 import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
 import { clip, imapTrace, redactCredentials } from "./trace";
@@ -123,10 +124,10 @@ const MAX_UNCONSUMED_COMMAND_BYTES = 64 * 1024;
 
 // The per-literal cap alone does not bound a COMMAND: literal declarations
 // chain, so N declarations each under the cap still accumulate N payloads on
-// `pendingLiterals` and N line fragments on `pendingCommand`. Only the header
-// line of a command reaches `waitForCommandSlot()`, so a chain is not paced
-// either. Both are new surface — before literals were generalized, only APPEND
-// could hold literal state and it could not chain at all.
+// `pendingLiterals` and N line fragments on `pendingCommand`. New surface —
+// before literals were generalized, only APPEND could hold literal state and
+// it could not chain at all. This bounds how many links one command may hold;
+// how fast a session may spend them is paced where the chain is read.
 //
 // No real command comes close to either bound. The most literals any command
 // this server implements takes is a handful (LOGIN's two credentials, RENAME's
@@ -242,11 +243,14 @@ export class ImapRequestHandler {
     const session = new ImapSession(this, socket);
     this.session = session;
 
-    // A Buffer, not a string: `{N}` counts OCTETS, and a UTF-8 decode makes
+    // Octets, not a string: `{N}` counts OCTETS, and a UTF-8 decode makes
     // `length` a count of UTF-16 code units instead — so slicing a literal off
     // a decoded string takes the wrong number of characters for any payload
-    // holding a multi-byte character.
-    let buffer = Buffer.alloc(0);
+    // holding a multi-byte character. `SessionBuffer` rather than a `Buffer`
+    // because both of the things this loop does to it — take a segment from the
+    // socket, consume a prefix — cost a whole copy on a `Buffer`, and a
+    // multi-MB APPEND pays that copy once per TCP segment.
+    const buffer = new SessionBuffer();
 
     // Literal continuation state. `pendingCommand` is the command text
     // assembled so far, holding the `{N}` markers but NOT the payloads;
@@ -462,7 +466,7 @@ export class ImapRequestHandler {
             // victim's encrypted channel (CVE-2011-0411 class). Drop the buffer
             // and hand the connection to the new generation's own loop.
             if (generation !== this.generation) {
-              buffer = Buffer.alloc(0);
+              buffer.clear();
               pendingCommand = null;
               pendingLiterals = [];
               pendingLiteralBytes = 0;
@@ -479,23 +483,23 @@ export class ImapRequestHandler {
             // discarded payload can never reach `pendingLiterals`.
             if (discardBytesRemaining > 0) {
               const take = Math.min(discardBytesRemaining, buffer.length);
-              buffer = Buffer.concat([buffer.subarray(take) as Uint8Array]);
+              buffer.consume(take);
               discardBytesRemaining -= take;
               if (discardBytesRemaining > 0) return;
               continue;
             }
             if (discardToEndOfCommand) {
-              const end = buffer.indexOf("\r\n");
+              const end = buffer.indexOfCrlf();
               // The tail can arrive in pieces. Drop what is here and wait for the
               // terminator rather than retaining it, so no length cap is needed
               // in this state — nothing accumulates. A peer that never sends the
               // terminator is holding an idle socket, which SOCKET_TIMEOUT_MS
               // already ends.
               if (end === -1) {
-                buffer = Buffer.alloc(0);
+                buffer.clear();
                 return;
               }
-              buffer = Buffer.concat([buffer.subarray(end + 2) as Uint8Array]);
+              buffer.consume(end + 2);
               discardToEndOfCommand = false;
               continue;
             }
@@ -511,27 +515,14 @@ export class ImapRequestHandler {
             // skip — leaving the queue short by one and the parse failing.
             if (pendingCommand !== null && awaitingLiteral) {
               if (buffer.length < literalBytesNeeded) return;
-              const payload = buffer
-                .subarray(0, literalBytesNeeded)
-                .toString("utf8");
+              const payload = buffer.decode(0, literalBytesNeeded);
               pendingLiterals.push(payload);
               // The declared count, not a re-measure of the decoded string:
               // it is the exact number of octets just sliced out of the
               // buffer, and an invalid UTF-8 sequence decodes to U+FFFD and
               // re-encodes to three octets that were never on the wire.
               pendingLiteralBytes += literalBytesNeeded;
-              // COPY the residual rather than viewing it. `subarray` returns a
-              // view that keeps the whole parent allocation alive, so after a
-              // multi-MB APPEND the session would sit on the full message for as
-              // long as it stays idle — per connection, against a 256 MiB
-              // container ceiling. The residual here is a command tail (bytes,
-              // not megabytes), so the copy is free; the line splitter below
-              // then views that small copy instead of the big one. `concat`
-              // rather than `subarray` because concat always allocates its own
-              // exactly-sized backing store, empty residual included.
-              buffer = Buffer.concat([
-                buffer.subarray(literalBytesNeeded) as Uint8Array
-              ]);
+              buffer.consume(literalBytesNeeded);
               literalBytesNeeded = 0;
               awaitingLiteral = false;
               // A payload that consumed its own line terminator (the client
@@ -582,11 +573,11 @@ export class ImapRequestHandler {
               continue;
             }
 
-            const lineEnd = buffer.indexOf("\r\n");
+            const lineEnd = buffer.indexOfCrlf();
             if (lineEnd === -1) return;
 
-            const line = buffer.subarray(0, lineEnd).toString("utf8");
-            buffer = buffer.subarray(lineEnd + 2);
+            const line = buffer.decode(0, lineEnd);
+            buffer.consume(lineEnd + 2);
 
             // Text following a consumed payload on the same line: either it
             // declares the next literal (LOGIN chains two — one per credential)
@@ -616,6 +607,17 @@ export class ImapRequestHandler {
                   ? null
                   : LITERAL_DECLARATION.exec(line);
               if (chained) {
+                // Pace the chain, not just the header line it hangs off.
+                // Only that header reaches `waitForCommandSlot()`, so an
+                // unpaced declaration costs a peer nothing while drawing a
+                // continuation, moving a payload through the buffer and
+                // re-entering the parser — the same work the same octets are
+                // charged for when they arrive as a command of their own. The
+                // chain ceilings bound how many links one command may hold;
+                // this bounds how fast a session may spend them, and the
+                // longest legitimate chain is a two-credential LOGIN at two
+                // slots out of a hundred per second.
+                await session.waitForCommandSlot();
                 const declaredBytes = parseInt(chained[1], 10);
                 const isSynchronizing = !chained[2];
                 // The payloads live on `pendingLiterals`; `pendingCommand` keeps
@@ -783,10 +785,7 @@ export class ImapRequestHandler {
       // handler synchronous — all async work belongs inside `drainCommands`
       // which owns the `draining` guard.
       try {
-        buffer =
-          buffer.length === 0
-            ? data
-            : Buffer.concat([buffer as Uint8Array, data as Uint8Array]);
+        buffer.push(data);
       } catch (error) {
         logger.error("Error appending data to buffer", { component: "imap" }, error);
         if (!socket.destroyed) socket.destroy();
@@ -795,7 +794,7 @@ export class ImapRequestHandler {
 
       // `drainCommands` runs inside `session.runSerial`, so an IDLE delivery
       // callback's DB round-trip parks it for as long as that takes while this
-      // handler keeps concatenating. The bound goes where the buffer grows.
+      // handler keeps taking segments. The bound goes where the buffer grows.
       applyBackpressure();
       // Fire-and-forget: `drainCommands` self-serializes via `draining`.
       // Errors inside are already logged; catch here just to prevent an
