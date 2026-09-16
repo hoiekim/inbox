@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
 import { pool } from "./client";
 import {
   writeUser,
@@ -409,7 +410,9 @@ export const initializeAdminUser = async (): Promise<void> => {
  *   the username is already present, so a redeploy keeps the same user_id.
  *   Authenticating with these credentials produces a session whose effective
  *   identity is admin and whose `isReadOnly` flag refuses every mutating
- *   surface.
+ *   surface. Changing the value to a new one also deletes the sessions the
+ *   previous password issued, so rotating a leaked credential withdraws it
+ *   everywhere; a redeploy with an unchanged value logs nobody out.
  * - unset — revokes any account a previous boot seeded and deletes the sessions
  *   it already issued, so removing the env var and redeploying is a complete
  *   revocation rather than a no-op that leaves a working credential behind.
@@ -423,6 +426,10 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
   }
 
   const existing = await searchUser({ username: ADMIN_RO_USERNAME });
+  // Compared before the write, which replaces the hash it is compared against.
+  const passwordRotated =
+    !!existing && !(await bcrypt.compare(ADMIN_RO_PASSWORD, existing.password));
+
   const result = await writeUser({
     user_id: existing?.user_id,
     username: ADMIN_RO_USERNAME,
@@ -433,6 +440,14 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
     email: `${ADMIN_RO_USERNAME}@${process.env.EMAIL_DOMAIN || "localhost"}`,
   });
   if (!result?._id) throw new Error("Failed to create read-only admin user");
+
+  if (passwordRotated) {
+    const deletedSessions = await deleteSessionsAuthenticatedAs(ADMIN_RO_USERNAME);
+    logger.info(
+      "ADMIN_RO_PASSWORD changed — deleted the sessions the previous password issued.",
+      { deletedSessions }
+    );
+  }
 
   logger.info("Successfully initialized read-only admin user.");
 };

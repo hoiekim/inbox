@@ -3,6 +3,7 @@
  * `ADMIN_RO_PASSWORD` — seeding when it is set, revoking when it is not.
  */
 import { describe, it, expect, mock, spyOn, beforeEach, afterAll } from "bun:test";
+import bcrypt from "bcryptjs";
 import * as realRepositories from "./repositories";
 import { ADMIN_RO_USERNAME } from "../read-only";
 import { logger } from "../logger";
@@ -42,10 +43,18 @@ afterAll(() => {
   mock.module("./repositories", () => REAL_REPOSITORIES);
 });
 
+const CONFIGURED_PASSWORD = "ro-secret";
+
 const SEEDED_ROW = {
   user_id: "ro-user-id",
   username: ADMIN_RO_USERNAME,
   email: `${ADMIN_RO_USERNAME}@mydomain`,
+  password: bcrypt.hashSync(CONFIGURED_PASSWORD, 10),
+};
+
+const ROW_WITH_PREVIOUS_PASSWORD = {
+  ...SEEDED_ROW,
+  password: bcrypt.hashSync("the-leaked-password", 10),
 };
 
 const originalPassword = process.env.ADMIN_RO_PASSWORD;
@@ -70,7 +79,7 @@ describe("initializeAdminReadOnlyUser", () => {
   });
 
   it("seeds the account with the configured password when the variable is set", () => {
-    process.env.ADMIN_RO_PASSWORD = "ro-secret";
+    process.env.ADMIN_RO_PASSWORD = CONFIGURED_PASSWORD;
     existingRow = SEEDED_ROW;
     return runInitialize().then(() => {
       expect(written).toHaveLength(1);
@@ -78,7 +87,7 @@ describe("initializeAdminReadOnlyUser", () => {
       expect(written[0].username).toBe(ADMIN_RO_USERNAME);
       // Mutation-test the branch: a revoke that also swallowed the seed would
       // leave the operator with no way to turn the role on.
-      expect(written[0].password).toBe("ro-secret");
+      expect(written[0].password).toBe(CONFIGURED_PASSWORD);
     });
   });
 
@@ -101,7 +110,7 @@ describe("initializeAdminReadOnlyUser", () => {
     // destroyed is the credential.
     expect(written[0].user_id).toBe(SEEDED_ROW.user_id);
     expect(written[0].email).toBe(SEEDED_ROW.email);
-    expect(written[0].password).not.toBe("ro-secret");
+    expect(written[0].password).not.toBe(CONFIGURED_PASSWORD);
     expect(written[0].password).toMatch(/^[0-9a-f]{64}$/);
     expect(infoSpy).toHaveBeenCalled();
     infoSpy.mockRestore();
@@ -121,12 +130,39 @@ describe("initializeAdminReadOnlyUser", () => {
     );
   });
 
-  it("leaves sessions alone when the variable is set", async () => {
-    process.env.ADMIN_RO_PASSWORD = "ro-secret";
+  it("leaves sessions alone when the configured password is unchanged", async () => {
+    process.env.ADMIN_RO_PASSWORD = CONFIGURED_PASSWORD;
     existingRow = SEEDED_ROW;
 
     await runInitialize();
 
+    // A steady-state redeploy must not log the operator out of a role whose
+    // credential has not moved.
+    expect(mockDeleteSessionsAuthenticatedAs).not.toHaveBeenCalled();
+  });
+
+  it("deletes the sessions the previous password issued when the value is rotated", async () => {
+    process.env.ADMIN_RO_PASSWORD = CONFIGURED_PASSWORD;
+    existingRow = ROW_WITH_PREVIOUS_PASSWORD;
+
+    await runInitialize();
+
+    // Rotating after a leak is the action an operator takes; refusing new
+    // logins leaves the leaked cookie reading admin's mailbox on a rolling
+    // window, so the sessions go with the password.
+    expect(mockDeleteSessionsAuthenticatedAs).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSessionsAuthenticatedAs.mock.calls[0][0]).toBe(
+      ADMIN_RO_USERNAME
+    );
+  });
+
+  it("deletes nothing on the first seed, when no row exists to compare against", async () => {
+    process.env.ADMIN_RO_PASSWORD = CONFIGURED_PASSWORD;
+    existingRow = null;
+
+    await runInitialize();
+
+    expect(written).toHaveLength(1);
     expect(mockDeleteSessionsAuthenticatedAs).not.toHaveBeenCalled();
   });
 
