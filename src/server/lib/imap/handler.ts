@@ -10,7 +10,10 @@ import { parseCommand } from "./parsers";
 import { clip, imapTrace, redactCredentials } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
 import { acquireCommandBudget, releaseCommandBudget } from "./command-budget";
-import { runInCommandBudgetContext } from "./command-budget-hold";
+import {
+  createCommandBudgetHold,
+  runInCommandBudgetContext,
+} from "./command-budget-hold";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
 
@@ -906,6 +909,7 @@ export class ImapRequestHandler {
     const waitedForCommandBudgetMs = budgeted
       ? Math.round(await acquireCommandBudget())
       : 0;
+    const hold = createCommandBudgetHold(budgeted);
 
     try {
     // Per-command diagnostic: RSS delta + bytes emitted to the client + wall
@@ -938,9 +942,9 @@ export class ImapRequestHandler {
     //
     // Also binds whether THIS command holds a command-budget slot, so a
     // deeper body-budget/stream-mutex wait can temporarily give it up via
-    // `withYieldedCommandBudget` (see `command-budget-hold.ts`) instead of
+    // `yieldCommandBudgetDuring` (see `command-budget-hold.ts`) instead of
     // pinning it for the whole nested wait.
-    await runInCommandBudgetContext(budgeted, () => runInBodyBudgetContext(async () => {
+    await runInCommandBudgetContext(hold, () => runInBodyBudgetContext(async () => {
     try {
       switch (request.type) {
         case "CAPABILITY":
@@ -1193,7 +1197,9 @@ export class ImapRequestHandler {
     }
     }));
     } finally {
-      if (budgeted) releaseCommandBudget();
+      // Reads the hold's own flag, not `budgeted`: a yielded-and-not-yet-
+      // reacquired slot is not ours to hand back twice.
+      if (hold.held) releaseCommandBudget();
     }
   }
 

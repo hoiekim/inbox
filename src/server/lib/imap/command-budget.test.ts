@@ -146,4 +146,30 @@ describe("command-budget semaphore", () => {
     // one the queued acquire above just took).
     for (let i = 0; i < CAP; i++) releaseCommandBudget();
   });
+
+  it("an unmatched release cannot lift the ceiling above capacity", async () => {
+    // A release with nothing held is the shape an asymmetry between the two
+    // release sites would produce. Left unfloored it drives the counter
+    // negative, and the bound this budget exists to enforce silently
+    // becomes CAP + 1 for the rest of the process's life.
+    releaseCommandBudget();
+    expect(commandBudgetInFlight()).toBe(0);
+
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+    expect(commandBudgetInFlight()).toBe(CAP);
+
+    let admitted = false;
+    const extra = acquireCommandBudget().then(() => {
+      admitted = true;
+    });
+    await nextTick();
+    expect(admitted).toBe(false);
+
+    releaseCommandBudget();
+    await extra;
+    expect(admitted).toBe(true);
+    expect(commandBudgetInFlight()).toBe(CAP);
+
+    for (let i = 0; i < CAP; i++) releaseCommandBudget();
+  });
 });

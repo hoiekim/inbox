@@ -7,10 +7,17 @@
  * slot count — so gutting `BUDGETED_COMMAND_TYPES` or dropping the
  * `releaseCommandBudget()` call in `handler.ts` fails these, not just a
  * mutation run against the semaphore in isolation.
+ *
+ * The second block does the same for the yield mechanism: it drives a real
+ * body-bearing `BODY[]` fetch through the production stream path with the
+ * body budget saturated, pinning BOTH halves of where the command slot may
+ * be given up — released while the fetch is queued behind the body budget,
+ * and held again for every chunk of the drain.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { EventEmitter } from "events";
+import type { MailType } from "common";
 import "../push";
 import { ImapRequestHandler } from "./handler";
 import {
@@ -20,6 +27,17 @@ import {
   commandBudgetInFlight,
   _resetCommandBudget,
 } from "./command-budget";
+import {
+  createCommandBudgetHold,
+  runInCommandBudgetContext,
+} from "./command-budget-hold";
+import {
+  withBodyBudget,
+  bodyBudgetCapacity,
+  _resetBodyBudget,
+} from "./body-budget";
+import { _resetStreamMutex } from "./stream-mutex";
+import { buildFetchResponsePart, writeFetchResponse } from "./fetch-helpers";
 
 function makeMockSocket() {
   const socket = new EventEmitter() as EventEmitter & {
@@ -122,5 +140,170 @@ describe("command budget wiring through handleRequest", () => {
     expect(commandBudgetInFlight()).toBe(CAP);
 
     for (let i = 0; i < CAP; i++) releaseCommandBudget();
+  });
+});
+
+const defer = (): { promise: Promise<void>; resolve: () => void } => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+};
+
+describe("command budget yield around a real body-bearing FETCH", () => {
+  const MAIL = {
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<budget-yield@local>",
+    date: new Date("2026-09-15T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "budget yield",
+    text: "plain body",
+    html: "<p>rich body</p>",
+    attachments: [] as unknown as MailType["attachments"],
+  };
+
+  beforeEach(() => {
+    _resetCommandBudget();
+    _resetBodyBudget();
+    _resetStreamMutex();
+  });
+
+  afterEach(() => {
+    _resetCommandBudget();
+    _resetBodyBudget();
+    _resetStreamMutex();
+  });
+
+  it("releases the command slot while the fetch is queued on the body budget, and holds it for every chunk of the drain", async () => {
+    // Every body-budget slot taken by other in-flight fetches, so this
+    // fetch's own acquire — deferred to the stream's first pull, deep
+    // inside the socket write — must queue.
+    const bodyGate = defer();
+    const bodyHolders = Array.from({ length: bodyBudgetCapacity() }, () =>
+      withBodyBudget(() => bodyGate.promise)
+    );
+    await settle();
+
+    // Stand in for `handler.ts`: a command-budget slot held for this
+    // command, with the hold bound to its async scope.
+    await acquireCommandBudget();
+    expect(commandBudgetInFlight()).toBe(1);
+    const hold = createCommandBudgetHold(true);
+
+    const inFlightDuringDrain: number[] = [];
+    let drainedBytes = 0;
+
+    const fetching = runInCommandBudgetContext(hold, async () => {
+      const part = await buildFetchResponsePart(
+        MAIL,
+        { type: "BODY", peek: false, section: { type: "FULL" } },
+        "doc-command-budget-yield",
+        "INBOX"
+      );
+      if (!part || part.type !== "stream") {
+        throw new Error("expected a stream part for BODY[]");
+      }
+      await writeFetchResponse(
+        () => true,
+        async () => {},
+        async (chunks) => {
+          for await (const chunk of chunks) {
+            drainedBytes += chunk.byteLength;
+            inFlightDuringDrain.push(commandBudgetInFlight());
+          }
+        },
+        1,
+        [part]
+      );
+    });
+
+    // Queued behind the body budget — the slot is genuinely back in the
+    // pool, not merely bookkept as released.
+    await settle();
+    expect(commandBudgetInFlight()).toBe(0);
+    expect(hold.held).toBe(false);
+    expect(inFlightDuringDrain).toEqual([]);
+
+    bodyGate.resolve();
+    await Promise.all(bodyHolders);
+    await fetching;
+
+    // The drain itself runs with the slot held: widening the yield to cover
+    // it would park a fully-written literal waiting to re-enter the command
+    // FIFO, once per message.
+    expect(drainedBytes).toBeGreaterThan(0);
+    expect(inFlightDuringDrain.length).toBeGreaterThan(0);
+    expect(inFlightDuringDrain).toEqual(
+      Array(inFlightDuringDrain.length).fill(1)
+    );
+
+    expect(hold.held).toBe(true);
+    expect(commandBudgetInFlight()).toBe(1);
+    releaseCommandBudget();
+  });
+
+  it("releases the command slot while the fetch is queued on the stream mutex for the same body", async () => {
+    const fetchPart = async () => {
+      const part = await buildFetchResponsePart(
+        MAIL,
+        { type: "BODY", peek: false, section: { type: "FULL" } },
+        "doc-command-budget-mutex",
+        "INBOX"
+      );
+      if (!part || part.type !== "stream") {
+        throw new Error("expected a stream part for BODY[]");
+      }
+      return part;
+    };
+
+    // Another session is already streaming this exact body, suspended
+    // between chunks, so it still owns the per-key mutex.
+    const holderGate = defer();
+    const holderPart = await fetchPart();
+    const holding = (async () => {
+      let first = true;
+      for await (const _chunk of holderPart.stream) {
+        if (first) {
+          first = false;
+          await holderGate.promise;
+        }
+      }
+    })();
+    await settle();
+
+    await acquireCommandBudget();
+    const hold = createCommandBudgetHold(true);
+    const inFlightDuringDrain: number[] = [];
+
+    const fetching = runInCommandBudgetContext(hold, async () => {
+      const part = await fetchPart();
+      for await (const _chunk of part.stream) {
+        inFlightDuringDrain.push(commandBudgetInFlight());
+      }
+    });
+
+    // Queued on the mutex, not the body budget — the slot must still go back.
+    await settle();
+    expect(commandBudgetInFlight()).toBe(0);
+    expect(hold.held).toBe(false);
+    expect(inFlightDuringDrain).toEqual([]);
+
+    holderGate.resolve();
+    await holding;
+    await fetching;
+
+    expect(inFlightDuringDrain.length).toBeGreaterThan(0);
+    expect(inFlightDuringDrain).toEqual(
+      Array(inFlightDuringDrain.length).fill(1)
+    );
+    expect(hold.held).toBe(true);
+    expect(commandBudgetInFlight()).toBe(1);
+    releaseCommandBudget();
   });
 });

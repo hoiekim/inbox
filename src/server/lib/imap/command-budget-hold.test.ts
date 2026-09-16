@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
+  createCommandBudgetHold,
   runInCommandBudgetContext,
-  withYieldedCommandBudget,
+  yieldCommandBudgetDuring,
 } from "./command-budget-hold";
 import {
   acquireCommandBudget,
   releaseCommandBudget,
+  commandBudgetCapacity,
   commandBudgetInFlight,
   _resetCommandBudget,
 } from "./command-budget";
@@ -18,94 +20,104 @@ const defer = <T>(): { promise: Promise<T>; resolve: (v: T) => void } => {
   return { promise, resolve };
 };
 
-async function* singleValueStream(value: string) {
-  yield value;
-}
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+};
 
 describe("command-budget-hold", () => {
   beforeEach(() => {
     _resetCommandBudget();
   });
 
-  it("gives up a held slot for the duration of the wrapped generator, and reacquires it on completion", async () => {
+  it("gives up a held slot for the duration of the wait, and reacquires it before returning", async () => {
     await acquireCommandBudget();
     expect(commandBudgetInFlight()).toBe(1);
 
-    const results: string[] = [];
-    await runInCommandBudgetContext(true, async () => {
-      const gate = defer<void>();
-      const gen = withYieldedCommandBudget(async function* () {
-        await gate.promise;
-        yield "value";
-      });
-      const consuming = (async () => {
-        for await (const v of gen) results.push(v);
-      })();
+    const hold = createCommandBudgetHold(true);
+    const gate = defer<void>();
+    await runInCommandBudgetContext(hold, async () => {
+      const yielding = yieldCommandBudgetDuring(() => gate.promise);
 
-      // The slot is given up as soon as the generator starts (first `.next()`).
-      await new Promise((r) => setImmediate(r));
+      await settle();
       expect(commandBudgetInFlight()).toBe(0);
+      expect(hold.held).toBe(false);
 
       gate.resolve();
-      await consuming;
+      await yielding;
     });
 
-    expect(results).toEqual(["value"]);
-    // Reacquired once the generator completed.
     expect(commandBudgetInFlight()).toBe(1);
+    expect(hold.held).toBe(true);
     releaseCommandBudget();
   });
 
   it("is a no-op when the command never held a slot", async () => {
     expect(commandBudgetInFlight()).toBe(0);
 
-    await runInCommandBudgetContext(false, async () => {
-      const gen = withYieldedCommandBudget(() => singleValueStream("v"));
-      const collected: string[] = [];
-      for await (const v of gen) collected.push(v);
-      expect(collected).toEqual(["v"]);
-    });
+    const hold = createCommandBudgetHold(false);
+    let ran = false;
+    await runInCommandBudgetContext(hold, () =>
+      yieldCommandBudgetDuring(async () => {
+        ran = true;
+      })
+    );
 
+    expect(ran).toBe(true);
     expect(commandBudgetInFlight()).toBe(0);
+    expect(hold.held).toBe(false);
   });
 
-  it("reacquires the slot even when the wrapped generator throws", async () => {
+  it("reacquires the slot even when the wait rejects", async () => {
     await acquireCommandBudget();
 
-    await runInCommandBudgetContext(true, async () => {
-      const gen = withYieldedCommandBudget<string>(async function* () {
-        throw new Error("boom");
-      });
+    const hold = createCommandBudgetHold(true);
+    await runInCommandBudgetContext(hold, async () => {
       await expect(
-        (async () => {
-          for await (const _v of gen) {
-            // drain
-          }
-        })()
+        yieldCommandBudgetDuring(() => Promise.reject(new Error("boom")))
       ).rejects.toThrow("boom");
     });
 
     expect(commandBudgetInFlight()).toBe(1);
+    expect(hold.held).toBe(true);
     releaseCommandBudget();
   });
 
-  it("reacquires the slot when the consumer abandons the generator early", async () => {
-    await acquireCommandBudget();
+  it("frees the slot for another command while waiting, and queues behind it to get back in", async () => {
+    const CAP = commandBudgetCapacity();
+    // Every slot taken, one of them by the command that is about to wait.
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
 
-    await runInCommandBudgetContext(true, async () => {
-      const gen = withYieldedCommandBudget(async function* () {
-        yield "first";
-        yield "second";
-      });
-      for await (const v of gen) {
-        expect(v).toBe("first");
-        break; // triggers gen.return() via the for-await protocol
-      }
-      // give the generator's finally a tick to run after the early break
-      await new Promise((r) => setImmediate(r));
+    const hold = createCommandBudgetHold(true);
+    const gate = defer<void>();
+    let reacquired = false;
+
+    const waiting = runInCommandBudgetContext(hold, async () => {
+      await yieldCommandBudgetDuring(() => gate.promise);
+      reacquired = true;
     });
 
-    expect(commandBudgetInFlight()).toBe(1);
+    // The freed slot is genuinely available to someone else, not just
+    // bookkept: a fresh acquire resolves while our command is still waiting.
+    await settle();
+    expect(commandBudgetInFlight()).toBe(CAP - 1);
+    const intruderAcquired = acquireCommandBudget();
+    await settle();
+    await intruderAcquired;
+    expect(commandBudgetInFlight()).toBe(CAP);
+
+    // Inner wait is over, but the budget is full again — the reacquire must
+    // queue rather than exceed capacity.
+    gate.resolve();
+    await settle();
+    expect(reacquired).toBe(false);
+    expect(commandBudgetInFlight()).toBe(CAP);
+
     releaseCommandBudget();
+    await waiting;
+    expect(reacquired).toBe(true);
+    expect(hold.held).toBe(true);
+    expect(commandBudgetInFlight()).toBe(CAP);
+
+    for (let i = 0; i < CAP; i++) releaseCommandBudget();
   });
 });

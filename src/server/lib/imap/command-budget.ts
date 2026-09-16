@@ -1,14 +1,6 @@
 import { createFifoSemaphore } from "./fifo-semaphore";
 import { parseConcurrencyValue } from "./concurrency-env";
 
-// A streaming `UID FETCH ... BODY[]` used to hold its command-budget slot
-// for the whole body-budget/stream-mutex wait AND the socket write, which
-// meant this capacity had to be sized relative to `body-budget.ts`'s own
-// cap to avoid starving every other command behind a burst of body
-// fetches. `command-budget-hold.ts`'s `withYieldedCommandBudget` now gives
-// up this slot for that entire window instead, so the two budgets
-// partition rather than nest and this default is independent of
-// `IMAP_BODY_FETCH_CONCURRENCY`.
 const DEFAULT_CONCURRENCY = 8;
 
 const CAPACITY = parseConcurrencyValue(

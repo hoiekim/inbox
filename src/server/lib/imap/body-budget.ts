@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createFifoSemaphore } from "./fifo-semaphore";
 import { parseConcurrencyValue } from "./concurrency-env";
+import { yieldCommandBudgetDuring } from "./command-budget-hold";
 
 const DEFAULT_CONCURRENCY = 3;
 
@@ -35,7 +36,15 @@ export const runInBodyBudgetContext = <T>(fn: () => T): T =>
 export const getBodyBudgetWaitMs = (): number => waitStore.getStore()?.ms ?? 0;
 
 const acquire = async (): Promise<void> => {
-  const waitedMs = await semaphore.acquire();
+  // Uncontended acquires must not go through the yield: giving the command
+  // slot up and taking it back costs a full command-FIFO rotation under
+  // saturation, which for a per-message FETCH path would dwarf the wait it
+  // is meant to hide.
+  if (semaphore.tryAcquire()) return;
+  let waitedMs = 0;
+  await yieldCommandBudgetDuring(async () => {
+    waitedMs = await semaphore.acquire();
+  });
   const ledger = waitStore.getStore();
   if (ledger) ledger.ms += waitedMs;
 };

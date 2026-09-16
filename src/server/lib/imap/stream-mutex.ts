@@ -26,6 +26,8 @@
  * has been trying to eliminate.
  */
 
+import { yieldCommandBudgetDuring } from "./command-budget-hold";
+
 // Absent key → available. Present → held; the array is the FIFO wait
 // queue. `undefined` on the wait-queue would be ambiguous with `absent`,
 // so waiters push their `resolve` fn directly and holders own the slot
@@ -40,9 +42,12 @@ const acquire = async (key: string): Promise<void> => {
     inflight.set(key, []);
     return;
   }
-  await new Promise<void>((resolve) => {
-    queue.push(resolve);
-  });
+  await yieldCommandBudgetDuring(
+    () =>
+      new Promise<void>((resolve) => {
+        queue.push(resolve);
+      })
+  );
   // When wake() ran, ownership transferred to us; the map entry
   // remains, and any newer waiter now queues behind us.
 };
