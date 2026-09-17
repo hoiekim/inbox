@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authRequired } from "../route";
+import { uploadHandlers } from "../../upload";
 import { getDomainRoute } from "./get-domain";
 import { getAccountsRoute } from "./get-accounts";
 import { getHeadersRoute } from "./get-headers";
@@ -22,6 +23,10 @@ mailsRouter.use((req, res, next) => {
   if (req.path === "/domain") return next();
   return authRequired(req, res, next);
 });
+
+// Behind the auth gate above, so an unauthenticated multipart body is never
+// parsed to disk. /send is the only route that reads req.files.
+mailsRouter.use("/send", ...uploadHandlers);
 
 const routes = [
   getDomainRoute,

@@ -4,7 +4,7 @@
  *   get-search, get-domain, get-allowlist, post-allowlist,
  *   delete-allowlist, post-send, post-spam-mark, get-attachment
  */
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll, beforeEach } from "bun:test";
 import type { ApiResponse } from "../route";
 import {
   ADMIN_RO_USERNAME,
@@ -12,6 +12,7 @@ import {
   remapReadOnlySession,
 } from "../../../read-only";
 import { SignedUser } from "common";
+import { MAX_ATTACHMENTS_PER_MAIL } from "../../upload";
 
 // ── Shared mocks for "server" barrel ─────────────────────────────────────────
 
@@ -1335,5 +1336,140 @@ describe("read-only guard on mutating mail + push routes", () => {
     }) as unknown as import("express").Request;
     await postSendMailRoute.callback(req, makeRes(), noopStream);
     expect(mockSendMail).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── upload wiring on the real mails router ────────────────────────────────────
+
+describe("mails router multipart wiring", () => {
+  const BOUNDARY = "----mailsuploadtest";
+  // express-fileupload names every temp file `tmp-<counter>-<pid><timestamp>`.
+  const OWN_TEMP_FILE = new RegExp(`^tmp-\\d+-${process.pid}\\d+$`);
+
+  const countOwnTempFiles = async () => {
+    const { readdirSync } = await import("fs");
+    return readdirSync("/tmp").filter((name) => OWN_TEMP_FILE.test(name)).length;
+  };
+
+  const settledTempFileCount = async () => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const count = await countOwnTempFiles();
+      if (count === 0) return count;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return countOwnTempFiles();
+  };
+
+  let server: import("http").Server;
+  let baseUrl: string;
+  let sessionUser: { id: string; username: string } | undefined;
+
+  beforeAll(async () => {
+    const express = (await import("express")).default;
+    const mailsRouter = (await import("./index")).default;
+
+    const app = express();
+    app.use((req, _res, next) => {
+      req.session = (sessionUser ? { user: sessionUser } : {}) as never;
+      next();
+    });
+    app.use("/api/mails", mailsRouter);
+
+    server = await new Promise((resolve) => {
+      const started = app.listen(0, () => resolve(started));
+    });
+    const { port } = server.address() as { port: number };
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+
+  beforeEach(() => {
+    sessionUser = undefined;
+    mockSendMail.mockClear();
+  });
+
+  const part = (index: number, payload: string) =>
+    `--${BOUNDARY}\r\n` +
+    `Content-Disposition: form-data; name="attachments"; filename="p${index}.txt"\r\n` +
+    `Content-Type: text/plain\r\n\r\n${payload}\r\n`;
+
+  const postParts = (count: number) =>
+    fetch(`${baseUrl}/api/mails/send`, {
+      method: "POST",
+      headers: { "Content-Type": `multipart/form-data; boundary=${BOUNDARY}` },
+      body: Array.from({ length: count }, (_, i) => part(i, `payload-${i}`)).join("") +
+        `--${BOUNDARY}--\r\n`
+    });
+
+  // The reclaim hook makes "zero files afterwards" true whether the parser sits
+  // in front of the auth gate or behind it. Holding the body open is what
+  // separates the two: behind the gate, the 401 lands before a byte is parsed.
+  it("does not write a part while the request is still unauthenticated", async () => {
+    const opening =
+      `--${BOUNDARY}\r\n` +
+      `Content-Disposition: form-data; name="attachments"; filename="held.txt"\r\n` +
+      `Content-Type: text/plain\r\n\r\n${"x".repeat(4096)}`;
+
+    let releaseTail = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode(opening));
+        await held;
+        try {
+          controller.enqueue(new TextEncoder().encode(`\r\n--${BOUNDARY}--\r\n`));
+          controller.close();
+        } catch {
+          // The server may already have closed the socket after its 401.
+        }
+      }
+    });
+
+    const response = fetch(`${baseUrl}/api/mails/send`, {
+      method: "POST",
+      headers: { "Content-Type": `multipart/form-data; boundary=${BOUNDARY}` },
+      body,
+      duplex: "half"
+    } as RequestInit).catch(() => undefined);
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const midFlight = await countOwnTempFiles();
+    releaseTail();
+    const res = await response;
+
+    expect([midFlight, res?.status]).toEqual([0, 401]);
+    expect(await settledTempFileCount()).toBe(0);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("parses attachments for an authenticated send and reclaims them", async () => {
+    sessionUser = makeUser();
+    mockSendMail.mockResolvedValueOnce(undefined as never);
+
+    const res = await postParts(2);
+
+    expect(await res.json()).toEqual({ status: "success" });
+    const attachments = mockSendMail.mock.calls[0]?.[2] as { name: string }[];
+    expect(attachments.map((file) => file.name)).toEqual(["p0.txt", "p1.txt"]);
+    expect(await settledTempFileCount()).toBe(0);
+  });
+
+  it("rejects a send carrying more attachments than the cap without sending it", async () => {
+    sessionUser = makeUser();
+
+    const res = await postParts(MAX_ATTACHMENTS_PER_MAIL + 5);
+    const body = (await res.json()) as ApiResponse<unknown>;
+
+    expect(body.status).toBe("failed");
+    expect(body.message).toMatch(new RegExp(`${MAX_ATTACHMENTS_PER_MAIL} attachments`));
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(await settledTempFileCount()).toBe(0);
   });
 });
