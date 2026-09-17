@@ -29,6 +29,15 @@ describe("deliversToAdminMailbox", () => {
     expect(deliversToAdminMailbox(`victim@${ADMIN_USERNAME}.${domain}`)).toBe(true);
   });
 
+  it("matches them regardless of how the address spells the domain's case", () => {
+    // The receive path lowercases every incoming address before mapping it to
+    // a mailbox, so a spelling that differs only in case is delivered to admin
+    // just the same and has to be refused just the same.
+    expect(deliversToAdminMailbox(`victim@${domain.toUpperCase()}`)).toBe(true);
+    expect(deliversToAdminMailbox(`victim@${ADMIN_USERNAME}.${domain.toUpperCase()}`)).toBe(true);
+    expect(deliversToAdminMailbox(`victim@${ADMIN_USERNAME.toUpperCase()}.${domain}`)).toBe(true);
+  });
+
   it("does not match another user's subdomain or an outside address", () => {
     // Mutation-test the discriminator: a predicate that answered true for
     // every address would refuse every signup on the server.

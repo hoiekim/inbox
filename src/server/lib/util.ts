@@ -18,10 +18,10 @@ export const getUserDomain = (username: string) => {
  * outside the served domain, which matches no username.
  */
 export const addressToUsername = (address: string) => {
-  const domain = getDomain();
+  const domain = getDomain().toLowerCase();
   const parsedAddress = address.split("@");
-  const domainInAddress = parsedAddress[parsedAddress.length - 1];
-  const subDomain = domainInAddress.split(`.${domain}`)[0]?.toLowerCase();
+  const domainInAddress = parsedAddress[parsedAddress.length - 1].toLowerCase();
+  const subDomain = domainInAddress.split(`.${domain}`)[0];
   return subDomain === domain ? "admin" : subDomain;
 };
 

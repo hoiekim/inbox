@@ -82,6 +82,11 @@ describe("addressToUsername", () => {
   it("returns 'admin' when the address is at the base domain", () => {
     expect(addressToUsername("hi@hoie.kim")).toBe("admin");
   });
+
+  it("ignores the case the address spells the domain in", () => {
+    expect(addressToUsername("anything@BOB.Hoie.Kim")).toBe("bob");
+    expect(addressToUsername("hi@HOIE.KIM")).toBe("admin");
+  });
 });
 
 // Mirror of saveIncomingMail's spam-context extraction.
