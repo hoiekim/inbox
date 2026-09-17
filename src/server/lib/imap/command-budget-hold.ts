@@ -3,6 +3,13 @@ import { acquireCommandBudget, releaseCommandBudget } from "./command-budget";
 
 export interface CommandBudgetHold {
   held: boolean;
+  /**
+   * Total ms this command has spent queued for a command-budget slot: the
+   * initial acquire plus every reacquire after a yield. A fetch that takes
+   * its slot instantly and then waits seconds to re-enter a saturated FIFO
+   * has to read as a full budget, not as a slow database.
+   */
+  waitedMs: number;
 }
 
 /**
@@ -14,9 +21,10 @@ export interface CommandBudgetHold {
  */
 const holdStore = new AsyncLocalStorage<CommandBudgetHold>();
 
-export const createCommandBudgetHold = (held: boolean): CommandBudgetHold => ({
-  held,
-});
+export const createCommandBudgetHold = (
+  held: boolean,
+  waitedMs = 0
+): CommandBudgetHold => ({ held, waitedMs });
 
 export const runInCommandBudgetContext = <T>(
   hold: CommandBudgetHold,
@@ -64,7 +72,7 @@ export const yieldCommandBudgetDuring = async (
   try {
     await wait();
   } finally {
-    await acquireCommandBudget();
+    hold.waitedMs += await acquireCommandBudget();
     hold.held = true;
   }
 };

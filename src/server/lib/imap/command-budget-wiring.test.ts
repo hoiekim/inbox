@@ -12,14 +12,27 @@
  * body-bearing `BODY[]` fetch through the production stream path with the
  * body budget saturated, pinning BOTH halves of where the command slot may
  * be given up — released while the fetch is queued behind the body budget,
- * and held again for every chunk of the drain.
+ * and held again for every chunk of the drain. It also pins the opposite
+ * case: an UNCONTENDED inner acquire must not give the slot up at all, or a
+ * per-message fetch path pays a full command-FIFO rotation per message.
+ *
+ * The third block covers what the budget does to a command's diagnostics and
+ * to a command whose peer left while it queued — the two behaviors that are
+ * only reachable once the budget is saturated, which is the state the whole
+ * mechanism exists for.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { EventEmitter } from "events";
 import type { MailType } from "common";
+import { logger } from "server";
 import "../push";
-import { ImapRequestHandler } from "./handler";
+import {
+  ImapRequestHandler,
+  INTERESTING_DURATION_MS,
+  INTERESTING_RESPONSE_BYTES,
+  INTERESTING_RSS_DELTA_MB,
+} from "./handler";
 import {
   acquireCommandBudget,
   releaseCommandBudget,
@@ -305,5 +318,169 @@ describe("command budget yield around a real body-bearing FETCH", () => {
     expect(hold.held).toBe(true);
     expect(commandBudgetInFlight()).toBe(1);
     releaseCommandBudget();
+  });
+
+  it("keeps the command slot through an UNCONTENDED body-budget and stream-mutex acquire", async () => {
+    const CAP = commandBudgetCapacity();
+
+    // The budget is full and one more command is already queued behind it.
+    // Any slot this fetch gives up goes to that waiter, and the reacquire
+    // lands at the back of the FIFO — per message, since the fetch path
+    // acquires once per response part. The inner acquires are uncontended,
+    // so their fast paths must not route through the yield at all.
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+    let intruderWoken = false;
+    const intruder = acquireCommandBudget().then(() => {
+      intruderWoken = true;
+    });
+    await settle();
+    expect(intruderWoken).toBe(false);
+
+    const hold = createCommandBudgetHold(true);
+    const inFlightDuringDrain: number[] = [];
+    let drainedBytes = 0;
+
+    const fetching = runInCommandBudgetContext(hold, async () => {
+      const part = await buildFetchResponsePart(
+        MAIL,
+        { type: "BODY", peek: false, section: { type: "FULL" } },
+        "doc-command-budget-uncontended",
+        "INBOX"
+      );
+      if (!part || part.type !== "stream") {
+        throw new Error("expected a stream part for BODY[]");
+      }
+      for await (const chunk of part.stream) {
+        drainedBytes += chunk.byteLength;
+        inFlightDuringDrain.push(commandBudgetInFlight());
+      }
+    });
+
+    const outcome = await Promise.race([
+      fetching.then(() => "drained" as const),
+      new Promise<"stalled">((r) => setTimeout(() => r("stalled"), 1000)),
+    ]);
+
+    // A yielded slot here is unrecoverable until another command finishes:
+    // the waiter above takes it and the fetch queues behind everything.
+    expect(outcome).toBe("drained");
+    expect(intruderWoken).toBe(false);
+    expect(hold.held).toBe(true);
+    expect(hold.waitedMs).toBe(0);
+    expect(drainedBytes).toBeGreaterThan(0);
+    expect(inFlightDuringDrain.length).toBeGreaterThan(0);
+    expect(inFlightDuringDrain).toEqual(
+      Array(inFlightDuringDrain.length).fill(CAP)
+    );
+
+    for (let i = 0; i < CAP; i++) releaseCommandBudget();
+    await intruder;
+    releaseCommandBudget();
+  });
+});
+
+const completedLogs = (
+  spy: { mock: { calls: unknown[][] } }
+): Array<Record<string, number>> =>
+  spy.mock.calls
+    .filter(([message]) => message === "IMAP command completed")
+    .map(([, context]) => context as Record<string, number>);
+
+describe("command budget under saturation — diagnostics and dead peers", () => {
+  beforeEach(() => {
+    _resetCommandBudget();
+  });
+
+  afterEach(() => {
+    _resetCommandBudget();
+  });
+
+  it("keeps a starved-but-fast command at INFO on the budget wait alone", async () => {
+    const CAP = commandBudgetCapacity();
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+
+    const infoSpy = spyOn(logger, "info");
+    const debugSpy = spyOn(logger, "debug");
+    try {
+      infoSpy.mockClear();
+      debugSpy.mockClear();
+
+      const handler = new ImapRequestHandler();
+      const socket = makeMockSocket();
+      handler.setSocket(socket as never);
+      socket.emit("data", Buffer.from("t1 SELECT INBOX\r\n"));
+
+      // Queued past the interesting-duration floor before a slot frees, so
+      // the wait is the only axis that can make this line interesting.
+      await new Promise((r) => setTimeout(r, INTERESTING_DURATION_MS + 50));
+      releaseCommandBudget();
+
+      await waitFor(
+        () => completedLogs(infoSpy).length + completedLogs(debugSpy).length > 0,
+        2000
+      );
+
+      const completions = completedLogs(infoSpy);
+      expect(completedLogs(debugSpy)).toEqual([]);
+      expect(completions.length).toBe(1);
+
+      const payload = completions[0];
+      expect(payload.waitedForCommandBudgetMs).toBeGreaterThanOrEqual(
+        INTERESTING_DURATION_MS
+      );
+      // Nothing else about this command is interesting — so the INFO routing
+      // above is attributable to the wait and to nothing else. Prod filters
+      // DEBUG out, and this line is the only signal the budget is undersized.
+      expect(payload.durationMs).toBeLessThan(INTERESTING_DURATION_MS);
+      expect(payload.responseBytes).toBeLessThan(INTERESTING_RESPONSE_BYTES);
+      expect(Math.abs(payload.rssDeltaMB)).toBeLessThan(
+        INTERESTING_RSS_DELTA_MB
+      );
+
+      for (let i = 0; i < CAP - 1; i++) releaseCommandBudget();
+    } finally {
+      infoSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
+  });
+
+  it("abandons a queued command whose peer disconnected while it waited", async () => {
+    const CAP = commandBudgetCapacity();
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+
+    const infoSpy = spyOn(logger, "info");
+    const debugSpy = spyOn(logger, "debug");
+    try {
+      infoSpy.mockClear();
+      debugSpy.mockClear();
+
+      const handler = new ImapRequestHandler();
+      const socket = makeMockSocket();
+      handler.setSocket(socket as never);
+      socket.emit("data", Buffer.from("t1 SELECT INBOX\r\n"));
+
+      await nextTick();
+      expect(commandBudgetInFlight()).toBe(CAP);
+
+      // The peer goes away while its command is still in the FIFO — what a
+      // socket timeout or an iOS reconnect produces under exactly the load
+      // this budget exists to bound.
+      socket.destroy();
+
+      releaseCommandBudget();
+      await waitFor(() => commandBudgetInFlight() === CAP - 1, 2000);
+
+      // Slot handed straight back, and the response was never built: the
+      // completion diagnostic is emitted from inside the dispatch it would
+      // have had to enter.
+      expect(commandBudgetInFlight()).toBe(CAP - 1);
+      expect(completedLogs(infoSpy)).toEqual([]);
+      expect(completedLogs(debugSpy)).toEqual([]);
+
+      for (let i = 0; i < CAP - 1; i++) releaseCommandBudget();
+    } finally {
+      infoSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
   });
 });

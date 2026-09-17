@@ -120,4 +120,39 @@ describe("command-budget-hold", () => {
 
     for (let i = 0; i < CAP; i++) releaseCommandBudget();
   });
+
+  it("credits the reacquire's queue time to the hold, not only the initial acquire", async () => {
+    const CAP = commandBudgetCapacity();
+    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+
+    // Took its slot instantly, so the only wait this command can report is
+    // the one it pays getting back in. Reported as zero, a saturated budget
+    // is indistinguishable from a slow database in the completion log.
+    const hold = createCommandBudgetHold(true);
+    expect(hold.waitedMs).toBe(0);
+
+    const gate = defer<void>();
+    const waiting = runInCommandBudgetContext(hold, () =>
+      yieldCommandBudgetDuring(() => gate.promise)
+    );
+
+    await settle();
+    const intruder = acquireCommandBudget();
+    await settle();
+    await intruder;
+
+    gate.resolve();
+    await settle();
+    expect(hold.waitedMs).toBe(0);
+
+    const QUEUED_MS = 60;
+    await new Promise((r) => setTimeout(r, QUEUED_MS));
+    releaseCommandBudget();
+    await waiting;
+
+    expect(hold.held).toBe(true);
+    expect(hold.waitedMs).toBeGreaterThanOrEqual(QUEUED_MS * 0.8);
+
+    for (let i = 0; i < CAP; i++) releaseCommandBudget();
+  });
 });

@@ -89,9 +89,9 @@ const BUDGETED_COMMAND_TYPES: Record<ImapRequest["type"], boolean> = {
 //   deliberately excludes the queue wait (see `handleRequest`'s acquire
 //   comment), so without this a starved command logs as fast and small
 //   and the ONLY signal that the budget is undersized never reaches INFO.
-const INTERESTING_RSS_DELTA_MB = 1;
-const INTERESTING_DURATION_MS = 100;
-const INTERESTING_RESPONSE_BYTES = 4096;
+export const INTERESTING_RSS_DELTA_MB = 1;
+export const INTERESTING_DURATION_MS = 100;
+export const INTERESTING_RESPONSE_BYTES = 4096;
 
 // A trailing `{N}` / `{N+}` is a literal declaration (RFC 3501 §4.3, RFC 7888).
 // It has to stand as its own argument, so it is preceded by SP or begins the
@@ -904,12 +904,13 @@ export class ImapRequestHandler {
     // Acquired BEFORE the per-command diagnostic timer starts, so a
     // command queued behind the budget doesn't attribute the OTHER
     // in-flight commands' RSS growth (and its own queueing latency) to
-    // itself — `waitedForCommandBudgetMs` below carries that separately.
+    // itself — the hold's own `waitedMs` carries that separately, and
+    // keeps accumulating across any reacquire a deeper yield performs.
     const budgeted = BUDGETED_COMMAND_TYPES[request.type];
-    const waitedForCommandBudgetMs = budgeted
-      ? Math.round(await acquireCommandBudget())
-      : 0;
-    const hold = createCommandBudgetHold(budgeted);
+    const hold = createCommandBudgetHold(
+      budgeted,
+      budgeted ? await acquireCommandBudget() : 0
+    );
 
     try {
     // Per-command diagnostic: RSS delta + bytes emitted to the client + wall
@@ -928,6 +929,15 @@ export class ImapRequestHandler {
     // concurrent commands (on DIFFERENT sessions) both see the same
     // rssDelta. `remote` in the log lets triage disambiguate.
     const session = this.session;
+
+    // Re-checked after the budget wait: `drainCommands` tests liveness
+    // before a command is dispatched, and a saturated budget is the longest
+    // window a peer has to disconnect in. Building a response for a socket
+    // that refuses every write spends a slot other sessions can still read.
+    if (budgeted && (session.socket.destroyed || !session.socket.writable)) {
+      return;
+    }
+
     const startedAt = performance.now();
     const memBefore = process.memoryUsage();
     const rssBefore = memBefore.rss;
@@ -1117,6 +1127,7 @@ export class ImapRequestHandler {
       const responseBytes = session.bytesWritten - bytesBefore;
       const durationMs = Math.round(performance.now() - startedAt);
       const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
+      const waitedForCommandBudgetMs = Math.round(hold.waitedMs);
       const isInteresting =
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||
