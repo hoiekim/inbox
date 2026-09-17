@@ -1362,6 +1362,7 @@ describe("mails router multipart wiring", () => {
 
   let server: import("http").Server;
   let baseUrl: string;
+  let port: number;
   let sessionUser: { id: string; username: string } | undefined;
 
   beforeAll(async () => {
@@ -1378,7 +1379,7 @@ describe("mails router multipart wiring", () => {
     server = await new Promise((resolve) => {
       const started = app.listen(0, () => resolve(started));
     });
-    const { port } = server.address() as { port: number };
+    port = (server.address() as { port: number }).port;
     baseUrl = `http://127.0.0.1:${port}`;
   });
 
@@ -1409,42 +1410,43 @@ describe("mails router multipart wiring", () => {
   // The reclaim hook makes "zero files afterwards" true whether the parser sits
   // in front of the auth gate or behind it. Holding the body open is what
   // separates the two: behind the gate, the 401 lands before a byte is parsed.
+  //
+  // Driven on a raw socket rather than fetch: the server answers 401 without
+  // draining the request, so the connection is unusable afterwards and a
+  // pooled fetch client hands the poisoned socket to the next test.
   it("does not write a part while the request is still unauthenticated", async () => {
-    const opening =
+    const net = await import("net");
+    const opening = Buffer.from(
       `--${BOUNDARY}\r\n` +
-      `Content-Disposition: form-data; name="attachments"; filename="held.txt"\r\n` +
-      `Content-Type: text/plain\r\n\r\n${"x".repeat(4096)}`;
+        `Content-Disposition: form-data; name="attachments"; filename="held.txt"\r\n` +
+        `Content-Type: text/plain\r\n\r\n${"x".repeat(4096)}`
+    );
+    const tail = Buffer.from(`\r\n--${BOUNDARY}--\r\n`);
 
-    let releaseTail = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseTail = resolve;
-    });
-    const body = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        controller.enqueue(new TextEncoder().encode(opening));
-        await held;
-        try {
-          controller.enqueue(new TextEncoder().encode(`\r\n--${BOUNDARY}--\r\n`));
-          controller.close();
-        } catch {
-          // The server may already have closed the socket after its 401.
-        }
-      }
-    });
+    const socket = net.connect(port, "127.0.0.1");
+    const raw: Buffer[] = [];
+    socket.on("data", (chunk) => raw.push(chunk));
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
 
-    const response = fetch(`${baseUrl}/api/mails/send`, {
-      method: "POST",
-      headers: { "Content-Type": `multipart/form-data; boundary=${BOUNDARY}` },
-      body,
-      duplex: "half"
-    } as RequestInit).catch(() => undefined);
+    socket.write(
+      `POST /api/mails/send HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        `Connection: close\r\n` +
+        `Content-Type: multipart/form-data; boundary=${BOUNDARY}\r\n` +
+        `Content-Length: ${opening.length + tail.length}\r\n\r\n`
+    );
+    socket.write(opening);
 
     await new Promise((resolve) => setTimeout(resolve, 300));
     const midFlight = await countOwnTempFiles();
-    releaseTail();
-    const res = await response;
 
-    expect([midFlight, res?.status]).toEqual([0, 401]);
+    socket.write(tail);
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 3000))]);
+    socket.destroy();
+    const statusLine = Buffer.concat(raw).toString("utf8").split("\r\n")[0];
+
+    expect([midFlight, statusLine]).toEqual([0, "HTTP/1.1 401 Unauthorized"]);
     expect(await settledTempFileCount()).toBe(0);
     expect(mockSendMail).not.toHaveBeenCalled();
   });
