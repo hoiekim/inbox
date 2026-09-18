@@ -85,10 +85,14 @@ const BUDGETED_COMMAND_TYPES: Record<ImapRequest["type"], boolean> = {
 //   of size — a slow FLAGS query is diagnosable evidence for a DB /
 //   pool issue.
 // - A budgeted command that queued >= 100ms behind the command budget
-//   surfaces too, even if it then runs in a couple ms — `durationMs`
-//   deliberately excludes the queue wait (see `handleRequest`'s acquire
-//   comment), so without this a starved command logs as fast and small
-//   and the ONLY signal that the budget is undersized never reaches INFO.
+//   surfaces too, even if it then runs in a couple ms. The field sums two
+//   waits: the pre-dispatch acquire, which sits OUTSIDE `durationMs` (see
+//   `handleRequest`'s acquire comment), and any in-dispatch reacquire a
+//   deeper yield performs, which sits INSIDE it — so the two fields are not
+//   disjoint and must not be added together. Only the first half needs this
+//   disjunct: a command starved on a reacquire is already interesting on
+//   `durationMs` alone, whereas one starved before dispatch logs as fast and
+//   small, and the ONLY signal that the budget is undersized never reaches INFO.
 export const INTERESTING_RSS_DELTA_MB = 1;
 export const INTERESTING_DURATION_MS = 100;
 export const INTERESTING_RESPONSE_BYTES = 4096;
@@ -934,7 +938,22 @@ export class ImapRequestHandler {
     // before a command is dispatched, and a saturated budget is the longest
     // window a peer has to disconnect in. Building a response for a socket
     // that refuses every write spends a slot other sessions can still read.
+    //
+    // Logged rather than dropped silently: these are by construction the
+    // longest waits — long enough for the peer to give up — and the
+    // completion diagnostic below never runs for them, so silence would
+    // censor `waitedForCommandBudgetMs` right where it is read, and the
+    // budget would look better sized the more it is saturated. The rate of
+    // this line against that one is what says whether the capacity is right.
     if (budgeted && (session.socket.destroyed || !session.socket.writable)) {
+      const { socket } = session;
+      logger.info("IMAP command dropped", {
+        component: "imap",
+        tag,
+        cmd: describeImapCommand(request),
+        remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`,
+        waitedForCommandBudgetMs: Math.round(hold.waitedMs),
+      });
       return;
     }
 

@@ -73,9 +73,14 @@ function makeMockSocket() {
   socket.destroy = () => {
     socket.destroyed = true;
   };
+  // Node's `end()` half-closes the WRITE side: `writable` clears immediately
+  // and `destroyed` stays false until the flush completes. `closeSocket` only
+  // forces `destroy()` after `CLOSE_FLUSH_TIMEOUT_MS`, so the server-initiated
+  // teardown this codebase actually performs leaves a socket in exactly that
+  // half-closed state for up to two seconds — the likeliest window for a
+  // queued command to be woken into.
   socket.end = () => {
-    socket.destroyed = true;
-    socket.emit("close");
+    socket.writable = false;
   };
   return socket;
 }
@@ -386,6 +391,13 @@ const completedLogs = (
     .filter(([message]) => message === "IMAP command completed")
     .map(([, context]) => context as Record<string, number>);
 
+const droppedLogs = (
+  spy: { mock: { calls: unknown[][] } }
+): Array<Record<string, number>> =>
+  spy.mock.calls
+    .filter(([message]) => message === "IMAP command dropped")
+    .map(([, context]) => context as Record<string, number>);
+
 describe("command budget under saturation — diagnostics and dead peers", () => {
   beforeEach(() => {
     _resetCommandBudget();
@@ -444,43 +456,84 @@ describe("command budget under saturation — diagnostics and dead peers", () =>
     }
   });
 
-  it("abandons a queued command whose peer disconnected while it waited", async () => {
-    const CAP = commandBudgetCapacity();
-    for (let i = 0; i < CAP; i++) await acquireCommandBudget();
+  // Both halves of the post-acquire liveness predicate, driven separately:
+  // `destroyed` is what an abrupt peer disappearance produces, `writable`
+  // is what this codebase's OWN teardown produces, and a test that only
+  // reaches the first leaves the second free to be deleted.
+  const abandonsQueuedCommand = (
+    name: string,
+    killPeer: (socket: ReturnType<typeof makeMockSocket>) => void,
+    expectedPeerState: { destroyed: boolean; writable: boolean }
+  ) =>
+    it(name, async () => {
+      const CAP = commandBudgetCapacity();
+      for (let i = 0; i < CAP; i++) await acquireCommandBudget();
 
-    const infoSpy = spyOn(logger, "info");
-    const debugSpy = spyOn(logger, "debug");
-    try {
-      infoSpy.mockClear();
-      debugSpy.mockClear();
+      const infoSpy = spyOn(logger, "info");
+      const debugSpy = spyOn(logger, "debug");
+      try {
+        infoSpy.mockClear();
+        debugSpy.mockClear();
 
-      const handler = new ImapRequestHandler();
-      const socket = makeMockSocket();
-      handler.setSocket(socket as never);
-      socket.emit("data", Buffer.from("t1 SELECT INBOX\r\n"));
+        const handler = new ImapRequestHandler();
+        const socket = makeMockSocket();
+        handler.setSocket(socket as never);
+        socket.emit("data", Buffer.from("t1 SELECT INBOX\r\n"));
 
-      await nextTick();
-      expect(commandBudgetInFlight()).toBe(CAP);
+        await nextTick();
+        expect(commandBudgetInFlight()).toBe(CAP);
 
-      // The peer goes away while its command is still in the FIFO — what a
-      // socket timeout or an iOS reconnect produces under exactly the load
-      // this budget exists to bound.
-      socket.destroy();
+        killPeer(socket);
+        // The predicate half this case exists to drive, asserted rather than
+        // assumed. Without it a teardown that stops producing this state
+        // degrades the case into a duplicate of its sibling — still green,
+        // while the other half of the guard goes unpinned again.
+        expect(socket.destroyed).toBe(expectedPeerState.destroyed);
+        expect(socket.writable).toBe(expectedPeerState.writable);
 
-      releaseCommandBudget();
-      await waitFor(() => commandBudgetInFlight() === CAP - 1, 2000);
+        releaseCommandBudget();
+        await waitFor(() => commandBudgetInFlight() === CAP - 1, 2000);
 
-      // Slot handed straight back, and the response was never built: the
-      // completion diagnostic is emitted from inside the dispatch it would
-      // have had to enter.
-      expect(commandBudgetInFlight()).toBe(CAP - 1);
-      expect(completedLogs(infoSpy)).toEqual([]);
-      expect(completedLogs(debugSpy)).toEqual([]);
+        // Slot handed straight back, and the response was never built: the
+        // completion diagnostic is emitted from inside the dispatch it would
+        // have had to enter.
+        expect(commandBudgetInFlight()).toBe(CAP - 1);
+        expect(completedLogs(infoSpy)).toEqual([]);
+        expect(completedLogs(debugSpy)).toEqual([]);
 
-      for (let i = 0; i < CAP - 1; i++) releaseCommandBudget();
-    } finally {
-      infoSpy.mockRestore();
-      debugSpy.mockRestore();
-    }
-  });
+        // The drop is accounted for rather than silent — otherwise the
+        // longest waits leave no trace anywhere, and a saturated budget
+        // reads as a healthy one.
+        const drops = droppedLogs(infoSpy);
+        expect(drops.length).toBe(1);
+        expect(drops[0].cmd).toBe("SELECT INBOX");
+        expect(drops[0].tag).toBe("t1");
+        expect(drops[0].waitedForCommandBudgetMs).toBeGreaterThanOrEqual(0);
+
+        for (let i = 0; i < CAP - 1; i++) releaseCommandBudget();
+      } finally {
+        infoSpy.mockRestore();
+        debugSpy.mockRestore();
+      }
+    });
+
+  // An abrupt disappearance — an over-buffered peer torn down past
+  // `CLOSE_FLUSH_TIMEOUT_MS`, or a connection reset.
+  abandonsQueuedCommand(
+    "abandons a queued command whose peer disconnected while it waited",
+    (socket) => socket.destroy(),
+    { destroyed: true, writable: true }
+  );
+
+  // The server-initiated close: `SOCKET_TIMEOUT_MS` fires, `* BYE Timeout` is
+  // written and `session.close()` runs `closeSocket`, which calls `end()` and
+  // only destroys after a 2s flush grace. For those two seconds the socket is
+  // half-closed — unwritable but not destroyed — which is the state a queued
+  // command is most likely to be woken into under exactly the load this
+  // budget exists to bound.
+  abandonsQueuedCommand(
+    "abandons a queued command whose peer was half-closed by a server-side timeout",
+    (socket) => socket.end(),
+    { destroyed: false, writable: false }
+  );
 });
