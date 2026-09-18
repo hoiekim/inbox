@@ -3,10 +3,10 @@ import { describe, it, expect, afterAll, beforeAll } from "bun:test";
 import type { IncomingMail, IncomingMailAddress } from "common";
 import {
   validateIncomingMail,
-  addressToUsername,
   convertMailAddress,
   convertAddressValue,
 } from "./receive";
+import { addressToUsername } from "../util";
 
 const makeMail = (envelopeTo: { address: string }[]): IncomingMail =>
   ({ envelopeTo } as unknown as IncomingMail);
@@ -81,6 +81,11 @@ describe("addressToUsername", () => {
 
   it("returns 'admin' when the address is at the base domain", () => {
     expect(addressToUsername("hi@hoie.kim")).toBe("admin");
+  });
+
+  it("ignores the case the address spells the domain in", () => {
+    expect(addressToUsername("anything@BOB.Hoie.Kim")).toBe("bob");
+    expect(addressToUsername("hi@HOIE.KIM")).toBe("admin");
   });
 });
 

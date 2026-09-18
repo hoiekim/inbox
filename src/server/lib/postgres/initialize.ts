@@ -1,6 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
 import { pool } from "./client";
-import { writeUser, searchUser } from "./repositories";
+import {
+  writeUser,
+  searchUser,
+  deleteSessionsAuthenticatedAs,
+} from "./repositories";
 import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
 import { runBootMaintenance, MaintenanceWork, Statement } from "./maintenance";
 import { sendAlarm } from "../alarm";
@@ -12,6 +17,7 @@ import {
 } from "./migration";
 import { searchVectorDdl, searchVectorReindexSql } from "./search-vector";
 import { logger } from "../logger";
+import { ADMIN_RO_USERNAME } from "../read-only";
 import { withTimeout } from "../util";
 import {
   Table,
@@ -394,4 +400,92 @@ export const initializeAdminUser = async (): Promise<void> => {
         "  Set EMAIL_DOMAIN=yourdomain.com in your .env file to see incoming emails."
     );
   }
+};
+
+/**
+ * Reconciles the read-only administrative user (`ADMIN_RO_USERNAME`) with
+ * `ADMIN_RO_PASSWORD` on every boot, in both directions:
+ *
+ * - set — seeds or re-seeds the account. Idempotent: reuses the existing row if
+ *   the username is already present, so a redeploy keeps the same user_id.
+ *   Authenticating with these credentials produces a session whose effective
+ *   identity is admin and whose `isReadOnly` flag refuses every mutating
+ *   surface. Changing the value to a new one also deletes the sessions the
+ *   previous password issued, so rotating a leaked credential withdraws it
+ *   everywhere; a redeploy with an unchanged value logs nobody out.
+ * - unset — revokes any account a previous boot seeded and deletes the sessions
+ *   it already issued, so removing the env var and redeploying is a complete
+ *   revocation rather than a no-op that leaves a working credential behind.
+ */
+export const initializeAdminReadOnlyUser = async (): Promise<void> => {
+  const { ADMIN_RO_PASSWORD } = process.env;
+
+  if (!ADMIN_RO_PASSWORD) {
+    await revokeAdminReadOnlyUser();
+    return;
+  }
+
+  const existing = await searchUser({ username: ADMIN_RO_USERNAME });
+  // Compared before the write, which replaces the hash it is compared against.
+  const passwordRotated =
+    !!existing && !(await bcrypt.compare(ADMIN_RO_PASSWORD, existing.password));
+
+  const result = await writeUser({
+    user_id: existing?.user_id,
+    username: ADMIN_RO_USERNAME,
+    password: ADMIN_RO_PASSWORD,
+    // Same domain rationale as admin (see initializeAdminUser above) — a
+    // consistent `@EMAIL_DOMAIN` local part keeps the account lookup happy
+    // across dev / sandbox / prod.
+    email: `${ADMIN_RO_USERNAME}@${process.env.EMAIL_DOMAIN || "localhost"}`,
+  });
+  if (!result?._id) throw new Error("Failed to create read-only admin user");
+
+  if (passwordRotated) {
+    const deletedSessions = await deleteSessionsAuthenticatedAs(ADMIN_RO_USERNAME);
+    logger.info(
+      "ADMIN_RO_PASSWORD changed — deleted the sessions the previous password issued.",
+      { deletedSessions }
+    );
+  }
+
+  logger.info("Successfully initialized read-only admin user.");
+};
+
+/**
+ * Revokes a previously seeded read-only admin account. The row is kept so a
+ * later re-enable reuses its user_id; what is destroyed is the credential —
+ * the stored password is replaced with a secret that exists nowhere, which no
+ * login can present. Retaining the column as a valid hash (rather than
+ * clearing it) keeps the three authentication surfaces on their normal
+ * wrong-password path, since `bcrypt.compare` rejects a null hash outright.
+ *
+ * Refusing new logins is only half of it: sessions outlive the password they
+ * were minted from, and the cookie is rolling, so the sessions the credential
+ * already issued are deleted in the same step.
+ */
+const revokeAdminReadOnlyUser = async (): Promise<void> => {
+  const existing = await searchUser({ username: ADMIN_RO_USERNAME });
+  if (!existing) {
+    logger.debug(
+      "[CONFIG] ADMIN_RO_PASSWORD is not set — skipping read-only admin user seed. " +
+        "Set it to enable the read-only role."
+    );
+    return;
+  }
+
+  const revoked = await writeUser({
+    user_id: existing.user_id,
+    username: ADMIN_RO_USERNAME,
+    password: randomBytes(32).toString("hex"),
+    email: existing.email ?? undefined,
+  });
+  if (!revoked?._id) throw new Error("Failed to revoke read-only admin user");
+
+  const deletedSessions = await deleteSessionsAuthenticatedAs(ADMIN_RO_USERNAME);
+
+  logger.info(
+    "ADMIN_RO_PASSWORD is not set — revoked the previously seeded read-only admin user.",
+    { deletedSessions }
+  );
 };

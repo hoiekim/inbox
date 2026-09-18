@@ -6,7 +6,9 @@ import {
   getUser,
   isValidEmail,
   sendMail,
-  startTimer
+  startTimer,
+  isReservedUsername,
+  deliversToAdminMailbox
 } from "server";
 import { Route } from "../route";
 import { getClientIp, tokenLimiter } from "../../rate-limit";
@@ -39,6 +41,26 @@ export const postTokenRoute = new Route<TokenPostResponse>(
       };
     }
 
+    // Refuse the boot-seeded accounts before createToken runs. This route is
+    // unauthenticated, and createToken's existing-user branch writes
+    // `{token, expiry}` onto the matched row AND schedules a hard-DELETE via
+    // startTimer — so without the gate an outside caller mints a live reset
+    // token for admin from nothing but the address.
+    // Same-shape success response as a normal send so no probe signal.
+    const existing = await getUser({ email });
+    if (isReservedUsername(existing?.username)) {
+      tokenLimiter.recordFailure(ip);
+      return { status: "success" };
+    }
+
+    // Same for an address delivered into admin's own mailbox: the sent link
+    // comes back through the receive webhook under admin's user_id, which the
+    // read-only role reads by design.
+    if (deliversToAdminMailbox(email)) {
+      tokenLimiter.recordFailure(ip);
+      return { status: "success" };
+    }
+
     const [adminUser, createdUser] = await Promise.all([
       getUser({ username: "admin" }),
       createToken(email)
@@ -55,7 +77,14 @@ export const postTokenRoute = new Route<TokenPostResponse>(
       username
     );
 
-    await sendMail(signedAdminUser, new MailDataToSend(authenticationEamil));
+    // No Sent record: the body carries a live signup token, and the sending
+    // identity is admin — whose mailbox the read-only role reads by design.
+    await sendMail(
+      signedAdminUser,
+      new MailDataToSend(authenticationEamil),
+      undefined,
+      { persistToSentMailbox: false }
+    );
 
     startTimer(id);
 

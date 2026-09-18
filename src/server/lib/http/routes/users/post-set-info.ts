@@ -1,5 +1,5 @@
 import { MaskedUser } from "common";
-import { setUserInfo } from "server";
+import { getUser, setUserInfo, isReservedUsername } from "server";
 import { Route } from "../route";
 
 export type SetInfoPostResponse = MaskedUser;
@@ -27,6 +27,16 @@ export const postSetInfoRoute = new Route<SetInfoPostResponse>(
     }
     if (token !== undefined && typeof token !== "string") {
       return { status: "failed", message: "token must be a string." };
+    }
+
+    // Refuse the boot-seeded accounts BEFORE calling setUserInfo. setUserInfo
+    // unconditionally runs `usersTable.update(id, {password, ...})` for
+    // pre-existing users, so a post-call check would leave the row already
+    // mutated (bcrypt hash of an attacker-chosen password) even when session
+    // issuance gets refused.
+    const existing = await getUser({ email });
+    if (isReservedUsername(existing?.username)) {
+      return { status: "failed", message: "Invalid credentials." };
     }
 
     const user = await setUserInfo({ email, username, password, token: token as string | undefined });

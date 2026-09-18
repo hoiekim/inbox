@@ -29,7 +29,6 @@ export {
   saveMail,
   convertMail,
   validateIncomingMail,
-  addressToUsername,
   saveBuffer,
   getAccounts,
   searchAccounts,
@@ -54,6 +53,9 @@ export { version } from "./postgres/initialize";
 
 // Users module
 export * from "./users";
+
+// Read-only role attribution
+export * from "./read-only";
 
 // Session store
 export { PostgresSessionStore } from "./session";

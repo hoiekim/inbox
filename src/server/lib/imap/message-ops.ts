@@ -65,7 +65,11 @@ export async function fetchMessagesTyped(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
   writeStream: WriteStream,
-  condstoreEnabled: boolean = false
+  condstoreEnabled: boolean = false,
+  // Suppresses the auto-\Seen side-effect on FETCH BODY[] / RFC822 /
+  // RFC822.TEXT for a read-only session, so reading a message never changes
+  // the flag another client is looking at.
+  suppressReadMark: boolean = false
 ): Promise<void> {
   const isFlagsOnly = fetchRequest.dataItems.every(
     (item) =>
@@ -140,7 +144,8 @@ export async function fetchMessagesTyped(
       write,
       writeChunked,
       writeStream,
-      emitCondstore
+      emitCondstore,
+      suppressReadMark
     );
     write(`${tag} OK FETCH completed\r\n`);
   } catch (error) {
@@ -223,7 +228,8 @@ async function _processFetchMessages(
   write: (data: string) => boolean | undefined,
   writeChunked: WriteChunked,
   writeStream: WriteStream,
-  condstoreEnabled: boolean
+  condstoreEnabled: boolean,
+  suppressReadMark: boolean
 ): Promise<void> {
   const sourceIsDomainScoped = isDomainScoped(selectedMailbox);
   const isUidFetch =
@@ -254,7 +260,7 @@ async function _processFetchMessages(
       );
       await writeFetchResponse(write, writeChunked, writeStream, seqNum, response);
 
-      if (shouldMarkAsRead(fetchRequest.dataItems)) {
+      if (!suppressReadMark && shouldMarkAsRead(fetchRequest.dataItems)) {
         await markRead(store.getUser().id, id);
       }
     } catch (error) {
