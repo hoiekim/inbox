@@ -1,5 +1,4 @@
 import express, { json } from "express";
-import fileupload from "express-fileupload";
 import session from "express-session";
 import path from "path";
 
@@ -24,14 +23,6 @@ export const initializeHttp = async () => {
   });
 
   app.use(json({ limit: "10mb" }));
-  app.use(
-    fileupload({
-      limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max per file
-      abortOnLimit: true,
-      useTempFiles: true,
-      tempFileDir: "/tmp/",
-    })
-  );
   app.use(
     session({
       secret: process.env.SECRET || "secret",

@@ -5,6 +5,7 @@ import {
   MailSendingError,
   refuseReadOnly,
 } from "server";
+import { MAX_ATTACHMENTS_PER_MAIL, toUploadList } from "../../upload";
 import { Route } from "../route";
 
 export type SendMailPostResponse =
@@ -24,6 +25,13 @@ export const postSendMailRoute = new Route<SendMailPostResponse>(
 
     const body: SendMailPostBody = req.body;
     const attachments = req.files?.attachments;
+
+    if (toUploadList(attachments).length > MAX_ATTACHMENTS_PER_MAIL) {
+      return {
+        status: "failed",
+        message: `A mail may carry at most ${MAX_ATTACHMENTS_PER_MAIL} attachments`
+      };
+    }
 
     try {
       await sendMail(user, new MailDataToSend({ ...body }), attachments);
