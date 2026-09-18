@@ -9,7 +9,11 @@ import {
   AllowlistDeleteResponse
 } from "server";
 import { call, onKeyboardActivate, queryClient, useIsOnline } from "client";
-import { isValidAllowlistPattern } from "./pattern";
+import {
+  ALLOWLIST_PATTERN_MAX_BYTES,
+  exceedsAllowlistPatternBytes,
+  isValidAllowlistPattern
+} from "./pattern";
 
 import "./index.scss";
 
@@ -95,6 +99,10 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
     // (onInputKeyDown) routes here too and would otherwise fire the POST offline.
     if (!isOnline) return;
     const pattern = input.trim();
+    if (exceedsAllowlistPatternBytes(pattern)) {
+      setError(`Pattern must be ${ALLOWLIST_PATTERN_MAX_BYTES} bytes or fewer.`);
+      return;
+    }
     if (!isValidAllowlistPattern(pattern)) {
       setError(
         "Enter an email (user@example.com) or domain wildcard (*@example.com)."
@@ -200,6 +208,7 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
             autoFocus
             type="text"
             value={input}
+            maxLength={ALLOWLIST_PATTERN_MAX_BYTES}
             placeholder="user@example.com or *@example.com"
             aria-label="Allowlist pattern"
             onChange={(e) => setInput(e.target.value)}

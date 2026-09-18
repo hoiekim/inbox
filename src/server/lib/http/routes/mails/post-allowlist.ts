@@ -1,4 +1,9 @@
-import { addAllowlistEntry, refuseReadOnly } from "server";
+import {
+  ALLOWLIST_COUNT_MAX,
+  ALLOWLIST_PATTERN_MAX_BYTES,
+  addAllowlistEntry,
+  refuseReadOnly,
+} from "server";
 import { Route } from "../route";
 import { AllowlistEntryResponse } from "./get-allowlist";
 
@@ -39,12 +44,25 @@ export const postSpamAllowlistRoute = new Route<AllowlistAddResponse>(
       };
     }
 
-    const entry = await addAllowlistEntry(user.id, pattern);
-    
-    if (!entry) {
+    const result = await addAllowlistEntry(user.id, pattern);
+
+    if (result.status === "exists") {
       return { status: "failed", message: "Entry already exists" };
     }
+    if (result.status === "too_long") {
+      return {
+        status: "failed",
+        message: `Pattern must be ${ALLOWLIST_PATTERN_MAX_BYTES} bytes or fewer`
+      };
+    }
+    if (result.status === "at_limit") {
+      return {
+        status: "failed",
+        message: `Allowlist limit of ${ALLOWLIST_COUNT_MAX} entries reached`
+      };
+    }
 
+    const { entry } = result;
     return {
       status: "success",
       body: {

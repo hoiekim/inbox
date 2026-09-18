@@ -11,6 +11,10 @@ import {
   refuseReadOnly,
   remapReadOnlySession,
 } from "../../../read-only";
+import {
+  ALLOWLIST_COUNT_MAX,
+  ALLOWLIST_PATTERN_MAX_BYTES,
+} from "../../../postgres/models/spam_allowlist";
 import { SignedUser } from "common";
 
 // ── Shared mocks for "server" barrel ─────────────────────────────────────────
@@ -67,6 +71,10 @@ mock.module("server", () => ({
   getDomain: mockGetDomain,
   getAllowlistForUser: mockGetAllowlistForUser,
   addAllowlistEntry: mockAddAllowlistEntry,
+  // Real ceilings, for the same reason as the read-only constants below — the
+  // route interpolates them into the refusal messages this file asserts on.
+  ALLOWLIST_COUNT_MAX,
+  ALLOWLIST_PATTERN_MAX_BYTES,
   removeAllowlistEntry: mockRemoveAllowlistEntry,
   sendMail: mockSendMail,
   markSpam: mockMarkSpam,
@@ -760,21 +768,55 @@ describe("postSpamAllowlistRoute", () => {
     expect((result as ApiResponse<unknown>).message).toMatch(/email address/i);
   });
 
-  it("returns failed when entry already exists (null returned)", async () => {
+  it("returns failed when entry already exists", async () => {
     const { postSpamAllowlistRoute } = await import("./post-allowlist");
-    mockAddAllowlistEntry.mockResolvedValueOnce(null);
+    mockAddAllowlistEntry.mockResolvedValueOnce({ status: "exists" });
     const req = makeReq({ body: { pattern: "*@spam.com" } });
     const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/already exists/i);
   });
 
+  it("refuses an over-long pattern with a message naming the byte ceiling", async () => {
+    const { postSpamAllowlistRoute } = await import("./post-allowlist");
+    mockAddAllowlistEntry.mockResolvedValueOnce({ status: "too_long" });
+    const localPart = "a".repeat(ALLOWLIST_PATTERN_MAX_BYTES);
+    const req = makeReq({ body: { pattern: `${localPart}@spam.com` } });
+    const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toBe(
+      `Pattern must be ${ALLOWLIST_PATTERN_MAX_BYTES} bytes or fewer`
+    );
+  });
+
+  it("refuses at the row ceiling with a message naming the limit", async () => {
+    const { postSpamAllowlistRoute } = await import("./post-allowlist");
+    mockAddAllowlistEntry.mockResolvedValueOnce({ status: "at_limit" });
+    const req = makeReq({ body: { pattern: "bad@spam.com" } });
+    const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("failed");
+    expect((result as ApiResponse<unknown>).message).toBe(
+      `Allowlist limit of ${ALLOWLIST_COUNT_MAX} entries reached`
+    );
+  });
+
+  it("distinguishes the two refusals — a duplicate is not reported as a limit", async () => {
+    const { postSpamAllowlistRoute } = await import("./post-allowlist");
+    mockAddAllowlistEntry.mockResolvedValueOnce({ status: "exists" });
+    const req = makeReq({ body: { pattern: "bad@spam.com" } });
+    const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).message).not.toMatch(/limit/i);
+  });
+
   it("returns success with new entry on exact email pattern", async () => {
     const { postSpamAllowlistRoute } = await import("./post-allowlist");
     mockAddAllowlistEntry.mockResolvedValueOnce({
-      allowlist_id: "a2",
-      pattern: "bad@spam.com",
-      created_at: "2026-04-01",
+      status: "created",
+      entry: {
+        allowlist_id: "a2",
+        pattern: "bad@spam.com",
+        created_at: "2026-04-01",
+      },
     });
     const req = makeReq({ body: { pattern: "bad@spam.com" } });
     const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);
@@ -785,9 +827,12 @@ describe("postSpamAllowlistRoute", () => {
   it("returns success with domain wildcard pattern", async () => {
     const { postSpamAllowlistRoute } = await import("./post-allowlist");
     mockAddAllowlistEntry.mockResolvedValueOnce({
-      allowlist_id: "a3",
-      pattern: "*@domain.com",
-      created_at: "2026-04-01",
+      status: "created",
+      entry: {
+        allowlist_id: "a3",
+        pattern: "*@domain.com",
+        created_at: "2026-04-01",
+      },
     });
     const req = makeReq({ body: { pattern: "*@domain.com" } });
     const result = await postSpamAllowlistRoute.callback(req, makeRes(), noopStream);

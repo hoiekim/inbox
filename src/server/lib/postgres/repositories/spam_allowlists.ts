@@ -6,7 +6,12 @@
  */
 
 import { logger } from "../../logger";
-import { SpamAllowlistModel, SpamAllowlistJSON, spamAllowlistTable } from "../models/spam_allowlist";
+import {
+  AddAllowlistEntryResult,
+  SpamAllowlistModel,
+  SpamAllowlistJSON,
+  spamAllowlistTable,
+} from "../models/spam_allowlist";
 
 /**
  * Get all allowlist entries for a user.
@@ -25,12 +30,12 @@ export async function isAllowlisted(userId: string, emailAddress: string): Promi
 
 /**
  * Add an allowlist entry for a user.
- * Returns null if the entry already exists.
+ * Refuses a duplicate, an oversized pattern, or a user at the row ceiling.
  */
 export async function addAllowlistEntry(
   userId: string,
   pattern: string
-): Promise<SpamAllowlistModel | null> {
+): Promise<AddAllowlistEntryResult> {
   try {
     return await spamAllowlistTable.addEntry(userId, pattern);
   } catch (error) {
