@@ -14,8 +14,35 @@ export const ALLOWLIST_ID = "allowlist_id";
 export const PATTERN = "pattern";
 export const CREATED_AT = "created_at";
 
+/**
+ * `pattern` is `TEXT`, so the column imposes no ceiling of its own. The cap is
+ * on bytes rather than characters because a non-ASCII character occupies up to
+ * four of them, and bytes are what the per-received-mail lookup pays. 320 is
+ * the longest address RFC 5321 permits (64-byte local part, `@`, 255-byte
+ * domain), so no legal address is refused.
+ */
+export const ALLOWLIST_PATTERN_MAX_BYTES = 320;
+
+/**
+ * Ceiling on allowlist entries per user. The allowlist lookup runs on every
+ * received mail and no index covers `LOWER(pattern)`, so every row for that
+ * user is scanned — the row count is what bounds that scan.
+ */
+export const ALLOWLIST_COUNT_MAX = 1000;
+
 // Type guards
 const isString = (v: unknown): v is string => typeof v === "string";
+
+/**
+ * The outcome of an add attempt. A refusal names its own reason so the route
+ * can answer with the message the user acts on — `exists` is already-done to
+ * someone re-adding a trusted sender, while `at_limit` and `too_long` are not.
+ */
+export type AddAllowlistEntryResult =
+  | { status: "created"; entry: SpamAllowlistModel }
+  | { status: "exists" }
+  | { status: "at_limit" }
+  | { status: "too_long" };
 
 export interface SpamAllowlistJSON {
   allowlist_id: string;
@@ -94,18 +121,43 @@ class SpamAllowlistTable extends Table<SpamAllowlistJSON, SpamAllowlistSchema, S
   }
 
   /**
-   * Inserts a new allowlist entry; returns null if the entry already exists.
+   * Inserts a new allowlist entry, refusing a pattern over
+   * {@link ALLOWLIST_PATTERN_MAX_BYTES} and a user already at
+   * {@link ALLOWLIST_COUNT_MAX} rows.
+   *
+   * Both ceilings live here because this is the only write path to the table.
+   * The count is a subquery of the INSERT rather than a preceding SELECT so
+   * the row being counted and the row being written are decided together, and
+   * a zero-row result is disambiguated by probing for the pattern first — an
+   * entry that already exists reports as existing even at the ceiling.
    */
-  async addEntry(userId: string, pattern: string): Promise<SpamAllowlistModel | null> {
+  async addEntry(userId: string, pattern: string): Promise<AddAllowlistEntryResult> {
     const normalizedPattern = pattern.toLowerCase();
+    if (Buffer.byteLength(normalizedPattern, "utf8") > ALLOWLIST_PATTERN_MAX_BYTES) {
+      return { status: "too_long" };
+    }
+
     const sql = `
       INSERT INTO ${this.name} (${USER_ID}, ${PATTERN})
-      VALUES ($1, $2)
+      SELECT $1, $2
+      WHERE (SELECT COUNT(*) FROM ${this.name} WHERE ${USER_ID} = $1) < $3
       ON CONFLICT (${USER_ID}, ${PATTERN}) DO NOTHING
       RETURNING *
     `;
-    const result = await pool.query<SpamAllowlistJSON>(sql, [userId, normalizedPattern]);
-    return result.rows.length > 0 ? new SpamAllowlistModel(result.rows[0]) : null;
+    const result = await pool.query<SpamAllowlistJSON>(sql, [
+      userId,
+      normalizedPattern,
+      ALLOWLIST_COUNT_MAX,
+    ]);
+    if (result.rows.length > 0) {
+      return { status: "created", entry: new SpamAllowlistModel(result.rows[0]) };
+    }
+
+    const probe = await pool.query(
+      `SELECT 1 FROM ${this.name} WHERE ${USER_ID} = $1 AND ${PATTERN} = $2 LIMIT 1`,
+      [userId, normalizedPattern]
+    );
+    return (probe.rowCount ?? 0) > 0 ? { status: "exists" } : { status: "at_limit" };
   }
 
   /**
