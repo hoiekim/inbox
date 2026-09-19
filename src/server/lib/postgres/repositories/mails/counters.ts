@@ -375,6 +375,26 @@ export const syncMailboxPivot = async (
  * `mails.uid_domain` still surfaces it via INBOX, making the loss look like a
  * routing quirk instead of a failed write.
  */
+/**
+ * Records a mail's per-mailbox UID. `DO UPDATE` rather than `DO NOTHING` so a
+ * row that already exists still comes back through `RETURNING` — under
+ * `DO NOTHING` a conflict returns no row and the caller cannot tell the
+ * persisted UID from the one it proposed.
+ */
+export const buildWriteMailboxUidQuery = (
+  user_id: string,
+  mailbox: string,
+  mail_id: string,
+  uid: number
+): { sql: string; values: ParamValue[] } => ({
+  sql: `INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID})
+         DO UPDATE SET ${UID} = ${MAIL_MAILBOX_UID}.${UID}
+       RETURNING ${UID}`,
+  values: [user_id, mailbox, mail_id, uid],
+});
+
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,
@@ -382,14 +402,13 @@ export const writeMailboxUid = async (
   uid: number
 ): Promise<number> => {
   try {
-    const result = await pool.query<{ uid: number }>(
-      `INSERT INTO ${MAIL_MAILBOX_UID} (${USER_ID}, ${MAILBOX}, ${MAIL_ID}, ${UID})
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (${USER_ID}, ${MAILBOX}, ${MAIL_ID})
-         DO UPDATE SET ${UID} = ${MAIL_MAILBOX_UID}.${UID}
-       RETURNING ${UID}`,
-      [user_id, mailbox, mail_id, uid]
+    const { sql, values } = buildWriteMailboxUidQuery(
+      user_id,
+      mailbox,
+      mail_id,
+      uid
     );
+    const result = await pool.query<{ uid: number }>(sql, values);
     return Number(result.rows[0]?.uid ?? uid);
   } catch (error) {
     logger.error(

@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { mailsTable } from "./models/mail";
 import { buildCreateIndex } from "./database";
 import { indexSpecs, maintenanceWork } from "./initialize";
+import { buildHeaderAddressCondition } from "./repositories/mails/http-query";
 import { SEARCH_VECTOR_REINDEX_CHUNK_ROWS } from "./search-vector";
 
 const indexNameOf = (sql: string) => {
@@ -11,28 +12,12 @@ const indexNameOf = (sql: string) => {
 };
 
 describe("initialize — GIN index coverage for the address containment filter", () => {
-  let conditionSource: string;
-
-  beforeAll(async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    conditionSource = await fs.readFile(
-      path.join(import.meta.dir, "repositories/mails/http.ts"),
-      "utf8"
-    );
-  });
-
-  // Columns filtered with `@>` inside buildHeaderAddressCondition. The two
-  // template tokens resolve to their models/common.ts constant values.
+  // Columns filtered with `@>` in the condition the read paths actually emit.
+  // The saved view is the union of both folder branches, so one call covers
+  // every column any view can filter on.
   const filteredAddressColumns = () => {
-    const fnMatch = conditionSource.match(
-      /export const buildHeaderAddressCondition[\s\S]*?\n};/
-    );
-    if (!fnMatch) throw new Error("buildHeaderAddressCondition not found");
-    const fn = fnMatch[0]
-      .replaceAll("${FROM_ADDRESS}", "from_address")
-      .replaceAll("${TO_ADDRESS}", "to_address");
-    return [...fn.matchAll(/(\w+)\s+@>/g)].map((m) => m[1]).sort();
+    const condition = buildHeaderAddressCondition({ sent: false, saved: true });
+    return [...condition.matchAll(/(\w+)\s+@>/g)].map((m) => m[1]).sort();
   };
 
   const ginIndexedColumns = () =>

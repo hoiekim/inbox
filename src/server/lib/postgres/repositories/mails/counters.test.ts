@@ -1,5 +1,8 @@
 import { describe, it, expect } from "bun:test";
-import { buildMailboxUidQuery } from "./counters";
+import {
+  buildMailboxUidQuery,
+  buildWriteMailboxUidQuery,
+} from "./counters";
 
 describe("buildMailboxUidQuery — 596-collision regression pin (#725)", () => {
   it("does not carry the `sent` column in its seed WHERE — one sequence per (user, mailbox)", () => {
@@ -47,5 +50,36 @@ describe("buildMailboxUidQuery — 596-collision regression pin (#725)", () => {
     expect(trash.values).toContain("Trash");
     expect(starred.values).not.toContain("Trash");
     expect(trash.values).not.toContain("Starred");
+  });
+});
+
+describe("buildWriteMailboxUidQuery", () => {
+  it("returns the persisted UID even when the mapping row already exists", () => {
+    // Under `DO NOTHING` a conflict returns no row, so the caller falls back
+    // to the UID it proposed and reports a UID the table does not hold —
+    // COPYUID / MOVE then name a message the client cannot FETCH.
+    const { sql, values } = buildWriteMailboxUidQuery(
+      "11111111-1111-1111-1111-111111111111",
+      "Archive",
+      "22222222-2222-2222-2222-222222222222",
+      7
+    );
+    expect(sql).toContain("INSERT INTO mail_mailbox_uid");
+    expect(sql).toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO UPDATE/);
+    expect(sql).not.toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO NOTHING/);
+    expect(sql).toContain("RETURNING uid");
+    expect(values).toEqual([
+      "11111111-1111-1111-1111-111111111111",
+      "Archive",
+      "22222222-2222-2222-2222-222222222222",
+      7,
+    ]);
+  });
+
+  it("keys the conflict on the mapping's identity, not on the UID", () => {
+    // Including `uid` in the conflict target would let the same mail hold two
+    // rows in one mailbox.
+    const { sql } = buildWriteMailboxUidQuery("u", "Archive", "m", 7);
+    expect(sql).toContain("ON CONFLICT (user_id, mailbox, mail_id)");
   });
 });
