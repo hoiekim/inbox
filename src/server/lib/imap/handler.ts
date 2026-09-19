@@ -9,8 +9,68 @@ import { ImapRequest } from "./types";
 import { parseCommand } from "./parsers";
 import { clip, imapTrace, redactCredentials } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
+import { acquireCommandBudget, releaseCommandBudget } from "./command-budget";
+import {
+  createCommandBudgetHold,
+  runInCommandBudgetContext,
+} from "./command-budget-hold";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
+
+// Command types whose processing (DB reads, mailbox/message-list
+// materialization, response formatting) has a non-trivial memory
+// footprint, and that the historical OOM/memory-pressure traffic shapes
+// (multiple concurrent connections each running SELECT sweeps, bulk
+// FETCH, or rapid STATUS) actually consist of. Gated through the global
+// command budget in `handleRequest` so the aggregate number of these
+// running at once across ALL sockets is bounded, rather than growing
+// with however many sockets a client happens to open concurrently.
+// Protocol/handshake commands (NOOP, IDLE, LOGIN, CAPABILITY, LOGOUT,
+// CHECK, ...) stay ungated: they are cheap. That only keeps IDLE off the
+// GLOBAL budget, not off this session's OWN serial drain — a client that
+// pipelines a budgeted command immediately followed by IDLE on the same
+// connection still has the IDLE wait for the earlier command's queueing
+// AND processing, exactly as it already waited for that command's
+// processing time before this budget existed (`drainCommands` runs the
+// whole per-session queue inside `session.runSerial`; see its comment).
+//
+// A `Record` (not a `Set`) so a new `ImapRequest` variant is a typecheck
+// failure here rather than a silent ungated default.
+const BUDGETED_COMMAND_TYPES: Record<ImapRequest["type"], boolean> = {
+  CAPABILITY: false,
+  NOOP: false,
+  LOGIN: false,
+  AUTHENTICATE: false,
+  LIST: true,
+  LSUB: true,
+  SELECT: true,
+  EXAMINE: true,
+  CREATE: false,
+  DELETE: false,
+  RENAME: false,
+  SUBSCRIBE: false,
+  UNSUBSCRIBE: false,
+  STATUS: true,
+  APPEND: true,
+  IDLE: false,
+  CHECK: false,
+  CLOSE: false,
+  EXPUNGE: true,
+  SEARCH: true,
+  FETCH: true,
+  STORE: true,
+  COPY: true,
+  MOVE: true,
+  UID: true,
+  ID: false,
+  DONE: false,
+  LOGOUT: false,
+  STARTTLS: false,
+  NAMESPACE: false,
+  ENABLE: false,
+  UNSELECT: false,
+  GETQUOTAROOT: false,
+};
 
 // Per-command diagnostic log thresholds. A command is "interesting"
 // (logged at INFO) if ANY of these thresholds is exceeded. Otherwise
@@ -24,9 +84,18 @@ import { logger } from "server";
 // - Anything abnormally slow (`durationMs >= 100`) surfaces regardless
 //   of size — a slow FLAGS query is diagnosable evidence for a DB /
 //   pool issue.
-const INTERESTING_RSS_DELTA_MB = 1;
-const INTERESTING_DURATION_MS = 100;
-const INTERESTING_RESPONSE_BYTES = 4096;
+// - A budgeted command that queued >= 100ms behind the command budget
+//   surfaces too, even if it then runs in a couple ms. The field sums two
+//   waits: the pre-dispatch acquire, which sits OUTSIDE `durationMs` (see
+//   `handleRequest`'s acquire comment), and any in-dispatch reacquire a
+//   deeper yield performs, which sits INSIDE it — so the two fields are not
+//   disjoint and must not be added together. Only the first half needs this
+//   disjunct: a command starved on a reacquire is already interesting on
+//   `durationMs` alone, whereas one starved before dispatch logs as fast and
+//   small, and the ONLY signal that the budget is undersized never reaches INFO.
+export const INTERESTING_RSS_DELTA_MB = 1;
+export const INTERESTING_DURATION_MS = 100;
+export const INTERESTING_RESPONSE_BYTES = 4096;
 
 // A trailing `{N}` / `{N+}` is a literal declaration (RFC 3501 §4.3, RFC 7888).
 // It has to stand as its own argument, so it is preceded by SP or begins the
@@ -836,6 +905,18 @@ export class ImapRequestHandler {
       return;
     }
 
+    // Acquired BEFORE the per-command diagnostic timer starts, so a
+    // command queued behind the budget doesn't attribute the OTHER
+    // in-flight commands' RSS growth (and its own queueing latency) to
+    // itself — the hold's own `waitedMs` carries that separately, and
+    // keeps accumulating across any reacquire a deeper yield performs.
+    const budgeted = BUDGETED_COMMAND_TYPES[request.type];
+    const hold = createCommandBudgetHold(
+      budgeted,
+      budgeted ? await acquireCommandBudget() : 0
+    );
+
+    try {
     // Per-command diagnostic: RSS delta + bytes emitted to the client + wall
     // duration, so a memory spike can be attributed to a specific command
     // rather than only to a coarse metrics-poll window. Sampled from
@@ -852,6 +933,30 @@ export class ImapRequestHandler {
     // concurrent commands (on DIFFERENT sessions) both see the same
     // rssDelta. `remote` in the log lets triage disambiguate.
     const session = this.session;
+
+    // Re-checked after the budget wait: `drainCommands` tests liveness
+    // before a command is dispatched, and a saturated budget is the longest
+    // window a peer has to disconnect in. Building a response for a socket
+    // that refuses every write spends a slot other sessions can still read.
+    //
+    // Logged rather than dropped silently: these are by construction the
+    // longest waits — long enough for the peer to give up — and the
+    // completion diagnostic below never runs for them, so silence would
+    // censor `waitedForCommandBudgetMs` right where it is read, and the
+    // budget would look better sized the more it is saturated. The rate of
+    // this line against that one is what says whether the capacity is right.
+    if (budgeted && (session.socket.destroyed || !session.socket.writable)) {
+      const { socket } = session;
+      logger.info("IMAP command dropped", {
+        component: "imap",
+        tag,
+        cmd: describeImapCommand(request),
+        remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`,
+        waitedForCommandBudgetMs: Math.round(hold.waitedMs),
+      });
+      return;
+    }
+
     const startedAt = performance.now();
     const memBefore = process.memoryUsage();
     const rssBefore = memBefore.rss;
@@ -863,7 +968,12 @@ export class ImapRequestHandler {
     // THIS command's totals, not a racing sibling command on another
     // socket. Reads via `getBodyBudgetWaitMs()` in the finally below.
     // See `body-budget.ts`.
-    return runInBodyBudgetContext(async () => {
+    //
+    // Also binds whether THIS command holds a command-budget slot, so a
+    // deeper body-budget/stream-mutex wait can temporarily give it up via
+    // `yieldCommandBudgetDuring` (see `command-budget-hold.ts`) instead of
+    // pinning it for the whole nested wait.
+    await runInCommandBudgetContext(hold, () => runInBodyBudgetContext(async () => {
     try {
       switch (request.type) {
         case "CAPABILITY":
@@ -1035,11 +1145,13 @@ export class ImapRequestHandler {
       const rssDeltaMB = Math.round((rssAfter - rssBefore) / 1_048_576);
       const responseBytes = session.bytesWritten - bytesBefore;
       const durationMs = Math.round(performance.now() - startedAt);
+      const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
+      const waitedForCommandBudgetMs = Math.round(hold.waitedMs);
       const isInteresting =
         Math.abs(rssDeltaMB) >= INTERESTING_RSS_DELTA_MB ||
         durationMs >= INTERESTING_DURATION_MS ||
-        responseBytes >= INTERESTING_RESPONSE_BYTES;
-      const waitedForBodyBudgetMs = Math.round(getBodyBudgetWaitMs());
+        responseBytes >= INTERESTING_RESPONSE_BYTES ||
+        waitedForCommandBudgetMs >= INTERESTING_DURATION_MS;
       // Attribution of the per-command RSS delta by memory class. `rss` is
       // OS-reported (Node process resident) — the other four are V8/Node
       // internal counters that partition where the growth actually lives:
@@ -1105,6 +1217,7 @@ export class ImapRequestHandler {
         responseBytes,
         durationMs,
         waitedForBodyBudgetMs,
+        waitedForCommandBudgetMs,
       };
       if (isInteresting) {
         logger.info("IMAP command completed", payload);
@@ -1112,7 +1225,12 @@ export class ImapRequestHandler {
         logger.debug("IMAP command completed", payload);
       }
     }
-    });
+    }));
+    } finally {
+      // Reads the hold's own flag, not `budgeted`: a yielded-and-not-yet-
+      // reacquired slot is not ours to hand back twice.
+      if (hold.held) releaseCommandBudget();
+    }
   }
 
   /**
