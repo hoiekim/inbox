@@ -356,26 +356,6 @@ export const syncMailboxPivot = async (
 };
 
 /**
- * Record a UID assignment in the per-(user, mailbox, mail) mapping.
- *
- * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or the
- * pre-existing one when a row for `(user, mailbox, mail_id)` already exists
- * (COPY-twice / partial-failure retry). Callers reporting a destination UID
- * over the wire (COPY's COPYUID, MOVE's COPYUID response) MUST use the return
- * value, not the `uid` they reserved — otherwise the response advertises a UID
- * absent from the mapping and the client's `UID FETCH` comes back empty.
- *
- * `ON CONFLICT ... DO UPDATE SET uid = mail_mailbox_uid.uid` is a deliberate
- * no-op update: `DO NOTHING RETURNING` yields no row on the conflict path,
- * while `DO UPDATE ... RETURNING` always yields the row's current value.
- *
- * ABORTS ON FAILURE rather than returning undefined. This mapping is the sole
- * per-mailbox UID source, so a swallowed fault leaves the mail invisible in
- * its destination — every account-scoped read joins here and misses — while
- * `mails.uid_domain` still surfaces it via INBOX, making the loss look like a
- * routing quirk instead of a failed write.
- */
-/**
  * Records a mail's per-mailbox UID. `DO UPDATE` rather than `DO NOTHING` so a
  * row that already exists still comes back through `RETURNING` — under
  * `DO NOTHING` a conflict returns no row and the caller cannot tell the
@@ -395,6 +375,22 @@ export const buildWriteMailboxUidQuery = (
   values: [user_id, mailbox, mail_id, uid],
 });
 
+/**
+ * Record a UID assignment in the per-(user, mailbox, mail) mapping.
+ *
+ * Returns the ACTUAL persisted UID — either the just-inserted `uid`, or the
+ * pre-existing one when a row for `(user, mailbox, mail_id)` already exists
+ * (COPY-twice / partial-failure retry). Callers reporting a destination UID
+ * over the wire (COPY's COPYUID, MOVE's COPYUID response) MUST use the return
+ * value, not the `uid` they reserved — otherwise the response advertises a UID
+ * absent from the mapping and the client's `UID FETCH` comes back empty.
+ *
+ * ABORTS ON FAILURE rather than returning undefined. This mapping is the sole
+ * per-mailbox UID source, so a swallowed fault leaves the mail invisible in
+ * its destination — every account-scoped read joins here and misses — while
+ * `mails.uid_domain` still surfaces it via INBOX, making the loss look like a
+ * routing quirk instead of a failed write.
+ */
 export const writeMailboxUid = async (
   user_id: string,
   mailbox: string,

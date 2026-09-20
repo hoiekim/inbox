@@ -219,11 +219,15 @@ describe("buildMailsByRangeQuery — range and membership", () => {
   it("applies the membership rule in every branch", () => {
     // Dropped from a branch, quarantined mail reappears past the filtered
     // enumeration and `FETCH <last seq>` addresses a message the client was
-    // told does not exist.
-    for (const mailbox of [null, "Drafts", "Junk"]) {
+    // told does not exist. The mapped boxes take the JOIN branch, which
+    // qualifies the rule with `m.` across the join.
+    for (const mailbox of [null, "Drafts", "Junk", ACCOUNT_BOX, USER_BOX]) {
       for (const useUid of [false, true]) {
+        const prefix = usesDomainUidSpace(mailbox) ? "" : "m.";
+        const expression = membershipExpression(mailbox, false, prefix);
+        if (expression === "TRUE") continue;
         const { sql } = range({ mailbox, useUid });
-        expect(sql).toContain(membershipExpression(mailbox, false));
+        expect(sql).toContain(expression);
       }
     }
   });
