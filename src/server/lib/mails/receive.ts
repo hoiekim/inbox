@@ -88,6 +88,7 @@ const saveIncomingMail = async (
     try {
       const emailContext: EmailContext = {
         fromAddress: mail.from?.value?.[0]?.address,
+        envelopeFromAddress: mail.envelopeFrom?.[0]?.address,
         fromName: mail.from?.text,
         replyToAddress: mail.replyTo?.value?.[0]?.address,
         subject: incoming.subject,

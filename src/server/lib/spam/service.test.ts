@@ -10,10 +10,32 @@ const stubClassifier = (
 const stubAllowlist = (allowed: boolean): CheckSpamDeps["isAllowlisted"] =>
   async () => allowed;
 
+const stubDnsbls = (score: number, reasons: string[] = []): CheckSpamDeps["checkDnsbls"] =>
+  async () => ({ score, listedIn: [], reasons });
+
 const baseDeps = (score: number, reason: string | null): CheckSpamDeps => ({
   isAllowlisted: stubAllowlist(false),
   classifyEmail: stubClassifier({ score, reason }),
 });
+
+const allowlistDeps = (
+  overrides: Partial<CheckSpamDeps> = {},
+): CheckSpamDeps => ({
+  isAllowlisted: stubAllowlist(true),
+  classifyEmail: stubClassifier({ score: 0, reason: null }),
+  checkDnsbls: stubDnsbls(0),
+  ...overrides,
+});
+
+// The allowlisted domain a forger claims. Body scores on the rule engine alone
+// so the assertions never depend on the classifier or on a network lookup.
+const spamFromAllowlistedDomain = {
+  fromAddress: "spammer@ut-allow.example",
+  fromName: "spammer@ut-allow.example",
+  subject: "FREE MONEY WINNER ACT NOW!!!",
+  text: "Click http://bit.ly/x to claim your free money prize winner. Act now!!!",
+  html: "<p>Click <a href='http://bit.ly/x'>here</a> for your free money prize winner!!!</p>",
+};
 
 // Email crafted so two minor rules fire (reply-to-mismatch + html-only-no-text = 20 pts).
 // remoteAddress is omitted so the DNSBL layer is skipped (no network calls in tests).
@@ -89,5 +111,95 @@ describe("checkSpam — classifier scoring gate", () => {
       baseDeps(30, null),
     );
     expect(result.flaggedBy).toBeUndefined();
+  });
+});
+
+describe("checkSpam — allowlist exemption requires a corroborated sender", () => {
+  it("exempts an allowlisted sender whose envelope sender shares its domain", async () => {
+    const result = await checkSpam(
+      "user1",
+      { ...spamFromAllowlistedDomain, envelopeFromAddress: "bounce@ut-allow.example" },
+      {},
+      allowlistDeps(),
+    );
+    expect(result.score).toBe(0);
+    expect(result.isSpam).toBe(false);
+    expect(result.flaggedBy).toBe("allowlist");
+    expect(result.reasons).toEqual(["Sender is allowlisted"]);
+  });
+
+  it("scores a forged From whose envelope sender is on another domain", async () => {
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "envelope-sender@external.example",
+      },
+      {},
+      allowlistDeps(),
+    );
+    expect(result.score).toBe(60);
+    expect(result.isSpam).toBe(true);
+    expect(result.flaggedBy).toBe("rules");
+    expect(result.reasons).toContain("Allowlisted sender not confirmed by the envelope sender");
+    expect(result.reasons).toContain("Subject >50% uppercase");
+  });
+
+  it("scores an allowlisted sender that arrived with no envelope sender", async () => {
+    const result = await checkSpam("user1", spamFromAllowlistedDomain, {}, allowlistDeps());
+    expect(result.score).toBe(60);
+    expect(result.isSpam).toBe(true);
+    expect(result.reasons).toContain("Allowlisted sender not confirmed by the envelope sender");
+  });
+
+  it("withdraws the exemption when the connecting address is blocklisted", async () => {
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "198.51.100.7",
+      },
+      {},
+      allowlistDeps({ checkDnsbls: stubDnsbls(40, ["Listed in Spamhaus ZEN"]) }),
+    );
+    expect(result.isSpam).toBe(true);
+    expect(result.score).toBe(100);
+    expect(result.reasons).toContain("Allowlisted sender arrived from a blocklisted address");
+    expect(result.reasons).toContain("Listed in Spamhaus ZEN");
+  });
+
+  it("keeps the exemption for an aligned sender on a clean connecting address", async () => {
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "198.51.100.7",
+      },
+      {},
+      allowlistDeps({ checkDnsbls: stubDnsbls(0) }),
+    );
+    expect(result.score).toBe(0);
+    expect(result.isSpam).toBe(false);
+  });
+
+  it("still scores a blocklisted connection that is not allowlisted at all", async () => {
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "198.51.100.7",
+      },
+      {},
+      allowlistDeps({
+        isAllowlisted: stubAllowlist(false),
+        checkDnsbls: stubDnsbls(40, ["Listed in Spamhaus ZEN"]),
+      }),
+    );
+    expect(result.score).toBe(100);
+    expect(result.flaggedBy).toBe("dnsbl");
+    expect(result.reasons).not.toContain("Allowlisted sender arrived from a blocklisted address");
   });
 });
