@@ -471,6 +471,39 @@ describe("handleLogin", () => {
     expect(harness.socket.destroyed).toBe(false);
   });
 
+  it("refuses a wrong password for a user that does exist", async () => {
+    const harness = makeHarness();
+    mockGetUser.mockImplementation(async () => ({
+      password: await hashOf("correct-horse"),
+      getSigned: () => signedUser,
+    }));
+
+    const result = await handleLogin("B10", ["admin", "wrong"], ...loginArgs(harness));
+
+    expect(result).toBeNull();
+    expect(harness.socket.writes).toEqual([
+      "B10 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
+    ]);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockResetAuthFailures).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty password even when the stored hash would match it", async () => {
+    const harness = makeHarness();
+    mockGetUser.mockImplementation(async () => ({
+      password: await hashOf(""),
+      getSigned: () => signedUser,
+    }));
+
+    const result = await handleLogin("B11", ["admin", ""], ...loginArgs(harness));
+
+    expect(result).toBeNull();
+    expect(harness.socket.writes).toEqual([
+      "B11 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
+    ]);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+  });
+
   it("refuses an account with no signable identity instead of throwing", async () => {
     const harness = makeHarness();
     // `getSigned` returns undefined unless id, username, email and password
@@ -748,6 +781,14 @@ describe("read-only credential session resolution", () => {
     expect(harness.socket.writes).toEqual([
       `E5 OK [CAPABILITY ${CAPABILITIES}] LOGIN completed\r\n`,
     ]);
+    expect(mockLoggerInfo).toHaveBeenCalledWith("IMAP LOGIN success", {
+      component: "imap",
+      tag: "E5",
+      authenticatedAs: ADMIN_RO_USERNAME,
+      effectiveUsername: ADMIN_USERNAME,
+      isReadOnly: true,
+      remote: `${REMOTE_IP}:45678`,
+    });
   });
 
   it("closes the LOGIN socket when that refusal crosses the threshold", async () => {
