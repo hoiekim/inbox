@@ -3,9 +3,12 @@
  *
  * SMTP authenticates neither the `From:` header nor the envelope `MAIL FROM`,
  * so a match on either one alone records a claim rather than an identity.
- * Requiring the two to agree is DMARC's relaxed-alignment rule: it costs a
- * forger control of the envelope as well as the header, which a sender
- * relaying through someone else's MTA does not have.
+ * Requiring the two to agree costs a forger control of the envelope as well as
+ * the header, which a sender relaying through someone else's MTA does not have.
+ * Agreement here means an exact domain match — DMARC's *strict* alignment
+ * (RFC 7489 3.1.2). Relaxed alignment compares Organizational Domains instead
+ * and would need a public-suffix list; until it exists, a bounce domain that is
+ * a subdomain of the header domain does not align.
  */
 
 /**
