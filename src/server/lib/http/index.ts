@@ -4,11 +4,13 @@ import path from "path";
 
 import { getDomain, isProduction, PostgresSessionStore } from "server";
 import { createExpressApp } from "./app";
+import { resolveSessionSecret } from "./session-secret";
 import apiRouter from "./routes";
 import { startCleanupScheduler } from "./rate-limit";
 import { logger } from "../logger";
 
 export const initializeHttp = async () => {
+  const sessionSecret = resolveSessionSecret();
   const app = createExpressApp();
 
   // Security headers
@@ -25,7 +27,7 @@ export const initializeHttp = async () => {
   app.use(json({ limit: "10mb" }));
   app.use(
     session({
-      secret: process.env.SECRET || "secret",
+      secret: sessionSecret,
       resave: true,
       saveUninitialized: false,
       rolling: true,
