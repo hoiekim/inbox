@@ -421,6 +421,7 @@ describe("handleLogin", () => {
       "B2 NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n",
     ]);
     expect(harness.socket.destroyed).toBe(true);
+    expect(mockIsAuthRateLimited).toHaveBeenCalledWith(REMOTE_IP);
     expect(mockGetUser).not.toHaveBeenCalled();
     expect(mockRecordAuthFailure).not.toHaveBeenCalled();
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
