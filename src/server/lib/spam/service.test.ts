@@ -10,8 +10,12 @@ const stubClassifier = (
 const stubAllowlist = (allowed: boolean): CheckSpamDeps["isAllowlisted"] =>
   async () => allowed;
 
-const stubDnsbls = (score: number, reasons: string[] = []): CheckSpamDeps["checkDnsbls"] =>
-  async () => ({ score, listedIn: [], reasons });
+const stubDnsbls = (
+  score: number,
+  reasons: string[] = [],
+  evaluated = true,
+): CheckSpamDeps["checkDnsbls"] =>
+  async () => ({ score, listedIn: [], reasons, evaluated });
 
 const baseDeps = (score: number, reason: string | null): CheckSpamDeps => ({
   isAllowlisted: stubAllowlist(false),
@@ -118,7 +122,11 @@ describe("checkSpam — allowlist exemption requires a corroborated sender", () 
   it("exempts an allowlisted sender whose envelope sender shares its domain", async () => {
     const result = await checkSpam(
       "user1",
-      { ...spamFromAllowlistedDomain, envelopeFromAddress: "bounce@ut-allow.example" },
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "198.51.100.7",
+      },
       {},
       allowlistDeps(),
     );
@@ -182,6 +190,50 @@ describe("checkSpam — allowlist exemption requires a corroborated sender", () 
     );
     expect(result.score).toBe(0);
     expect(result.isSpam).toBe(false);
+  });
+
+  it("refuses the exemption when no blocklist could answer for the connecting address", async () => {
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "2001:db8::1",
+      },
+      {},
+      allowlistDeps({ checkDnsbls: stubDnsbls(0, [], false) }),
+    );
+    expect(result.score).toBe(60);
+    expect(result.isSpam).toBe(true);
+    expect(result.reasons).toContain(
+      "Allowlisted sender arrived from an address no blocklist answered for",
+    );
+  });
+
+  it("refuses the exemption when the mail carries no connecting address", async () => {
+    const result = await checkSpam(
+      "user1",
+      { ...spamFromAllowlistedDomain, envelopeFromAddress: "bounce@ut-allow.example" },
+      {},
+      allowlistDeps(),
+    );
+    expect(result.score).toBe(60);
+    expect(result.isSpam).toBe(true);
+    expect(result.reasons).toContain(
+      "Allowlisted sender arrived from an address no blocklist answered for",
+    );
+  });
+
+  it("keeps the exemption when the blocklist layer is turned off by config", async () => {
+    const result = await checkSpam(
+      "user1",
+      { ...spamFromAllowlistedDomain, envelopeFromAddress: "bounce@ut-allow.example" },
+      { enableDnsbl: false },
+      allowlistDeps(),
+    );
+    expect(result.score).toBe(0);
+    expect(result.isSpam).toBe(false);
+    expect(result.flaggedBy).toBe("allowlist");
   });
 
   it("still scores a blocklisted connection that is not allowlisted at all", async () => {

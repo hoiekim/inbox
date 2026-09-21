@@ -33,18 +33,34 @@ export const DEFAULT_DNSBLS: DnsBlocklist[] = [
   },
 ];
 
+/** Prefix a dual-stack listener puts in front of an IPv4 peer address. */
+const IPV4_MAPPED_PREFIX = "::ffff:";
+
 /**
- * Reverse an IP address for DNSBL lookup.
- * For IPv4: 1.2.3.4 -> 4.3.2.1
+ * The dotted quad an address denotes, or null if it denotes none.
+ *
+ * A listener bound without a host reports an IPv4 peer in the mapped form
+ * `::ffff:198.51.100.7`, which no blocklist answers for. Unwrapping it is what
+ * lets one host get the same verdict over either socket family.
  */
-function reverseIp(ip: string): string | null {
-  // Only handle IPv4 for now
-  const parts = ip.split(".");
+export function toIpv4(ip: string): string | null {
+  const quad = ip.toLowerCase().startsWith(IPV4_MAPPED_PREFIX)
+    ? ip.slice(IPV4_MAPPED_PREFIX.length)
+    : ip;
+  const parts = quad.split(".");
   if (parts.length !== 4) return null;
   if (!parts.every(p => /^\d+$/.test(p) && parseInt(p) >= 0 && parseInt(p) <= 255)) {
     return null;
   }
-  return parts.reverse().join(".");
+  return quad;
+}
+
+/**
+ * Reverse a dotted quad for DNSBL lookup.
+ * For IPv4: 1.2.3.4 -> 4.3.2.1
+ */
+function reverseIp(ipv4: string): string {
+  return ipv4.split(".").reverse().join(".");
 }
 
 /**
@@ -70,16 +86,22 @@ function timeout<T>(ms: number, message: string): Promise<T> {
 export const isRealListing = (addresses: string[]): boolean =>
   addresses.some((addr) => addr.startsWith("127.0."));
 
-/**
- * Check if an IP is listed in a specific DNSBL.
- * Returns true if listed, false otherwise.
- * Times out after DNSBL_TIMEOUT_MS to prevent hanging.
- */
-async function checkDnsbl(ip: string, dnsbl: DnsBlocklist): Promise<boolean> {
-  const reversed = reverseIp(ip);
-  if (!reversed) return false;
+/** What one blocklist said about an address: it listed it, cleared it, or never answered. */
+export type DnsblVerdict = "listed" | "clean" | "unknown";
 
-  const query = `${reversed}.${dnsbl.hostname}`;
+/** DNS failures that mean "no such record" — how a blocklist spells "not listed". */
+const NOT_LISTED_DNS_CODES = new Set(["ENOTFOUND", "ENODATA", "NOTFOUND", "NODATA"]);
+
+/**
+ * Ask one DNSBL about a dotted quad.
+ * Times out after DNSBL_TIMEOUT_MS to prevent hanging.
+ *
+ * A timeout, a resolver failure, or a response carrying only the warning codes
+ * `isRealListing` rejects are all answers the query never got, and are reported
+ * as such rather than as a clearance.
+ */
+async function checkDnsbl(ipv4: string, dnsbl: DnsBlocklist): Promise<DnsblVerdict> {
+  const query = `${reverseIp(ipv4)}.${dnsbl.hostname}`;
 
   try {
     // Race DNS query against timeout to prevent hanging
@@ -87,55 +109,72 @@ async function checkDnsbl(ip: string, dnsbl: DnsBlocklist): Promise<boolean> {
       dns.resolve4(query),
       timeout<string[]>(DNSBL_TIMEOUT_MS, `DNSBL query timeout: ${dnsbl.name}`),
     ]);
-    return isRealListing(result);
-  } catch {
-    // NXDOMAIN (not listed), timeout, or other DNS errors
-    // Not listed = not spam indicator
-    return false;
+    return isRealListing(result) ? "listed" : "unknown";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code && NOT_LISTED_DNS_CODES.has(code) ? "clean" : "unknown";
   }
 }
 
 /**
  * Check an IP against multiple DNSBLs.
  * Returns aggregated results.
+ *
+ * `evaluated` reports whether the score is a verdict or an absence of one, so a
+ * caller that treats a clean address as authorization can tell the two apart.
  */
 export async function checkDnsbls(
   ip: string,
   dnsbls: DnsBlocklist[] = DEFAULT_DNSBLS
-): Promise<{ score: number; listedIn: DnsBlocklist[]; reasons: string[] }> {
-  // Skip private/local IPs
-  if (isPrivateIp(ip)) {
-    return { score: 0, listedIn: [], reasons: [] };
+): Promise<{
+  score: number;
+  listedIn: DnsBlocklist[];
+  reasons: string[];
+  evaluated: boolean;
+}> {
+  const ipv4 = toIpv4(ip);
+  // An address outside IPv4 is one the blocklists cannot be asked about.
+  if (!ipv4) {
+    return { score: 0, listedIn: [], reasons: [], evaluated: false };
+  }
+  // A private or local address names no internet host, so no blocklist carries
+  // it — "not listed" is a definite answer here, not a missing one.
+  if (isPrivateIp(ipv4)) {
+    return { score: 0, listedIn: [], reasons: [], evaluated: true };
   }
 
   const results = await Promise.allSettled(
     dnsbls.map(async dnsbl => ({
       dnsbl,
-      listed: await checkDnsbl(ip, dnsbl),
+      verdict: await checkDnsbl(ipv4, dnsbl),
     }))
   );
 
   const listedIn: DnsBlocklist[] = [];
   const reasons: string[] = [];
   let score = 0;
+  let evaluated = dnsbls.length > 0;
 
   for (const result of results) {
-    if (result.status === "fulfilled" && result.value.listed) {
+    if (result.status !== "fulfilled" || result.value.verdict === "unknown") {
+      evaluated = false;
+      continue;
+    }
+    if (result.value.verdict === "listed") {
       listedIn.push(result.value.dnsbl);
       score += result.value.dnsbl.score;
       reasons.push(`Listed in ${result.value.dnsbl.name}`);
     }
   }
 
-  return { score, listedIn, reasons };
+  return { score, listedIn, reasons, evaluated };
 }
 
 /**
- * Check if an IP is a private/local address that shouldn't be checked.
+ * Check if a dotted quad is a private/local address that shouldn't be checked.
  */
-function isPrivateIp(ip: string): boolean {
-  const parts = ip.split(".").map(Number);
-  if (parts.length !== 4) return true; // Not valid IPv4, skip
+function isPrivateIp(ipv4: string): boolean {
+  const parts = ipv4.split(".").map(Number);
 
   // Localhost
   if (parts[0] === 127) return true;

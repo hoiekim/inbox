@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { checkDnsbls, DEFAULT_DNSBLS, isRealListing } from "./dnsbl";
+import { checkDnsbls, DEFAULT_DNSBLS, isRealListing, toIpv4 } from "./dnsbl";
 
 describe("DNSBL Checker", () => {
   describe("checkDnsbls", () => {
@@ -77,6 +77,54 @@ describe("DNSBL Checker", () => {
       // Should not crash, just return 0 score
       expect(result.score).toBe(0);
       expect(result.listedIn).toEqual([]);
+    });
+  });
+
+  describe("toIpv4", () => {
+    it("unwraps the IPv4-mapped form a dual-stack listener reports", () => {
+      expect(toIpv4("::ffff:198.51.100.7")).toBe("198.51.100.7");
+      expect(toIpv4("::FFFF:203.0.113.5")).toBe("203.0.113.5");
+    });
+
+    it("passes a plain dotted quad through unchanged", () => {
+      expect(toIpv4("198.51.100.7")).toBe("198.51.100.7");
+      expect(toIpv4("0.0.0.0")).toBe("0.0.0.0");
+      expect(toIpv4("255.255.255.255")).toBe("255.255.255.255");
+    });
+
+    it("returns null for an address that denotes no IPv4 host", () => {
+      expect(toIpv4("2001:db8::1")).toBeNull();
+      expect(toIpv4("::1")).toBeNull();
+      expect(toIpv4("::ffff:2001:db8::1")).toBeNull();
+      expect(toIpv4("not-an-ip")).toBeNull();
+      expect(toIpv4("256.1.1.1")).toBeNull();
+      expect(toIpv4("1.2.3")).toBeNull();
+      expect(toIpv4("1.2.3.4.5")).toBeNull();
+      expect(toIpv4("")).toBeNull();
+    });
+  });
+
+  describe("checkDnsbls evaluability", () => {
+    it("reports an address outside IPv4 as unevaluated", async () => {
+      for (const ip of ["2001:db8::1", "not-an-ip", "1.2.3", ""]) {
+        const result = await checkDnsbls(ip);
+        expect(result.score).toBe(0);
+        expect(result.evaluated).toBe(false);
+      }
+    });
+
+    it("reports a private address as evaluated — no blocklist carries one", async () => {
+      for (const ip of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "::ffff:10.0.0.1"]) {
+        const result = await checkDnsbls(ip);
+        expect(result.score).toBe(0);
+        expect(result.evaluated).toBe(true);
+      }
+    });
+
+    it("reports an empty blocklist set as unevaluated", async () => {
+      const result = await checkDnsbls("198.51.100.7", []);
+      expect(result.score).toBe(0);
+      expect(result.evaluated).toBe(false);
     });
   });
 

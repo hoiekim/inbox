@@ -46,15 +46,23 @@ const DEFAULT_CONFIG: SpamFilterConfig = {
  * freely. Granting a total bypass on that alone hands guaranteed delivery to
  * anyone who types an allowlisted address, so the exemption additionally
  * requires the two signals the server does not take on the sender's word: an
- * envelope sender that corroborates the header, and a connection that is not
- * on a blocklist.
+ * envelope sender that corroborates the header, and a connection a blocklist
+ * was asked about and did not list. A blocklist that was never asked — the
+ * address is outside IPv4, the query timed out, the resolver was refused —
+ * withholds the second signal rather than supplying it.
  */
-const exemptionRefusal = (email: EmailContext, dnsblScore: number): string | null => {
+const exemptionRefusal = (
+  email: EmailContext,
+  dnsbl: { score: number; evaluated: boolean },
+): string | null => {
   if (!isEnvelopeAligned(email.fromAddress, email.envelopeFromAddress)) {
     return "Allowlisted sender not confirmed by the envelope sender";
   }
-  if (dnsblScore > 0) {
+  if (dnsbl.score > 0) {
     return "Allowlisted sender arrived from a blocklisted address";
+  }
+  if (!dnsbl.evaluated) {
+    return "Allowlisted sender arrived from an address no blocklist answered for";
   }
   return null;
 };
@@ -84,11 +92,15 @@ export async function checkSpam(
   // Layer 1: DNS blocklist check
   let dnsblScore = 0;
   let dnsblReasons: string[] = [];
+  // A layer turned off by config states no opinion, so it withholds nothing.
+  // An enabled layer that never ran does, and must not read as a clearance.
+  let dnsblEvaluated = !cfg.enableDnsbl;
   if (cfg.enableDnsbl && email.remoteAddress) {
     try {
       const dnsblResult = await checkDnsbls(email.remoteAddress, cfg.dnsbls);
       dnsblScore = dnsblResult.score;
       dnsblReasons = dnsblResult.reasons;
+      dnsblEvaluated = dnsblResult.evaluated;
     } catch (error) {
       logger.warn("[SpamFilter] DNSBL check failed", {}, error);
       // Continue with other checks
@@ -100,7 +112,10 @@ export async function checkSpam(
     try {
       const allowed = await isAllowlisted(userId, email.fromAddress);
       if (allowed) {
-        const refusal = exemptionRefusal(email, dnsblScore);
+        const refusal = exemptionRefusal(email, {
+          score: dnsblScore,
+          evaluated: dnsblEvaluated,
+        });
         if (!refusal) {
           return {
             score: 0,
@@ -160,22 +175,4 @@ export async function checkSpam(
     isSpam,
     flaggedBy: isSpam ? flaggedBy : undefined,
   };
-}
-
-/**
- * Quick check if sender is in user's allowlist.
- * Use this for fast skip before expensive checks.
- */
-export async function isSenderAllowlisted(
-  userId: string,
-  fromAddress: string,
-  deps: { isAllowlisted?: IsAllowlistedFn } = {},
-): Promise<boolean> {
-  const isAllowlisted = deps.isAllowlisted ?? realIsAllowlisted;
-  try {
-    return await isAllowlisted(userId, fromAddress);
-  } catch (error) {
-    logger.warn("[SpamFilter] Allowlist lookup failed", {}, error);
-    return false;
-  }
 }
