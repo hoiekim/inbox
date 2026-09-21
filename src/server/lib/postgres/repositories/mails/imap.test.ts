@@ -216,21 +216,23 @@ describe("buildFlagSetClause — empty/unknown-only STORE is a no-op (#671)", ()
   });
 });
 
-describe("setMailFlags — no-op STORE skips the UPDATE (source regression for #671)", () => {
+describe("setMailFlags — no-op STORE skips the UPDATE (#671)", () => {
+  // Not a SQL-shape guard: the property is which of the builder's two
+  // statements the function chooses to run, which no emitted string can show.
+  // `set-flags-query.test.ts` pins the SQL itself. Scoped to the one file the
+  // function lives in — a whole-directory scan could match a decoy in another
+  // module.
   let fnSource: string;
 
   beforeAll(async () => {
     const fs = await import("fs/promises");
     const path = await import("path");
-    const mailsSource = (
-      await Promise.all(
-        (await fs.readdir(import.meta.dir)).sort()
-          .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
-          .map((f) => fs.readFile(path.join(import.meta.dir, f), "utf8"))
-      )
-    ).join("\n");
-    const fnMatch = mailsSource.match(/export const setMailFlags[\s\S]*?\n};/);
-    if (!fnMatch) throw new Error("setMailFlags not found in mails/*.ts");
+    const source = await fs.readFile(
+      path.join(import.meta.dir, "imap.ts"),
+      "utf8"
+    );
+    const fnMatch = source.match(/export const setMailFlags[\s\S]*?\n};/);
+    if (!fnMatch) throw new Error("setMailFlags not found in imap.ts");
     fnSource = fnMatch[0];
   });
 
@@ -259,10 +261,10 @@ describe("account-scoped reads use the raw mailbox path", () => {
   // stores rows with mail_mailbox_uid.mailbox = "Archive", so a derived
   // `INBOX/accounts/Archive` returns zero rows and the mail is invisible.
   //
-  // Static source check. The reader must (a) accept a `mailbox` parameter
-  // (nullable for domain-scoped views), (b) bind that parameter directly onto
-  // `x.mailbox = $N`, and (c) NOT define a mailboxPathForAccount helper that
-  // derives the path.
+  // Not SQL-shape guards — `imap-query.test.ts` asserts the emitted `x.mailbox
+  // = $N` binding per branch. These two pin what no emitted string can show:
+  // the absence of a derived-path helper, and the parameter name every reader
+  // takes it under.
   let mailsSource: string;
 
   beforeAll(async () => {
@@ -298,85 +300,14 @@ describe("account-scoped reads use the raw mailbox path", () => {
     expect(sigMatch![1]).toMatch(/\bmailbox\s*:\s*string\s*\|\s*null/);
     expect(sigMatch![1]).not.toMatch(/\baccount\s*:\s*string\s*\|\s*null/);
   });
-
-  it("every account-scoped JOIN binds `x.mailbox = $N` with N in scope", () => {
-    // Coarse but effective: each per-mailbox branch must contain the
-    // parameterised mailbox filter — never a derived literal.
-    const branches = mailsSource.match(/x\.\$\{MAILBOX\}\s*=\s*\$\d+/g) ?? [];
-    // 8 refactored sites; getMailsByRange has 2 (useUid + seq) and setMailFlags
-    // has 3 (useUid selectSql + updateSql + seq target subquery). Bound: ≥8.
-    expect(branches.length).toBeGreaterThanOrEqual(8);
-  });
 });
 
-describe("getMailsByRange — text_octets / html_octets synthetic projection", () => {
-  let source: string;
-  beforeAll(async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
-  });
-
-  it("projects octet_length(text) AS text_octets when requested", () => {
-    expect(source).toMatch(/octet_length\(\$\{prefix\}text\)\s+AS\s+text_octets/);
-  });
-
-  it("projects octet_length(html) AS html_octets when requested", () => {
-    expect(source).toMatch(/octet_length\(\$\{prefix\}html\)\s+AS\s+html_octets/);
-  });
-
-  it("strips the synthetic names from the mails-column SELECT list", () => {
-    // The synthetic names would break the SELECT list if they leaked in
-    // (`m.text_octets` is not a column). The strip set names both.
-    expect(source).toContain('syntheticNames = new Set(["uid_mailbox", "text_octets", "html_octets"])');
-  });
-
-  it("passes the `m.` prefix in the JOIN branch so the octet_length is unambiguous", () => {
-    // The JOIN branch calls `octetProjections("m.")` so the alias refers to
-    // the mails table under its `m` alias, not the mapping table.
-    expect(source).toContain('octetProjections("m.")');
-    expect(source).toContain('octetProjections("")');
-  });
-});
-
-describe("getMailsByRange — CHANGEDSINCE modseq filter (CONDSTORE phase 3, #609)", () => {
-  // Source-text scan (robust against module-mock interactions in the full
-  // suite): the CHANGEDSINCE modifier must add a `modseq > $N` predicate to the
-  // range query in both the domain-wide and per-mailbox branches, so the filter
-  // runs in SQL (O(rows-changed)) rather than as a JS post-filter over the
-  // whole window.
-  let mailsSource: string;
-
-  beforeAll(async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    mailsSource = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
-  });
-
-  it("takes an optional changedSince parameter", () => {
-    const sigMatch = mailsSource.match(
-      /export const getMailsByRange\s*=\s*async\s*\(([\s\S]*?)\)/
-    );
-    expect(sigMatch).not.toBeNull();
-    expect(sigMatch![1]).toMatch(/changedSince\s*\??\s*:\s*number/);
-  });
-
-  it("adds a `modseq > $N` predicate for the domain-wide branch", () => {
-    // `${MODSEQ} > $5` — the param after the domain branch's fixed 4 args.
-    expect(mailsSource).toMatch(/\$\{MODSEQ\}\s*>\s*\$5/);
-  });
-
-  it("adds a qualified `m.modseq > $N` predicate for the per-mailbox branch", () => {
-    // `m.${MODSEQ} > $6` — the param after the per-mailbox branch's fixed 5 args.
-    expect(mailsSource).toMatch(/m\.\$\{MODSEQ\}\s*>\s*\$6/);
-  });
-
-  it("only appends the predicate when changedSince is provided", () => {
-    expect(mailsSource).toMatch(/changedSince !== undefined/);
-  });
-});
-
-describe("expungeDeletedMails — `updated` column refresh (regression for #456, #614)", () => {
+describe("expungeDeletedMails — `updated` column refresh (#456, #614)", () => {
+  // Not SQL-shape guards: `Table.updateWhere` builds the statement, so what
+  // these pin is which API the mutation paths go through and that none of them
+  // stamps `updated` from the app clock. The last of them is a repository-wide
+  // absence, which is what the whole-directory read is for — a per-file scan
+  // would miss the next module to reintroduce it.
   let mailsSource: string;
   let fnSource: string;
 
@@ -474,24 +405,6 @@ describe("expungeDeletedMails — `updated` column refresh (regression for #456,
       /logger\.error\("Failed to save mail"[^\n]*\n\s+throw error;/
     );
     expect(outerCatchTail).not.toBeNull();
-  });
-
-  it("writeMailboxUid uses DO UPDATE + RETURNING so persisted UID is always returned", async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    const counters = await fs.readFile(
-      path.join(import.meta.dir, "counters.ts"),
-      "utf8"
-    );
-    const fnMatch = counters.match(/export const writeMailboxUid[\s\S]*?\n};/);
-    if (!fnMatch) throw new Error("writeMailboxUid not found in counters.ts");
-    const fnSource = fnMatch[0];
-    expect(fnSource).toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO UPDATE/);
-    expect(fnSource).toMatch(/RETURNING\s+\$\{UID\}/);
-    // Return type must be `Promise<number>` — callers rely on it.
-    expect(fnSource).toMatch(/Promise<number>/);
-    // Guard against a future revert to DO NOTHING.
-    expect(fnSource).not.toMatch(/ON CONFLICT\s*\([^)]+\)\s+DO NOTHING/);
   });
 
   it("saveMail returns uid_mailbox on both the INSERT and the 23505 merge branches", async () => {
@@ -751,40 +664,6 @@ describe("buildCriterionClause — UID_SET ORs its ranges (#659)", () => {
   });
 });
 
-describe("searchMailsByUid — no result cap (#553)", () => {
-  // A `LIMIT 10000` with `ORDER BY uid ASC` made SEARCH/UID SEARCH drop
-  // the NEWEST messages once a mailbox exceeded 10000 — the worst-possible
-  // truncation for an email client and an RFC 3501 §6.4.4 violation (SEARCH
-  // must return all matching messages). The enumeration siblings getAllUids
-  // and getMailsByRange are unbounded; the search path must match.
-  let fnSource: string;
-
-  beforeAll(async () => {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    const mailsSource = (
-      await Promise.all(
-        (await fs.readdir(import.meta.dir)).sort()
-          .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
-          .map((f) => fs.readFile(path.join(import.meta.dir, f), "utf8"))
-      )
-    ).join("\n");
-    const fnMatch = mailsSource.match(
-      /export const searchMailsByUid[\s\S]*?\n};/
-    );
-    if (!fnMatch) throw new Error("searchMailsByUid not found in mails/*.ts");
-    fnSource = fnMatch[0];
-  });
-
-  it("the search SQL has no LIMIT clause", () => {
-    const sqlMatch = fnSource.match(
-      /const sql = `([\s\S]*?SELECT[\s\S]*?)`/
-    );
-    if (!sqlMatch) throw new Error("search SQL not found");
-    expect(sqlMatch[1]).not.toMatch(/\bLIMIT\b/i);
-  });
-});
-
 describe("buildCriterionClause — BODY/TEXT search the message body (#552)", () => {
   // RFC 3501 §6.4.4: BODY matches the message body; TEXT matches header +
   // body. The prior impl ORed only subject/from_text/to_text, so IMAP
@@ -1021,129 +900,5 @@ describe("buildCriterionClause — combinators don't orphan bound params (#672)"
     );
     expect(frag).toBe("subject ILIKE $3"); // KEYWORD = match-none → reduces to X
     expect(values).toEqual(["user-1", false, "%x%"]);
-  });
-});
-
-describe("every mailbox applies its membership rule (#605, #725)", () => {
-  describe("every mailbox-scoped site applies it (source regression)", () => {
-    // One missed site desynchronises INBOX's membership: e.g. a filtered
-    // `getAllUids` (the seq→UID map) against an unfiltered `countMessages`
-    // makes EXISTS exceed the addressable sequence range.
-    let source: string;
-
-    beforeAll(async () => {
-      const fs = await import("fs/promises");
-      const path = await import("path");
-      source = await fs.readFile(path.join(import.meta.dir, "imap.ts"), "utf8");
-    });
-
-    // [public name, symbol that actually builds the SQL] — getMailsByRange is
-    // a single-flight wrapper whose query lives in the uncoalesced impl.
-    // setMailFlags builds none of its own SQL: `set-flags-query.test.ts` reads
-    // the rule off the SQL its builder emits.
-    const fns: [string, string][] = [
-      ["countMessages", "countMessages"],
-      ["getMailsByRange", "getMailsByRangeUncoalesced"],
-      ["searchMailsByUid", "searchMailsByUid"],
-      ["getAllUids", "getAllUids"],
-      ["getFirstUnseenUid", "getFirstUnseenUid"],
-      ["expungeDeletedMails", "expungeDeletedMails"],
-      ["expungeMailsByUid", "expungeMailsByUid"],
-    ];
-
-    // Applications per function — one per SQL-bearing branch. Counting helper
-    // CALLS is not enough: several of these call the helper once into a local
-    // and interpolate `${membership}` into two or more statements, so deleting
-    // one interpolation leaves the call (and a call-count guard) untouched.
-    // Count application SITES instead — a helper call that is not assigned to
-    // a local, plus every interpolation of a local that is. Dropping the rule
-    // from the `mailbox === null` branch of getAllUids (INBOX's own seq->UID
-    // map) is one guarded mutation: quarantined UIDs reappear past the
-    // filtered EXISTS and `FETCH <last seq>` addresses a message the client
-    // was told does not exist.
-    // Counts are of SQL application sites only: `applicationSites` strips
-    // comments first, so an occurrence of the word "membership" in prose
-    // cannot inflate them.
-    const applications: Record<string, number> = {
-      countMessages: 4, // total + unread FILTER, in each of the two branches
-      getMailsByRangeUncoalesced: 4, // UID and sequence range, in each branch
-      searchMailsByUid: 1, // one conditions list serves both branches
-      getAllUids: 2, // one per branch
-      getFirstUnseenUid: 2,
-      expungeDeletedMails: 2, // domain filter bag + mapping SELECT
-      expungeMailsByUid: 2,
-    };
-
-    const HELPERS =
-      "(?:membershipCondition|membershipExpression|membershipFilter)";
-
-    const applicationSites = (rawBody: string) => {
-      // Comments mention the rule by name constantly; counting them would let a
-      // real application be deleted as long as the prose survived.
-      const body = rawBody
-        .split("\n")
-        .map((line) => line.replace(/\/\/.*$/, ""))
-        .join("\n");
-      const locals = new Set(
-        [...body.matchAll(new RegExp(`const\\s+(\\w+)\\s*=\\s*${HELPERS}\\(`, "g"))].map(
-          (m) => m[1]
-        )
-      );
-      // Assignments are the definition, not a use — drop them so only the
-      // sites that put the rule into SQL are counted.
-      const withoutAssignments = body.replace(
-        new RegExp(`const\\s+\\w+\\s*=\\s*${HELPERS}\\([\\s\\S]*?;`, "g"),
-        ""
-      );
-      const direct =
-        withoutAssignments.match(new RegExp(`${HELPERS}\\(`, "g"))?.length ?? 0;
-      // Count every use of a helper-derived local, not just `${…}` ones: the
-      // expunge paths consume `quarantined` as a boolean that gates an
-      // `is_spam` key in the data bag, which is an application of the rule
-      // that never appears in a template.
-      let uses = 0;
-      for (const local of locals) {
-        uses +=
-          withoutAssignments.match(new RegExp(`\\b${local}\\b`, "g"))?.length ?? 0;
-      }
-      return direct + uses;
-    };
-
-    it.each(fns)("%s applies the membership rule in every branch", (_name, symbol) => {
-      const body = source.match(new RegExp(`const ${symbol}\\s*=[\\s\\S]*?\\n};`));
-      expect(body, `body not found for ${symbol}`).not.toBeNull();
-      expect(applicationSites(body![0])).toBeGreaterThanOrEqual(
-        applications[symbol]
-      );
-    });
-
-    it("does not compute UIDNEXT — a MAX over live rows can only regress", () => {
-      // UIDNEXT now comes from `getUidNext` (mail_uid_counters, the authority
-      // that assigns UIDs). Re-deriving it here from any MAX over these rows
-      // brings the bug straight back: the rows are the surviving ones, so an
-      // EXPUNGE / hard delete / spam-mark of the highest-UID mail lowers it,
-      // which RFC 3501 §2.3.1.1 forbids. The counts stay FILTERed.
-      const body = source.match(/export const countMessages[\s\S]*?\n};/)![0];
-      expect(body).toMatch(/COUNT\(\*\) FILTER \(WHERE \$\{membership\}\)/);
-      // Comments stripped — the prose here explains the ban and would match it.
-      const code = body.replace(/^\s*\/\/.*$/gm, "");
-      expect(code).not.toMatch(/MAX\s*\(/);
-      expect(code).not.toContain("max_uid");
-    });
-
-    it("stamps a mod-sequence when a spam flip moves a mail out of INBOX", async () => {
-      // The flip is a membership change, so it has to advance HIGHESTMODSEQ or
-      // a CONDSTORE client reads an unchanged value and never resyncs. The
-      // repository's own tests mock this module, so pin the write at the source.
-      const fs = await import("fs/promises");
-      const path = await import("path");
-      const core = await fs.readFile(path.join(import.meta.dir, "core.ts"), "utf8");
-      const body = core.match(/export const markMailSpam[\s\S]*?\n};/)![0];
-      expect(body).toMatch(/modseq\s*=\s*\$4/);
-      expect(body).toContain("getNextModseq(user_id)");
-      // The idempotence guard must survive — a re-mark of the same value has to
-      // match no row so the reserved value goes unused.
-      expect(body).toContain("is_spam IS DISTINCT FROM $1");
-    });
   });
 });

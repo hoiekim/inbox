@@ -396,8 +396,8 @@ describe("MOVE happy path — non-INBOX source → INBOX dest", () => {
   it("keeps the routing addresses, and still targets the expunge and the dest UID space", async () => {
     // Source is a mapped mailbox (Archive); the clone's routing JSONB must be
     // preserved. The jsonb address filter (`buildHeaderAddressCondition`)
-    // belongs to the WEB reads in `repositories/mails/http.ts`; IMAP boxes
-    // outside the domain-scoped set read through an INNER JOIN on
+    // belongs to the WEB reads in `repositories/mails/http-query.ts`; IMAP
+    // boxes outside the domain-scoped set read through an INNER JOIN on
     // `mail_mailbox_uid`, and the clone has no mapping row for a
     // domain-scoped destination — so it cannot re-surface in Archive either
     // way. Clearing the JSONB would only strip the recipient the web views

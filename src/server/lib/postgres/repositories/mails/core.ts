@@ -19,6 +19,10 @@ import {
   writeMailboxUid,
 } from "./counters";
 import {
+  buildMailExistsQuery,
+  buildMarkMailSpamQuery,
+} from "./core-query";
+import {
   decideMappingWrites,
   type MappingScope,
   type MappingWrite,
@@ -514,16 +518,15 @@ export const markMailSpam = async (
   mail_id: string,
   is_spam: boolean
 ): Promise<{ found: boolean; changed: boolean }> => {
-  const result = await pool.query(
-    `UPDATE mails SET is_spam = $1, updated = NOW(), modseq = $4
-       WHERE mail_id = $2 AND user_id = $3 AND is_spam IS DISTINCT FROM $1
-       RETURNING mail_id`,
-    [is_spam, mail_id, user_id, await getNextModseq(user_id)]
+  const update = buildMarkMailSpamQuery(
+    user_id,
+    mail_id,
+    is_spam,
+    await getNextModseq(user_id)
   );
+  const result = await pool.query(update.sql, update.values);
   if ((result.rowCount ?? 0) > 0) return { found: true, changed: true };
-  const exists = await pool.query(
-    `SELECT 1 FROM mails WHERE mail_id = $1 AND user_id = $2 LIMIT 1`,
-    [mail_id, user_id]
-  );
+  const probe = buildMailExistsQuery(user_id, mail_id);
+  const exists = await pool.query(probe.sql, probe.values);
   return { found: (exists.rowCount ?? 0) > 0, changed: false };
 };
