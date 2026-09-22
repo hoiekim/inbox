@@ -135,7 +135,8 @@ export const stopCleanupScheduler = () => {
   }
 };
 
-// Pre-configured limiters for auth endpoints
+// Pre-configured limiters, shared by a router mount and the handler that
+// records against them.
 export const loginLimiter = createLimiter(
   5,
   "Too many login attempts, try again later"
@@ -144,4 +145,9 @@ export const loginLimiter = createLimiter(
 export const tokenLimiter = createLimiter(
   3,
   "Too many token requests, try again later"
+);
+
+export const mailgunEventsLimiter = createLimiter(
+  60,
+  "Too many Mailgun webhook requests, try again later"
 );
