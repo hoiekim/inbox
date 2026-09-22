@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
+import { PassThrough, Readable } from "stream";
 import {
   SMTPServer,
   SMTPServerAddress,
@@ -20,6 +21,7 @@ import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
+import { MAX_MESSAGE_BYTES } from "./message-size";
 
 const registerListeners = (
   server: SMTPServer,
@@ -128,6 +130,87 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
   return cb();
 };
 
+/** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
+class MessageTooLargeError extends Error {
+  responseCode = 552;
+
+  constructor() {
+    super(
+      `Error: message exceeds fixed maximum message size ${MAX_MESSAGE_BYTES}`
+    );
+  }
+}
+
+/**
+ * A DATA transaction, carried to the parser only as far as the ceiling.
+ *
+ * `exceeded` is read after every `await` the handlers do: the 552 has already
+ * gone out by then, so the side effect that `await` was leading up to must
+ * not run, and nothing may answer the transaction a second time.
+ */
+interface BoundedMessage {
+  stream: Readable;
+  exceeded: boolean;
+}
+
+/**
+ * Bounds what one DATA transaction can make the process hold.
+ *
+ * `smtp-server` offers no enforcement to lean on. Its `size` option makes
+ * `EHLO` advertise `SIZE` and refuses a `MAIL FROM` that declares more, but a
+ * sender that declares nothing still streams whatever it likes: the library
+ * computes `stream.sizeExceeded` in `_endDataMode`, once the final octet has
+ * already been written, and never acts on it. So the count is kept here, where
+ * the octets arrive, and the parser is cut off at the ceiling rather than told
+ * about it afterwards.
+ *
+ * Two shapes this deliberately avoids. The source keeps flowing past the cut,
+ * because the reply is only sent once DATA ends and a source nobody reads
+ * never ends. And the cut destroys without an error, because an error would
+ * reach the parser — which may not have been handed the stream yet — while
+ * this has already answered the transaction.
+ */
+const boundMessageSize = (
+  source: SMTPServerDataStream,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+): BoundedMessage => {
+  const bounded = new PassThrough();
+  const message: BoundedMessage = { stream: bounded, exceeded: false };
+  let bytes = 0;
+
+  source.on("data", (chunk: Buffer) => {
+    if (message.exceeded) return;
+
+    bytes += chunk.length;
+    if (bytes > MAX_MESSAGE_BYTES) {
+      message.exceeded = true;
+      logger.warn("SMTP: refused a message over the maximum size", {
+        remoteAddress: session.remoteAddress,
+        maxBytes: MAX_MESSAGE_BYTES
+      });
+      bounded.destroy();
+      source.resume();
+      return cb(new MessageTooLargeError());
+    }
+
+    if (!bounded.write(chunk)) {
+      source.pause();
+      bounded.once("drain", () => source.resume());
+    }
+  });
+
+  source.once("end", () => {
+    if (!message.exceeded) bounded.end();
+  });
+
+  source.once("error", (err) => {
+    if (!message.exceeded) bounded.destroy(err);
+  });
+
+  return message;
+};
+
 export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -147,17 +230,22 @@ export const onData = (
   const isOutgoingEmail =
     typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
 
-  if (isOutgoingEmail) onDataOutgoing(stream, session, cb);
-  else if (isIncomingEmail) onDataIncoming(stream, session, cb);
+  if (!isIncomingEmail && !isOutgoingEmail) return;
+
+  const message = boundMessageSize(stream, session, cb);
+  if (isOutgoingEmail) onDataOutgoing(message, session, cb);
+  else onDataIncoming(message, session, cb);
 };
 
 const onDataIncoming = (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
-  simpleParser(stream)
+  simpleParser(message.stream)
     .then(async (parsed) => {
+      if (message.exceeded) return;
+
       const mail: IncomingMail = {
         messageId: parsed.messageId,
         from: parsed.from,
@@ -187,6 +275,7 @@ const onDataIncoming = (
       cb();
     })
     .catch((err) => {
+      if (message.exceeded) return;
       logger.error("Error parsing email", {}, err);
       cb(err);
     });
@@ -305,20 +394,24 @@ export const splitEnvelopeRecipients = (
 };
 
 const onDataOutgoing = async (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
   try {
     const username = session.user;
     const user = username && (await getUser({ username }));
+    if (message.exceeded) return;
+
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
       return cb(new Error("User not authenticated"));
     }
 
-    const parsed = await simpleParser(stream);
+    const parsed = await simpleParser(message.stream);
+    if (message.exceeded) return;
+
     const mailFrom = session.envelope.mailFrom;
     const envelopeFrom =
       mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
@@ -349,6 +442,7 @@ const onDataOutgoing = async (
     await sendMail(signedUser, mailData);
     cb();
   } catch (err) {
+    if (message.exceeded) return;
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };
@@ -363,7 +457,8 @@ export const initializeSmtp = async () => {
     onAuth,
     onMailFrom,
     onData,
-    maxClients: SMTP_MAX_CLIENTS
+    maxClients: SMTP_MAX_CLIENTS,
+    size: MAX_MESSAGE_BYTES
   };
 
   const credentials = getTlsCredentials();

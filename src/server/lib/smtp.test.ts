@@ -6,7 +6,9 @@ import type {
   SMTPServerDataStream,
   SMTPServerAuthentication
 } from "smtp-server";
+import { PassThrough } from "stream";
 import * as authRateLimit from "./auth-rate-limit";
+import { MAX_MESSAGE_BYTES } from "./message-size";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -327,12 +329,12 @@ describe("onMailFrom handler", () => {
 describe("onData handler", () => {
   const originalEnv = process.env;
 
+  // A real stream, not a { pipe, on } stub: onData now counts the octets it
+  // forwards, so a fixture that never delivers any cannot exercise the cap.
   const makeStream = () => {
-    const stream = {
-      pipe: mock(() => stream),
-      on: mock(() => stream),
-    } as unknown as SMTPServerDataStream;
-    return stream;
+    const stream = new PassThrough();
+    stream.end();
+    return stream as unknown as SMTPServerDataStream;
   };
 
   beforeEach(() => {
@@ -886,6 +888,166 @@ describe("onData handler", () => {
   });
 });
 
+describe("onData message ceiling", () => {
+  const originalEnv = process.env;
+
+  // Counts what the parser is actually handed, so the assertions can tell a
+  // handler that stops feeding it at the ceiling from one that parses the
+  // whole message and rejects afterwards — the second spends exactly the
+  // memory the ceiling exists to bound, and answers 552 all the same.
+  let parserBytes = 0;
+
+  const parseAndCount = () =>
+    mockSimpleParser.mockImplementation(
+      (stream: NodeJS.ReadableStream) =>
+        new Promise((resolve) => {
+          stream.on("data", (chunk: Buffer) => {
+            parserBytes += chunk.length;
+          });
+          stream.on("end", () =>
+            resolve({
+              messageId: "<big@example.com>",
+              from: { value: [{ address: "sender@example.com" }] },
+              to: { value: [{ address: "recipient@test.com" }] },
+              subject: "Big",
+              html: "<p>Big</p>",
+              text: "Big",
+              attachments: []
+            })
+          );
+        })
+    );
+
+  // Writes `totalBytes` honouring backpressure, so the fixture cannot outrun
+  // the handler and buffer the whole payload in the source stream instead.
+  const feed = (stream: PassThrough, totalBytes: number) => {
+    const chunk = Buffer.alloc(256 * 1024, 0x61);
+    let written = 0;
+    const pump = () => {
+      while (written < totalBytes) {
+        const size = Math.min(chunk.length, totalBytes - written);
+        written += size;
+        if (!stream.write(chunk.subarray(0, size))) {
+          stream.once("drain", pump);
+          return;
+        }
+      }
+      stream.end();
+    };
+    pump();
+  };
+
+  const drive = (
+    session: SMTPServerSession,
+    totalBytes: number
+  ): Promise<Error | null | undefined> => {
+    const stream = new PassThrough();
+    return new Promise((resolve) => {
+      onData(stream as unknown as SMTPServerDataStream, session, resolve);
+      feed(stream, totalBytes);
+    });
+  };
+
+  const incomingSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const outgoingSession = () =>
+    ({
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  beforeEach(() => {
+    parserBytes = 0;
+    mockSaveMailHandler.mockReset();
+    mockSendMail.mockReset();
+    mockSimpleParser.mockReset();
+    mockGetUser.mockReset();
+    mockLogger.warn.mockReset();
+    parseAndCount();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("refuses an incoming message past the ceiling with 552 and never saves it", async () => {
+    const err = await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("stops feeding the parser at the ceiling rather than after the whole message", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(parserBytes).toBeGreaterThan(0);
+    expect(parserBytes).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+  });
+
+  it("logs the refusal against the sending address", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    const refusals = mockLogger.warn.mock.calls.filter((call) =>
+      String(call[0]).includes("over the maximum size")
+    );
+    expect(refusals.length).toBe(1);
+    expect(refusals[0]![1]).toMatchObject({
+      remoteAddress: "1.2.3.4",
+      maxBytes: MAX_MESSAGE_BYTES
+    });
+  });
+
+  it("refuses an outgoing submission past the ceiling and never relays it", async () => {
+    mockGetUser.mockImplementation(() =>
+      Promise.resolve({
+        username: "admin",
+        getSigned: () => ({ id: "user-1", username: "admin" })
+      })
+    );
+
+    const err = await drive(outgoingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(parserBytes).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+  });
+
+  it("delivers a message under the ceiling whole", async () => {
+    const size = 2 * 1024 * 1024;
+    const err = await drive(incomingSession(), size);
+
+    expect(err).toBeUndefined();
+    expect(parserBytes).toBe(size);
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a refused transaction exactly once", async () => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+      calls.push(err)
+    );
+    feed(stream, MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(calls.length).toBe(1);
+  });
+});
+
 describe("splitEnvelopeRecipients", () => {
   it("assigns each envelope recipient by the header that names it", () => {
     const split = splitEnvelopeRecipients(
@@ -965,11 +1127,14 @@ const makeFakeServer = (): FakeServer => {
   return server;
 };
 
+const createdOptions: Record<string, unknown>[] = [];
+
 mock.module("smtp-server", () => ({
   SMTPServer: class {
-    constructor(_opts: unknown) {
+    constructor(opts: Record<string, unknown>) {
       const fake = makeFakeServer();
       createdServers.push(fake);
+      createdOptions.push(opts);
       return fake as unknown as SMTPServer;
     }
   }
@@ -1043,6 +1208,7 @@ describe("initializeSmtp configuration", () => {
 
   beforeEach(() => {
     createdServers.length = 0;
+    createdOptions.length = 0;
     mockLogger.warn.mockReset();
     mockLogger.info.mockReset();
     process.env = { ...originalEnv };
@@ -1132,6 +1298,38 @@ describe("initializeSmtp configuration", () => {
       expect(infos.some((m) => m.includes("2525"))).toBe(true);
       expect(infos.some((m) => m.includes("4465"))).toBe(true);
       expect(infos.some((m) => m.includes("5587"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // `size` is what makes the listener advertise `SIZE` in EHLO and refuse a
+  // `MAIL FROM` that declares more — the half a sending MTA acts on, which no
+  // test that drives DATA can see.
+  it("declares the message ceiling on every listener it starts", async () => {
+    const { writeFileSync, mkdtempSync, rmSync } = await import("fs");
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+
+    const dir = mkdtempSync(join(tmpdir(), "smtp-size-test-"));
+    const certPath = join(dir, "cert.pem");
+    const keyPath = join(dir, "key.pem");
+    writeFileSync(certPath, "DUMMY CERT");
+    writeFileSync(keyPath, "DUMMY KEY");
+    process.env.SSL_CERTIFICATE = certPath;
+    process.env.SSL_CERTIFICATE_KEY = keyPath;
+
+    try {
+      const initializeSmtp = await loadInitializeSmtp();
+      await initializeSmtp();
+
+      expect(createdOptions.length).toBe(3);
+      expect(createdOptions.map((options) => options.size)).toEqual([
+        MAX_MESSAGE_BYTES,
+        MAX_MESSAGE_BYTES,
+        MAX_MESSAGE_BYTES
+      ]);
+      expect(createdOptions.every((options) => options.hideSize)).toBeFalsy();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
