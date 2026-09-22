@@ -1034,6 +1034,66 @@ describe("onData message ceiling", () => {
     expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("answers a failed DATA stream once and never saves it", async () => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+      calls.push(err)
+    );
+    stream.write(Buffer.alloc(1024, 0x61));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stream.destroy(new Error("socket reset"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("socket reset");
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  // The outgoing branch reaches `simpleParser` only after a user lookup, so a
+  // stream that fails during the lookup has no parser listening yet. Answering
+  // through `cb` rather than through the stream is what keeps that from
+  // becoming an unhandled 'error' event.
+  it("answers a DATA stream that fails before the parser is attached", async () => {
+    let releaseLookup: (() => void) | undefined;
+    mockGetUser.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseLookup = () =>
+            resolve({
+              username: "admin",
+              getSigned: () => ({ id: "user-1", username: "admin" })
+            });
+        })
+    );
+
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+    const uncaught: Error[] = [];
+    const onUncaught = (err: Error) => uncaught.push(err);
+    process.on("uncaughtException", onUncaught);
+
+    try {
+      onData(stream as unknown as SMTPServerDataStream, outgoingSession(), (err) =>
+        calls.push(err)
+      );
+      stream.write(Buffer.alloc(1024, 0x61));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      stream.destroy(new Error("socket reset"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseLookup?.();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+
+    expect(uncaught).toEqual([]);
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("socket reset");
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
   it("answers a refused transaction exactly once", async () => {
     const stream = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
