@@ -144,13 +144,13 @@ class MessageTooLargeError extends Error {
 /**
  * A DATA transaction, carried to the parser only as far as the ceiling.
  *
- * `exceeded` is read after every `await` the handlers do: the 552 has already
- * gone out by then, so the side effect that `await` was leading up to must
- * not run, and nothing may answer the transaction a second time.
+ * `refused` is read after every `await` the handlers do: the reply has already
+ * gone out by then, so the side effect that `await` was leading up to must not
+ * run, and nothing may answer the transaction a second time.
  */
 interface BoundedMessage {
   stream: Readable;
-  exceeded: boolean;
+  refused: boolean;
 }
 
 /**
@@ -166,9 +166,10 @@ interface BoundedMessage {
  *
  * Two shapes this deliberately avoids. The source keeps flowing past the cut,
  * because the reply is only sent once DATA ends and a source nobody reads
- * never ends. And the cut destroys without an error, because an error would
- * reach the parser — which may not have been handed the stream yet — while
- * this has already answered the transaction.
+ * never ends. And every cut destroys without an error: the outgoing handler
+ * reaches `simpleParser` only after a user lookup, so an error emitted here
+ * can land on a stream nothing is listening to yet. Refusals are answered
+ * through `cb` instead, which is in hand the whole time.
  */
 const boundMessageSize = (
   source: SMTPServerDataStream,
@@ -176,22 +177,29 @@ const boundMessageSize = (
   cb: (err?: Error | null) => void
 ): BoundedMessage => {
   const bounded = new PassThrough();
-  const message: BoundedMessage = { stream: bounded, exceeded: false };
+  const message: BoundedMessage = { stream: bounded, refused: false };
   let bytes = 0;
 
+  const refuse = (err: Error) => {
+    message.refused = true;
+    bounded.destroy();
+    cb(err);
+  };
+
   source.on("data", (chunk: Buffer) => {
-    if (message.exceeded) return;
+    if (message.refused) return;
 
     bytes += chunk.length;
     if (bytes > MAX_MESSAGE_BYTES) {
-      message.exceeded = true;
       logger.warn("SMTP: refused a message over the maximum size", {
         remoteAddress: session.remoteAddress,
         maxBytes: MAX_MESSAGE_BYTES
       });
-      bounded.destroy();
+      refuse(new MessageTooLargeError());
+      // Read the rest of DATA without holding it: the reply lands when the
+      // transaction ends, and a source nobody reads never ends.
       source.resume();
-      return cb(new MessageTooLargeError());
+      return;
     }
 
     if (!bounded.write(chunk)) {
@@ -201,11 +209,13 @@ const boundMessageSize = (
   });
 
   source.once("end", () => {
-    if (!message.exceeded) bounded.end();
+    if (!message.refused) bounded.end();
   });
 
   source.once("error", (err) => {
-    if (!message.exceeded) bounded.destroy(err);
+    if (message.refused) return;
+    logger.error("SMTP: DATA stream failed", {}, err);
+    refuse(err);
   });
 
   return message;
@@ -244,7 +254,7 @@ const onDataIncoming = (
 ) => {
   simpleParser(message.stream)
     .then(async (parsed) => {
-      if (message.exceeded) return;
+      if (message.refused) return;
 
       const mail: IncomingMail = {
         messageId: parsed.messageId,
@@ -275,7 +285,7 @@ const onDataIncoming = (
       cb();
     })
     .catch((err) => {
-      if (message.exceeded) return;
+      if (message.refused) return;
       logger.error("Error parsing email", {}, err);
       cb(err);
     });
@@ -401,7 +411,7 @@ const onDataOutgoing = async (
   try {
     const username = session.user;
     const user = username && (await getUser({ username }));
-    if (message.exceeded) return;
+    if (message.refused) return;
 
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
@@ -410,7 +420,7 @@ const onDataOutgoing = async (
     }
 
     const parsed = await simpleParser(message.stream);
-    if (message.exceeded) return;
+    if (message.refused) return;
 
     const mailFrom = session.envelope.mailFrom;
     const envelopeFrom =
@@ -442,7 +452,7 @@ const onDataOutgoing = async (
     await sendMail(signedUser, mailData);
     cb();
   } catch (err) {
-    if (message.exceeded) return;
+    if (message.refused) return;
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };
