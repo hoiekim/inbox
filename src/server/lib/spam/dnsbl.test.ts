@@ -5,7 +5,14 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { checkDnsbls, DEFAULT_DNSBLS, isRealListing, toIpv4 } from "./dnsbl";
+import {
+  checkDnsbls,
+  DEFAULT_DNSBLS,
+  isRealListing,
+  toIpv4,
+  verdictForAnswer,
+  verdictForDnsError,
+} from "./dnsbl";
 
 describe("DNSBL Checker", () => {
   describe("checkDnsbls", () => {
@@ -165,6 +172,51 @@ describe("DNSBL Checker", () => {
       // Those must not be treated as DNSBL listings.
       expect(isRealListing(["192.0.2.1"])).toBe(false);
       expect(isRealListing(["10.0.0.1"])).toBe(false);
+    });
+  });
+
+  describe("verdictForAnswer", () => {
+    it("reads a 127.0.0.X record as a listing", () => {
+      expect(verdictForAnswer(["127.0.0.2"])).toBe("listed");
+      expect(verdictForAnswer(["127.0.0.10"])).toBe("listed");
+      expect(verdictForAnswer(["127.0.0.2", "127.255.255.254"])).toBe("listed");
+    });
+
+    it("reads an open-resolver warning as no answer, never as a clearance", () => {
+      // Spamhaus returns 127.255.255.X when the query arrives via a public
+      // resolver. Reading it as "clean" hands the allowlist exemption to any
+      // sender whose query the blocklist refused to answer.
+      expect(verdictForAnswer(["127.255.255.254"])).toBe("unknown");
+      expect(verdictForAnswer(["127.255.255.252"])).toBe("unknown");
+      expect(verdictForAnswer(["127.255.255.252", "127.255.255.254"])).toBe("unknown");
+    });
+
+    it("reads a hijacked NXDOMAIN response as no answer", () => {
+      expect(verdictForAnswer(["192.0.2.1"])).toBe("unknown");
+      expect(verdictForAnswer([])).toBe("unknown");
+    });
+  });
+
+  describe("verdictForDnsError", () => {
+    it("clears the address only on a no-such-record code", () => {
+      expect(verdictForDnsError("ENOTFOUND")).toBe("clean");
+      expect(verdictForDnsError("ENODATA")).toBe("clean");
+      expect(verdictForDnsError("NOTFOUND")).toBe("clean");
+      expect(verdictForDnsError("NODATA")).toBe("clean");
+    });
+
+    it("withholds a verdict when the resolver failed rather than answered", () => {
+      expect(verdictForDnsError("ETIMEOUT")).toBe("unknown");
+      expect(verdictForDnsError("ESERVFAIL")).toBe("unknown");
+      expect(verdictForDnsError("EREFUSED")).toBe("unknown");
+      expect(verdictForDnsError("ECONNREFUSED")).toBe("unknown");
+    });
+
+    it("withholds a verdict when the rejection carries no code", () => {
+      // The DNSBL_TIMEOUT_MS race rejects with a plain Error, so this is the
+      // shape condition 2 of the allowlist gate leads with.
+      expect(verdictForDnsError(undefined)).toBe("unknown");
+      expect(verdictForDnsError("")).toBe("unknown");
     });
   });
 
