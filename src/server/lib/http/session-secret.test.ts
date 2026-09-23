@@ -53,9 +53,10 @@ describe("resolveSessionSecret in production", () => {
     });
   });
 
-  it("throws on the literal the server used to fall back to", async () => {
-    const { resolveSessionSecret } = await import("./session-secret");
-    await withEnv({ SECRET: "secret", NODE_ENV: "production" }, () => {
+  it("throws on the development fallback, so it cannot be copied into a deployment", async () => {
+    const { resolveSessionSecret, DEVELOPMENT_FALLBACK } = await import("./session-secret");
+    expect(DEVELOPMENT_FALLBACK).toBe("secret");
+    await withEnv({ SECRET: DEVELOPMENT_FALLBACK, NODE_ENV: "production" }, () => {
       expect(() => resolveSessionSecret()).toThrow(/published in this repository/);
     });
   });
@@ -63,13 +64,6 @@ describe("resolveSessionSecret in production", () => {
   it("throws on the value .env.example ships", async () => {
     const { resolveSessionSecret } = await import("./session-secret");
     await withEnv({ SECRET: "inbox", NODE_ENV: "production" }, () => {
-      expect(() => resolveSessionSecret()).toThrow(/published in this repository/);
-    });
-  });
-
-  it("throws on the development fallback, so it cannot be copied into a deployment", async () => {
-    const { resolveSessionSecret, DEVELOPMENT_FALLBACK } = await import("./session-secret");
-    await withEnv({ SECRET: DEVELOPMENT_FALLBACK, NODE_ENV: "production" }, () => {
       expect(() => resolveSessionSecret()).toThrow(/published in this repository/);
     });
   });
@@ -103,21 +97,19 @@ describe("resolveSessionSecret in production", () => {
 });
 
 describe("resolveSessionSecret outside production", () => {
-  it("warns and returns a key that is not the old fallback when SECRET is unset", async () => {
+  it("warns and keeps signing with the key it signed with before, when SECRET is unset", async () => {
     const { resolveSessionSecret, DEVELOPMENT_FALLBACK } = await import("./session-secret");
     await withEnv({ SECRET: undefined, NODE_ENV: "test" }, (warnings) => {
-      const resolved = resolveSessionSecret();
-      expect(resolved).toBe(DEVELOPMENT_FALLBACK);
-      expect(resolved).not.toBe("secret");
+      expect(resolveSessionSecret()).toBe(DEVELOPMENT_FALLBACK);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]?.message).toMatch(/SECRET is not set/);
     });
   });
 
   it("does not throw when NODE_ENV is absent entirely", async () => {
-    const { resolveSessionSecret } = await import("./session-secret");
+    const { resolveSessionSecret, DEVELOPMENT_FALLBACK } = await import("./session-secret");
     await withEnv({ SECRET: undefined, NODE_ENV: undefined }, (warnings) => {
-      expect(resolveSessionSecret()).not.toBe("secret");
+      expect(resolveSessionSecret()).toBe(DEVELOPMENT_FALLBACK);
       expect(warnings).toHaveLength(1);
     });
   });

@@ -1,8 +1,13 @@
 import { isProduction } from "../env";
 import { logger } from "../logger";
 
-/** The key a non-production boot signs with when SECRET is unset. */
-export const DEVELOPMENT_FALLBACK = "inbox-development-session-secret";
+/**
+ * The key a non-production boot signs with when SECRET is unset. Changing this
+ * value invalidates every outstanding cookie on a deployment that never opted
+ * into the production posture, logging its users out to swap one published key
+ * for another, so it stays fixed.
+ */
+export const DEVELOPMENT_FALLBACK = "secret";
 
 /**
  * Values this repository publishes — in its own source, in .env.example, and as
@@ -10,7 +15,7 @@ export const DEVELOPMENT_FALLBACK = "inbox-development-session-secret";
  * no cookie integrity at all, because the key is readable by anyone, so they
  * are treated the same as an unset secret rather than as a configured one.
  */
-const PUBLISHED_VALUES = new Set(["secret", "inbox", DEVELOPMENT_FALLBACK]);
+const PUBLISHED_VALUES = new Set([DEVELOPMENT_FALLBACK, "inbox"]);
 
 const RECOMMENDED_LENGTH = 32;
 
