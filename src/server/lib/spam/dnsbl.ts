@@ -93,12 +93,39 @@ export type DnsblVerdict = "listed" | "clean" | "unknown";
 const NOT_LISTED_DNS_CODES = new Set(["ENOTFOUND", "ENODATA", "NOTFOUND", "NODATA"]);
 
 /**
+ * The verdict a DNSBL's successful response carries.
+ *
+ * A record came back, so the address is either listed or the response is one of
+ * the warning codes `isRealListing` rejects — a query the blocklist declined to
+ * answer, which is not a clearance.
+ *
+ * ```ts
+ * verdictForAnswer(["127.0.0.2"]);       // "listed"
+ * verdictForAnswer(["127.255.255.254"]); // "unknown" — open-resolver warning
+ * ```
+ */
+export const verdictForAnswer = (addresses: string[]): DnsblVerdict =>
+  isRealListing(addresses) ? "listed" : "unknown";
+
+/**
+ * The verdict a failed DNSBL query carries.
+ *
+ * Only the no-such-record codes mean "not listed". A timeout rejects with a
+ * plain `Error` carrying no `code`, and a refusal or server failure describes
+ * the resolver rather than the address, so neither clears it.
+ *
+ * ```ts
+ * verdictForDnsError("ENOTFOUND"); // "clean"
+ * verdictForDnsError("EREFUSED");  // "unknown"
+ * verdictForDnsError(undefined);   // "unknown" — the timeout path
+ * ```
+ */
+export const verdictForDnsError = (code?: string): DnsblVerdict =>
+  code && NOT_LISTED_DNS_CODES.has(code) ? "clean" : "unknown";
+
+/**
  * Ask one DNSBL about a dotted quad.
  * Times out after DNSBL_TIMEOUT_MS to prevent hanging.
- *
- * A timeout, a resolver failure, or a response carrying only the warning codes
- * `isRealListing` rejects are all answers the query never got, and are reported
- * as such rather than as a clearance.
  */
 async function checkDnsbl(ipv4: string, dnsbl: DnsBlocklist): Promise<DnsblVerdict> {
   const query = `${reverseIp(ipv4)}.${dnsbl.hostname}`;
@@ -109,10 +136,9 @@ async function checkDnsbl(ipv4: string, dnsbl: DnsBlocklist): Promise<DnsblVerdi
       dns.resolve4(query),
       timeout<string[]>(DNSBL_TIMEOUT_MS, `DNSBL query timeout: ${dnsbl.name}`),
     ]);
-    return isRealListing(result) ? "listed" : "unknown";
+    return verdictForAnswer(result);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code && NOT_LISTED_DNS_CODES.has(code) ? "clean" : "unknown";
+    return verdictForDnsError((error as NodeJS.ErrnoException).code);
   }
 }
 
