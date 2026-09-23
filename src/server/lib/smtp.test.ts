@@ -6,7 +6,7 @@ import type {
   SMTPServerDataStream,
   SMTPServerAuthentication
 } from "smtp-server";
-import { PassThrough } from "stream";
+import { PassThrough, Readable } from "stream";
 import * as authRateLimit from "./auth-rate-limit";
 import { MAX_MESSAGE_BYTES } from "./message-size";
 
@@ -865,8 +865,7 @@ describe("onData handler", () => {
     expect(mailData.bcc).toBe("hidden@other.com");
   });
 
-  it("does not invoke callback when neither incoming nor outgoing matches", async () => {
-    // Both addresses outside EMAIL_DOMAIN — neither branch fires, cb stays uncalled.
+  it("refuses to relay when neither incoming nor outgoing matches", async () => {
     const stream = makeStream();
     const session = {
       envelope: {
@@ -876,13 +875,12 @@ describe("onData handler", () => {
       remoteAddress: "1.2.3.4"
     } as unknown as SMTPServerSession;
 
-    let cbCalled = false;
-    onData(stream, session, () => {
-      cbCalled = true;
-    });
-    // Give microtasks a chance — nothing should run.
+    const calls: (Error | null | undefined)[] = [];
+    onData(stream, session, (err) => calls.push(err));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(cbCalled).toBe(false);
+
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(550);
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
   });
@@ -896,11 +894,13 @@ describe("onData message ceiling", () => {
   // whole message and rejects afterwards — the second spends exactly the
   // memory the ceiling exists to bound, and answers 552 all the same.
   let parserBytes = 0;
+  let parserStream: Readable | undefined;
 
   const parseAndCount = () =>
     mockSimpleParser.mockImplementation(
       (stream: NodeJS.ReadableStream) =>
         new Promise((resolve) => {
+          parserStream = stream as unknown as Readable;
           stream.on("data", (chunk: Buffer) => {
             parserBytes += chunk.length;
           });
@@ -969,6 +969,7 @@ describe("onData message ceiling", () => {
 
   beforeEach(() => {
     parserBytes = 0;
+    parserStream = undefined;
     mockSaveMailHandler.mockReset();
     mockSendMail.mockReset();
     mockSimpleParser.mockReset();
@@ -1089,6 +1090,7 @@ describe("onData message ceiling", () => {
     }
 
     expect(uncaught).toEqual([]);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
     expect(calls.length).toBe(1);
     expect(calls[0]!.message).toBe("socket reset");
     expect(mockSendMail).not.toHaveBeenCalled();
@@ -1105,6 +1107,72 @@ describe("onData message ceiling", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(calls.length).toBe(1);
+  });
+
+  it("releases the parser's stream when the ceiling refuses", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(parserStream).toBeDefined();
+    expect(parserStream!.destroyed).toBe(true);
+  });
+
+  // The library transmits a reply only once DATA ends, and DATA ends only once
+  // the source is read. A handler that answers through `cb` without reading the
+  // transaction out therefore sends nothing at all and holds the connection to
+  // the socket timeout — so every refusal is asserted on the source ending, not
+  // just on the callback firing.
+  const relaySession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "external@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const unauthenticatedSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const driveAndDrain = async (session: SMTPServerSession, totalBytes: number) => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, session, (err) =>
+      calls.push(err)
+    );
+    feed(stream, totalBytes);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    return { calls, ended: stream.readableEnded };
+  };
+
+  it("reads out a relayed transaction it refuses", async () => {
+    const { calls, ended } = await driveAndDrain(relaySession(), 1024 * 1024);
+
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(550);
+    expect(ended).toBe(true);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
+  });
+
+  it("reads out an unauthenticated submission it refuses", async () => {
+    mockGetUser.mockImplementation(() => Promise.resolve(undefined));
+
+    const { calls, ended } = await driveAndDrain(
+      unauthenticatedSession(),
+      1024 * 1024
+    );
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(ended).toBe(true);
+    expect(mockSendMail).not.toHaveBeenCalled();
   });
 });
 
@@ -1389,7 +1457,11 @@ describe("initializeSmtp configuration", () => {
         MAX_MESSAGE_BYTES,
         MAX_MESSAGE_BYTES
       ]);
-      expect(createdOptions.every((options) => options.hideSize)).toBeFalsy();
+      expect(createdOptions.map((options) => options.hideSize)).toEqual([
+        undefined,
+        undefined,
+        undefined
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

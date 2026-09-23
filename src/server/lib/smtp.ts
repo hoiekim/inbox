@@ -130,6 +130,20 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
   return cb();
 };
 
+/**
+ * RFC 5321 §3.6.1 gives 550 to a message this host will not relay — neither
+ * the sender nor any recipient is local. 550 keeps it in the "policy denied"
+ * family rather than the "server error" family that would train a client to
+ * retry, matching `onMailFrom`'s refusal above.
+ */
+class RelayDeniedError extends Error {
+  responseCode = 550;
+
+  constructor() {
+    super("Error: relay access denied");
+  }
+}
+
 /** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
 class MessageTooLargeError extends Error {
   responseCode = 552;
@@ -229,6 +243,12 @@ export const onData = (
   const { EMAIL_DOMAIN } = process.env;
   if (!EMAIL_DOMAIN) {
     logger.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
+    // Every refusal below reads the transaction out before answering. The
+    // library transmits a reply only once DATA ends, and DATA ends only once
+    // the source is read — so answering through `cb` alone generates a reply
+    // that is never sent, and holds one of `maxClients` until the socket
+    // timeout.
+    stream.resume();
     return cb(new Error("Email service not configured"));
   }
 
@@ -240,7 +260,13 @@ export const onData = (
   const isOutgoingEmail =
     typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
 
-  if (!isIncomingEmail && !isOutgoingEmail) return;
+  if (!isIncomingEmail && !isOutgoingEmail) {
+    logger.warn("SMTP: refused to relay a message with no local party", {
+      remoteAddress: session.remoteAddress
+    });
+    stream.resume();
+    return cb(new RelayDeniedError());
+  }
 
   const message = boundMessageSize(stream, session, cb);
   if (isOutgoingEmail) onDataOutgoing(message, session, cb);
@@ -287,6 +313,7 @@ const onDataIncoming = (
     .catch((err) => {
       if (message.refused) return;
       logger.error("Error parsing email", {}, err);
+      message.stream.resume();
       cb(err);
     });
 };
@@ -416,6 +443,7 @@ const onDataOutgoing = async (
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
+      message.stream.resume();
       return cb(new Error("User not authenticated"));
     }
 
@@ -453,6 +481,7 @@ const onDataOutgoing = async (
     cb();
   } catch (err) {
     if (message.refused) return;
+    message.stream.resume();
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };
