@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { isProduction } from "../env";
 import { logger } from "../logger";
 
@@ -24,12 +25,15 @@ const GENERATE = "generate one with `openssl rand -base64 32`";
 /**
  * Resolve the key that signs session cookies.
  *
- * Production refuses to boot on a missing or publicly known key: either one
- * lets anyone mint a validly-signed cookie for a session id they have seen,
- * which is the whole guarantee the signature exists to provide. A key that is
- * merely shorter than the recommended length is still private, so it warns
- * instead — refusing it would cost availability while denying an attacker
- * nothing.
+ * A missing or publicly known key gives session cookies no integrity: either
+ * one lets anyone mint a validly-signed cookie for a session id they have
+ * seen. Production never signs with one — instead of refusing to boot, it
+ * generates a fresh random key for the life of the process and logs an error
+ * demanding a real one, so a deployment that hasn't configured SECRET yet
+ * stays reachable rather than crash-looping, at the cost of invalidating
+ * every session on the next restart. A key that is merely shorter than the
+ * recommended length is still private, so it only warns — refusing it would
+ * cost availability while denying an attacker nothing.
  *
  * Outside production nothing is fatal and a missing key resolves to a fixed
  * development value, so a local checkout needs no setup.
@@ -43,29 +47,39 @@ export const resolveSessionSecret = (): string => {
   const value = secret?.trim();
 
   if (!secret || !value) {
-    if (isProduction())
-      throw new Error(
+    if (isProduction()) {
+      const generated = randomBytes(32).toString("base64");
+      logger.error(
         "SECRET is not set, so session cookies would be signed with a key published in this " +
-          `repository — anyone could forge one. Set SECRET in the deployment environment (${GENERATE}).`
+          "repository — anyone could forge one. Generated a random key for this process instead " +
+          `of refusing to boot; every session will be invalidated on the next restart. Set SECRET ` +
+          `in the deployment environment (${GENERATE}).`
       );
+      return generated;
+    }
     logger.warn(
       "[CONFIG WARNING] SECRET is not set, so session cookies are signed with a fixed\n" +
-        "  development key that this repository publishes. Production refuses to boot without\n" +
-        `  a real one — ${GENERATE} and set SECRET before deploying.`
+        "  development key that this repository publishes. Production generates a random\n" +
+        `  one instead — ${GENERATE} and set SECRET before deploying.`
     );
     return DEVELOPMENT_FALLBACK;
   }
 
   if (PUBLISHED_VALUES.has(value)) {
-    if (isProduction())
-      throw new Error(
+    if (isProduction()) {
+      const generated = randomBytes(32).toString("base64");
+      logger.error(
         "SECRET is set to a value published in this repository, so every session cookie is " +
-          `forgeable. Set a private SECRET in the deployment environment (${GENERATE}).`
+          "forgeable. Generated a random key for this process instead of refusing to boot; " +
+          `every session will be invalidated on the next restart. Set a private SECRET in the ` +
+          `deployment environment (${GENERATE}).`
       );
+      return generated;
+    }
     logger.warn(
       "[CONFIG WARNING] SECRET is a value published in this repository, so it grants session\n" +
-        `  cookies no integrity. Production refuses to boot on it — ${GENERATE} and set SECRET\n` +
-        "  before deploying."
+        `  cookies no integrity. Production generates a random one instead — ${GENERATE} and\n` +
+        "  set SECRET before deploying."
     );
   } else if (value.length < RECOMMENDED_LENGTH) {
     logger.warn(
