@@ -1,6 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { isProduction } from "../env";
 import { logger } from "../logger";
+import { sendAlarm } from "../alarm";
+
+type Notify = (title: string, detail: string, key?: string) => Promise<void>;
 
 /**
  * The key a non-production boot signs with when SECRET is unset. Changing this
@@ -23,39 +26,61 @@ const RECOMMENDED_LENGTH = 32;
 const GENERATE = "generate one with `openssl rand -base64 32`";
 
 /**
+ * Generates the process's key, alarms and logs an error demanding a real one,
+ * then returns it. Kept out of the two call sites in `resolveSessionSecret` so
+ * the alarm — the only signal that reaches an operator once boot stops
+ * throwing — can't be added to one branch and forgotten on the other.
+ */
+const degradeInProduction = (reason: string, generateSecret: () => string, notify: Notify): string => {
+  const detail =
+    `${reason} Generated a random key for this process instead of refusing to boot; ` +
+    `every session will be invalidated on the next restart. Set a private SECRET in the ` +
+    `deployment environment (${GENERATE}).`;
+  logger.error(detail);
+  notify("SECRET Misconfigured", detail, "session-secret").catch(() => undefined);
+  return generateSecret();
+};
+
+/**
  * Resolve the key that signs session cookies.
  *
  * A missing or publicly known key gives session cookies no integrity: either
  * one lets anyone mint a validly-signed cookie for a session id they have
  * seen. Production never signs with one — instead of refusing to boot, it
- * generates a fresh random key for the life of the process and logs an error
- * demanding a real one, so a deployment that hasn't configured SECRET yet
- * stays reachable rather than crash-looping, at the cost of invalidating
- * every session on the next restart. A key that is merely shorter than the
- * recommended length is still private, so it only warns — refusing it would
- * cost availability while denying an attacker nothing.
+ * generates a fresh random key and alarms demanding a real one, so a
+ * deployment that hasn't configured SECRET yet stays reachable rather than
+ * crash-looping, at the cost of invalidating every session on the next
+ * restart. `resolveSessionSecret` is called exactly once, at boot, so the
+ * generated key holds for the life of the process; it is not memoized here,
+ * so a second call would mint a different key and desync from cookies the
+ * first key already signed. A key that is merely shorter than the recommended
+ * length is still private, so it only warns — refusing it would cost
+ * availability while denying an attacker nothing.
  *
  * Outside production nothing is fatal and a missing key resolves to a fixed
  * development value, so a local checkout needs no setup.
  *
  * Called from the boot path rather than module scope because a module-scope
  * read cannot be exercised by a test: ESM imports hoist above any assignment
- * the test would make.
+ * the test would make. `generateSecret` and `notify` default to the real
+ * CSPRNG and Discord alarm and exist so a test can substitute spies without
+ * touching the process-global crypto or alarm modules.
  */
-export const resolveSessionSecret = (): string => {
+export const resolveSessionSecret = (
+  generateSecret: () => string = () => randomBytes(32).toString("base64"),
+  notify: Notify = sendAlarm
+): string => {
   const secret = process.env["SECRET"];
   const value = secret?.trim();
 
   if (!secret || !value) {
     if (isProduction()) {
-      const generated = randomBytes(32).toString("base64");
-      logger.error(
+      return degradeInProduction(
         "SECRET is not set, so session cookies would be signed with a key published in this " +
-          "repository — anyone could forge one. Generated a random key for this process instead " +
-          `of refusing to boot; every session will be invalidated on the next restart. Set SECRET ` +
-          `in the deployment environment (${GENERATE}).`
+          "repository — anyone could forge one.",
+        generateSecret,
+        notify
       );
-      return generated;
     }
     logger.warn(
       "[CONFIG WARNING] SECRET is not set, so session cookies are signed with a fixed\n" +
@@ -67,14 +92,12 @@ export const resolveSessionSecret = (): string => {
 
   if (PUBLISHED_VALUES.has(value)) {
     if (isProduction()) {
-      const generated = randomBytes(32).toString("base64");
-      logger.error(
+      return degradeInProduction(
         "SECRET is set to a value published in this repository, so every session cookie is " +
-          "forgeable. Generated a random key for this process instead of refusing to boot; " +
-          `every session will be invalidated on the next restart. Set a private SECRET in the ` +
-          `deployment environment (${GENERATE}).`
+          "forgeable.",
+        generateSecret,
+        notify
       );
-      return generated;
     }
     logger.warn(
       "[CONFIG WARNING] SECRET is a value published in this repository, so it grants session\n" +

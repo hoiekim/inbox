@@ -44,44 +44,79 @@ const withEnv = async <T>(
 
 const STRONG_SECRET = "Yx0pQ7bH2mV9sLd4TnR6wCzE8fJaUgKiPo1ZvXbNqMs=";
 
+/** A `notify` spy that records calls without hitting the network. */
+const spyNotify = () => {
+  const calls: { title: string; detail: string; key?: string }[] = [];
+  const notify = async (title: string, detail: string, key?: string) => {
+    calls.push({ title, detail, key });
+  };
+  return { notify, calls };
+};
+
 describe("resolveSessionSecret in production", () => {
-  it("generates a random secret and logs an error when SECRET is unset", async () => {
+  it("returns whatever generateSecret produces and alarms, when SECRET is unset", async () => {
     const { resolveSessionSecret } = await import("./session-secret");
     await withEnv({ SECRET: undefined, NODE_ENV: "production" }, (_warnings, errors) => {
-      const first = resolveSessionSecret();
-      const second = resolveSessionSecret();
-      expect(first).not.toBe(second);
-      expect(first.length).toBeGreaterThan(32);
-      expect(errors).toHaveLength(2);
-      expect(errors[0]?.message).toMatch(/SECRET is not set/);
-    });
-  });
-
-  it("generates a random secret when SECRET is whitespace only", async () => {
-    const { resolveSessionSecret } = await import("./session-secret");
-    await withEnv({ SECRET: "   \t ", NODE_ENV: "production" }, (_warnings, errors) => {
-      expect(resolveSessionSecret().length).toBeGreaterThan(32);
+      const { notify, calls } = spyNotify();
+      let generateCalls = 0;
+      const generateSecret = () => {
+        generateCalls += 1;
+        return `spy-secret-${generateCalls}`;
+      };
+      expect(resolveSessionSecret(generateSecret, notify)).toBe("spy-secret-1");
+      expect(generateCalls).toBe(1);
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toMatch(/SECRET is not set/);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.title).toBe("SECRET Misconfigured");
+      expect(calls[0]?.detail).toMatch(/SECRET is not set/);
     });
   });
 
-  it("generates a random secret on the development fallback, so it grants no integrity", async () => {
+  it("returns whatever generateSecret produces when SECRET is whitespace only", async () => {
+    const { resolveSessionSecret } = await import("./session-secret");
+    await withEnv({ SECRET: "   \t ", NODE_ENV: "production" }, (_warnings, errors) => {
+      const { notify, calls } = spyNotify();
+      expect(resolveSessionSecret(() => "spy-secret", notify)).toBe("spy-secret");
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toMatch(/SECRET is not set/);
+      expect(calls).toHaveLength(1);
+    });
+  });
+
+  it("returns whatever generateSecret produces on the development fallback, so it grants no integrity", async () => {
     const { resolveSessionSecret, DEVELOPMENT_FALLBACK } = await import("./session-secret");
     expect(DEVELOPMENT_FALLBACK).toBe("secret");
     await withEnv({ SECRET: DEVELOPMENT_FALLBACK, NODE_ENV: "production" }, (_warnings, errors) => {
-      expect(resolveSessionSecret().length).toBeGreaterThan(32);
+      const { notify, calls } = spyNotify();
+      expect(resolveSessionSecret(() => "spy-secret", notify)).toBe("spy-secret");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toMatch(/published in this repository/);
+      expect(calls).toHaveLength(1);
     });
   });
 
-  it("generates a random secret on the value .env.example ships", async () => {
+  it("returns whatever generateSecret produces on the value .env.example ships", async () => {
     const { resolveSessionSecret } = await import("./session-secret");
     await withEnv({ SECRET: "inbox", NODE_ENV: "production" }, (_warnings, errors) => {
-      expect(resolveSessionSecret().length).toBeGreaterThan(32);
+      const { notify, calls } = spyNotify();
+      expect(resolveSessionSecret(() => "spy-secret", notify)).toBe("spy-secret");
       expect(errors).toHaveLength(1);
       expect(errors[0]?.message).toMatch(/published in this repository/);
+      expect(calls).toHaveLength(1);
+    });
+  });
+
+  it("the default generator produces a distinct 32-byte key on every call, without alarming a caller that supplies its own notify", async () => {
+    const { resolveSessionSecret } = await import("./session-secret");
+    await withEnv({ SECRET: undefined, NODE_ENV: "production" }, () => {
+      const { notify, calls } = spyNotify();
+      const first = resolveSessionSecret(undefined, notify);
+      const second = resolveSessionSecret(undefined, notify);
+      expect(first).not.toBe(second);
+      expect(Buffer.from(first, "base64").length).toBe(32);
+      expect(Buffer.from(second, "base64").length).toBe(32);
+      expect(calls).toHaveLength(2);
     });
   });
 

@@ -24,9 +24,10 @@ For detailed instruction, please keep reading this document.
    APP_HOSTNAME             // Domain name that hosts inbox web app.
 
    SECRET                   // Private value that signs session cookies. Required when
-                            // NODE_ENV=production: the server refuses to boot when it is
-                            // unset or set to a value this repository publishes, because
-                            // either one lets anyone forge a signed cookie. Generate one
+                            // NODE_ENV=production: a missing or published value lets
+                            // anyone forge a signed cookie, so the server generates a
+                            // random one instead and alarms, invalidating every session
+                            // on each restart until you set a real one. Generate one
                             // with `openssl rand -base64 32`.
    ADMIN_PASSWORD           // Password the admin user is created with, on first run.
 
