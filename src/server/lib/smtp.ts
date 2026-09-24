@@ -175,6 +175,14 @@ class MessageTooLargeError extends Error {
 interface BoundedMessage {
   stream: Readable;
   refused: boolean;
+  /**
+   * Disarms the ceiling watcher and reads the rest of DATA out without
+   * holding it. Every path that answers the transaction calls this first: the
+   * watcher answers through the same `cb`, and `smtp-server` registers one
+   * end-of-data listener per `cb` it hands out, so a second answer puts a
+   * second reply on the wire and resumes command parsing a transaction early.
+   */
+  drain: () => void;
 }
 
 /**
@@ -201,12 +209,21 @@ const boundMessageSize = (
   cb: (err?: Error | null) => void
 ): BoundedMessage => {
   const bounded = new PassThrough();
-  const message: BoundedMessage = { stream: bounded, refused: false };
+  const message: BoundedMessage = {
+    stream: bounded,
+    refused: false,
+    drain: () => {
+      message.refused = true;
+      bounded.destroy();
+      // The reply lands when the transaction ends, and a source nobody reads
+      // never ends.
+      source.resume();
+    }
+  };
   let bytes = 0;
 
   const refuse = (err: Error) => {
-    message.refused = true;
-    bounded.destroy();
+    message.drain();
     cb(err);
   };
 
@@ -220,9 +237,6 @@ const boundMessageSize = (
         maxBytes: MAX_MESSAGE_BYTES
       });
       refuse(new MessageTooLargeError());
-      // Read the rest of DATA without holding it: the reply lands when the
-      // transaction ends, and a source nobody reads never ends.
-      source.resume();
       return;
     }
 
@@ -323,7 +337,7 @@ const onDataIncoming = (
     .catch((err) => {
       if (message.refused) return;
       logger.error("Error parsing email", {}, err);
-      message.stream.resume();
+      message.drain();
       cb(err);
     });
 };
@@ -453,7 +467,7 @@ const onDataOutgoing = async (
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
-      message.stream.resume();
+      message.drain();
       return cb(new Error("User not authenticated"));
     }
 
@@ -491,7 +505,7 @@ const onDataOutgoing = async (
     cb();
   } catch (err) {
     if (message.refused) return;
-    message.stream.resume();
+    message.drain();
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };

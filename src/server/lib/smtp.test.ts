@@ -1139,7 +1139,11 @@ describe("onData message ceiling", () => {
       remoteAddress: "1.2.3.4"
     }) as unknown as SMTPServerSession;
 
-  const driveAndDrain = async (session: SMTPServerSession, totalBytes: number) => {
+  const driveAndDrain = async (
+    session: SMTPServerSession,
+    totalBytes: number,
+    waitMs = 300
+  ) => {
     const stream = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
 
@@ -1147,10 +1151,16 @@ describe("onData message ceiling", () => {
       calls.push(err)
     );
     feed(stream, totalBytes);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
 
     return { calls, ended: stream.readableEnded };
   };
+
+  // Each payload below crosses the ceiling on purpose. Reading the transaction
+  // out after an early refusal puts the rest of DATA back under the ceiling
+  // watcher, which answers through the same callback — so the same fixture
+  // measures both that the source ends and that it is answered only once.
+  const PAST_CEILING = MAX_MESSAGE_BYTES + 1024 * 1024;
 
   it("reads out a relayed transaction it refuses", async () => {
     const { calls, ended } = await driveAndDrain(relaySession(), 1024 * 1024);
@@ -1171,6 +1181,54 @@ describe("onData message ceiling", () => {
 
     expect(calls.length).toBe(1);
     expect(calls[0]!.message).toBe("User not authenticated");
+    expect(ended).toBe(true);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("reads out a transaction refused before EMAIL_DOMAIN is known", async () => {
+    delete process.env.EMAIL_DOMAIN;
+
+    const { calls, ended } = await driveAndDrain(incomingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("Email service not configured");
+    expect(ended).toBe(true);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
+  });
+
+  it("answers an unauthenticated submission once when DATA runs past the ceiling", async () => {
+    mockGetUser.mockImplementation(() => Promise.resolve(undefined));
+
+    const { calls, ended } = await driveAndDrain(
+      unauthenticatedSession(),
+      PAST_CEILING
+    );
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(ended).toBe(true);
+  });
+
+  it("answers a parser failure once and reads the rest of DATA out", async () => {
+    mockSimpleParser.mockImplementation(() =>
+      Promise.reject(new Error("parse boom"))
+    );
+
+    const { calls, ended } = await driveAndDrain(incomingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("parse boom");
+    expect(ended).toBe(true);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("answers an outgoing lookup failure once and reads the rest of DATA out", async () => {
+    mockGetUser.mockImplementation(() => Promise.reject(new Error("db down")));
+
+    const { calls, ended } = await driveAndDrain(outgoingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("db down");
     expect(ended).toBe(true);
     expect(mockSendMail).not.toHaveBeenCalled();
   });
