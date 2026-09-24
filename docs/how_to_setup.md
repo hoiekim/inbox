@@ -23,7 +23,11 @@ For detailed instruction, please keep reading this document.
    EMAIL_DOMAIN             // Domain name to use when sending & receiving mails.
    APP_HOSTNAME             // Domain name that hosts inbox web app.
 
-   SECRET                   // Encoding secret for session data. Any value works.
+   SECRET                   // Private value that signs session cookies. Required when
+                            // NODE_ENV=production: the server refuses to boot when it is
+                            // unset or set to a value this repository publishes, because
+                            // either one lets anyone forge a signed cookie. Generate one
+                            // with `openssl rand -base64 32`.
    ADMIN_PASSWORD           // Password the admin user is created with, on first run.
 
    ADMIN_PASSWORD_RESET     // (optional) Set to 1 for one boot to reset admin's password
