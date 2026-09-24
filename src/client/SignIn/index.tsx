@@ -40,6 +40,9 @@ const Home = () => {
 
   if (mutation.isLoading) infoMessage = "🧐 Checking...";
   if (mutation.isError) infoMessage = "🤯 Server error";
+  // `call` resolves on a 5xx too, so a server-side failure arrives as a
+  // parsed body rather than a rejected mutation.
+  if (mutation.data?.status === "error") infoMessage = "🤯 Server error";
   if (mutation.data?.status === "success") infoMessage = "🤗 Welcome!";
   if (mutation.data?.status === "failed") {
     infoMessage = mutation.data?.message

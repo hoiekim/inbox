@@ -32,55 +32,47 @@ import {
 /**
  * Searches session data by id from PostgreSQL.
  * @param session_id
- * @returns A promise to be a SessionModel or null.
+ * @returns A promise to be a SessionModel, or null when no row carries that
+ * id. A failed read rejects so callers can tell a store fault from a session
+ * that does not exist.
  */
 export const searchSession = async (
   session_id: string
 ): Promise<SessionModel | null> => {
-  try {
-    return await sessionsTable.queryOne({ [SESSION_ID]: session_id });
-  } catch (error) {
-    logger.error(`Failed to get session from PostgreSQL`, { session_id }, error);
-    return null;
-  }
+  return sessionsTable.queryOne({ [SESSION_ID]: session_id });
 };
 
 /**
  * Updates a session object with given session_id and session data.
  * @param session_id
  * @param session
- * @returns A promise to be a success boolean.
+ * @returns A promise that settles once the row is written. A failed write
+ * rejects so callers cannot report an unwritten session as a stored one.
  */
 export const updateSession = async (
   session_id: string,
   session: Session
-): Promise<boolean> => {
-  try {
-    const { user, cookie } = session;
-    const data = {
-      [SESSION_ID]: session_id,
-      [SESSION_USER_ID]: user.id,
-      [SESSION_USERNAME]: user.username,
-      [SESSION_EMAIL]: user.email,
-      [SESSION_IS_READ_ONLY]: user.isReadOnly ?? null,
-      [SESSION_AUTHENTICATED_AS]: user.authenticatedAs ?? null,
-      [COOKIE_ORIGINAL_MAX_AGE]: cookie.originalMaxAge,
-      [COOKIE_MAX_AGE]: cookie.maxAge,
-      [COOKIE_SIGNED]: cookie.signed,
-      [COOKIE_EXPIRES]: cookie._expires,
-      [COOKIE_HTTP_ONLY]: cookie.httpOnly,
-      [COOKIE_PATH]: cookie.path,
-      [COOKIE_DOMAIN]: cookie.domain,
-      [COOKIE_SECURE]: cookie.secure,
-      [COOKIE_SAME_SITE]: cookie.sameSite,
-    };
+): Promise<void> => {
+  const { user, cookie } = session;
+  const data = {
+    [SESSION_ID]: session_id,
+    [SESSION_USER_ID]: user.id,
+    [SESSION_USERNAME]: user.username,
+    [SESSION_EMAIL]: user.email,
+    [SESSION_IS_READ_ONLY]: user.isReadOnly ?? null,
+    [SESSION_AUTHENTICATED_AS]: user.authenticatedAs ?? null,
+    [COOKIE_ORIGINAL_MAX_AGE]: cookie.originalMaxAge,
+    [COOKIE_MAX_AGE]: cookie.maxAge,
+    [COOKIE_SIGNED]: cookie.signed,
+    [COOKIE_EXPIRES]: cookie._expires,
+    [COOKIE_HTTP_ONLY]: cookie.httpOnly,
+    [COOKIE_PATH]: cookie.path,
+    [COOKIE_DOMAIN]: cookie.domain,
+    [COOKIE_SECURE]: cookie.secure,
+    [COOKIE_SAME_SITE]: cookie.sameSite,
+  };
 
-    const result = await sessionsTable.upsert(data);
-    return result !== null;
-  } catch (error) {
-    logger.error("Failed to update session", {}, error);
-    return false;
-  }
+  await sessionsTable.upsert(data);
 };
 
 /**
@@ -96,18 +88,15 @@ export const deleteSession = async (session_id: string): Promise<boolean> => {
 
 /**
  * Searches all expired session data and delete them.
- * @returns A promise to be a count of deleted sessions.
+ * @returns A promise to be a count of deleted sessions. A failed sweep rejects,
+ * so a table growing without bound is distinguishable from a sweep that found
+ * nothing to purge.
  */
 export const purgeSessions = async (): Promise<number> => {
-  try {
-    const now = new Date().toISOString();
-    return await sessionsTable.deleteWhere({
-      [COOKIE_EXPIRES]: { op: "<=", value: now, notNull: true },
-    });
-  } catch (error) {
-    logger.error("Failed to purge sessions", {}, error);
-    return 0;
-  }
+  const now = new Date().toISOString();
+  return sessionsTable.deleteWhere({
+    [COOKIE_EXPIRES]: { op: "<=", value: now, notNull: true },
+  });
 };
 
 /**
@@ -117,23 +106,16 @@ export const purgeSessions = async (): Promise<number> => {
  * window on every request, so a credential that is no longer accepted at login
  * would otherwise stay usable indefinitely through an existing session.
  * @param authenticatedAs
- * @returns A promise to be a count of deleted sessions.
+ * @returns A promise to be a count of deleted sessions. A failed delete
+ * rejects, so a revocation that left its sessions alive cannot report itself
+ * as a revocation that had none to delete.
  */
 export const deleteSessionsAuthenticatedAs = async (
   authenticatedAs: string
 ): Promise<number> => {
-  try {
-    return await sessionsTable.deleteWhere({
-      [SESSION_AUTHENTICATED_AS]: authenticatedAs,
-    });
-  } catch (error) {
-    logger.error(
-      "Failed to delete sessions by authenticated credential",
-      { authenticatedAs },
-      error
-    );
-    return 0;
-  }
+  return sessionsTable.deleteWhere({
+    [SESSION_AUTHENTICATED_AS]: authenticatedAs,
+  });
 };
 
 /**
@@ -150,7 +132,7 @@ export class PostgresSessionStore extends Store {
    * Repeatedly run every hour to remove expired session data.
    */
   private autoRemoveScheduler = () => {
-    purgeSessions().catch((error) => logger.error("Failed to purge sessions on startup", {}, error));
+    purgeSessions().catch((error) => logger.error("Failed to purge expired sessions", {}, error));
     setTimeout(this.autoRemoveScheduler, 1000 * 60 * 60);
   };
 
