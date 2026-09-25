@@ -1116,11 +1116,33 @@ describe("onData message ceiling", () => {
     expect(parserStream!.destroyed).toBe(true);
   });
 
-  // The library transmits a reply only once DATA ends, and DATA ends only once
-  // the source is read. A handler that answers through `cb` without reading the
-  // transaction out therefore sends nothing at all and holds the connection to
-  // the socket timeout — so every refusal is asserted on the source ending, not
-  // just on the callback firing.
+  // A destroyed stream is not a settled parser: `mailparser` settles on `end`
+  // or `error` and on neither `close` nor a bare `destroy()`, so a refusal that
+  // cuts silently holds everything the parser accumulated for the life of the
+  // connection.
+  it("settles the parser's promise when the ceiling refuses", async () => {
+    let parserSettled = false;
+    mockSimpleParser.mockImplementation(
+      (stream: NodeJS.ReadableStream) =>
+        new Promise((resolve, reject) => {
+          stream.on("data", () => {});
+          stream.on("end", () => {
+            parserSettled = true;
+            resolve({ attachments: [] });
+          });
+          stream.on("error", (err: Error) => {
+            parserSettled = true;
+            reject(err);
+          });
+        })
+    );
+
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(parserSettled).toBe(true);
+  });
+
   const relaySession = () =>
     ({
       envelope: {
