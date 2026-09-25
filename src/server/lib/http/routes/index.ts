@@ -11,7 +11,7 @@ import healthRouter from "./health";
 import clientErrorRouter from "./client-error";
 import { getClientIp } from "server";
 import { sendAlarm } from "../../alarm";
-import { createLimiter } from "../rate-limit";
+import { mailgunEventsLimiter } from "../rate-limit";
 import { postMailgunEventsRoute } from "./mailgun-events";
 
 const apiRouter = Router();
@@ -52,10 +52,6 @@ apiRouter.use("/push", pushRouter);
 // route handler). Mounted at the /api root so the path Mailgun POSTs to is
 // exactly `/api/mailgun-events`. Rate-limited per IP to keep an attacker
 // from burning the alarm-cooldown bucket via replayed captured signatures.
-const mailgunEventsLimiter = createLimiter(
-  60,
-  "Too many Mailgun webhook requests, try again later",
-);
 apiRouter.use("/mailgun-events", mailgunEventsLimiter.middleware);
 postMailgunEventsRoute.register(apiRouter);
 

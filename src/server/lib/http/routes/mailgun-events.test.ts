@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll, beforeEach, mock, afterAll, spyOn } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 import crypto from "crypto";
+import type { Server } from "http";
 
 const mockQuery = mock(async (_sql: string, _values?: unknown[]) => ({
   rows: [] as unknown[],
@@ -23,23 +24,47 @@ const pgMock = () => ({
 mock.module("pg", pgMock);
 
 const { postMailgunEventsRoute, resetPool } = await import("server");
+const express = (await import("express")).default;
+const apiRouter = (await import("./index")).default;
 const alarmModule = await import("../../alarm");
+// alarm.test.ts overrides global.fetch; keep the real one to drive HTTP into
+// the listening server below.
+const realFetch = globalThis.fetch;
 const sendAlarmSpy = spyOn(alarmModule, "sendAlarm").mockImplementation(async () => {});
+
+let server: Server;
+let baseUrl = "";
 
 // `mock.module` is process-global — a sibling test file that ran earlier
 // may have restored `pg` to the real module in its `afterAll(restoreLeaves)`
 // AND left the lazy pool cached against the real Pool. Re-assert the pg
 // mock and drop the cached pool right before this file's tests, so every
 // query below funnels through FakePool. Same pattern users.test.ts uses.
-beforeAll(() => {
+beforeAll(async () => {
   mock.module("pg", pgMock);
   resetPool();
+
+  // Mount the real apiRouter rather than re-declaring the limiter wiring, so
+  // dropping either the mount or the record call fails this suite.
+  const app = express();
+  app.use(express.json());
+  app.use("/api", apiRouter);
+  await new Promise<void>((resolve) => {
+    server = app.listen(0, () => {
+      const addr = server.address();
+      if (addr && typeof addr === "object") baseUrl = `http://127.0.0.1:${addr.port}`;
+      resolve();
+    });
+  });
 });
 
-afterAll(() => {
+afterAll(async () => {
   sendAlarmSpy.mockRestore();
   restoreLeaves();
   resetPool();
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
 });
 
 const SIGNING_KEY = "test-signing-key";
@@ -52,7 +77,7 @@ interface FakeReqBody {
   "event-data"?: Record<string, unknown>;
 }
 
-const call = async (body: FakeReqBody) => {
+const call = async (body: FakeReqBody, ip = "198.51.100.1") => {
   const captured: { status?: string; message?: string } = {};
   const res = {
     status(_code: number) {
@@ -64,7 +89,13 @@ const call = async (body: FakeReqBody) => {
     },
   };
   await postMailgunEventsRoute.handler(
-    { body, method: "POST", url: "/mailgun-events" } as never,
+    {
+      body,
+      method: "POST",
+      url: "/mailgun-events",
+      headers: { "x-real-ip": ip },
+      ip,
+    } as never,
     res as never,
     (() => {}) as never,
   );
@@ -207,5 +238,69 @@ describe("postMailgunEventsRoute", () => {
     mockQuery.mockRejectedValueOnce(new Error("db down"));
     const result = await call(signed(buildEvent({ event: "delivered" })));
     expect(result.status).toBe("success");
+  });
+});
+
+describe("POST /api/mailgun-events per-IP request cap", () => {
+  // Matches the cap the limiter is constructed with; a deliberate change to
+  // one is a deliberate change to the other.
+  const CAP = 60;
+
+  beforeEach(() => {
+    process.env.MAILGUN_WEBHOOK_SIGNING_KEY = SIGNING_KEY;
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    sendAlarmSpy.mockClear();
+  });
+
+  const post = async (ip: string, body: FakeReqBody) =>
+    realFetch(`${baseUrl}/api/mailgun-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-real-ip": ip },
+      body: JSON.stringify(body),
+    });
+
+  it("returns 429 on the request past the cap, and 200 on every one below it", async () => {
+    const ip = "203.0.113.20";
+    for (let i = 0; i < CAP; i++) {
+      const res = await post(ip, signed(buildEvent()));
+      expect(res.status).toBe(200);
+    }
+    const blocked = await post(ip, signed(buildEvent()));
+    expect(blocked.status).toBe(429);
+    const body = (await blocked.json()) as { status: string; message: string };
+    expect(body.status).toBe("failed");
+    expect(body.message).toMatch(/too many/i);
+  });
+
+  it("counts validly-signed replays, not just rejected ones", async () => {
+    // The threat is a captured signature replayed inside its 15-min window:
+    // every request verifies HMAC and writes a row, and all of them are valid.
+    // A cap that only counted rejections would leave that path unbounded.
+    const ip = "203.0.113.21";
+    for (let i = 0; i < CAP; i++) {
+      const res = await post(ip, signed(buildEvent()));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { status: string };
+      expect(body.status).toBe("success");
+    }
+    expect((await post(ip, signed(buildEvent()))).status).toBe(429);
+  });
+
+  it("counts unsigned requests too", async () => {
+    const ip = "203.0.113.22";
+    for (let i = 0; i < CAP; i++) {
+      const res = await post(ip, { "event-data": buildEvent() });
+      expect(res.status).toBe(200);
+    }
+    expect((await post(ip, { "event-data": buildEvent() })).status).toBe(429);
+  });
+
+  it("gives each IP its own budget", async () => {
+    const exhausted = "203.0.113.23";
+    const fresh = "203.0.113.24";
+    for (let i = 0; i <= CAP; i++) await post(exhausted, signed(buildEvent()));
+    expect((await post(exhausted, signed(buildEvent()))).status).toBe(429);
+    expect((await post(fresh, signed(buildEvent()))).status).toBe(200);
   });
 });
