@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User, SignedUser } from "common";
 import { searchUser as pgSearchUser } from "./postgres/repositories/users";
+import { deleteSessionsForUser } from "./postgres/repositories/sessions";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 import { logger } from "./logger";
 
@@ -197,14 +198,26 @@ export const setUserInfo = async (
     username = existingUser.username;
   }
 
+  // Evict before the write so a failed DELETE aborts the rotation with the row
+  // — and so the reset token — intact, leaving a retryable reset rather than a
+  // new password whose old sessions survived. The hash is computed ahead of the
+  // DELETE to keep a bcrypt round out of that window.
+  const passwordHash = await encryptPassword(password);
+
+  await deleteSessionsForUser(id);
+
   await usersTable.update(id, {
-    password: await encryptPassword(password),
+    password: passwordHash,
     username,
     token: null,
     expiry: null
   });
 
-  return new User({ id, email, username }).getSigned() as SignedUser;
+  const signed = new User({ id, email, username, password: passwordHash }).getSigned();
+  if (!signed) {
+    throw new Error("`setUserInfo` failed to sign the updated user.");
+  }
+  return signed;
 };
 
 export const createAuthenticationMail = (
