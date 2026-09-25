@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
+import { PassThrough, Readable } from "stream";
 import {
   SMTPServer,
   SMTPServerAddress,
@@ -20,6 +21,7 @@ import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
+import { MAX_MESSAGE_BYTES } from "./message-size";
 
 const registerListeners = (
   server: SMTPServer,
@@ -128,6 +130,127 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
   return cb();
 };
 
+/**
+ * RFC 5321 §3.6.1 gives 550 to a message this host will not relay — neither
+ * the sender nor any recipient is local. 550 keeps it in the "policy denied"
+ * family rather than the "server error" family that would train a client to
+ * retry, matching `onMailFrom`'s refusal above.
+ */
+class RelayDeniedError extends Error {
+  responseCode = 550;
+
+  constructor() {
+    super("Error: relay access denied");
+  }
+}
+
+/** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
+class MessageTooLargeError extends Error {
+  responseCode = 552;
+
+  constructor() {
+    super(
+      `Error: message exceeds fixed maximum message size ${MAX_MESSAGE_BYTES}`
+    );
+  }
+}
+
+/**
+ * A DATA transaction, carried to the parser only as far as the ceiling.
+ *
+ * `refused` is read after every `await` the handlers do: the reply has already
+ * gone out by then, so the side effect that `await` was leading up to must not
+ * run, and nothing may answer the transaction a second time.
+ */
+interface BoundedMessage {
+  stream: Readable;
+  refused: boolean;
+  /**
+   * Disarms the ceiling watcher and reads the rest of DATA out without
+   * holding it. Every path that answers the transaction calls this first: the
+   * watcher answers through the same `cb`, and `smtp-server` registers one
+   * end-of-data listener per `cb` it hands out, so a second answer puts a
+   * second reply on the wire and resumes command parsing a transaction early.
+   */
+  drain: () => void;
+}
+
+/**
+ * Bounds what one DATA transaction can make the process hold.
+ *
+ * `smtp-server` offers no enforcement to lean on. Its `size` option makes
+ * `EHLO` advertise `SIZE` and refuses a `MAIL FROM` that declares more, but a
+ * sender that declares nothing still streams whatever it likes: the library
+ * computes `stream.sizeExceeded` in `_endDataMode`, once the final octet has
+ * already been written, and never acts on it. So the count is kept here, where
+ * the octets arrive, and the parser is cut off at the ceiling rather than told
+ * about it afterwards.
+ *
+ * Two shapes this deliberately avoids. The source keeps flowing past the cut,
+ * because the reply is only sent once DATA ends and a source nobody reads
+ * never ends. And no cut is silent: `mailparser` settles on an `error` but not
+ * on the `close` that a bare `destroy()` emits, so a silent cut leaves its
+ * promise pending and everything it accumulated reachable until the connection
+ * goes away. Refusals are still answered through `cb`, which is in hand the
+ * whole time, and never through that error.
+ */
+const boundMessageSize = (
+  source: SMTPServerDataStream,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+): BoundedMessage => {
+  const bounded = new PassThrough();
+  // The outgoing handler reaches `simpleParser` only after a user lookup, so a
+  // refusal can destroy this before anything is listening.
+  bounded.on("error", () => {});
+  const message: BoundedMessage = {
+    stream: bounded,
+    refused: false,
+    drain: () => {
+      message.refused = true;
+      bounded.destroy(new Error("message refused"));
+      source.resume();
+    }
+  };
+  let bytes = 0;
+
+  const refuse = (err: Error) => {
+    message.drain();
+    cb(err);
+  };
+
+  source.on("data", (chunk: Buffer) => {
+    if (message.refused) return;
+
+    bytes += chunk.length;
+    if (bytes > MAX_MESSAGE_BYTES) {
+      logger.warn("SMTP: refused a message over the maximum size", {
+        remoteAddress: session.remoteAddress,
+        maxBytes: MAX_MESSAGE_BYTES
+      });
+      refuse(new MessageTooLargeError());
+      return;
+    }
+
+    if (!bounded.write(chunk)) {
+      source.pause();
+      bounded.once("drain", () => source.resume());
+    }
+  });
+
+  source.once("end", () => {
+    if (!message.refused) bounded.end();
+  });
+
+  source.once("error", (err) => {
+    if (message.refused) return;
+    logger.error("SMTP: DATA stream failed", {}, err);
+    refuse(err);
+  });
+
+  return message;
+};
+
 export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -136,6 +259,7 @@ export const onData = (
   const { EMAIL_DOMAIN } = process.env;
   if (!EMAIL_DOMAIN) {
     logger.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
+    stream.resume();
     return cb(new Error("Email service not configured"));
   }
 
@@ -147,17 +271,28 @@ export const onData = (
   const isOutgoingEmail =
     typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
 
-  if (isOutgoingEmail) onDataOutgoing(stream, session, cb);
-  else if (isIncomingEmail) onDataIncoming(stream, session, cb);
+  if (!isIncomingEmail && !isOutgoingEmail) {
+    logger.warn("SMTP: refused to relay a message with no local party", {
+      remoteAddress: session.remoteAddress
+    });
+    stream.resume();
+    return cb(new RelayDeniedError());
+  }
+
+  const message = boundMessageSize(stream, session, cb);
+  if (isOutgoingEmail) onDataOutgoing(message, session, cb);
+  else onDataIncoming(message, session, cb);
 };
 
 const onDataIncoming = (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
-  simpleParser(stream)
+  simpleParser(message.stream)
     .then(async (parsed) => {
+      if (message.refused) return;
+
       const mail: IncomingMail = {
         messageId: parsed.messageId,
         from: parsed.from,
@@ -187,7 +322,9 @@ const onDataIncoming = (
       cb();
     })
     .catch((err) => {
+      if (message.refused) return;
       logger.error("Error parsing email", {}, err);
+      message.drain();
       cb(err);
     });
 };
@@ -305,20 +442,25 @@ export const splitEnvelopeRecipients = (
 };
 
 const onDataOutgoing = async (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
   try {
     const username = session.user;
     const user = username && (await getUser({ username }));
+    if (message.refused) return;
+
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
+      message.drain();
       return cb(new Error("User not authenticated"));
     }
 
-    const parsed = await simpleParser(stream);
+    const parsed = await simpleParser(message.stream);
+    if (message.refused) return;
+
     const mailFrom = session.envelope.mailFrom;
     const envelopeFrom =
       mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
@@ -349,6 +491,8 @@ const onDataOutgoing = async (
     await sendMail(signedUser, mailData);
     cb();
   } catch (err) {
+    if (message.refused) return;
+    message.drain();
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };
@@ -363,7 +507,8 @@ export const initializeSmtp = async () => {
     onAuth,
     onMailFrom,
     onData,
-    maxClients: SMTP_MAX_CLIENTS
+    maxClients: SMTP_MAX_CLIENTS,
+    size: MAX_MESSAGE_BYTES
   };
 
   const credentials = getTlsCredentials();

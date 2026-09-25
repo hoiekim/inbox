@@ -6,7 +6,9 @@ import type {
   SMTPServerDataStream,
   SMTPServerAuthentication
 } from "smtp-server";
+import { PassThrough, Readable } from "stream";
 import * as authRateLimit from "./auth-rate-limit";
+import { MAX_MESSAGE_BYTES } from "./message-size";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -327,12 +329,12 @@ describe("onMailFrom handler", () => {
 describe("onData handler", () => {
   const originalEnv = process.env;
 
+  // A real stream, not a { pipe, on } stub: onData now counts the octets it
+  // forwards, so a fixture that never delivers any cannot exercise the cap.
   const makeStream = () => {
-    const stream = {
-      pipe: mock(() => stream),
-      on: mock(() => stream),
-    } as unknown as SMTPServerDataStream;
-    return stream;
+    const stream = new PassThrough();
+    stream.end();
+    return stream as unknown as SMTPServerDataStream;
   };
 
   beforeEach(() => {
@@ -863,8 +865,7 @@ describe("onData handler", () => {
     expect(mailData.bcc).toBe("hidden@other.com");
   });
 
-  it("does not invoke callback when neither incoming nor outgoing matches", async () => {
-    // Both addresses outside EMAIL_DOMAIN — neither branch fires, cb stays uncalled.
+  it("refuses to relay when neither incoming nor outgoing matches", async () => {
     const stream = makeStream();
     const session = {
       envelope: {
@@ -874,14 +875,383 @@ describe("onData handler", () => {
       remoteAddress: "1.2.3.4"
     } as unknown as SMTPServerSession;
 
-    let cbCalled = false;
-    onData(stream, session, () => {
-      cbCalled = true;
-    });
-    // Give microtasks a chance — nothing should run.
+    const calls: (Error | null | undefined)[] = [];
+    onData(stream, session, (err) => calls.push(err));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(cbCalled).toBe(false);
+
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(550);
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+});
+
+describe("onData message ceiling", () => {
+  const originalEnv = process.env;
+
+  // Counts what the parser is actually handed, so the assertions can tell a
+  // handler that stops feeding it at the ceiling from one that parses the
+  // whole message and rejects afterwards — the second spends exactly the
+  // memory the ceiling exists to bound, and answers 552 all the same.
+  let parserBytes = 0;
+  let parserStream: Readable | undefined;
+
+  const parseAndCount = () =>
+    mockSimpleParser.mockImplementation(
+      (stream: NodeJS.ReadableStream) =>
+        new Promise((resolve) => {
+          parserStream = stream as unknown as Readable;
+          stream.on("data", (chunk: Buffer) => {
+            parserBytes += chunk.length;
+          });
+          stream.on("end", () =>
+            resolve({
+              messageId: "<big@example.com>",
+              from: { value: [{ address: "sender@example.com" }] },
+              to: { value: [{ address: "recipient@test.com" }] },
+              subject: "Big",
+              html: "<p>Big</p>",
+              text: "Big",
+              attachments: []
+            })
+          );
+        })
+    );
+
+  // Writes `totalBytes` honouring backpressure, so the fixture cannot outrun
+  // the handler and buffer the whole payload in the source stream instead.
+  const feed = (stream: PassThrough, totalBytes: number) => {
+    const chunk = Buffer.alloc(256 * 1024, 0x61);
+    let written = 0;
+    const pump = () => {
+      while (written < totalBytes) {
+        const size = Math.min(chunk.length, totalBytes - written);
+        written += size;
+        if (!stream.write(chunk.subarray(0, size))) {
+          stream.once("drain", pump);
+          return;
+        }
+      }
+      stream.end();
+    };
+    pump();
+  };
+
+  const drive = (
+    session: SMTPServerSession,
+    totalBytes: number
+  ): Promise<Error | null | undefined> => {
+    const stream = new PassThrough();
+    return new Promise((resolve) => {
+      onData(stream as unknown as SMTPServerDataStream, session, resolve);
+      feed(stream, totalBytes);
+    });
+  };
+
+  const incomingSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const outgoingSession = () =>
+    ({
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  beforeEach(() => {
+    parserBytes = 0;
+    parserStream = undefined;
+    mockSaveMailHandler.mockReset();
+    mockSendMail.mockReset();
+    mockSimpleParser.mockReset();
+    mockGetUser.mockReset();
+    mockLogger.warn.mockReset();
+    parseAndCount();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("refuses an incoming message past the ceiling with 552 and never saves it", async () => {
+    const err = await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("stops feeding the parser at the ceiling rather than after the whole message", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(parserBytes).toBeGreaterThan(0);
+    expect(parserBytes).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+  });
+
+  it("logs the refusal against the sending address", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    const refusals = mockLogger.warn.mock.calls.filter((call) =>
+      String(call[0]).includes("over the maximum size")
+    );
+    expect(refusals.length).toBe(1);
+    expect(refusals[0]![1]).toMatchObject({
+      remoteAddress: "1.2.3.4",
+      maxBytes: MAX_MESSAGE_BYTES
+    });
+  });
+
+  it("refuses an outgoing submission past the ceiling and never relays it", async () => {
+    mockGetUser.mockImplementation(() =>
+      Promise.resolve({
+        username: "admin",
+        getSigned: () => ({ id: "user-1", username: "admin" })
+      })
+    );
+
+    const err = await drive(outgoingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(parserBytes).toBeLessThanOrEqual(MAX_MESSAGE_BYTES);
+  });
+
+  it("delivers a message under the ceiling whole", async () => {
+    const size = 2 * 1024 * 1024;
+    const err = await drive(incomingSession(), size);
+
+    expect(err).toBeUndefined();
+    expect(parserBytes).toBe(size);
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a failed DATA stream once and never saves it", async () => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+      calls.push(err)
+    );
+    stream.write(Buffer.alloc(1024, 0x61));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stream.destroy(new Error("socket reset"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("socket reset");
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  // The outgoing branch reaches `simpleParser` only after a user lookup, so a
+  // stream that fails during the lookup has no parser listening yet. Answering
+  // through `cb` rather than through the stream is what keeps that from
+  // becoming an unhandled 'error' event.
+  it("answers a DATA stream that fails before the parser is attached", async () => {
+    let releaseLookup: (() => void) | undefined;
+    mockGetUser.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseLookup = () =>
+            resolve({
+              username: "admin",
+              getSigned: () => ({ id: "user-1", username: "admin" })
+            });
+        })
+    );
+
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+    const uncaught: Error[] = [];
+    const onUncaught = (err: Error) => uncaught.push(err);
+    process.on("uncaughtException", onUncaught);
+
+    try {
+      onData(stream as unknown as SMTPServerDataStream, outgoingSession(), (err) =>
+        calls.push(err)
+      );
+      stream.write(Buffer.alloc(1024, 0x61));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      stream.destroy(new Error("socket reset"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      releaseLookup?.();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+
+    expect(uncaught).toEqual([]);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("socket reset");
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("answers a refused transaction exactly once", async () => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+      calls.push(err)
+    );
+    feed(stream, MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(calls.length).toBe(1);
+  });
+
+  it("releases the parser's stream when the ceiling refuses", async () => {
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+
+    expect(parserStream).toBeDefined();
+    expect(parserStream!.destroyed).toBe(true);
+  });
+
+  // A destroyed stream is not a settled parser: `mailparser` settles on `end`
+  // or `error` and on neither `close` nor a bare `destroy()`, so a refusal that
+  // cuts silently holds everything the parser accumulated for the life of the
+  // connection.
+  it("settles the parser's promise when the ceiling refuses", async () => {
+    let parserSettled = false;
+    mockSimpleParser.mockImplementation(
+      (stream: NodeJS.ReadableStream) =>
+        new Promise((resolve, reject) => {
+          stream.on("data", () => {});
+          stream.on("end", () => {
+            parserSettled = true;
+            resolve({ attachments: [] });
+          });
+          stream.on("error", (err: Error) => {
+            parserSettled = true;
+            reject(err);
+          });
+        })
+    );
+
+    await drive(incomingSession(), MAX_MESSAGE_BYTES + 1024 * 1024);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(parserSettled).toBe(true);
+  });
+
+  const relaySession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "external@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const unauthenticatedSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const driveAndDrain = async (
+    session: SMTPServerSession,
+    totalBytes: number,
+    waitMs = 300
+  ) => {
+    const stream = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+
+    onData(stream as unknown as SMTPServerDataStream, session, (err) =>
+      calls.push(err)
+    );
+    feed(stream, totalBytes);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+    return { calls, ended: stream.readableEnded };
+  };
+
+  // Each payload below crosses the ceiling on purpose. Reading the transaction
+  // out after an early refusal puts the rest of DATA back under the ceiling
+  // watcher, which answers through the same callback — so the same fixture
+  // measures both that the source ends and that it is answered only once.
+  const PAST_CEILING = MAX_MESSAGE_BYTES + 1024 * 1024;
+
+  it("reads out a relayed transaction it refuses", async () => {
+    const { calls, ended } = await driveAndDrain(relaySession(), 1024 * 1024);
+
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(550);
+    expect(ended).toBe(true);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
+  });
+
+  it("reads out an unauthenticated submission it refuses", async () => {
+    mockGetUser.mockImplementation(() => Promise.resolve(undefined));
+
+    const { calls, ended } = await driveAndDrain(
+      unauthenticatedSession(),
+      1024 * 1024
+    );
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(ended).toBe(true);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("reads out a transaction refused before EMAIL_DOMAIN is known", async () => {
+    delete process.env.EMAIL_DOMAIN;
+
+    const { calls, ended } = await driveAndDrain(incomingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("Email service not configured");
+    expect(ended).toBe(true);
+    expect(mockSimpleParser).not.toHaveBeenCalled();
+  });
+
+  it("answers an unauthenticated submission once when DATA runs past the ceiling", async () => {
+    mockGetUser.mockImplementation(() => Promise.resolve(undefined));
+
+    const { calls, ended } = await driveAndDrain(
+      unauthenticatedSession(),
+      PAST_CEILING
+    );
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(ended).toBe(true);
+  });
+
+  it("answers a parser failure once and reads the rest of DATA out", async () => {
+    mockSimpleParser.mockImplementation(() =>
+      Promise.reject(new Error("parse boom"))
+    );
+
+    const { calls, ended } = await driveAndDrain(incomingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("parse boom");
+    expect(ended).toBe(true);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("answers an outgoing lookup failure once and reads the rest of DATA out", async () => {
+    mockGetUser.mockImplementation(() => Promise.reject(new Error("db down")));
+
+    const { calls, ended } = await driveAndDrain(outgoingSession(), PAST_CEILING);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.message).toBe("db down");
+    expect(ended).toBe(true);
     expect(mockSendMail).not.toHaveBeenCalled();
   });
 });
@@ -965,11 +1335,14 @@ const makeFakeServer = (): FakeServer => {
   return server;
 };
 
+const createdOptions: Record<string, unknown>[] = [];
+
 mock.module("smtp-server", () => ({
   SMTPServer: class {
-    constructor(_opts: unknown) {
+    constructor(opts: Record<string, unknown>) {
       const fake = makeFakeServer();
       createdServers.push(fake);
+      createdOptions.push(opts);
       return fake as unknown as SMTPServer;
     }
   }
@@ -1043,6 +1416,7 @@ describe("initializeSmtp configuration", () => {
 
   beforeEach(() => {
     createdServers.length = 0;
+    createdOptions.length = 0;
     mockLogger.warn.mockReset();
     mockLogger.info.mockReset();
     process.env = { ...originalEnv };
@@ -1132,6 +1506,42 @@ describe("initializeSmtp configuration", () => {
       expect(infos.some((m) => m.includes("2525"))).toBe(true);
       expect(infos.some((m) => m.includes("4465"))).toBe(true);
       expect(infos.some((m) => m.includes("5587"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // `size` is what makes the listener advertise `SIZE` in EHLO and refuse a
+  // `MAIL FROM` that declares more — the half a sending MTA acts on, which no
+  // test that drives DATA can see.
+  it("declares the message ceiling on every listener it starts", async () => {
+    const { writeFileSync, mkdtempSync, rmSync } = await import("fs");
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+
+    const dir = mkdtempSync(join(tmpdir(), "smtp-size-test-"));
+    const certPath = join(dir, "cert.pem");
+    const keyPath = join(dir, "key.pem");
+    writeFileSync(certPath, "DUMMY CERT");
+    writeFileSync(keyPath, "DUMMY KEY");
+    process.env.SSL_CERTIFICATE = certPath;
+    process.env.SSL_CERTIFICATE_KEY = keyPath;
+
+    try {
+      const initializeSmtp = await loadInitializeSmtp();
+      await initializeSmtp();
+
+      expect(createdOptions.length).toBe(3);
+      expect(createdOptions.map((options) => options.size)).toEqual([
+        MAX_MESSAGE_BYTES,
+        MAX_MESSAGE_BYTES,
+        MAX_MESSAGE_BYTES
+      ]);
+      expect(createdOptions.map((options) => options.hideSize)).toEqual([
+        undefined,
+        undefined,
+        undefined
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
