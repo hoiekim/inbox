@@ -6,6 +6,7 @@ import { getDomain, isProduction, PostgresSessionStore } from "server";
 import { createExpressApp } from "./app";
 import { resolveSessionSecret } from "./session-secret";
 import apiRouter from "./routes";
+import { errorHandler } from "./error-handler";
 import { startCleanupScheduler } from "./rate-limit";
 import { logger } from "../logger";
 
@@ -113,6 +114,8 @@ export const initializeHttp = async () => {
   app.get("*", (req, res) => {
     res.sendFile(path.join(clientPath, "index.html"));
   });
+
+  app.use(errorHandler);
 
   const domain = getDomain();
   const port = process.env.PORT || 3004;
