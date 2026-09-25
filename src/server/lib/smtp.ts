@@ -188,10 +188,11 @@ interface BoundedMessage {
  *
  * Two shapes this deliberately avoids. The source keeps flowing past the cut,
  * because the reply is only sent once DATA ends and a source nobody reads
- * never ends. And every cut destroys without an error: the outgoing handler
- * reaches `simpleParser` only after a user lookup, so an error emitted here
- * can land on a stream nothing is listening to yet. Refusals are answered
- * through `cb` instead, which is in hand the whole time.
+ * never ends. And no cut is silent: `mailparser` settles on an `error` but not
+ * on the `close` that a bare `destroy()` emits, so a silent cut leaves its
+ * promise pending and everything it accumulated reachable until the connection
+ * goes away. Refusals are still answered through `cb`, which is in hand the
+ * whole time, and never through that error.
  */
 const boundMessageSize = (
   source: SMTPServerDataStream,
@@ -199,14 +200,15 @@ const boundMessageSize = (
   cb: (err?: Error | null) => void
 ): BoundedMessage => {
   const bounded = new PassThrough();
+  // The outgoing handler reaches `simpleParser` only after a user lookup, so a
+  // refusal can destroy this before anything is listening.
+  bounded.on("error", () => {});
   const message: BoundedMessage = {
     stream: bounded,
     refused: false,
     drain: () => {
       message.refused = true;
-      bounded.destroy();
-      // The reply lands when the transaction ends, and a source nobody reads
-      // never ends.
+      bounded.destroy(new Error("message refused"));
       source.resume();
     }
   };
@@ -257,11 +259,6 @@ export const onData = (
   const { EMAIL_DOMAIN } = process.env;
   if (!EMAIL_DOMAIN) {
     logger.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
-    // Every refusal below reads the transaction out before answering. The
-    // library transmits a reply only once DATA ends, and DATA ends only once
-    // the source is read — so answering through `cb` alone generates a reply
-    // that is never sent, and holds one of `maxClients` until the socket
-    // timeout.
     stream.resume();
     return cb(new Error("Email service not configured"));
   }
