@@ -555,6 +555,54 @@ describe("postSetInfoRoute", () => {
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect(mockSetUserInfo).toHaveBeenCalledTimes(1);
   });
+
+  it("regenerates the session id before it attaches the rotated user", async () => {
+    // setUserInfo deletes the user's session rows; without a regenerate the
+    // assignment re-upserts the caller's own row under the id it already had,
+    // so the session most likely to be the compromised one survives.
+    const { postSetInfoRoute } = await import("./post-set-info");
+    mockSetUserInfo.mockClear();
+    mockGetUser.mockResolvedValueOnce({ id: "u1", username: "alice", email: "a@b.com" });
+    mockSetUserInfo.mockResolvedValueOnce(
+      { id: "u1", username: "alice", email: "a@b.com" } as Awaited<
+        ReturnType<typeof mockSetUserInfo>
+      >
+    );
+    const req = makeReq({
+      body: { email: "a@b.com", username: "alice", password: "pass" },
+    });
+    const result = await postSetInfoRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(req.session.regenerate).toHaveBeenCalledTimes(1);
+    expect(req.session.user).toEqual({ id: "u1", username: "alice", email: "a@b.com" });
+  });
+
+  it("fails without attaching the user when the regenerate errors", async () => {
+    // A session that could not be reissued must not be handed the rotated
+    // identity on the id it was already carrying.
+    const { postSetInfoRoute } = await import("./post-set-info");
+    mockSetUserInfo.mockClear();
+    mockGetUser.mockResolvedValueOnce({ id: "u1", username: "alice", email: "a@b.com" });
+    mockSetUserInfo.mockResolvedValueOnce(
+      { id: "u1", username: "alice", email: "a@b.com" } as Awaited<
+        ReturnType<typeof mockSetUserInfo>
+      >
+    );
+    const req = makeReq({
+      body: { email: "a@b.com", username: "alice", password: "pass" },
+      session: {
+        user: null,
+        regenerate: mock((cb: (err: Error | null) => void) =>
+          cb(new Error("store unavailable"))
+        ),
+        destroy: mock((cb: (err: Error | null) => void) => cb(null)),
+      },
+    });
+    await expect(
+      postSetInfoRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("store unavailable");
+    expect(req.session.user).toBeNull();
+  });
 });
 
 // ── post-token tests ──────────────────────────────────────────────────────────

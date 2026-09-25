@@ -137,6 +137,26 @@ export const deleteSessionsAuthenticatedAs = async (
 };
 
 /**
+ * Deletes every session issued to a given user, whichever credential minted it.
+ * Rotating a user's password has to reach the sessions it already issued: a
+ * session row carries no password, and `rolling` renews its window on every
+ * request, so a cookie held before the rotation would otherwise stay
+ * authenticated for as long as it kept being used.
+ *
+ * A fault rejects rather than resolving to 0. This is the eviction half of a
+ * password rotation, and a caller that cannot tell a failed DELETE from "no
+ * sessions to delete" would report the rotation as complete while the sessions
+ * it was supposed to revoke are still live.
+ * @param userId
+ * @returns A promise to be a count of deleted sessions.
+ */
+export const deleteSessionsForUser = async (
+  userId: string
+): Promise<number> => {
+  return sessionsTable.deleteWhere({ [SESSION_USER_ID]: userId });
+};
+
+/**
  * Can be passed to 'store' option of express-session middleware to achieve persistent
  * session memory.
  */
