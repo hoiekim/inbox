@@ -87,6 +87,13 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     });
     req.session.user = sessionUser;
 
+    // The store write is what makes the issued cookie mean anything, so it has
+    // to land before the response claims the login succeeded. express-session
+    // otherwise saves at `res.end`, after the success body is already written.
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => (err ? reject(err) : resolve()));
+    });
+
     loginLimiter.reset(ip);
     return { status: "success", body: sessionUser };
   }
