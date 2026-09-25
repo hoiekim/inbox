@@ -150,8 +150,8 @@ describe("PostgresSessionStore.get", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("connection terminated unexpectedly");
-    // A read fault must not reach the caller as the absent-session answer:
-    // express-session mints a fresh id on that branch, orphaning the live row.
+    // The error callback must not also carry the affirmative "no such session"
+    // answer, which is how the swallow spelled a fault.
     expect(session).toBeFalsy();
   });
 

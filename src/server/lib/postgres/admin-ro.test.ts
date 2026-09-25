@@ -19,7 +19,11 @@ const written: WrittenUser[] = [];
 let existingRow: unknown = null;
 
 const mockSearchUser = mock(async () => existingRow);
-const mockDeleteSessionsAuthenticatedAs = mock(async (_authenticatedAs: string) => 2);
+let deleteFault: Error | null = null;
+const mockDeleteSessionsAuthenticatedAs = mock(async (_authenticatedAs: string) => {
+  if (deleteFault) throw deleteFault;
+  return 2;
+});
 const mockWriteUser = mock(async (user: WrittenUser) => {
   written.push(user);
   return { _id: user.user_id ?? "generated-id" };
@@ -68,6 +72,7 @@ describe("initializeAdminReadOnlyUser", () => {
   beforeEach(() => {
     written.length = 0;
     existingRow = null;
+    deleteFault = null;
     mockWriteUser.mockClear();
     mockSearchUser.mockClear();
     mockDeleteSessionsAuthenticatedAs.mockClear();
@@ -164,6 +169,28 @@ describe("initializeAdminReadOnlyUser", () => {
 
     expect(written).toHaveLength(1);
     expect(mockDeleteSessionsAuthenticatedAs).not.toHaveBeenCalled();
+  });
+
+  it("keeps the previous password stored when the purge raises, so the next boot retries", async () => {
+    process.env.ADMIN_RO_PASSWORD = CONFIGURED_PASSWORD;
+    existingRow = ROW_WITH_PREVIOUS_PASSWORD;
+    deleteFault = new Error("deadlock detected");
+
+    await expect(runInitialize()).rejects.toThrow("deadlock detected");
+
+    // The stored hash is the only rotation signal, and the rejection's only
+    // consumer is a process restart. Persisting the new hash before the purge
+    // lands would make the restarted boot compare equal, skip the revocation
+    // for good, and log a clean start while the leaked sessions roll on.
+    expect(written).toHaveLength(0);
+
+    deleteFault = null;
+    existingRow = ROW_WITH_PREVIOUS_PASSWORD;
+    await runInitialize();
+
+    expect(mockDeleteSessionsAuthenticatedAs).toHaveBeenCalledTimes(2);
+    expect(written).toHaveLength(1);
+    expect(written[0].password).toBe(CONFIGURED_PASSWORD);
   });
 
   it("revokes with a password that exists nowhere, not a fixed sentinel", async () => {
