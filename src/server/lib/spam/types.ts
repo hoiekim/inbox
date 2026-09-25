@@ -38,6 +38,8 @@ export interface SpamRule {
 export interface EmailContext {
   /** From header address */
   fromAddress?: string;
+  /** Envelope sender from the SMTP MAIL FROM command */
+  envelopeFromAddress?: string;
   /** From header display name */
   fromName?: string;
   /** Reply-To address */
