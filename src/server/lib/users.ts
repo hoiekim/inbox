@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { User, SignedUser } from "common";
 import { searchUser as pgSearchUser } from "./postgres/repositories/users";
 import { deleteSessionsForUser } from "./postgres/repositories/sessions";
+import { evictImapSessions } from "./imap/session-registry";
+import { evictSmtpConnections } from "./smtp-registry";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 import { logger } from "./logger";
 
@@ -212,6 +214,13 @@ export const setUserInfo = async (
     token: null,
     expiry: null
   });
+
+  // IMAP and SMTP hold authentication for the life of a connection rather than
+  // per request, so a client that authenticated with the old password keeps its
+  // grant until its socket is torn down. This runs after the write, not before:
+  // until the new hash lands, an evicted client can reconnect on the old one.
+  evictImapSessions(username);
+  evictSmtpConnections(username);
 
   const signed = new User({ id, email, username, password: passwordHash }).getSigned();
   if (!signed) {

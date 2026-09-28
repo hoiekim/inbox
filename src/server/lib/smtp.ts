@@ -20,12 +20,15 @@ import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
+import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
 
 const registerListeners = (
   server: SMTPServer,
   port: number,
   callback: () => void
 ) => {
+  registerSmtpServer(server);
+
   server.on("error", (err) => {
     // Suppress noise from external port scanners and misconfigured clients.
     // These errors originate from the remote side failing TLS negotiation —
@@ -71,6 +74,7 @@ const registerListeners = (
   });
 
   server.on("close", () => {
+    unregisterSmtpServer(server);
     logger.info(`SMTP Server(${port}) closed`);
   });
 

@@ -26,6 +26,10 @@ import { ImapRequestHandler } from "./handler";
 import { writeChunkedToSocket, writeStreamToSocket } from "./chunked-write";
 import { imapTrace } from "./trace";
 import { closeSocket } from "./close-socket";
+import {
+  registerAuthenticatedSession,
+  unregisterSession,
+} from "./session-registry";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -325,6 +329,7 @@ export class ImapSession {
       this.authenticated = result.authenticated;
       this.isReadOnlyUser = result.isReadOnly;
       this.authenticatedAs = result.authenticatedAs;
+      if (this.authenticated) registerAuthenticatedSession(this);
     }
   };
 
@@ -341,6 +346,7 @@ export class ImapSession {
       this.authenticated = result.authenticated;
       this.isReadOnlyUser = result.isReadOnly;
       this.authenticatedAs = result.authenticatedAs;
+      if (this.authenticated) registerAuthenticatedSession(this);
     }
   };
 
@@ -744,7 +750,12 @@ export class ImapSession {
     return this.sessionId;
   };
 
+  getAuthenticatedAs = (): string | null => {
+    return this.authenticatedAs;
+  };
+
   cleanup = () => {
+    unregisterSession(this);
     if (this.isIdling) {
       idleManager.removeIdleSession(this.sessionId);
       this.isIdling = false;

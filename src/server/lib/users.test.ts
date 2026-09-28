@@ -77,6 +77,14 @@ const {
   expiryTimer,
 } = await import("./users");
 const { resetPool } = await import("./postgres/client");
+const {
+  registerAuthenticatedSession,
+  unregisterSession,
+} = await import("./imap/session-registry");
+const {
+  registerSmtpServer,
+  unregisterSmtpServer,
+} = await import("./smtp-registry");
 
 beforeAll(() => {
   // `mock.module` is process-global: a sibling test file that ran earlier in
@@ -750,6 +758,103 @@ describe("setUserInfo", () => {
     expect(signed.email).toBe("a@b.c");
     expect(JSON.stringify(signed)).not.toMatch(/\$2[aby]\$/);
     expect(JSON.stringify(signed)).not.toContain("newpw");
+  });
+
+  it("tears down the user's live IMAP and SMTP connections", async () => {
+    // Both mail surfaces authenticate once per connection, so the HTTP-session
+    // delete leaves them untouched. Without this the one control a user has
+    // against someone else in the account misses the longest-lived grants.
+    const imapClose = mock(() => {});
+    const imapSession = {
+      write: mock(() => true),
+      close: imapClose,
+      getAuthenticatedAs: () => "alice",
+      getSessionId: () => "s-1",
+    } as unknown as Parameters<typeof registerAuthenticatedSession>[0];
+    const smtpClose = mock(() => {});
+    const smtpConnection = {
+      session: { user: "alice" },
+      send: mock(() => {}),
+      close: smtpClose,
+    };
+    const smtpServer = {
+      connections: new Set([smtpConnection]),
+    } as unknown as Parameters<typeof registerSmtpServer>[0];
+    registerAuthenticatedSession(imapSession);
+    registerSmtpServer(smtpServer);
+
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    try {
+      await setUserInfo({
+        email: "a@b.c",
+        username: "alice",
+        password: "newpw",
+        token: "tok",
+      });
+
+      expect(imapClose).toHaveBeenCalledTimes(1);
+      expect(smtpClose).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterSession(imapSession);
+      unregisterSmtpServer(smtpServer);
+    }
+  });
+
+  it("leaves live connections alone when the password write fails", async () => {
+    // The eviction runs after the UPDATE, so a rotation that never landed does
+    // not disconnect clients still holding a credential that is still valid.
+    const imapClose = mock(() => {});
+    const imapSession = {
+      write: mock(() => true),
+      close: imapClose,
+      getAuthenticatedAs: () => "alice",
+      getSessionId: () => "s-1",
+    } as unknown as Parameters<typeof registerAuthenticatedSession>[0];
+    registerAuthenticatedSession(imapSession);
+
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockRejectedValueOnce(new Error("constraint violation"));
+
+    try {
+      await expect(
+        setUserInfo({
+          email: "a@b.c",
+          username: "alice",
+          password: "newpw",
+          token: "tok",
+        })
+      ).rejects.toThrow("constraint violation");
+
+      expect(imapClose).not.toHaveBeenCalled();
+    } finally {
+      unregisterSession(imapSession);
+    }
   });
 
   it("rejects without writing the password when the session delete fails", async () => {
