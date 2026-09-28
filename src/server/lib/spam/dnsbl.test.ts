@@ -6,13 +6,26 @@
 
 import { describe, it, expect } from "bun:test";
 import {
+  aggregateVerdicts,
   checkDnsbls,
   DEFAULT_DNSBLS,
+  DnsblAnswer,
+  DnsblVerdict,
   isRealListing,
   toIpv4,
   verdictForAnswer,
   verdictForDnsError,
 } from "./dnsbl";
+
+const ZEN = { hostname: "zen.spamhaus.org", name: "Spamhaus ZEN", score: 40 };
+const SPAMCOP = { hostname: "bl.spamcop.net", name: "SpamCop", score: 30 };
+
+const answered = (dnsbl: typeof ZEN, verdict: DnsblVerdict): DnsblAnswer => ({
+  status: "fulfilled",
+  value: { dnsbl, verdict },
+});
+
+const threw = (): DnsblAnswer => ({ status: "rejected", reason: new Error("query failed") });
 
 describe("DNSBL Checker", () => {
   describe("checkDnsbls", () => {
@@ -132,6 +145,65 @@ describe("DNSBL Checker", () => {
       const result = await checkDnsbls("198.51.100.7", []);
       expect(result.score).toBe(0);
       expect(result.evaluated).toBe(false);
+    });
+  });
+
+  describe("aggregateVerdicts", () => {
+    it("reports evaluated when every blocklist reached a verdict", () => {
+      const result = aggregateVerdicts([
+        answered(ZEN, "listed"),
+        answered(SPAMCOP, "clean"),
+      ]);
+      expect(result.score).toBe(40);
+      expect(result.listedIn).toEqual([ZEN]);
+      expect(result.reasons).toEqual(["Listed in Spamhaus ZEN"]);
+      expect(result.evaluated).toBe(true);
+    });
+
+    it("withdraws evaluated when one blocklist never answered", () => {
+      // A clearance from the others is not a clearance from the one that was
+      // never asked. Reading this as evaluated hands the allowlist exemption to
+      // a sender whose connection no blocklist has an opinion on.
+      const result = aggregateVerdicts([
+        answered(ZEN, "clean"),
+        answered(SPAMCOP, "unknown"),
+      ]);
+      expect(result.score).toBe(0);
+      expect(result.evaluated).toBe(false);
+    });
+
+    it("keeps a listing's score while withdrawing evaluated", () => {
+      const result = aggregateVerdicts([
+        answered(ZEN, "listed"),
+        answered(SPAMCOP, "unknown"),
+      ]);
+      expect(result.score).toBe(40);
+      expect(result.evaluated).toBe(false);
+    });
+
+    it("withdraws evaluated when a query rejected instead of answering", () => {
+      const result = aggregateVerdicts([answered(ZEN, "clean"), threw()]);
+      expect(result.score).toBe(0);
+      expect(result.evaluated).toBe(false);
+    });
+
+    it("reports an empty answer set as unevaluated", () => {
+      expect(aggregateVerdicts([])).toEqual({
+        score: 0,
+        listedIn: [],
+        reasons: [],
+        evaluated: false,
+      });
+    });
+
+    it("sums every listing rather than stopping at the first", () => {
+      const result = aggregateVerdicts([
+        answered(ZEN, "listed"),
+        answered(SPAMCOP, "listed"),
+      ]);
+      expect(result.score).toBe(70);
+      expect(result.listedIn).toEqual([ZEN, SPAMCOP]);
+      expect(result.evaluated).toBe(true);
     });
   });
 

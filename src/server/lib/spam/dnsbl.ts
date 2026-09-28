@@ -142,6 +142,55 @@ async function checkDnsbl(ipv4: string, dnsbl: DnsBlocklist): Promise<DnsblVerdi
   }
 }
 
+/** One blocklist's answer about an address, as the per-blocklist queries settle. */
+export type DnsblAnswer = PromiseSettledResult<{
+  dnsbl: DnsBlocklist;
+  verdict: DnsblVerdict;
+}>;
+
+/**
+ * Fold the per-blocklist answers into one result.
+ *
+ * `score` is an OR over the answers — one listing is enough to score. `evaluated`
+ * is an AND: it reports whether every blocklist reached a verdict, so a caller
+ * that treats `score: 0` as authorization can tell a clearance from an absence
+ * of one. An answer that never arrived withholds the signal rather than
+ * supplying it, which is why a single `unknown` or a rejected query clears it.
+ *
+ * ```ts
+ * // nothing was asked, so nothing was answered
+ * aggregateVerdicts([]); // { score: 0, evaluated: false, ... }
+ *
+ * // one blocklist cleared the address, the other never answered
+ * aggregateVerdicts([
+ *   { status: "fulfilled", value: { dnsbl: zen, verdict: "clean" } },
+ *   { status: "fulfilled", value: { dnsbl: spamcop, verdict: "unknown" } },
+ * ]); // { score: 0, evaluated: false, ... }
+ * ```
+ */
+export const aggregateVerdicts = (
+  answers: DnsblAnswer[],
+): { score: number; listedIn: DnsBlocklist[]; reasons: string[]; evaluated: boolean } => {
+  const listedIn: DnsBlocklist[] = [];
+  const reasons: string[] = [];
+  let score = 0;
+  let evaluated = answers.length > 0;
+
+  for (const answer of answers) {
+    if (answer.status !== "fulfilled" || answer.value.verdict === "unknown") {
+      evaluated = false;
+      continue;
+    }
+    if (answer.value.verdict === "listed") {
+      listedIn.push(answer.value.dnsbl);
+      score += answer.value.dnsbl.score;
+      reasons.push(`Listed in ${answer.value.dnsbl.name}`);
+    }
+  }
+
+  return { score, listedIn, reasons, evaluated };
+};
+
 /**
  * Check an IP against multiple DNSBLs.
  * Returns aggregated results.
@@ -176,24 +225,7 @@ export async function checkDnsbls(
     }))
   );
 
-  const listedIn: DnsBlocklist[] = [];
-  const reasons: string[] = [];
-  let score = 0;
-  let evaluated = dnsbls.length > 0;
-
-  for (const result of results) {
-    if (result.status !== "fulfilled" || result.value.verdict === "unknown") {
-      evaluated = false;
-      continue;
-    }
-    if (result.value.verdict === "listed") {
-      listedIn.push(result.value.dnsbl);
-      score += result.value.dnsbl.score;
-      reasons.push(`Listed in ${result.value.dnsbl.name}`);
-    }
-  }
-
-  return { score, listedIn, reasons, evaluated };
+  return aggregateVerdicts(results);
 }
 
 /**

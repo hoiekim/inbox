@@ -224,6 +224,32 @@ describe("checkSpam — allowlist exemption requires a corroborated sender", () 
     );
   });
 
+  it("refuses the exemption when the blocklist lookup threw instead of answering", async () => {
+    // checkSpam swallows a DNSBL failure so the other layers still run. The
+    // exemption must not survive that: a lookup that never completed states no
+    // opinion on the connection, and reading it as a clearance is the bypass.
+    const result = await checkSpam(
+      "user1",
+      {
+        ...spamFromAllowlistedDomain,
+        envelopeFromAddress: "bounce@ut-allow.example",
+        remoteAddress: "198.51.100.7",
+      },
+      {},
+      allowlistDeps({
+        checkDnsbls: async () => {
+          throw new Error("resolver unreachable");
+        },
+      }),
+    );
+    expect(result.score).toBe(60);
+    expect(result.isSpam).toBe(true);
+    expect(result.flaggedBy).toBe("rules");
+    expect(result.reasons).toContain(
+      "Allowlisted sender arrived from an address no blocklist answered for",
+    );
+  });
+
   it("keeps the exemption when the blocklist layer is turned off by config", async () => {
     const result = await checkSpam(
       "user1",
