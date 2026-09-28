@@ -21,7 +21,13 @@ import {
   getDomainUidNext as pgGetDomainUidNext,
   getAccountUidNext as pgGetAccountUidNext,
 } from "../postgres/repositories/mails";
-import { getUser, getText, getDomain, addressToUsername } from "server";
+import {
+  getUser,
+  getText,
+  getDomain,
+  addressToUsername,
+  isLocalAddress,
+} from "server";
 import {
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
@@ -346,7 +352,7 @@ const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
   else array.push(envelopeTo);
   const domain = getDomain();
   return array
-    .filter((e) => e.address && isValidAddress(e.address, domain))
+    .filter((e) => e.address && isLocalAddress(e.address, domain))
     .map((e) => addressToUsername(e.address as string));
 };
 
@@ -358,15 +364,8 @@ const getMailboxesFromIncomingMail = (data: IncomingMail): string[] => {
   else array.push(envelopeTo);
   const domain = getDomain();
   return array
-    .filter((e) => e.address && isValidAddress(e.address, domain))
+    .filter((e) => e.address && isLocalAddress(e.address, domain))
     .map((e) => accountToBox(e.address as string));
-};
-
-const isValidAddress = (address: string, domain: string) => {
-  const parsedAddress = address.split("@");
-  const domainInData = parsedAddress[parsedAddress.length - 1].toLowerCase();
-  const target = domain.toLowerCase();
-  return domainInData === target || domainInData.endsWith(`.${target}`);
 };
 
 export const validateIncomingMail = (
@@ -383,7 +382,7 @@ export const validateIncomingMail = (
   else addressArray.push(envelopeTo);
 
   const isAddressCorrect = !!addressArray.find((e) => {
-    return e.address && isValidAddress(e.address, domainName);
+    return e.address && isLocalAddress(e.address, domainName);
   });
 
   if (isAddressCorrect) return data as IncomingMail;

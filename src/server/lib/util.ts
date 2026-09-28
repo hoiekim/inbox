@@ -12,6 +12,19 @@ export const getUserDomain = (username: string) => {
 };
 
 /**
+ * Whether this host is responsible for `address`: `domain` itself, or any
+ * subdomain under it, which is the set {@link getUserDomain} draws from. The
+ * protocol layer and the mail-save path both decide locality here, so the
+ * envelopes answered for and the envelopes stored are the same set.
+ */
+export const isLocalAddress = (address: string, domain: string) => {
+  const parsedAddress = address.split("@");
+  const domainInAddress = parsedAddress[parsedAddress.length - 1].toLowerCase();
+  const target = domain.toLowerCase();
+  return domainInAddress === target || domainInAddress.endsWith(`.${target}`);
+};
+
+/**
  * The username whose mailbox receives mail for `address`. The inverse of
  * {@link getUserDomain}: `x@<domain>` and `x@admin.<domain>` are admin's, and
  * `x@bob.<domain>` is bob's. Returns the address's own domain for anything

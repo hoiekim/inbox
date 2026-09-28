@@ -17,7 +17,7 @@ import {
 } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
-import { getUserDomain } from "./util";
+import { getUserDomain, isLocalAddress } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
@@ -274,12 +274,12 @@ export const onData = (
   }
 
   const isIncomingEmail = session.envelope.rcptTo.some((addr) => {
-    return addr.address.endsWith(`@${EMAIL_DOMAIN}`);
+    return isLocalAddress(addr.address, EMAIL_DOMAIN);
   });
 
   const from = session.envelope.mailFrom;
   const isOutgoingEmail =
-    typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
+    typeof from !== "boolean" && isLocalAddress(from.address, EMAIL_DOMAIN);
 
   if (!isIncomingEmail && !isOutgoingEmail) {
     logger.warn("SMTP: refused to relay a message with no local party", {
@@ -329,6 +329,7 @@ const onDataIncoming = (
       // Extract remote address for spam DNSBL checks
       const remoteAddress = session.remoteAddress;
       await saveMailHandler(null, mail, { remoteAddress });
+      if (message.refused) return;
       cb();
     })
     .catch((err) => {
@@ -499,6 +500,7 @@ const onDataOutgoing = async (
     });
 
     await sendMail(signedUser, mailData);
+    if (message.refused) return;
     cb();
   } catch (err) {
     if (message.refused) return;

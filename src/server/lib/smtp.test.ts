@@ -884,6 +884,146 @@ describe("onData handler", () => {
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
     expect(mockSendMail).not.toHaveBeenCalled();
   });
+
+  // Locality is a label boundary, not a string suffix: a user's mail lives
+  // under `<user>.<domain>`, so both predicates have to accept that form and
+  // still refuse a domain that merely ends in the served one.
+  it("saves incoming mail addressed to a user subdomain", async () => {
+    const stream = makeStream();
+    const session = {
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "anything@bob.test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("relays an authenticated submission sent from a user subdomain", async () => {
+    const stream = makeStream();
+    const session = {
+      user: "bob",
+      envelope: {
+        mailFrom: { address: "bob@bob.test.com" },
+        rcptTo: [{ address: "someone@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "bob" })
+    });
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("refuses a domain that merely ends in the served one", async () => {
+    const codes: (number | undefined)[] = [];
+    for (const address of ["user@nottest.com", "user@test.com.attacker.net"]) {
+      const session = {
+        envelope: {
+          mailFrom: { address },
+          rcptTo: [{ address }]
+        },
+        remoteAddress: "1.2.3.4"
+      } as unknown as SMTPServerSession;
+
+      const err = await new Promise<Error | null | undefined>((resolve) => {
+        onData(makeStream(), session, (e) => resolve(e));
+      });
+      codes.push((err as Error & { responseCode?: number }).responseCode);
+    }
+
+    expect(codes).toEqual([550, 550]);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  // A refusal that lands while a handler's own await is in flight: the reply
+  // has gone out, so the await's continuation must not answer again.
+  const deferred = () => {
+    let settle!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    return { promise, settle };
+  };
+
+  const answersOnceWhenRefusedMidAwait = async (
+    session: SMTPServerSession,
+    awaited: { promise: Promise<void> }
+  ) => {
+    const source = new PassThrough();
+    const calls: (Error | null | undefined)[] = [];
+    onData(source as unknown as SMTPServerDataStream, session, (err) =>
+      calls.push(err)
+    );
+    source.write("x");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    source.emit("error", new Error("connection reset"));
+    await awaited.promise;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return calls;
+  };
+
+  it("answers once when the source fails during saveMailHandler", async () => {
+    const saving = deferred();
+    mockSaveMailHandler.mockImplementation(() => saving.promise);
+    const session = {
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const pending = answersOnceWhenRefusedMidAwait(session, saving);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    saving.settle();
+    const calls = await pending;
+
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error).message).toBe("connection reset");
+  });
+
+  it("answers once when the source fails during sendMail", async () => {
+    const sending = deferred();
+    mockSendMail.mockImplementation(() => sending.promise);
+    mockGetUser.mockResolvedValue({
+      getSigned: () => ({ username: "admin" })
+    });
+    const session = {
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const pending = answersOnceWhenRefusedMidAwait(session, sending);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    sending.settle();
+    const calls = await pending;
+
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error).message).toBe("connection reset");
+  });
 });
 
 describe("onData message ceiling", () => {

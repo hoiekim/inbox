@@ -11,7 +11,7 @@ import { addressToUsername } from "../util";
 const makeMail = (envelopeTo: { address: string }[]): IncomingMail =>
   ({ envelopeTo } as unknown as IncomingMail);
 
-describe("validateIncomingMail (envelope-to gate via isValidAddress)", () => {
+describe("validateIncomingMail (envelope-to gate via isLocalAddress)", () => {
   it("accepts an exact-match domain recipient", () => {
     const mail = makeMail([{ address: "alice@hoie.kim" }]);
     expect(validateIncomingMail(mail, "hoie.kim")).toBe(mail);
