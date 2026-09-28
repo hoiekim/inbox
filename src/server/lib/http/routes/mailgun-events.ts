@@ -3,6 +3,7 @@ import { mailgunEventsTable, MailgunEventModel } from "server";
 import { sendAlarm } from "../../alarm";
 import { logger } from "../../logger";
 import { Route } from "./route";
+import { getClientIp, mailgunEventsLimiter } from "../rate-limit";
 
 /**
  * Mailgun events webhook — Mailgun POSTs one event per delivery-lifecycle
@@ -114,6 +115,12 @@ export const postMailgunEventsRoute = new Route<undefined>(
   "POST",
   "/mailgun-events",
   async (req) => {
+    // A volume cap, not a failure cap: the threat is one captured signature
+    // replayed inside its window, where every request is validly signed. So
+    // each request that clears the read-only middleware check consumes a slot,
+    // however it resolves.
+    mailgunEventsLimiter.recordFailure(getClientIp(req));
+
     const key = process.env.MAILGUN_WEBHOOK_SIGNING_KEY;
     if (!key) {
       // Fail closed if the server isn't configured for webhooks — we
