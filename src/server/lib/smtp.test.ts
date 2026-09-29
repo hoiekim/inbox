@@ -12,7 +12,10 @@ import { MAX_MESSAGE_BYTES } from "./message-size";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
-const mockSaveMailHandler = mock(() => Promise.resolve());
+// Resolves the number of mailboxes written, as `saveMailHandler` does. A stub
+// that resolved nothing would make every incoming fixture read as a mailbox
+// that stored, which is the one thing the transaction now branches on.
+const mockSaveMailHandler = mock((): Promise<number> => Promise.resolve(1));
 const mockSendMail = mock(() => Promise.resolve());
 
 const mockLogger = {
@@ -76,7 +79,14 @@ const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockRetu
 // `DISCORD_ALARM_WEBHOOK` is unset (the early return in alarm.ts:15).
 
 // Import the actual SMTP handlers after mocks are set up
-import { onAuth, onData, onMailFrom, resolveOutgoingSender, splitEnvelopeRecipients } from "./smtp";
+import {
+  onAuth,
+  onData,
+  onMailFrom,
+  onRcptTo,
+  resolveOutgoingSender,
+  splitEnvelopeRecipients
+} from "./smtp";
 
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
@@ -326,6 +336,91 @@ describe("onMailFrom handler", () => {
   });
 });
 
+describe("onRcptTo handler", () => {
+  const originalEnv = process.env;
+
+  const rcpt = (address: string) =>
+    new Promise<Error | null | undefined>((resolve) => {
+      const session = { remoteAddress: "1.2.3.4" } as unknown as SMTPServerSession;
+      onRcptTo!({ address } as never, session, (e) => resolve(e));
+    });
+
+  beforeEach(() => {
+    mockGetUser.mockReset();
+    mockLogger.warn.mockReset();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("passes a foreign recipient without looking a user up", async () => {
+    const err = await rcpt("someone@other.com");
+
+    expect(err).toBeUndefined();
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  it("passes a domain that merely ends in the served one without looking a user up", async () => {
+    mockGetUser.mockResolvedValue({ id: "u1" });
+
+    expect(await rcpt("user@nottest.com")).toBeUndefined();
+    expect(await rcpt("user@test.com.attacker.net")).toBeUndefined();
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  it("resolves the served apex to admin and passes it", async () => {
+    mockGetUser.mockResolvedValue({ id: "u1" });
+
+    const err = await rcpt("anything@test.com");
+
+    expect(err).toBeUndefined();
+    expect(mockGetUser).toHaveBeenCalledWith({ username: "admin" });
+  });
+
+  it("resolves a user subdomain to its own account and passes it", async () => {
+    mockGetUser.mockResolvedValue({ id: "u1" });
+
+    const err = await rcpt("anything@bob.test.com");
+
+    expect(err).toBeUndefined();
+    expect(mockGetUser).toHaveBeenCalledWith({ username: "bob" });
+  });
+
+  // The served zone answers a wildcard, so any label under it is this host's to
+  // answer for while only the ones with an account behind them have a mailbox.
+  it("refuses a label under the served domain that owns no account", async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    const err = await rcpt("x@nosuchuser.test.com");
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(550);
+    expect(err!.message).toBe("5.1.1 Error: no such mailbox here");
+    expect(mockGetUser).toHaveBeenCalledWith({ username: "nosuchuser" });
+  });
+
+  it("refuses a nested label no account owns", async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    const err = await rcpt("x@evil.bob.test.com");
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(550);
+    expect(mockGetUser).toHaveBeenCalledWith({ username: "evil.bob" });
+  });
+
+  it("passes every recipient when EMAIL_DOMAIN is not set", async () => {
+    delete process.env.EMAIL_DOMAIN;
+
+    const err = await rcpt("x@nosuchuser.test.com");
+
+    expect(err).toBeUndefined();
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+});
+
 describe("onData handler", () => {
   const originalEnv = process.env;
 
@@ -339,6 +434,7 @@ describe("onData handler", () => {
 
   beforeEach(() => {
     mockSaveMailHandler.mockReset();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
     mockSendMail.mockReset();
     mockSimpleParser.mockReset();
     mockSimpleParser.mockImplementation(() =>
@@ -444,7 +540,11 @@ describe("onData handler", () => {
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
   });
 
-  it("rejects outgoing path when session.user is missing", async () => {
+  // A local envelope sender on an unauthenticated session is a freely chosen
+  // string, so the pair (local sender, foreign recipient, no auth) is a relay
+  // attempt. 550 is permanent; the 450 the submission branch produced invited a
+  // retry for a class this host will never accept.
+  it("refuses an unauthenticated relay attempt permanently", async () => {
     const stream = makeStream();
     const session = {
       envelope: {
@@ -459,8 +559,116 @@ describe("onData handler", () => {
     });
 
     expect(err).toBeInstanceOf(Error);
-    expect(err!.message).toBe("User not authenticated");
+    expect(err!.message).toBe("Error: relay access denied");
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(550);
     expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  // The delivery half of the same gate: an inbound message for a local mailbox
+  // is delivered whatever its envelope sender claims. Selecting the submission
+  // branch on the sender alone refused it instead — a forwarder, a bounce or a
+  // spoof addressed to a real user never reached the mailbox.
+  it("delivers inbound mail whose envelope sender claims a user subdomain", async () => {
+    const stream = makeStream();
+    const session = {
+      envelope: {
+        mailFrom: { address: "spoof@bob.test.com" },
+        rcptTo: [{ address: "alice@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  it("delivers inbound mail whose envelope sender claims the served apex", async () => {
+    const stream = makeStream();
+    const session = {
+      envelope: {
+        mailFrom: { address: "spoof@test.com" },
+        rcptTo: [{ address: "alice@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+    expect(mockSendMail).not.toHaveBeenCalled();
+  });
+
+  // The transaction is answered rather than accepted when nothing was written,
+  // and transiently, because the authoritative refusal is `onRcptTo`'s.
+  it("refuses a transaction that stored into no mailbox", async () => {
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(0));
+    const stream = makeStream();
+    const session = {
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "ghost@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(451);
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a zero-stored transaction once when the source fails afterwards", async () => {
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(0));
+    const source = new PassThrough();
+    const session = {
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "ghost@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const calls: (Error | null | undefined)[] = [];
+    onData(source as unknown as SMTPServerDataStream, session, (err) =>
+      calls.push(err)
+    );
+    source.end("x");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    source.emit("error", new Error("connection reset"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(calls.length).toBe(1);
+    expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(451);
+  });
+
+  it("accepts a transaction that stored into at least one mailbox", async () => {
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
+    const stream = makeStream();
+    const session = {
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "alice@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeUndefined();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
   });
 
   it("rejects outgoing path when getUser returns null", async () => {
@@ -981,7 +1189,7 @@ describe("onData handler", () => {
 
   it("answers once when the source fails during saveMailHandler", async () => {
     const saving = deferred();
-    mockSaveMailHandler.mockImplementation(() => saving.promise);
+    mockSaveMailHandler.mockImplementation(() => saving.promise.then(() => 1));
     const session = {
       envelope: {
         mailFrom: { address: "external@other.com" },
@@ -1111,6 +1319,7 @@ describe("onData message ceiling", () => {
     parserBytes = 0;
     parserStream = undefined;
     mockSaveMailHandler.mockReset();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
     mockSendMail.mockReset();
     mockSimpleParser.mockReset();
     mockGetUser.mockReset();
@@ -1292,6 +1501,8 @@ describe("onData message ceiling", () => {
       remoteAddress: "1.2.3.4"
     }) as unknown as SMTPServerSession;
 
+  // Local envelope sender, foreign recipient, no auth: a relay attempt, which
+  // is refused before the octets are read rather than at the submission branch.
   const unauthenticatedSession = () =>
     ({
       envelope: {
@@ -1333,7 +1544,7 @@ describe("onData message ceiling", () => {
     expect(mockSimpleParser).not.toHaveBeenCalled();
   });
 
-  it("reads out an unauthenticated submission it refuses", async () => {
+  it("reads out an unauthenticated relay attempt it refuses", async () => {
     mockGetUser.mockImplementation(() => Promise.resolve(undefined));
 
     const { calls, ended } = await driveAndDrain(
@@ -1342,7 +1553,7 @@ describe("onData message ceiling", () => {
     );
 
     expect(calls.length).toBe(1);
-    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(calls[0]!.message).toBe("Error: relay access denied");
     expect(ended).toBe(true);
     expect(mockSendMail).not.toHaveBeenCalled();
   });
@@ -1358,7 +1569,7 @@ describe("onData message ceiling", () => {
     expect(mockSimpleParser).not.toHaveBeenCalled();
   });
 
-  it("answers an unauthenticated submission once when DATA runs past the ceiling", async () => {
+  it("answers an unauthenticated relay attempt once when DATA runs past the ceiling", async () => {
     mockGetUser.mockImplementation(() => Promise.resolve(undefined));
 
     const { calls, ended } = await driveAndDrain(
@@ -1367,7 +1578,7 @@ describe("onData message ceiling", () => {
     );
 
     expect(calls.length).toBe(1);
-    expect(calls[0]!.message).toBe("User not authenticated");
+    expect(calls[0]!.message).toBe("Error: relay access denied");
     expect(ended).toBe(true);
   });
 
@@ -1656,6 +1867,32 @@ describe("initializeSmtp configuration", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // A recipient check the listener was never handed refuses nothing, and no test
+  // that calls the handler directly can see that. Driving the registered one is
+  // what ties the two together.
+  it("registers a recipient check that refuses a mailbox it does not hold", async () => {
+    process.env.EMAIL_DOMAIN = "test.com";
+    mockGetUser.mockReset();
+    mockGetUser.mockImplementation(() => Promise.resolve(undefined));
+
+    const initializeSmtp = await loadInitializeSmtp();
+    await initializeSmtp();
+
+    expect(createdOptions.length).toBe(1);
+    const registered = createdOptions[0]!.onRcptTo as NonNullable<
+      typeof onRcptTo
+    >;
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      registered(
+        { address: "x@nosuchuser.test.com" } as never,
+        { remoteAddress: "1.2.3.4" } as unknown as SMTPServerSession,
+        (e) => resolve(e)
+      );
+    });
+
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(550);
   });
 
   // `size` is what makes the listener advertise `SIZE` in EHLO and refuse a

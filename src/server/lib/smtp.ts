@@ -17,7 +17,7 @@ import {
 } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
-import { getUserDomain, isLocalAddress } from "./util";
+import { addressToUsername, getUserDomain, isLocalAddress } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
@@ -154,6 +154,35 @@ class RelayDeniedError extends Error {
   }
 }
 
+/**
+ * RFC 5321 §3.5.3 gives 550 to a recipient this host is responsible for but
+ * holds no mailbox for. Answered at RCPT TO rather than at DATA so the octets
+ * are never transferred, and permanent so the sender bounces at once instead
+ * of queueing for a mailbox that will not appear.
+ */
+class NoSuchMailboxError extends Error {
+  responseCode = 550;
+
+  constructor() {
+    super("5.1.1 Error: no such mailbox here");
+  }
+}
+
+/**
+ * The mailbox `onRcptTo` accepted held nothing by the end of DATA, so it went
+ * away mid-transaction. Transient, because the authoritative answer for a
+ * recipient that does not exist is given one command earlier — a retry reaches
+ * that 550 rather than this, and this host cannot claim authority over a state
+ * change it did not observe.
+ */
+class MailNotStoredError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.2.1 Error: mailbox unavailable, try again later");
+  }
+}
+
 /** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
 class MessageTooLargeError extends Error {
   responseCode = 552;
@@ -164,6 +193,43 @@ class MessageTooLargeError extends Error {
     );
   }
 }
+
+/**
+ * Refuses a recipient inside the served zone that maps onto no account.
+ *
+ * `isLocalAddress` answers by label, so every `<anything>.$EMAIL_DOMAIN` is
+ * this host's to answer for, while only the labels {@link addressToUsername}
+ * maps onto a real account have a mailbox behind them. Deciding that here is
+ * what keeps the set of recipients answered `250` equal to the set stored for:
+ * at DATA the message would already have been transferred, and the save path
+ * skips an unresolvable username silently.
+ *
+ * A foreign recipient is not this host's to judge and passes — the relay
+ * decision belongs to {@link onData}, which needs the envelope complete.
+ *
+ * Naming a nonexistent mailbox is answerable here or in a bounce, and a bounce
+ * tells the same sender the same thing at the cost of carrying the message
+ * first, so refusing early trades nothing away.
+ */
+export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
+  address: SMTPServerAddress,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+) => {
+  const { EMAIL_DOMAIN } = process.env;
+  if (!EMAIL_DOMAIN) return cb();
+  if (!isLocalAddress(address.address, EMAIL_DOMAIN)) return cb();
+
+  const username = addressToUsername(address.address);
+  const user = username ? await getUser({ username }) : undefined;
+  if (user) return cb();
+
+  logger.warn("SMTP: refused a recipient with no mailbox", {
+    remoteAddress: session.remoteAddress,
+    username
+  });
+  return cb(new NoSuchMailboxError());
+};
 
 /**
  * A DATA transaction, carried to the parser only as far as the ceiling.
@@ -277,9 +343,17 @@ export const onData = (
     return isLocalAddress(addr.address, EMAIL_DOMAIN);
   });
 
+  // `mailFrom` is a value any sender chooses freely, so a local one selects
+  // submission only on a session that authenticated. Without that, inbound mail
+  // whose envelope sender sits under the served zone — a forwarder, a bounce, a
+  // spoof — is routed to submission and refused, and the genuine relay probe
+  // (local sender, foreign recipient, no auth) draws the transient reply that
+  // invites the retry rather than the permanent one this host owes it.
   const from = session.envelope.mailFrom;
   const isOutgoingEmail =
-    typeof from !== "boolean" && isLocalAddress(from.address, EMAIL_DOMAIN);
+    !!session.user &&
+    typeof from !== "boolean" &&
+    isLocalAddress(from.address, EMAIL_DOMAIN);
 
   if (!isIncomingEmail && !isOutgoingEmail) {
     logger.warn("SMTP: refused to relay a message with no local party", {
@@ -328,8 +402,21 @@ const onDataIncoming = (
 
       // Extract remote address for spam DNSBL checks
       const remoteAddress = session.remoteAddress;
-      await saveMailHandler(null, mail, { remoteAddress });
+      const stored = await saveMailHandler(null, mail, { remoteAddress });
       if (message.refused) return;
+
+      // `onRcptTo` refuses the recipients this cannot store for, so a zero here
+      // is a mailbox that went away mid-transaction. Answering an error keeps
+      // the 250 from outrunning the write in every case, including one the
+      // recipient check has no way to see.
+      if (stored === 0) {
+        logger.warn("SMTP: accepted DATA that stored into no mailbox", {
+          remoteAddress
+        });
+        message.drain();
+        return cb(new MailNotStoredError());
+      }
+
       cb();
     })
     .catch((err) => {
@@ -518,6 +605,7 @@ export const initializeSmtp = async () => {
     authOptional: true,
     onAuth,
     onMailFrom,
+    onRcptTo,
     onData,
     maxClients: SMTP_MAX_CLIENTS,
     size: MAX_MESSAGE_BYTES

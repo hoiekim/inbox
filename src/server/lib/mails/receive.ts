@@ -43,11 +43,24 @@ export interface SaveMailHandlerOptions {
   remoteAddress?: string;
 }
 
+/**
+ * Stores an incoming message into the mailbox of every local recipient that
+ * resolves to an account, and answers how many it wrote.
+ *
+ * A recipient inside the served domain need not have an account behind it, and
+ * one that does not is skipped rather than failing the call. Returning the count
+ * is what lets the caller tell "stored" from "accepted and dropped" — a caller
+ * that answers its own protocol needs to know the message landed somewhere.
+ *
+ * @example
+ * const stored = await saveMailHandler(null, mail, { remoteAddress });
+ * if (stored === 0) refuse();
+ */
 export const saveMailHandler = async (
   _: unknown,
   data: IncomingMail,
   options: SaveMailHandlerOptions = {}
-) => {
+): Promise<number> => {
   const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));
   const from = JSON.stringify(convertMailAddress(data.from)?.value);
   logger.info("Received an email", { timestamp: new Date().toISOString(), envelopeTo, from });
@@ -56,18 +69,25 @@ export const saveMailHandler = async (
   const validData = validateIncomingMail(data, domain);
   if (!validData) {
     logger.warn("Recipient is not valid. Mails is not saved.");
-    return;
+    return 0;
   }
 
   const usernames = getUsernamesFromIncomingMail(validData);
-  await Promise.all(
+  const saved = await Promise.all(
     usernames.map((u) => saveIncomingMail(u, validData, { remoteAddress: options.remoteAddress }))
   );
+  const storedCount = saved.filter((result) => !!result).length;
+  if (storedCount === 0) {
+    logger.warn("No recipient resolved to a mailbox. Mail is not saved.", { envelopeTo });
+    return 0;
+  }
   logger.info("Successfully saved an email");
 
   const mailboxes = getMailboxesFromIncomingMail(validData);
   await push.notifyNewMails(usernames, mailboxes);
   logger.info(`Sent push notifications to users: [${usernames.toString()}]`);
+
+  return storedCount;
 };
 
 interface SaveIncomingMailOptions {
