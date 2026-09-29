@@ -119,6 +119,14 @@ const makeRes = () => {
 
 const noopStream = mock(() => {}) as unknown as import("../route").Stream<unknown>;
 
+const noopNext = () => mock(() => {}) as unknown as import("express").NextFunction;
+
+// `Route.handler`'s catch reaches the real `sendAlarm`, and alarm.ts is a no-op
+// only while this is unset — bun auto-loads `.env`, which may carry the live one.
+beforeEach(() => {
+  delete process.env.DISCORD_ALARM_WEBHOOK;
+});
+
 // ── post-login tests ──────────────────────────────────────────────────────────
 
 describe("postLoginRoute", () => {
@@ -160,6 +168,26 @@ describe("postLoginRoute", () => {
     await expect(postLoginRoute.callback(req, res, noopStream)).rejects.toThrow(
       "session store error"
     );
+  });
+
+  it("answers 500 without the driver's message when the session store write fails", async () => {
+    const { postLoginRoute } = await import("./post-login");
+
+    const user = makeUser("alice");
+    mockGetUser.mockResolvedValueOnce(user);
+    mockBcryptCompare.mockResolvedValueOnce(true);
+
+    const req = makeReq({ body: { username: "alice", password: "secret" } });
+    (req as unknown as { session: { save: ReturnType<typeof mock> } }).session.save = mock(
+      (cb: (err: Error) => void) => cb(new Error('relation "sessions" does not exist'))
+    );
+    const res = makeRes();
+
+    await postLoginRoute.handler(req, res, noopNext());
+
+    expect(res._code).toBe(500);
+    expect(res._body).toEqual({ status: "error", message: "Internal server error" });
+    expect(JSON.stringify(res._body)).not.toContain("sessions");
   });
 
   it("waits for the session write before answering success", async () => {

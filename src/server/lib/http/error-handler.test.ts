@@ -41,6 +41,13 @@ const makeRes = (init?: { headersSent?: boolean; writableEnded?: boolean }) => {
 
 const originalConsoleError = console.error;
 
+// Ahead of every test in every suite, not after each test in one: bun
+// auto-loads `.env`, and alarm.ts is a no-op only while this is unset. The two
+// sink tests set it inside their own bodies, so they run with it present.
+beforeEach(() => {
+  delete process.env.DISCORD_ALARM_WEBHOOK;
+});
+
 afterEach(() => {
   console.error = originalConsoleError;
 });
@@ -271,9 +278,6 @@ describe("errorHandler in the assembled app", () => {
   afterEach(() => {
     if (originalSecret !== undefined) process.env.SECRET = originalSecret;
     else delete process.env.SECRET;
-    // alarm.ts is a no-op without it; the convention this file has to keep is
-    // that a `bun test` run never POSTs to whatever `.env` happens to carry.
-    delete process.env.DISCORD_ALARM_WEBHOOK;
   });
 
   const withApp = async (run: (baseUrl: string) => Promise<void>) => {

@@ -129,7 +129,6 @@ describe("Route.handler", () => {
   });
 
   it("returns 500 json on thrown error", async () => {
-    process.env.NODE_ENV = "test"; // non-production
     const route = new Route("GET", "/boom", async () => {
       throw new Error("kaboom");
     });
@@ -141,26 +140,36 @@ describe("Route.handler", () => {
     await route.handler(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(500);
-    expect((res as unknown as { _body: unknown })._body).toMatchObject({ status: "error", message: "kaboom" });
+    expect((res as unknown as { _body: unknown })._body).toEqual({ status: "error", message: "Internal server error" });
   });
 
-  it("hides error message in production", async () => {
-    const origEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
+  it.each(["production", "development", "test", undefined])(
+    "withholds the thrown error's message from the body when NODE_ENV is %p",
+    async (nodeEnv) => {
+      const origEnv = process.env.NODE_ENV;
+      if (nodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnv;
 
-    const route = new Route("GET", "/boom-prod", async () => {
-      throw new Error("secret details");
-    });
+      const route = new Route("GET", "/boom-env", async () => {
+        throw new Error('relation "sessions" does not exist');
+      });
 
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
+      const req = makeReq({ method: "GET" });
+      const res = makeRes();
+      const next = makeNext();
 
-    await route.handler(req, res, next);
+      try {
+        await route.handler(req, res, next);
+      } finally {
+        if (origEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = origEnv;
+      }
 
-    expect((res as unknown as { _body: unknown })._body).toMatchObject({ status: "error", message: "Internal server error" });
-    process.env.NODE_ENV = origEnv;
-  });
+      const body = (res as unknown as { _body: unknown })._body;
+      expect(body).toEqual({ status: "error", message: "Internal server error" });
+      expect(JSON.stringify(body)).not.toContain("sessions");
+    }
+  );
 });
 
 // ── Route.register ────────────────────────────────────────────────────────────
