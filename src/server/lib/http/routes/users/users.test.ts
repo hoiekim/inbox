@@ -68,6 +68,13 @@ mock.module("../../../logger", () => ({
   logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
 }));
 
+// `Route.handler`'s catch calls `sendAlarm(...).catch(...)`. Without a stub of
+// its own, this file inherits whichever shape an earlier file last left on the
+// module — and a non-thenable makes the handler throw before it writes the 500.
+mock.module("../../../alarm", () => ({
+  sendAlarm: mock(async () => {}),
+}));
+
 // bcrypt is a real module but we mock it to keep tests fast + deterministic
 const mockBcryptCompare = mock(async () => false);
 mock.module("bcryptjs", () => ({
@@ -120,12 +127,6 @@ const makeRes = () => {
 const noopStream = mock(() => {}) as unknown as import("../route").Stream<unknown>;
 
 const noopNext = () => mock(() => {}) as unknown as import("express").NextFunction;
-
-// `Route.handler`'s catch reaches the real `sendAlarm`, and alarm.ts is a no-op
-// only while this is unset — bun auto-loads `.env`, which may carry the live one.
-beforeEach(() => {
-  delete process.env.DISCORD_ALARM_WEBHOOK;
-});
 
 // ── post-login tests ──────────────────────────────────────────────────────────
 
