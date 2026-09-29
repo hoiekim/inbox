@@ -241,6 +241,17 @@ const loginAs = async (username: string, password = PASSWORD) => {
   return { session: session as unknown as ImapSession, writes };
 };
 
+const authenticateAs = async (username: string, password = PASSWORD) => {
+  const { socket, writes } = mkSocket();
+  const handler = { setPendingSaslTag: () => {}, isTls: false };
+  const session = new ImapSession(handler as never, socket as never);
+  const payload = Buffer.from(
+    ["", username, password].join(String.fromCharCode(0))
+  ).toString("base64");
+  await session.authenticate("A1", "PLAIN", payload);
+  return { session: session as unknown as ImapSession, writes };
+};
+
 describe("ImapSession registration wiring", () => {
   beforeEach(() => {
     mockQuery.mockClear();
@@ -249,6 +260,22 @@ describe("ImapSession registration wiring", () => {
   it("registers a session that completed LOGIN, and the sweep reaches it", async () => {
     const before = getAuthenticatedSessionCount();
     const { session, writes } = await loginAs("alice");
+
+    expect(writes.join("")).toContain("A1 OK");
+    expect(getAuthenticatedSessionCount()).toBe(before + 1);
+
+    expect(evictImapSessions("alice")).toBe(1);
+
+    expect(writes.join("")).toContain("* BYE Credential changed");
+    expect(getAuthenticatedSessionCount()).toBe(before);
+    unregisterSession(session);
+  });
+
+  it("registers a session that completed AUTHENTICATE PLAIN", async () => {
+    // SASL PLAIN is what mail clients negotiate in preference to the legacy
+    // LOGIN command, so this is the call site real long-lived connections take.
+    const before = getAuthenticatedSessionCount();
+    const { session, writes } = await authenticateAs("alice");
 
     expect(writes.join("")).toContain("A1 OK");
     expect(getAuthenticatedSessionCount()).toBe(before + 1);
