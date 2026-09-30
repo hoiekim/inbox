@@ -430,6 +430,15 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
   const passwordRotated =
     !!existing && !(await bcrypt.compare(ADMIN_RO_PASSWORD, existing.password));
 
+  // Revoked before the write, not after: the stored hash is the only rotation
+  // signal, so a delete that raises once the new hash is persisted leaves the
+  // restarted boot comparing equal, skipping the revocation for good. Failing
+  // with the old hash still stored keeps the next boot's retry honest.
+  let deletedSessions: number | undefined;
+  if (passwordRotated) {
+    deletedSessions = await deleteSessionsAuthenticatedAs(ADMIN_RO_USERNAME);
+  }
+
   const result = await writeUser({
     user_id: existing?.user_id,
     username: ADMIN_RO_USERNAME,
@@ -442,7 +451,6 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
   if (!result?._id) throw new Error("Failed to create read-only admin user");
 
   if (passwordRotated) {
-    const deletedSessions = await deleteSessionsAuthenticatedAs(ADMIN_RO_USERNAME);
     logger.info(
       "ADMIN_RO_PASSWORD changed — deleted the sessions the previous password issued.",
       { deletedSessions }

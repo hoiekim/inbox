@@ -6,10 +6,22 @@ import { getDomain, isProduction, PostgresSessionStore } from "server";
 import { createExpressApp } from "./app";
 import { resolveSessionSecret } from "./session-secret";
 import apiRouter from "./routes";
+import { errorHandler } from "./error-handler";
 import { startCleanupScheduler } from "./rate-limit";
 import { logger } from "../logger";
 
-export const initializeHttp = async () => {
+/**
+ * Assembles the full middleware chain, terminating in {@link errorHandler}.
+ *
+ * The store is a parameter so the chain can be driven end to end against an
+ * in-memory one: a store fault is raised by `express-session`, which is mounted
+ * upstream of every route, and the only thing that can observe where such a
+ * fault lands is the assembled stack itself.
+ *
+ * @example
+ * const app = createHttpApp(new PostgresSessionStore());
+ */
+export const createHttpApp = (store: session.Store): express.Application => {
   const sessionSecret = resolveSessionSecret();
   const app = createExpressApp();
 
@@ -36,7 +48,7 @@ export const initializeHttp = async () => {
         sameSite: "strict",
         maxAge: 1000 * 60 * 60 * 24 * 7
       },
-      store: new PostgresSessionStore()
+      store
     })
   );
 
@@ -113,6 +125,14 @@ export const initializeHttp = async () => {
   app.get("*", (req, res) => {
     res.sendFile(path.join(clientPath, "index.html"));
   });
+
+  app.use(errorHandler);
+
+  return app;
+};
+
+export const initializeHttp = async () => {
+  const app = createHttpApp(new PostgresSessionStore());
 
   const domain = getDomain();
   const port = process.env.PORT || 3004;

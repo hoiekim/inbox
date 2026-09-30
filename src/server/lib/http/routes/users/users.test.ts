@@ -68,6 +68,13 @@ mock.module("../../../logger", () => ({
   logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
 }));
 
+// `Route.handler`'s catch calls `sendAlarm(...).catch(...)`. Without a stub of
+// its own, this file inherits whichever shape an earlier file last left on the
+// module — and a non-thenable makes the handler throw before it writes the 500.
+mock.module("../../../alarm", () => ({
+  sendAlarm: mock(async () => {}),
+}));
+
 // bcrypt is a real module but we mock it to keep tests fast + deterministic
 const mockBcryptCompare = mock(async () => false);
 mock.module("bcryptjs", () => ({
@@ -97,6 +104,7 @@ const makeReq = (overrides: Record<string, unknown> = {}) => {
     session: {
       ...sessionData,
       regenerate: mock((cb: (err: Error | null) => void) => cb(null)),
+      save: mock((cb: (err: Error | null) => void) => cb(null)),
       destroy: mock((cb: (err: Error | null) => void) => cb(null)),
     },
     body: {},
@@ -117,6 +125,8 @@ const makeRes = () => {
 };
 
 const noopStream = mock(() => {}) as unknown as import("../route").Stream<unknown>;
+
+const noopNext = () => mock(() => {}) as unknown as import("express").NextFunction;
 
 // ── post-login tests ──────────────────────────────────────────────────────────
 
@@ -141,6 +151,79 @@ describe("postLoginRoute", () => {
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect((result as ApiResponse<unknown>).body).toMatchObject({ id: "u1", username: "alice" });
     expect((req as unknown as { session: import("express-session").Session & { user: unknown; destroy: ReturnType<typeof mock> } }).session.user).toMatchObject({ id: "u1", username: "alice" });
+  });
+
+  it("rejects and never answers success when the session store write fails", async () => {
+    const { postLoginRoute } = await import("./post-login");
+
+    const user = makeUser("alice");
+    mockGetUser.mockResolvedValueOnce(user);
+    mockBcryptCompare.mockResolvedValueOnce(true);
+
+    const req = makeReq({ body: { username: "alice", password: "secret" } });
+    (req as unknown as { session: { save: ReturnType<typeof mock> } }).session.save = mock(
+      (cb: (err: Error) => void) => cb(new Error("session store error"))
+    );
+    const res = makeRes();
+
+    await expect(postLoginRoute.callback(req, res, noopStream)).rejects.toThrow(
+      "session store error"
+    );
+  });
+
+  it("answers 500 without the driver's message when the session store write fails", async () => {
+    const { postLoginRoute } = await import("./post-login");
+
+    const user = makeUser("alice");
+    mockGetUser.mockResolvedValueOnce(user);
+    mockBcryptCompare.mockResolvedValueOnce(true);
+
+    const req = makeReq({ body: { username: "alice", password: "secret" } });
+    (req as unknown as { session: { save: ReturnType<typeof mock> } }).session.save = mock(
+      (cb: (err: Error) => void) => cb(new Error('relation "sessions" does not exist'))
+    );
+    const res = makeRes();
+
+    await postLoginRoute.handler(req, res, noopNext());
+
+    expect(res._code).toBe(500);
+    expect(res._body).toEqual({ status: "error", message: "Internal server error" });
+    expect(JSON.stringify(res._body)).not.toContain("sessions");
+  });
+
+  it("waits for the session write before answering success", async () => {
+    const { postLoginRoute } = await import("./post-login");
+
+    const user = makeUser("alice");
+    mockGetUser.mockResolvedValueOnce(user);
+    mockBcryptCompare.mockResolvedValueOnce(true);
+
+    const req = makeReq({ body: { username: "alice", password: "secret" } });
+    let settleSave: (() => void) | undefined;
+    let onSaveCalled: (() => void) | undefined;
+    const saveCalled = new Promise<void>((resolve) => {
+      onSaveCalled = resolve;
+    });
+    (req as unknown as { session: { save: ReturnType<typeof mock> } }).session.save = mock(
+      (cb: (err: Error | null) => void) => {
+        settleSave = () => cb(null);
+        onSaveCalled?.();
+      }
+    );
+    const res = makeRes();
+
+    let answered = false;
+    const pending = postLoginRoute.callback(req, res, noopStream).then((result) => {
+      answered = true;
+      return result;
+    });
+
+    await saveCalled;
+    await Promise.resolve();
+    expect(answered).toBe(false);
+
+    settleSave?.();
+    expect(((await pending) as ApiResponse<unknown>).status).toBe("success");
   });
 
   it("returns failed when password doesn't match", async () => {
