@@ -5,6 +5,7 @@ import {
   writeUser,
   searchUser,
   deleteSessionsAuthenticatedAs,
+  deleteSessionsForUser,
 } from "./repositories";
 import { buildCreateTable, buildCreateIndex, buildIndexName } from "./database";
 import { runBootMaintenance, MaintenanceWork, Statement } from "./maintenance";
@@ -385,6 +386,18 @@ export const initializeAdminUser = async (): Promise<void> => {
   });
   const createdAdminUserId = indexingAdminUserResult?._id;
   if (!createdAdminUserId) throw new Error("Failed to create admin user");
+
+  if (plan.action === "reset") {
+    // Sessions live in Postgres and survive the restart that applies the new
+    // password, and the cookie is rolling, so an operator resetting a
+    // compromised admin gets nothing from the rotation alone. No mail
+    // connection can exist to sweep here: this runs before any listener binds.
+    const deletedSessions = await deleteSessionsForUser(createdAdminUserId);
+    logger.info(
+      "ADMIN_PASSWORD_RESET applied — deleted the sessions the previous password issued.",
+      { deletedSessions }
+    );
+  }
 
   logger.info("Successfully initialized PostgreSQL database and setup admin user.");
 
