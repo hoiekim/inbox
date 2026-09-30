@@ -16,7 +16,13 @@ import {
   ADMIN_RO_USERNAME
 } from "server";
 import { IncomingMail, MailDataToSend } from "common";
-import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
+import {
+  isAuthRateLimited,
+  isRecipientProbeRateLimited,
+  recordAuthFailure,
+  recordRecipientProbe,
+  resetAuthFailures
+} from "./auth-rate-limit";
 import { addressToUsername, getUserDomain, isLocalAddress } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
@@ -83,6 +89,12 @@ const registerListeners = (
   server.listen(port, callback);
 };
 
+/**
+ * `smtp-server` discards the promise an async handler returns and hands the
+ * command-loop continuation to `cb`, so a rejection that escapes leaves the
+ * whole session unanswered rather than the one command. Every path here ends
+ * in `cb`, including the failure ones.
+ */
 export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   if (session.user) return cb(null, { user: session.user });
 
@@ -93,15 +105,23 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   }
 
   const { username, password } = auth;
-  const user = await getUser({ username });
-  const signedUser = user?.getSigned();
 
-  if (!password || !user || !signedUser) {
-    await recordAuthFailure(ip);
-    return cb(null, { user: undefined });
+  let pwMatches = false;
+  try {
+    const user = await getUser({ username });
+    const signedUser = user?.getSigned();
+
+    if (!password || !user || !signedUser) {
+      await recordAuthFailure(ip);
+      return cb(null, { user: undefined });
+    }
+
+    pwMatches = await bcrypt.compare(password, user.password!);
+  } catch (err) {
+    logger.error("SMTP: authentication lookup failed", { remoteAddress: ip }, err);
+    return cb(new LookupFailedError());
   }
 
-  const pwMatches = await bcrypt.compare(password, user.password!);
   if (!pwMatches) {
     await recordAuthFailure(ip);
     return cb(null, { user: undefined });
@@ -183,6 +203,33 @@ class MailNotStoredError extends Error {
   }
 }
 
+/**
+ * A lookup this host needed to answer a command did not return, so it has
+ * observed nothing about the account either way. RFC 5321 §4.2.3 gives 451 to
+ * a local error in processing — transient, because a permanent refusal would
+ * make a sender bounce mail over an outage the sender cannot see.
+ */
+class LookupFailedError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.3.0 Error: temporary lookup failure");
+  }
+}
+
+/**
+ * The peer has spent its recipient-probe budget. Transient and free — no
+ * lookup runs behind it, and it is answered for every local recipient alike
+ * so that a throttled peer learns nothing from the difference.
+ */
+class TooManyProbesError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.7.0 Error: too many unknown recipients, try again later");
+  }
+}
+
 /** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
 class MessageTooLargeError extends Error {
   responseCode = 552;
@@ -210,25 +257,40 @@ class MessageTooLargeError extends Error {
  * Naming a nonexistent mailbox is answerable here or in a bounce, and a bounce
  * tells the same sender the same thing at the cost of carrying the message
  * first, so refusing early trades nothing away.
+ *
+ * The refusal is also a yes/no on username existence, and this listener takes
+ * `RCPT TO` unauthenticated, so each one is charged to a per-IP budget that
+ * prices it exactly as a failed credential is priced. Past the budget the
+ * answer is a uniform transient refusal and no lookup runs, which is what
+ * bounds the connection-pool draw an unauthenticated peer can cause.
  */
 export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
   address: SMTPServerAddress,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
-  const { EMAIL_DOMAIN } = process.env;
-  if (!EMAIL_DOMAIN) return cb();
-  if (!isLocalAddress(address.address, EMAIL_DOMAIN)) return cb();
+  const ip = session.remoteAddress ?? "unknown";
+  try {
+    const { EMAIL_DOMAIN } = process.env;
+    if (!EMAIL_DOMAIN) return cb();
+    if (!isLocalAddress(address.address, EMAIL_DOMAIN)) return cb();
 
-  const username = addressToUsername(address.address);
-  const user = username ? await getUser({ username }) : undefined;
-  if (user) return cb();
+    if (isRecipientProbeRateLimited(ip)) return cb(new TooManyProbesError());
 
-  logger.warn("SMTP: refused a recipient with no mailbox", {
-    remoteAddress: session.remoteAddress,
-    username
-  });
-  return cb(new NoSuchMailboxError());
+    const username = addressToUsername(address.address);
+    const user = username ? await getUser({ username }) : undefined;
+    if (user) return cb();
+
+    logger.warn("SMTP: refused a recipient with no mailbox", {
+      remoteAddress: ip,
+      username
+    });
+    await recordRecipientProbe(ip);
+    return cb(new NoSuchMailboxError());
+  } catch (err) {
+    logger.error("SMTP: recipient lookup failed", { remoteAddress: ip }, err);
+    return cb(new LookupFailedError());
+  }
 };
 
 /**

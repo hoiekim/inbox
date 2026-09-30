@@ -72,6 +72,14 @@ mock.module("mailparser", () => ({
 const mockIsAuthRateLimited = spyOn(authRateLimit, "isAuthRateLimited").mockReturnValue(false);
 const mockRecordAuthFailure = spyOn(authRateLimit, "recordAuthFailure").mockResolvedValue(false);
 const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockReturnValue(undefined);
+const mockIsRecipientProbeRateLimited = spyOn(
+  authRateLimit,
+  "isRecipientProbeRateLimited"
+).mockReturnValue(false);
+const mockRecordRecipientProbe = spyOn(
+  authRateLimit,
+  "recordRecipientProbe"
+).mockResolvedValue(false);
 
 // Note: we deliberately do NOT mock "./alarm" globally — `mock.module` is
 // process-wide in Bun, and a global mock leaks into alarm.test.ts. Instead
@@ -94,6 +102,8 @@ afterAll(() => {
   mockIsAuthRateLimited.mockRestore();
   mockRecordAuthFailure.mockRestore();
   mockResetAuthFailures.mockRestore();
+  mockIsRecipientProbeRateLimited.mockRestore();
+  mockRecordRecipientProbe.mockRestore();
   // Restore the "server" barrel — the `mock.module("server", ...)` at the
   // top of this file replaces the export graph-wide, so `getUser` leaks
   // into any file that imports it (even `users.test.ts`'s direct import
@@ -149,6 +159,25 @@ describe("onAuth handler", () => {
     });
 
     expect(result.user).toBeUndefined();
+  });
+
+  // Same contract as `onRcptTo`: `sasl.js` discards the promise this handler
+  // returns, so a rejection that escapes leaves the session unanswered. An
+  // outage is not a credential verdict, so it answers transiently and does not
+  // charge the failure budget.
+  it("answers a transient refusal when the credential lookup rejects", async () => {
+    const session = {} as SMTPServerSession;
+    const auth = { username: "testuser", password: "password" } as SMTPServerAuthentication;
+    mockGetUser.mockRejectedValue(new Error("timeout exceeded when trying to connect"));
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onAuth!(auth, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(451);
+    expect(err!.message).toBe("4.3.0 Error: temporary lookup failure");
+    expect(mockRecordAuthFailure).not.toHaveBeenCalled();
   });
 
   it("rejects auth when password is empty", async () => {
@@ -348,6 +377,9 @@ describe("onRcptTo handler", () => {
   beforeEach(() => {
     mockGetUser.mockReset();
     mockLogger.warn.mockReset();
+    mockRecordRecipientProbe.mockClear();
+    mockIsRecipientProbeRateLimited.mockClear();
+    mockIsRecipientProbeRateLimited.mockReturnValue(false);
     process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
   });
 
@@ -418,6 +450,62 @@ describe("onRcptTo handler", () => {
 
     expect(err).toBeUndefined();
     expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  // `smtp-server` hands the command-loop continuation to `cb` and discards the
+  // promise, so a rejection that escapes wedges the session rather than the
+  // command — the connection then holds one of `maxClients` until the socket
+  // times out. The pool this lookup draws on is shared with HTTP and IMAP and
+  // rejects on saturation, so this needs no attacker to reach.
+  it("answers a transient refusal when the mailbox lookup rejects", async () => {
+    mockGetUser.mockRejectedValue(new Error("timeout exceeded when trying to connect"));
+
+    const err = await rcpt("x@bob.test.com");
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(451);
+    expect(err!.message).toBe("4.3.0 Error: temporary lookup failure");
+  });
+
+  it("charges a refused recipient to the per-IP probe budget", async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    await rcpt("x@nosuchuser.test.com");
+
+    expect(mockRecordRecipientProbe).toHaveBeenCalledWith("1.2.3.4");
+  });
+
+  it("does not charge a recipient that resolves to a mailbox", async () => {
+    mockGetUser.mockResolvedValue({ id: "u1" });
+
+    await rcpt("x@bob.test.com");
+
+    expect(mockRecordRecipientProbe).not.toHaveBeenCalled();
+  });
+
+  // Past the budget the answer carries no information and costs no pool slot:
+  // the same transient refusal for every local recipient, with no lookup behind
+  // it. A check that ran after the query would have already paid for it.
+  it("refuses without a lookup once the probe budget is spent", async () => {
+    mockIsRecipientProbeRateLimited.mockReturnValueOnce(true);
+    mockGetUser.mockResolvedValue({ id: "u1" });
+
+    const err = await rcpt("x@bob.test.com");
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(451);
+    expect(err!.message).toBe(
+      "4.7.0 Error: too many unknown recipients, try again later"
+    );
+    expect(mockGetUser).not.toHaveBeenCalled();
+    expect(mockRecordRecipientProbe).not.toHaveBeenCalled();
+  });
+
+  it("does not consult the budget for a foreign recipient", async () => {
+    const err = await rcpt("someone@other.com");
+
+    expect(err).toBeUndefined();
+    expect(mockIsRecipientProbeRateLimited).not.toHaveBeenCalled();
   });
 });
 
