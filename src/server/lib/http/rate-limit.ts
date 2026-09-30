@@ -2,23 +2,14 @@ import { Request, Response, NextFunction } from "express";
 import { logger } from "../logger";
 
 /**
- * Resolve the real client IP from the request.
- * Prefers X-Real-IP (set by nginx from $remote_addr, cannot be spoofed by the
- * client), then the leftmost X-Forwarded-For entry, then Express's req.ip.
+ * Identity that every rate-limit bucket is keyed on.
+ *
+ * Reads `req.ip` only. Express resolves it against the app's `trust proxy`
+ * setting, so a forwarded address is honoured only when the connection itself
+ * arrives from an address configured as a proxy. Reading the forwarding headers
+ * here instead would let any caller name its own bucket and rotate out of it.
  */
-export const getClientIp = (req: Request): string => {
-  const xRealIp = req.headers["x-real-ip"];
-  const xForwardedFor = req.headers["x-forwarded-for"];
-  const forwarded = Array.isArray(xForwardedFor)
-    ? xForwardedFor[0]
-    : xForwardedFor?.split(",")[0]?.trim();
-  return (
-    (typeof xRealIp === "string" ? xRealIp : undefined) ??
-    forwarded ??
-    req.ip ??
-    "unknown"
-  );
-};
+export const getClientIp = (req: Request): string => req.ip ?? "unknown";
 
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour

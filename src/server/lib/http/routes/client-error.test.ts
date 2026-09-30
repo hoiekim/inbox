@@ -19,6 +19,10 @@ beforeAll(async () => {
   const clientErrorRouter = (await import("./client-error")).default;
 
   const app = express();
+  // Adopt production's trust-proxy posture so a forwarded address selects the
+  // bucket, the way it does behind the real proxy. Without it express ignores
+  // the header and every case in this file shares one bucket.
+  app.set("trust proxy", ["loopback", "uniquelocal"]);
   app.use(express.json());
   app.use("/api/client-error", clientErrorRouter);
 
@@ -49,7 +53,7 @@ const postClientError = async (ip: string, body: object = { message: "x" }) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-real-ip": ip,
+      "x-forwarded-for": ip,
     },
     body: JSON.stringify(body),
   });

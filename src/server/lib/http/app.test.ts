@@ -20,14 +20,21 @@ describe("createExpressApp", () => {
     process.env.NODE_ENV = "development";
     const dev = createExpressApp();
 
-    // `false` is express's own default for trust proxy — asserted rather than
-    // omitted so a stray unconditional `app.set("trust proxy", 1)` fails here.
+    // Both values are asserted exactly. A hop count in place of the address
+    // list would let a peer that never passed the proxy name its own `req.ip`,
+    // and `false` is express's own default, so a stray unconditional set in
+    // development fails here too.
     expect([
       prod.get("env"),
       prod.get("trust proxy"),
       dev.get("env"),
       dev.get("trust proxy")
-    ]).toEqual(["production", 1, "development", false]);
+    ]).toEqual([
+      "production",
+      ["loopback", "uniquelocal"],
+      "development",
+      false
+    ]);
   });
 
   // The consequence the `env` setting exists for, driven over a real socket

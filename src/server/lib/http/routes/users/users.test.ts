@@ -894,7 +894,7 @@ describe("postTokenRoute body shape", () => {
     const rateLimit = await import("../../rate-limit");
     rateLimit.tokenLimiter.reset(ip as string);
 
-    const req = makeReq({ body, headers: { "x-real-ip": ip } });
+    const req = makeReq({ body, ip });
 
     for (let i = 0; i < 3; i++) {
       const result = await postTokenRoute.callback(req, makeRes(), noopStream);
@@ -922,7 +922,7 @@ describe("postLoginRoute + loginLimiter integration (#504)", () => {
     rateLimit.loginLimiter.reset("198.51.100.10");
 
     const req = (body: Record<string, unknown>) =>
-      makeReq({ body, headers: { "x-real-ip": "198.51.100.10" } });
+      makeReq({ body, ip: "198.51.100.10" });
 
     // Five consecutive bad-password attempts should all reach the handler
     // (middleware lets them through; recordFailure bumps the counter).
@@ -949,7 +949,7 @@ describe("postLoginRoute + loginLimiter integration (#504)", () => {
     rateLimit.loginLimiter.reset("198.51.100.11");
     const successReq = makeReq({
       body: { username: "alice", password: "right" },
-      headers: { "x-real-ip": "198.51.100.11" }
+      ip: "198.51.100.11"
     });
     mockGetUser.mockResolvedValueOnce(makeUser("alice"));
     mockBcryptCompare.mockResolvedValueOnce(true);
@@ -991,7 +991,7 @@ describe("postTokenRoute + tokenLimiter integration (#504)", () => {
 
     const req = makeReq({
       body: { email: "user@example.com" },
-      headers: { "x-real-ip": "198.51.100.20" }
+      ip: "198.51.100.20"
     });
 
     // sendMail rejects → callback throws → recordFailure should NOT run.

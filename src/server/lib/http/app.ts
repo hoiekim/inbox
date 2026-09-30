@@ -11,10 +11,13 @@ export const createExpressApp = (): express.Application => {
 
   app.set("env", isProduction() ? "production" : "development");
 
-  // Trust first proxy for secure cookie detection behind reverse proxy.
-  // (Rate limiting reads X-Real-IP directly and does not rely on req.ip.)
+  // Trust the proxy by ADDRESS, not by hop count. A hop count trusts whichever
+  // peer opened the connection, so a request that reaches the app port without
+  // passing the proxy could still name its own `req.ip` through a forwarding
+  // header. With an address list, such a peer is untrusted and `req.ip` stays
+  // its real socket address.
   if (isProduction()) {
-    app.set("trust proxy", 1);
+    app.set("trust proxy", ["loopback", "uniquelocal"]);
   }
 
   return app;

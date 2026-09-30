@@ -92,6 +92,30 @@ If you want to use this app only for receiving mails, skip this step.
    bun run dev
    ```
 
+### Running behind a reverse proxy
+
+In production the app resolves each request's client address through Express's
+`trust proxy` setting, which is fixed to the loopback and private ranges. A
+forwarding header is honoured only when the connection itself arrives from one
+of those addresses — in other words, from the proxy. A request that reaches the
+app port from anywhere else is attributed to its own socket address and its
+forwarding headers are ignored.
+
+Rate limits are keyed on that address, so the proxy has to pass the real client
+address along or every client ends up sharing one bucket. With nginx:
+
+```
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+`X-Forwarded-Proto` is what lets the session cookie's `Secure` attribute apply;
+without it Express sees a plaintext request and declines to set the cookie.
+`X-Real-IP` is not read — set `X-Forwarded-For` even if you already set it.
+
+Nothing other than the proxy needs to reach the app's HTTP port, so there is no
+reason to publish it on a public interface.
+
 ### Environment Variables
 
 This app in default uses `.env` and `.env.local` to load environment variables. `.env` is included in the repository, intending to determine consistent variables that are related to React's build process, etc. `.env.local` is not included in the repository, intending to determine variables that differ by inbox app's host environment, external API credentials, etc. Additionally, we have an option to add another one as `.env.<NODE_ENV>` where you can set `NODE_ENV` in your terminal for example in Mac/Linux, `NODE_ENV=development` or in Windows cmd, `set NODE_ENV=development`.

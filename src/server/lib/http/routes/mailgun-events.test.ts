@@ -47,6 +47,10 @@ beforeAll(async () => {
   // Mount the real apiRouter rather than re-declaring the limiter wiring, so
   // dropping either the mount or the record call fails this suite.
   const app = express();
+  // Adopt production's trust-proxy posture so a forwarded address selects the
+  // bucket, the way it does behind the real proxy. Without it express ignores
+  // the header and every case in this file shares one bucket.
+  app.set("trust proxy", ["loopback", "uniquelocal"]);
   app.use(express.json());
   app.use("/api", apiRouter);
   await new Promise<void>((resolve) => {
@@ -93,7 +97,7 @@ const call = async (body: FakeReqBody, ip = "198.51.100.1") => {
       body,
       method: "POST",
       url: "/mailgun-events",
-      headers: { "x-real-ip": ip },
+      headers: {},
       ip,
     } as never,
     res as never,
@@ -256,7 +260,7 @@ describe("POST /api/mailgun-events per-IP request cap", () => {
   const post = async (ip: string, body: FakeReqBody) =>
     realFetch(`${baseUrl}/api/mailgun-events`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-real-ip": ip },
+      headers: { "Content-Type": "application/json", "x-forwarded-for": ip },
       body: JSON.stringify(body),
     });
 
