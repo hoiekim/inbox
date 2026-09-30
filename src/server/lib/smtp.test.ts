@@ -1016,6 +1016,7 @@ describe("registerListeners error handler", () => {
     server.emit("error", new Error("tls_choose_sigalg: no suitable signature algorithm"));
     server.emit("error", new Error("Socket closed before TLS handshake"));
     server.emit("error", new Error("read ECONNRESET"));
+    server.emit("error", new Error("TLS handshake timeout"));
 
     expect(mockLogger.error).not.toHaveBeenCalled();
   });
