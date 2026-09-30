@@ -56,8 +56,13 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
-      msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465/993) — client connected but never completed the handshake
-    ) return;
+      msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
+    ) {
+      // Still logged (at warn, not error) so a real failure hiding in this
+      // bucket leaves a trace — only the page to Discord is suppressed.
+      logger.warn(`SMTP Server(${port}) Error`, {}, err);
+      return;
+    }
     logger.error(`SMTP Server(${port}) Error`, {}, err);
     sendAlarm(
       "SMTP Server Error",
