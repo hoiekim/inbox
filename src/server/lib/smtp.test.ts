@@ -1009,15 +1009,18 @@ describe("registerListeners error handler", () => {
     return createdServers[0]!;
   };
 
-  it("suppresses errors from TLS handshake function names", async () => {
+  it("suppresses the alarm for TLS handshake function names, but still logs a warning", async () => {
     const server = await bootSingleServer();
     server.emit("error", new Error("tls_early_post_process_client_hello: unsupported protocol"));
     server.emit("error", new Error("extract_keyshares: bad key share"));
     server.emit("error", new Error("tls_choose_sigalg: no suitable signature algorithm"));
     server.emit("error", new Error("Socket closed before TLS handshake"));
     server.emit("error", new Error("read ECONNRESET"));
+    server.emit("error", new Error("TLS handshake timeout"));
 
     expect(mockLogger.error).not.toHaveBeenCalled();
+    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(6);
   });
 
   it("logs error on non-suppressible failures", async () => {
