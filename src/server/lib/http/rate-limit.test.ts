@@ -206,11 +206,22 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
   const startProbe = async (peer: string) => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
-    const { createExpressApp } = await import("./app");
-    const { createLimiter, getClientIp } = await import("./rate-limit");
-    const app = createExpressApp();
-    if (previousNodeEnv !== undefined) process.env.NODE_ENV = previousNodeEnv;
-    else delete process.env.NODE_ENV;
+    let app: import("express").Application;
+    let createLimiter: typeof import("./rate-limit").createLimiter;
+    let getClientIp: typeof import("./rate-limit").getClientIp;
+    try {
+      const appModule = await import("./app");
+      const rateLimitModule = await import("./rate-limit");
+      createLimiter = rateLimitModule.createLimiter;
+      getClientIp = rateLimitModule.getClientIp;
+      app = appModule.createExpressApp();
+    } finally {
+      // A throw before the restore would leave the variable at "production" for
+      // the rest of the process, where resolveSessionSecret throws rather than
+      // warning — turning one failure into a cascade that points away from it.
+      if (previousNodeEnv !== undefined) process.env.NODE_ENV = previousNodeEnv;
+      else delete process.env.NODE_ENV;
+    }
 
     const limiter = createLimiter(CAP, "too many");
     app.use((req, _res, next) => {
@@ -223,7 +234,7 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
     app.use("/probe", limiter.middleware);
     app.post("/probe", (req, res) => {
       limiter.recordFailure(getClientIp(req));
-      res.json({ bucket: getClientIp(req) });
+      res.json({ bucket: getClientIp(req), secure: req.secure });
     });
 
     const server = await new Promise<import("http").Server>((resolve) => {
@@ -240,13 +251,13 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
         // Parsed defensively so an unexpected body shape surfaces as a status
         // mismatch rather than as a throw from the helper.
         const text = await res.text();
-        let bucket: string | undefined;
+        let body: { bucket?: string; secure?: boolean } = {};
         try {
-          bucket = (JSON.parse(text) as { bucket?: string }).bucket;
+          body = JSON.parse(text) as { bucket?: string; secure?: boolean };
         } catch {
-          bucket = undefined;
+          body = {};
         }
-        return { status: res.status, bucket };
+        return { status: res.status, bucket: body.bucket, secure: body.secure };
       },
       close: () => server.close()
     };
@@ -297,6 +308,29 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
       expect([other.status, other.bucket]).toEqual([200, "203.0.113.10"]);
     } finally {
       probe.close();
+    }
+  });
+
+  // The same setting governs req.secure, which express-session consults before
+  // it will set a Secure cookie. A peer outside the trusted ranges therefore
+  // gets no session cookie at all in production, so the proxy's own socket
+  // address is a precondition of login and not only of bucket granularity.
+  it("honours X-Forwarded-Proto from the proxy and ignores it from an untrusted peer", async () => {
+    const fromProxy = await startProbe("172.20.0.2");
+    try {
+      const forwarded = await fromProxy.post({ "x-forwarded-proto": "https" });
+      const plain = await fromProxy.post({});
+      expect([forwarded.secure, plain.secure]).toEqual([true, false]);
+    } finally {
+      fromProxy.close();
+    }
+
+    const fromOutside = await startProbe("198.51.100.66");
+    try {
+      const forwarded = await fromOutside.post({ "x-forwarded-proto": "https" });
+      expect(forwarded.secure).toBe(false);
+    } finally {
+      fromOutside.close();
     }
   });
 });
