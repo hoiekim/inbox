@@ -77,6 +77,14 @@ const {
   expiryTimer,
 } = await import("./users");
 const { resetPool } = await import("./postgres/client");
+const {
+  registerAuthenticatedSession,
+  unregisterSession,
+} = await import("./imap/session-registry");
+const {
+  registerSmtpServer,
+  unregisterSmtpServer,
+} = await import("./smtp-registry");
 
 beforeAll(() => {
   // `mock.module` is process-global: a sibling test file that ran earlier in
@@ -641,8 +649,8 @@ describe("setUserInfo", () => {
 
   it("updates the row on matching token for a user whose username is already set", async () => {
     // existingUser.username is set → setUserInfo skips the collision check and
-    // goes straight to UPDATE with the new password, clearing token+expiry.
-    // The existing username wins over input.
+    // goes straight to the session eviction + UPDATE with the new password,
+    // clearing token+expiry. The existing username wins over input.
     mockQuery
       .mockResolvedValueOnce(
         rows(
@@ -655,6 +663,7 @@ describe("setUserInfo", () => {
           })
         )
       )
+      .mockResolvedValueOnce(rows())
       .mockResolvedValueOnce(rows({ user_id: "u-1" }));
 
     await setUserInfo({
@@ -664,8 +673,8 @@ describe("setUserInfo", () => {
       token: "tok",
     });
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
-    const [sql, values] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(mockQuery).toHaveBeenCalledTimes(3);
+    const [sql, values] = mockQuery.mock.calls[2] as [string, unknown[]];
     expect(sql).toContain("UPDATE");
     // existing username wins; token + expiry cleared to null; password hashed.
     expect(values).toContain("alice");
@@ -676,6 +685,210 @@ describe("setUserInfo", () => {
     );
     expect(hashed).toBeDefined();
     expect(values).not.toContain("newpw");
+  });
+
+  it("deletes the user's sessions before it writes the new password", async () => {
+    // Ordering is the assertion, not just presence: a DELETE issued after the
+    // UPDATE would leave a failed eviction on a row whose token is already
+    // spent, so the caller could neither retry the reset nor trust it.
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows({ session_id: "s-1" }, { session_id: "s-2" }))
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    await setUserInfo({
+      email: "a@b.c",
+      username: "alice",
+      password: "newpw",
+      token: "tok",
+    });
+
+    const [deleteSql, deleteValues] = mockQuery.mock.calls[1] as [
+      string,
+      unknown[]
+    ];
+    expect(deleteSql).toContain("DELETE FROM sessions");
+    expect(deleteSql).toContain("session_user_id");
+    expect(deleteValues).toEqual(["u-1"]);
+
+    const [updateSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+    expect(updateSql).toContain("UPDATE");
+  });
+
+  it("returns a signed user that carries no password", async () => {
+    // `getSigned` refuses a user with no password, so the returned value is
+    // only a SignedUser if the rotated hash reaches it — and the route hands
+    // this object to both `req.session.user` and the response body, so the
+    // hash must not survive the masking.
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    const signed = await setUserInfo({
+      email: "a@b.c",
+      username: "alice",
+      password: "newpw",
+      token: "tok",
+    });
+
+    expect(signed).toBeDefined();
+    expect(signed.id).toBe("u-1");
+    expect(signed.username).toBe("alice");
+    expect(signed.email).toBe("a@b.c");
+    expect(JSON.stringify(signed)).not.toMatch(/\$2[aby]\$/);
+    expect(JSON.stringify(signed)).not.toContain("newpw");
+  });
+
+  it("tears down the user's live IMAP and SMTP connections", async () => {
+    // Both mail surfaces authenticate once per connection, so the HTTP-session
+    // delete leaves them untouched. Without this the one control a user has
+    // against someone else in the account misses the longest-lived grants.
+    const imapClose = mock(() => {});
+    const imapSession = {
+      write: mock(() => true),
+      close: imapClose,
+      getAuthenticatedAs: () => "alice",
+      getSessionId: () => "s-1",
+    } as unknown as Parameters<typeof registerAuthenticatedSession>[0];
+    const smtpClose = mock(() => {});
+    const smtpConnection = {
+      session: { user: "alice" },
+      send: mock(() => {}),
+      close: smtpClose,
+    };
+    const smtpServer = {
+      connections: new Set([smtpConnection]),
+    } as unknown as Parameters<typeof registerSmtpServer>[0];
+    registerAuthenticatedSession(imapSession);
+    registerSmtpServer(smtpServer);
+
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+
+    try {
+      await setUserInfo({
+        email: "a@b.c",
+        username: "alice",
+        password: "newpw",
+        token: "tok",
+      });
+
+      expect(imapClose).toHaveBeenCalledTimes(1);
+      expect(smtpClose).toHaveBeenCalledTimes(1);
+    } finally {
+      unregisterSession(imapSession);
+      unregisterSmtpServer(smtpServer);
+    }
+  });
+
+  it("leaves live connections alone when the password write fails", async () => {
+    // The eviction runs after the UPDATE, so a rotation that never landed does
+    // not disconnect clients still holding a credential that is still valid.
+    const imapClose = mock(() => {});
+    const imapSession = {
+      write: mock(() => true),
+      close: imapClose,
+      getAuthenticatedAs: () => "alice",
+      getSessionId: () => "s-1",
+    } as unknown as Parameters<typeof registerAuthenticatedSession>[0];
+    registerAuthenticatedSession(imapSession);
+
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockRejectedValueOnce(new Error("constraint violation"));
+
+    try {
+      await expect(
+        setUserInfo({
+          email: "a@b.c",
+          username: "alice",
+          password: "newpw",
+          token: "tok",
+        })
+      ).rejects.toThrow("constraint violation");
+
+      expect(imapClose).not.toHaveBeenCalled();
+    } finally {
+      unregisterSession(imapSession);
+    }
+  });
+
+  it("rejects without writing the password when the session delete fails", async () => {
+    // The eviction is half of the rotation. A swallowed DELETE fault would let
+    // the UPDATE land and answer success while every pre-reset session stayed
+    // authenticated — the defect this eviction exists to close.
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hash",
+            token: "tok",
+          })
+        )
+      )
+      .mockRejectedValueOnce(new Error("deadlock detected"));
+
+    await expect(
+      setUserInfo({
+        email: "a@b.c",
+        username: "alice",
+        password: "newpw",
+        token: "tok",
+      })
+    ).rejects.toThrow("deadlock detected");
+
+    // SELECT + the failed DELETE, and nothing after it: the row still holds the
+    // old password and a spendable token.
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    const issued = mockQuery.mock.calls.map(([sql]) => sql as string);
+    expect(issued.some((sql) => sql.includes("UPDATE"))).toBe(false);
   });
 });
 

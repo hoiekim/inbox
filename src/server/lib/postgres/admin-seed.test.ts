@@ -19,6 +19,7 @@ const written: WrittenUser[] = [];
 let existingRow: unknown = null;
 
 const mockSearchUser = mock(async () => existingRow);
+const mockDeleteSessionsForUser = mock(async (_userId: string) => 2);
 const mockWriteUser = mock(async (user: WrittenUser) => {
   written.push(user);
   return { _id: user.user_id ?? "generated-id" };
@@ -32,6 +33,7 @@ mock.module("./repositories", () => ({
   ...REAL_REPOSITORIES,
   searchUser: mockSearchUser,
   writeUser: mockWriteUser,
+  deleteSessionsForUser: mockDeleteSessionsForUser,
 }));
 
 // `mock.module` is process-global with no unmock API — hand the real module
@@ -132,6 +134,7 @@ describe("initializeAdminUser", () => {
     existingRow = null;
     mockWriteUser.mockClear();
     mockSearchUser.mockClear();
+    mockDeleteSessionsForUser.mockClear();
     delete process.env.ADMIN_PASSWORD_RESET;
   });
 
@@ -212,6 +215,58 @@ describe("initializeAdminUser", () => {
 
     expect(written[0].password).toBeUndefined();
     expect(warnSpy.mock.calls.flat().join("\n")).toContain("ADMIN_PASSWORD is empty");
+    warnSpy.mockRestore();
+  });
+
+  it("deletes the sessions the previous password issued when a reset is applied", async () => {
+    process.env.ADMIN_PASSWORD = "configured";
+    process.env.ADMIN_PASSWORD_RESET = "1";
+    existingRow = EXISTING_ADMIN;
+
+    await runInitialize();
+
+    // Replacing the hash refuses new logins and nothing more: session rows are
+    // in Postgres, so they outlive the restart that applies the reset, and the
+    // cookie is rolling. An operator resetting a compromised admin expects the
+    // attacker's cookie to stop working.
+    expect(mockDeleteSessionsForUser).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSessionsForUser.mock.calls[0][0]).toBe(EXISTING_ADMIN.user_id);
+  });
+
+  it("leaves sessions alone on a boot that does not touch the password", async () => {
+    process.env.ADMIN_PASSWORD = "configured";
+    existingRow = EXISTING_ADMIN;
+
+    await runInitialize();
+
+    // Every restart runs this path; signing the admin out of each one would
+    // make the eviction a restart side effect rather than a reset consequence.
+    expect(written[0].password).toBeUndefined();
+    expect(mockDeleteSessionsForUser).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing on the first boot, which has no prior password to invalidate", async () => {
+    process.env.ADMIN_PASSWORD = "configured";
+    existingRow = null;
+
+    await runInitialize();
+
+    expect(written[0].password).toBe("configured");
+    expect(mockDeleteSessionsForUser).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing when the reset is refused for having no password to apply", async () => {
+    delete process.env.ADMIN_PASSWORD;
+    process.env.ADMIN_PASSWORD_RESET = "1";
+    existingRow = EXISTING_ADMIN;
+    const warnSpy = spyOn(logger, "warn");
+
+    await runInitialize();
+
+    // The stored hash is untouched here, so the sessions it issued are still
+    // the sessions of the current credential.
+    expect(written[0].password).toBeUndefined();
+    expect(mockDeleteSessionsForUser).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 

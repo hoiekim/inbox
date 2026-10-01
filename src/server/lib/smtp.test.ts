@@ -942,6 +942,9 @@ interface FakeServer {
   listen: (port: number, callback: () => void) => void;
   emit: (event: string, ...args: unknown[]) => void;
   listeners: Map<string, Listener[]>;
+  // The real SMTPServer tracks its live connections here; the eviction sweep
+  // reads it, so the stub carries one too.
+  connections: Set<unknown>;
 }
 
 const createdServers: FakeServer[] = [];
@@ -950,6 +953,7 @@ const makeFakeServer = (): FakeServer => {
   const listeners = new Map<string, Listener[]>();
   const server: FakeServer = {
     listeners,
+    connections: new Set<unknown>(),
     on(event, listener) {
       if (!listeners.has(event)) listeners.set(event, []);
       listeners.get(event)!.push(listener);
@@ -1287,5 +1291,92 @@ describe("resolveOutgoingSender", () => {
       sender: "team",
       recipients: ["outside@other.com", "admin@test.com"]
     });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Credential eviction: a rotated password has to reach connections that
+// authenticated before it, because SMTP authenticates once per connection and
+// never re-derives the grant from the stored hash.
+// ───────────────────────────────────────────────────────────────────────────
+
+interface StubConnection {
+  session: { user?: string };
+  send: ReturnType<typeof mock>;
+  close: ReturnType<typeof mock>;
+}
+
+const makeConnection = (user?: string): StubConnection => ({
+  session: { user },
+  send: mock(() => {}),
+  close: mock(() => {})
+});
+
+describe("evictSmtpConnections", () => {
+  const originalEnv = process.env;
+  let evictSmtpConnections: (username: string) => number;
+  let server: FakeServer;
+
+  beforeEach(async () => {
+    createdServers.length = 0;
+    process.env = { ...originalEnv };
+    delete process.env.SSL_CERTIFICATE;
+    delete process.env.SSL_CERTIFICATE_KEY;
+    const initializeSmtp = await loadInitializeSmtp();
+    await initializeSmtp();
+    server = createdServers[0]!;
+    evictSmtpConnections = (await import("./smtp-registry")).evictSmtpConnections;
+  });
+
+  afterEach(() => {
+    // "close" is what drops the server from the registry, so emitting it keeps
+    // this file's fakes out of later suites' sweeps.
+    createdServers.forEach((created) => created.emit("close"));
+    process.env = originalEnv;
+  });
+
+  it("closes only the connections authenticated as the rotated username", () => {
+    const alice = makeConnection("alice");
+    const otherAlice = makeConnection("alice");
+    const bob = makeConnection("bob");
+    const anonymous = makeConnection(undefined);
+    [alice, otherAlice, bob, anonymous].forEach((c) => server.connections.add(c));
+
+    expect(evictSmtpConnections("alice")).toBe(2);
+
+    [alice, otherAlice].forEach((c) => {
+      expect(c.send).toHaveBeenCalledTimes(1);
+      expect(c.send.mock.calls[0]![0]).toBe(421);
+      expect(c.close).toHaveBeenCalledTimes(1);
+    });
+    expect(bob.close).not.toHaveBeenCalled();
+    expect(anonymous.close).not.toHaveBeenCalled();
+  });
+
+  it("keeps sweeping after a connection refuses teardown", () => {
+    const refuses = makeConnection("alice");
+    refuses.close = mock(() => {
+      throw new Error("socket already gone");
+    });
+    const healthy = makeConnection("alice");
+    [refuses, healthy].forEach((c) => server.connections.add(c));
+
+    expect(evictSmtpConnections("alice")).toBe(1);
+    expect(healthy.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports nothing evicted when no connection matches", () => {
+    server.connections.add(makeConnection("bob"));
+    expect(evictSmtpConnections("alice")).toBe(0);
+  });
+
+  it("stops reaching a server that has closed", () => {
+    const alice = makeConnection("alice");
+    server.connections.add(alice);
+
+    server.emit("close");
+
+    expect(evictSmtpConnections("alice")).toBe(0);
+    expect(alice.close).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,9 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User, SignedUser } from "common";
 import { searchUser as pgSearchUser } from "./postgres/repositories/users";
+import { deleteSessionsForUser } from "./postgres/repositories/sessions";
+import { evictImapSessions } from "./imap/session-registry";
+import { evictSmtpConnections } from "./smtp-registry";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 import { logger } from "./logger";
 
@@ -197,14 +200,33 @@ export const setUserInfo = async (
     username = existingUser.username;
   }
 
+  // Evict before the write so a failed DELETE aborts the rotation with the row
+  // — and so the reset token — intact, leaving a retryable reset rather than a
+  // new password whose old sessions survived. The hash is computed ahead of the
+  // DELETE to keep a bcrypt round out of that window.
+  const passwordHash = await encryptPassword(password);
+
+  await deleteSessionsForUser(id);
+
   await usersTable.update(id, {
-    password: await encryptPassword(password),
+    password: passwordHash,
     username,
     token: null,
     expiry: null
   });
 
-  return new User({ id, email, username }).getSigned() as SignedUser;
+  // IMAP and SMTP hold authentication for the life of a connection rather than
+  // per request, so a client that authenticated with the old password keeps its
+  // grant until its socket is torn down. This runs after the write, not before:
+  // until the new hash lands, an evicted client can reconnect on the old one.
+  evictImapSessions(username);
+  evictSmtpConnections(username);
+
+  const signed = new User({ id, email, username, password: passwordHash }).getSigned();
+  if (!signed) {
+    throw new Error("`setUserInfo` failed to sign the updated user.");
+  }
+  return signed;
 };
 
 export const createAuthenticationMail = (
