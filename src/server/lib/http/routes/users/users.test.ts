@@ -98,15 +98,22 @@ const makeUser = (username = "alice", id = "u1") => ({
 });
 
 const makeReq = (overrides: Record<string, unknown> = {}) => {
-  const sessionData: Record<string, unknown> = { user: null };
+  // express-session's regenerate swaps in a fresh, empty session, so an identity
+  // attached before the call is dropped rather than carried onto the new id.
+  // Modelling that clear is what makes an assign-then-reissue route fail the
+  // ordering assertions below instead of passing them.
+  const session: Record<string, unknown> = {
+    user: null,
+    save: mock((cb: (err: Error | null) => void) => cb(null)),
+    destroy: mock((cb: (err: Error | null) => void) => cb(null)),
+  };
+  session.regenerate = mock((cb: (err: Error | null) => void) => {
+    session.user = null;
+    cb(null);
+  });
   return {
     method: "POST",
-    session: {
-      ...sessionData,
-      regenerate: mock((cb: (err: Error | null) => void) => cb(null)),
-      save: mock((cb: (err: Error | null) => void) => cb(null)),
-      destroy: mock((cb: (err: Error | null) => void) => cb(null)),
-    },
+    session,
     body: {},
     params: {},
     query: {},
@@ -685,6 +692,82 @@ describe("postSetInfoRoute", () => {
       postSetInfoRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("store unavailable");
     expect(req.session.user).toBeNull();
+  });
+
+  it("neither reissues nor attaches when the emailed token does not match", async () => {
+    const { postSetInfoRoute } = await import("./post-set-info");
+    mockSetUserInfo.mockClear();
+    mockGetUser.mockResolvedValueOnce({ id: "u1", username: "alice", email: "a@b.com" });
+    mockSetUserInfo.mockRejectedValueOnce(
+      new Error("`setUserInfo` failed because token doesn't match.")
+    );
+    const req = makeReq({
+      body: { email: "a@b.com", username: "alice", password: "pass", token: "wrong" },
+    });
+    await expect(
+      postSetInfoRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("token doesn't match");
+    expect(req.session.regenerate).not.toHaveBeenCalled();
+    expect(req.session.user).toBeNull();
+  });
+});
+
+// ── session issuance ──────────────────────────────────────────────────────────
+
+describe("issueAuthenticatedSession", () => {
+  it("attaches the identity only after the reissue has resolved", async () => {
+    const { issueAuthenticatedSession } = await import("./issue-session");
+    // The assignment is recorded through a setter rather than after the call, so
+    // the sequence under test is the helper's own and not the assertion's.
+    const order: string[] = [];
+    let attached: unknown = null;
+    const session: Record<string, unknown> = {};
+    Object.defineProperty(session, "user", {
+      get: () => attached,
+      set: (value) => {
+        attached = value;
+        order.push("assign");
+      },
+      configurable: true,
+      enumerable: true,
+    });
+    session.regenerate = mock((cb: (err: Error | null) => void) => {
+      order.push("regenerate");
+      attached = null;
+      cb(null);
+    });
+    const req = { session } as unknown as import("express").Request;
+    const user = { id: "u1", username: "alice" };
+
+    await issueAuthenticatedSession(req, user as never);
+
+    expect(order).toEqual(["regenerate", "assign"]);
+    expect(req.session.user).toEqual(user);
+  });
+
+  it("leaves the session anonymous when the reissue fails", async () => {
+    const { issueAuthenticatedSession } = await import("./issue-session");
+    const session: Record<string, unknown> = {
+      user: null,
+      regenerate: mock((cb: (err: Error | null) => void) => cb(new Error("store down"))),
+    };
+    const req = { session } as unknown as import("express").Request;
+
+    await expect(
+      issueAuthenticatedSession(req, { id: "u1", username: "alice" } as never)
+    ).rejects.toThrow("store down");
+    expect(req.session.user).toBeNull();
+  });
+
+  it("is the only place in the users router that attaches a session identity", async () => {
+    // A route that assigns directly would skip the reissue, so the invariant is
+    // asserted over every sibling rather than over the two known callers.
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const dir = new URL(".", import.meta.url).pathname;
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith(".ts") && f !== "issue-session.ts" && !f.endsWith(".test.ts"))
+      .filter((f) => /\breq\.session\.user\s*=/.test(readFileSync(dir + f, "utf8")));
+    expect(offenders).toEqual([]);
   });
 });
 

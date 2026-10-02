@@ -1,6 +1,7 @@
 import { MaskedUser } from "common";
 import { getUser, setUserInfo, isReservedUsername } from "server";
 import { Route } from "../route";
+import { issueAuthenticatedSession } from "./issue-session";
 
 export type SetInfoPostResponse = MaskedUser;
 
@@ -41,16 +42,7 @@ export const postSetInfoRoute = new Route<SetInfoPostResponse>(
 
     const user = await setUserInfo({ email, username, password, token: token as string | undefined });
 
-    // Reissue the id, as `/login` does: `setUserInfo` has just deleted this
-    // user's session rows, and without a new one the assignment below
-    // re-upserts the caller's own row under the id it already had.
-    await new Promise<void>((resolve, reject) => {
-      req.session.regenerate((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-    req.session.user = user;
+    await issueAuthenticatedSession(req, user);
     return { status: "success", body: user };
   }
 );
