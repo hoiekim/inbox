@@ -7,6 +7,7 @@ import type {
   SMTPServerAuthentication
 } from "smtp-server";
 import * as authRateLimit from "./auth-rate-limit";
+import { restoreLeaves } from "test-helpers";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -58,6 +59,31 @@ mock.module("mailparser", () => ({
   simpleParser: mockSimpleParser
 }));
 
+const realBcrypt = (globalThis as Record<string, unknown>).__REAL_BCRYPT as {
+  compare: (password: string, hash: string) => Promise<boolean>;
+  hash: (password: string, rounds: number) => Promise<string>;
+  default: Record<string, unknown>;
+};
+
+// Every `bcrypt.compare` onAuth makes, as `[password, hash]`. The real
+// implementation still runs underneath — a stub answering a constant would let
+// the success cases pass without a working comparison. Restored for the next
+// test file by `restoreLeaves` in this file's afterAll.
+const compareCalls: [string, string][] = [];
+const trackedCompare = (password: string, hash: string) => {
+  compareCalls.push([password, hash]);
+  return realBcrypt.compare(password, hash);
+};
+
+mock.module("bcryptjs", () => ({
+  ...realBcrypt,
+  compare: trackedCompare,
+  default: { ...realBcrypt.default, compare: trackedCompare },
+}));
+
+/** A complete bcrypt digest — 22 salt chars plus 31 of hash, base64-ish alphabet. */
+const BCRYPT_DIGEST = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
 // Stub auth-rate-limit so we can drive the rate-limit branch in onAuth without
 // needing 10 real failed attempts (each takes 500ms in production code). We use
 // spyOn (restored in afterAll) rather than mock.module: mock.module is process-
@@ -95,6 +121,7 @@ afterAll(() => {
   // afterAll re-mocks it back before the next file runs.
   const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
   if (realServer) mock.module("server", () => realServer);
+  restoreLeaves();
 });
 
 describe("onAuth handler", () => {
@@ -280,6 +307,85 @@ describe("onAuth handler", () => {
     expect((readOnlyLog?.[1] as Record<string, unknown>).authenticatedAs).toBe(
       ADMIN_RO_USERNAME
     );
+  });
+});
+
+describe("onAuth username enumeration resistance", () => {
+  const hashOf = (password: string) => realBcrypt.hash(password, 4);
+
+  const existingUser = async () => ({
+    password: await hashOf("correct-horse"),
+    getSigned: () => ({ username: "testuser" }),
+  });
+
+  const drive = (username: string, password: string) =>
+    new Promise<{ user?: string }>((resolve) => {
+      const auth = { username, password } as SMTPServerAuthentication;
+      onAuth!(auth, { remoteAddress: "203.0.113.7" } as SMTPServerSession, (_err, data) =>
+        resolve(data || {})
+      );
+    });
+
+  beforeEach(() => {
+    compareCalls.length = 0;
+    mockGetUser.mockReset();
+    mockGetUser.mockImplementation(() => Promise.resolve(null));
+    mockIsAuthRateLimited.mockReset();
+    mockIsAuthRateLimited.mockImplementation(() => false);
+    mockRecordAuthFailure.mockReset();
+    mockRecordAuthFailure.mockImplementation(() => Promise.resolve(false));
+    mockResetAuthFailures.mockReset();
+    mockResetAuthFailures.mockImplementation(() => undefined);
+  });
+
+  it("runs a bcrypt comparison against a real digest when AUTH names no known user", async () => {
+    const result = await drive("nobody", "hunter2");
+
+    expect(result.user).toBeUndefined();
+    expect(compareCalls).toHaveLength(1);
+    const [password, hash] = compareCalls[0]!;
+    expect(password).toBe("hunter2");
+    expect(hash).toMatch(BCRYPT_DIGEST);
+  });
+
+  it("spends the same number of bcrypt rounds on an unknown user as on a wrong password", async () => {
+    // The refusal is identical either way, so the round count is the only
+    // observable that separates an equalised implementation from one that
+    // answers an unknown username in microseconds.
+    await drive("nobody", "hunter2");
+    const unknownUserRounds = compareCalls.length;
+
+    compareCalls.length = 0;
+    mockGetUser.mockImplementation(existingUser);
+    await drive("testuser", "hunter2");
+
+    expect(unknownUserRounds).toBe(1);
+    expect(compareCalls).toHaveLength(unknownUserRounds);
+  });
+
+  it("does not reuse a real account's digest for the unknown-user comparison", async () => {
+    mockGetUser.mockImplementation(existingUser);
+    await drive("testuser", "hunter2");
+    const realDigest = compareCalls[0]![1];
+
+    compareCalls.length = 0;
+    mockGetUser.mockImplementation(() => Promise.resolve(null));
+    await drive("nobody", "hunter2");
+
+    expect(compareCalls[0]![1]).not.toBe(realDigest);
+    expect(await realBcrypt.compare("hunter2", compareCalls[0]![1])).toBe(false);
+  });
+
+  it("runs the comparison when the stored digest is empty", async () => {
+    mockGetUser.mockImplementation(() =>
+      Promise.resolve({ password: "", getSigned: () => ({ username: "testuser" }) })
+    );
+
+    const result = await drive("testuser", "hunter2");
+
+    expect(result.user).toBeUndefined();
+    expect(compareCalls).toHaveLength(1);
+    expect(compareCalls[0]![1]).toMatch(BCRYPT_DIGEST);
   });
 });
 
