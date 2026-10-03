@@ -9,7 +9,7 @@ import {
 } from "server";
 import { Route } from "../route";
 import { getClientIp, loginLimiter } from "../../rate-limit";
-import { issueAuthenticatedSession } from "./issue-session";
+import { issueAuthenticatedSession } from "../../issue-session";
 
 export type LoginPostResponse = MaskedUser;
 

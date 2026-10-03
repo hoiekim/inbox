@@ -1,7 +1,7 @@
 import { MaskedUser } from "common";
 import { getUser, setUserInfo, isReservedUsername } from "server";
 import { Route } from "../route";
-import { issueAuthenticatedSession } from "./issue-session";
+import { issueAuthenticatedSession } from "../../issue-session";
 
 export type SetInfoPostResponse = MaskedUser;
 

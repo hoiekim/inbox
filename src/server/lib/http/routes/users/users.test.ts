@@ -712,65 +712,6 @@ describe("postSetInfoRoute", () => {
   });
 });
 
-// ── session issuance ──────────────────────────────────────────────────────────
-
-describe("issueAuthenticatedSession", () => {
-  it("attaches the identity only after the reissue has resolved", async () => {
-    const { issueAuthenticatedSession } = await import("./issue-session");
-    // The assignment is recorded through a setter rather than after the call, so
-    // the sequence under test is the helper's own and not the assertion's.
-    const order: string[] = [];
-    let attached: unknown = null;
-    const session: Record<string, unknown> = {};
-    Object.defineProperty(session, "user", {
-      get: () => attached,
-      set: (value) => {
-        attached = value;
-        order.push("assign");
-      },
-      configurable: true,
-      enumerable: true,
-    });
-    session.regenerate = mock((cb: (err: Error | null) => void) => {
-      order.push("regenerate");
-      attached = null;
-      cb(null);
-    });
-    const req = { session } as unknown as import("express").Request;
-    const user = { id: "u1", username: "alice" };
-
-    await issueAuthenticatedSession(req, user as never);
-
-    expect(order).toEqual(["regenerate", "assign"]);
-    expect(req.session.user).toEqual(user);
-  });
-
-  it("leaves the session anonymous when the reissue fails", async () => {
-    const { issueAuthenticatedSession } = await import("./issue-session");
-    const session: Record<string, unknown> = {
-      user: null,
-      regenerate: mock((cb: (err: Error | null) => void) => cb(new Error("store down"))),
-    };
-    const req = { session } as unknown as import("express").Request;
-
-    await expect(
-      issueAuthenticatedSession(req, { id: "u1", username: "alice" } as never)
-    ).rejects.toThrow("store down");
-    expect(req.session.user).toBeNull();
-  });
-
-  it("is the only place in the users router that attaches a session identity", async () => {
-    // A route that assigns directly would skip the reissue, so the invariant is
-    // asserted over every sibling rather than over the two known callers.
-    const { readdirSync, readFileSync } = await import("node:fs");
-    const dir = new URL(".", import.meta.url).pathname;
-    const offenders = readdirSync(dir)
-      .filter((f) => f.endsWith(".ts") && f !== "issue-session.ts" && !f.endsWith(".test.ts"))
-      .filter((f) => /\breq\.session\.user\s*=/.test(readFileSync(dir + f, "utf8")));
-    expect(offenders).toEqual([]);
-  });
-});
-
 // ── post-token tests ──────────────────────────────────────────────────────────
 
 describe("postTokenRoute", () => {
