@@ -9,6 +9,7 @@ import {
 } from "server";
 import { Route } from "../route";
 import { getClientIp, loginLimiter } from "../../rate-limit";
+import { issueAuthenticatedSession } from "../../issue-session";
 
 export type LoginPostResponse = MaskedUser;
 
@@ -79,13 +80,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
       });
     }
 
-    await new Promise<void>((resolve, reject) => {
-      req.session.regenerate((err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-    req.session.user = sessionUser;
+    await issueAuthenticatedSession(req, sessionUser);
 
     // The store write is what makes the issued cookie mean anything, so it has
     // to land before the response claims the login succeeded. express-session

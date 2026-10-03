@@ -98,15 +98,22 @@ const makeUser = (username = "alice", id = "u1") => ({
 });
 
 const makeReq = (overrides: Record<string, unknown> = {}) => {
-  const sessionData: Record<string, unknown> = { user: null };
+  // express-session's regenerate swaps in a fresh, empty session, so an identity
+  // attached before the call is dropped rather than carried onto the new id.
+  // Modelling that clear is what makes an assign-then-reissue route fail the
+  // ordering assertions below instead of passing them.
+  const session: Record<string, unknown> = {
+    user: null,
+    save: mock((cb: (err: Error | null) => void) => cb(null)),
+    destroy: mock((cb: (err: Error | null) => void) => cb(null)),
+  };
+  session.regenerate = mock((cb: (err: Error | null) => void) => {
+    session.user = null;
+    cb(null);
+  });
   return {
     method: "POST",
-    session: {
-      ...sessionData,
-      regenerate: mock((cb: (err: Error | null) => void) => cb(null)),
-      save: mock((cb: (err: Error | null) => void) => cb(null)),
-      destroy: mock((cb: (err: Error | null) => void) => cb(null)),
-    },
+    session,
     body: {},
     params: {},
     query: {},
@@ -684,6 +691,23 @@ describe("postSetInfoRoute", () => {
     await expect(
       postSetInfoRoute.callback(req, makeRes(), noopStream)
     ).rejects.toThrow("store unavailable");
+    expect(req.session.user).toBeNull();
+  });
+
+  it("neither reissues nor attaches when the emailed token does not match", async () => {
+    const { postSetInfoRoute } = await import("./post-set-info");
+    mockSetUserInfo.mockClear();
+    mockGetUser.mockResolvedValueOnce({ id: "u1", username: "alice", email: "a@b.com" });
+    mockSetUserInfo.mockRejectedValueOnce(
+      new Error("`setUserInfo` failed because token doesn't match.")
+    );
+    const req = makeReq({
+      body: { email: "a@b.com", username: "alice", password: "pass", token: "wrong" },
+    });
+    await expect(
+      postSetInfoRoute.callback(req, makeRes(), noopStream)
+    ).rejects.toThrow("token doesn't match");
+    expect(req.session.regenerate).not.toHaveBeenCalled();
     expect(req.session.user).toBeNull();
   });
 });
