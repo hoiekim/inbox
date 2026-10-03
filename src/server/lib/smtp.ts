@@ -59,6 +59,7 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
+      msg.includes("write ECONNRESET") ||                     // client closed the socket before the server's reply write landed — the QUIT case (client already has its 250 OK, doesn't wait for 221) is the common one, so this happens after any mail transaction already completed
       msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
