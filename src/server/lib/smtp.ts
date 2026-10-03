@@ -59,6 +59,15 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
+      // smtp-server itself swallows a write ECONNRESET/EPIPE silently once a transaction
+      // is complete (no open envelope) — see its own error gate in smtp-connection.js.
+      // So by the time either string reaches here, the client abandoned an in-flight
+      // transaction (e.g. sent MAIL FROM but never completed DATA/RSET) and reset the
+      // socket before a pending write (often the QUIT reply) landed. No mail content
+      // was ever accepted on that connection. Which errno surfaces is platform/timing
+      // dependent, not semantically different — both need suppressing.
+      msg.includes("write ECONNRESET") ||
+      msg.includes("write EPIPE") ||
       msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this

@@ -1127,10 +1127,12 @@ describe("registerListeners error handler", () => {
     server.emit("error", new Error("Socket closed before TLS handshake"));
     server.emit("error", new Error("read ECONNRESET"));
     server.emit("error", new Error("TLS handshake timeout"));
+    server.emit("error", new Error("write ECONNRESET"));
+    server.emit("error", new Error("write EPIPE"));
 
     expect(mockLogger.error).not.toHaveBeenCalled();
     const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(6);
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(8);
   });
 
   it("logs error on non-suppressible failures", async () => {
