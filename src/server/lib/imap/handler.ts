@@ -16,6 +16,7 @@ import {
 } from "./command-budget-hold";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { logger } from "server";
+import { MAX_MESSAGE_BYTES } from "../message-size";
 
 // Command types whose processing (DB reads, mailbox/message-list
 // materialization, response formatting) has a non-trivial memory
@@ -163,20 +164,15 @@ const commandVerb = (input: string): string =>
 // buffer fills before LOGIN is ever parsed. Against the container's memory
 // ceiling one connection takes IMAP down for every user.
 //
-// APPEND carries a whole RFC 5322 message, so its ceiling is the largest
-// message a client may file into Sent or Drafts. Nothing else in the process
-// bounds a message: the composer's `fileSize: 25 * 1024 * 1024` is per FILE
-// and no limit caps the file count, and the relay declares no SIZE ceiling of
-// its own — so this number is a judgment about how much one socket may hold,
-// not a value derived from a limit that already exists. 35 MiB clears the
-// message sizes mainstream providers accept.
+// APPEND carries a whole RFC 5322 message, so its ceiling is the one every
+// surface that materializes a message shares.
 //
 // It is offered only to an authenticated session. `session.append` answers
 // `NO Not authenticated` either way, so a pre-auth declaration buys nothing
 // but heap — and that is what holds the worst case to one payload per
 // AUTHENTICATED socket rather than one per connected socket, of which
 // `imap/index.ts` admits IMAP_MAX_CONNECTIONS.
-const MAX_APPEND_LITERAL_BYTES = 35 * 1024 * 1024;
+const MAX_APPEND_LITERAL_BYTES = MAX_MESSAGE_BYTES;
 
 // Every other literal is a mailbox name, a credential, or a SEARCH string.
 // RFC 2683 §3.2.1.5 asks servers to accept at least 8000 octets of command

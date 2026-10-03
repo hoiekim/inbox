@@ -21,7 +21,13 @@ import {
   getDomainUidNext as pgGetDomainUidNext,
   getAccountUidNext as pgGetAccountUidNext,
 } from "../postgres/repositories/mails";
-import { getUser, getText, getDomain, addressToUsername } from "server";
+import {
+  getUser,
+  getText,
+  getDomain,
+  addressToUsername,
+  isLocalAddress,
+} from "server";
 import {
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
@@ -37,11 +43,24 @@ export interface SaveMailHandlerOptions {
   remoteAddress?: string;
 }
 
+/**
+ * Stores an incoming message into the mailbox of every local recipient that
+ * resolves to an account, and answers how many it wrote.
+ *
+ * A recipient inside the served domain need not have an account behind it, and
+ * one that does not is skipped rather than failing the call. Returning the count
+ * is what lets the caller tell "stored" from "accepted and dropped" — a caller
+ * that answers its own protocol needs to know the message landed somewhere.
+ *
+ * @example
+ * const stored = await saveMailHandler(null, mail, { remoteAddress });
+ * if (stored === 0) refuse();
+ */
 export const saveMailHandler = async (
   _: unknown,
   data: IncomingMail,
   options: SaveMailHandlerOptions = {}
-) => {
+): Promise<number> => {
   const envelopeTo = JSON.stringify(convertAddressValue(data.envelopeTo));
   const from = JSON.stringify(convertMailAddress(data.from)?.value);
   logger.info("Received an email", { timestamp: new Date().toISOString(), envelopeTo, from });
@@ -50,18 +69,25 @@ export const saveMailHandler = async (
   const validData = validateIncomingMail(data, domain);
   if (!validData) {
     logger.warn("Recipient is not valid. Mails is not saved.");
-    return;
+    return 0;
   }
 
   const usernames = getUsernamesFromIncomingMail(validData);
-  await Promise.all(
+  const saved = await Promise.all(
     usernames.map((u) => saveIncomingMail(u, validData, { remoteAddress: options.remoteAddress }))
   );
+  const storedCount = saved.filter((result) => !!result).length;
+  if (storedCount === 0) {
+    logger.warn("No recipient resolved to a mailbox. Mail is not saved.", { envelopeTo });
+    return 0;
+  }
   logger.info("Successfully saved an email");
 
   const mailboxes = getMailboxesFromIncomingMail(validData);
   await push.notifyNewMails(usernames, mailboxes);
   logger.info(`Sent push notifications to users: [${usernames.toString()}]`);
+
+  return storedCount;
 };
 
 interface SaveIncomingMailOptions {
@@ -346,7 +372,7 @@ const getUsernamesFromIncomingMail = (data: IncomingMail): string[] => {
   else array.push(envelopeTo);
   const domain = getDomain();
   return array
-    .filter((e) => e.address && isValidAddress(e.address, domain))
+    .filter((e) => e.address && isLocalAddress(e.address, domain))
     .map((e) => addressToUsername(e.address as string));
 };
 
@@ -358,15 +384,8 @@ const getMailboxesFromIncomingMail = (data: IncomingMail): string[] => {
   else array.push(envelopeTo);
   const domain = getDomain();
   return array
-    .filter((e) => e.address && isValidAddress(e.address, domain))
+    .filter((e) => e.address && isLocalAddress(e.address, domain))
     .map((e) => accountToBox(e.address as string));
-};
-
-const isValidAddress = (address: string, domain: string) => {
-  const parsedAddress = address.split("@");
-  const domainInData = parsedAddress[parsedAddress.length - 1].toLowerCase();
-  const target = domain.toLowerCase();
-  return domainInData === target || domainInData.endsWith(`.${target}`);
 };
 
 export const validateIncomingMail = (
@@ -383,7 +402,7 @@ export const validateIncomingMail = (
   else addressArray.push(envelopeTo);
 
   const isAddressCorrect = !!addressArray.find((e) => {
-    return e.address && isValidAddress(e.address, domainName);
+    return e.address && isLocalAddress(e.address, domainName);
   });
 
   if (isAddressCorrect) return data as IncomingMail;
