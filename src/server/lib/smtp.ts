@@ -21,6 +21,10 @@ import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
 import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
+import {
+  DataBudgetUnavailableError,
+  withSmtpDataBudget
+} from "./smtp-data-budget";
 
 const registerListeners = (
   server: SMTPServer,
@@ -138,6 +142,18 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
   return cb();
 };
 
+/**
+ * Discards the rest of a DATA stream that was refused before anything read it.
+ *
+ * `smtp-server` holds the reply until the stream emits `end`, and a
+ * `PassThrough` nobody reads never will — so refusing without this leaves the
+ * peer waiting on its own socket timeout instead of reading the code. Flowing
+ * mode drops each chunk as it arrives, which keeps the drain off the heap.
+ */
+const drainDataStream = (stream: SMTPServerDataStream) => {
+  stream.resume();
+};
+
 export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -157,49 +173,58 @@ export const onData = (
   const isOutgoingEmail =
     typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
 
-  if (isOutgoingEmail) onDataOutgoing(stream, session, cb);
-  else if (isIncomingEmail) onDataIncoming(stream, session, cb);
+  const deliver = isOutgoingEmail
+    ? onDataOutgoing
+    : isIncomingEmail
+      ? onDataIncoming
+      : undefined;
+  if (!deliver) return;
+
+  // The budget wraps the dispatch rather than sitting inside each lane, so the
+  // slot is taken before either lane touches the stream — the one ordering
+  // that keeps an unadmitted transaction at its stream buffer instead of a
+  // whole decoded message.
+  withSmtpDataBudget(() => deliver(stream, session)).then(
+    () => cb(),
+    (err) => {
+      if (err instanceof DataBudgetUnavailableError) drainDataStream(stream);
+      else logger.error("Error handling DATA transaction", {}, err);
+      cb(err instanceof Error ? err : new Error(String(err)));
+    }
+  );
 };
 
-const onDataIncoming = (
+const onDataIncoming = async (
   stream: SMTPServerDataStream,
-  session: SMTPServerSession,
-  cb: (err?: Error | null) => void
+  session: SMTPServerSession
 ) => {
-  simpleParser(stream)
-    .then(async (parsed) => {
-      const mail: IncomingMail = {
-        messageId: parsed.messageId,
-        from: parsed.from,
-        to: parsed.to,
-        cc: parsed.cc,
-        bcc: parsed.bcc,
-        replyTo: parsed.replyTo,
-        envelopeFrom: session.envelope.mailFrom || undefined,
-        envelopeTo: session.envelope.rcptTo.map((addr) => ({
-          address: addr.address
-        })),
-        subject: parsed.subject,
-        date: parsed.date?.toISOString(),
-        html: parsed.html || parsed.text,
-        text: parsed.text,
-        attachments: parsed.attachments?.map((att) => ({
-          filename: att.filename || "attachment",
-          contentType: att.contentType,
-          content: att.content,
-          size: att.size
-        }))
-      };
+  const parsed = await simpleParser(stream);
+  const mail: IncomingMail = {
+    messageId: parsed.messageId,
+    from: parsed.from,
+    to: parsed.to,
+    cc: parsed.cc,
+    bcc: parsed.bcc,
+    replyTo: parsed.replyTo,
+    envelopeFrom: session.envelope.mailFrom || undefined,
+    envelopeTo: session.envelope.rcptTo.map((addr) => ({
+      address: addr.address
+    })),
+    subject: parsed.subject,
+    date: parsed.date?.toISOString(),
+    html: parsed.html || parsed.text,
+    text: parsed.text,
+    attachments: parsed.attachments?.map((att) => ({
+      filename: att.filename || "attachment",
+      contentType: att.contentType,
+      content: att.content,
+      size: att.size
+    }))
+  };
 
-      // Extract remote address for spam DNSBL checks
-      const remoteAddress = session.remoteAddress;
-      await saveMailHandler(null, mail, { remoteAddress });
-      cb();
-    })
-    .catch((err) => {
-      logger.error("Error parsing email", {}, err);
-      cb(err);
-    });
+  // Extract remote address for spam DNSBL checks
+  const remoteAddress = session.remoteAddress;
+  await saveMailHandler(null, mail, { remoteAddress });
 };
 
 const splitAddress = (address: string) => {
@@ -316,51 +341,45 @@ export const splitEnvelopeRecipients = (
 
 const onDataOutgoing = async (
   stream: SMTPServerDataStream,
-  session: SMTPServerSession,
-  cb: (err?: Error | null) => void
+  session: SMTPServerSession
 ) => {
-  try {
-    const username = session.user;
-    const user = username && (await getUser({ username }));
-    const signedUser = user && user.getSigned();
-    if (!username || !user || !signedUser) {
-      logger.warn("SMTP: Unauthenticated user attempted to send email.");
-      return cb(new Error("User not authenticated"));
-    }
-
-    const parsed = await simpleParser(stream);
-    const mailFrom = session.envelope.mailFrom;
-    const envelopeFrom =
-      mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
-    const { sender, recipients } = resolveOutgoingSender(
-      username,
-      getUserDomain(username),
-      { header: parsed.from?.value?.[0]?.address, envelope: envelopeFrom },
-      session.envelope.rcptTo.map((addr) => addr.address),
-      addressList(parsed.to)
-    );
-
-    const { to, cc, bcc } = splitEnvelopeRecipients(
-      recipients,
-      addressList(parsed.to),
-      addressList(parsed.cc)
-    );
-
-    const mailData = new MailDataToSend({
-      to: to.join(","),
-      cc: cc.join(",") || undefined,
-      bcc: bcc.join(",") || undefined,
-      subject: parsed.subject || "",
-      html: parsed.html || parsed.text || "",
-      sender,
-      senderFullName: parsed.from?.value?.[0]?.name || sender
-    });
-
-    await sendMail(signedUser, mailData);
-    cb();
-  } catch (err) {
-    cb(err instanceof Error ? err : new Error(String(err)));
+  const username = session.user;
+  const user = username && (await getUser({ username }));
+  const signedUser = user && user.getSigned();
+  if (!username || !user || !signedUser) {
+    logger.warn("SMTP: Unauthenticated user attempted to send email.");
+    throw new Error("User not authenticated");
   }
+
+  const parsed = await simpleParser(stream);
+  const mailFrom = session.envelope.mailFrom;
+  const envelopeFrom =
+    mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
+  const { sender, recipients } = resolveOutgoingSender(
+    username,
+    getUserDomain(username),
+    { header: parsed.from?.value?.[0]?.address, envelope: envelopeFrom },
+    session.envelope.rcptTo.map((addr) => addr.address),
+    addressList(parsed.to)
+  );
+
+  const { to, cc, bcc } = splitEnvelopeRecipients(
+    recipients,
+    addressList(parsed.to),
+    addressList(parsed.cc)
+  );
+
+  const mailData = new MailDataToSend({
+    to: to.join(","),
+    cc: cc.join(",") || undefined,
+    bcc: bcc.join(",") || undefined,
+    subject: parsed.subject || "",
+    html: parsed.html || parsed.text || "",
+    sender,
+    senderFullName: parsed.from?.value?.[0]?.name || sender
+  });
+
+  await sendMail(signedUser, mailData);
 };
 
 const SMTP_MAX_CLIENTS = 100;
