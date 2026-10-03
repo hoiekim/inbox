@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
 import {
   SMTPServer,
@@ -16,6 +15,7 @@ import {
 } from "server";
 import { IncomingMail, MailDataToSend } from "common";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
+import { verifyPassword } from "./verify-password";
 import { getUserDomain } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
@@ -94,13 +94,9 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   const user = await getUser({ username });
   const signedUser = user?.getSigned();
 
-  if (!password || !user || !signedUser) {
-    await recordAuthFailure(ip);
-    return cb(null, { user: undefined });
-  }
+  const pwMatches = await verifyPassword(password, user?.password);
 
-  const pwMatches = await bcrypt.compare(password, user.password!);
-  if (!pwMatches) {
+  if (!user || !signedUser || !pwMatches) {
     await recordAuthFailure(ip);
     return cb(null, { user: undefined });
   }
