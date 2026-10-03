@@ -1,5 +1,5 @@
-import { createFifoSemaphore } from "./fifo-semaphore";
-import { parseConcurrencyValue } from "./concurrency-env";
+import { createFifoSemaphore } from "../fifo-semaphore";
+import { parseConcurrencyValue } from "../concurrency-env";
 
 const DEFAULT_CONCURRENCY = 8;
 
