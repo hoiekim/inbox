@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
+import { describe, expect, it, jest, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
 import bcrypt from "bcryptjs";
 import type {
   SMTPServer,
@@ -101,6 +101,13 @@ const mockResetAuthFailures = spyOn(authRateLimit, "resetAuthFailures").mockRetu
 
 // Import the actual SMTP handlers after mocks are set up
 import { onAuth, onData, onMailFrom, resolveOutgoingSender, splitEnvelopeRecipients } from "./smtp";
+import {
+  withSmtpDataBudget,
+  smtpDataBudgetCapacity,
+  smtpDataBudgetInFlight,
+  smtpDataBudgetWaitCeilingMs,
+  _resetSmtpDataBudget
+} from "./smtp-data-budget";
 
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
@@ -437,6 +444,7 @@ describe("onData handler", () => {
     const stream = {
       pipe: mock(() => stream),
       on: mock(() => stream),
+      resume: mock(() => stream),
     } as unknown as SMTPServerDataStream;
     return stream;
   };
@@ -1486,5 +1494,147 @@ describe("evictSmtpConnections", () => {
 
     expect(evictSmtpConnections("alice")).toBe(0);
     expect(alice.close).not.toHaveBeenCalled();
+  });
+});
+
+
+/**
+ * Proves the DATA budget is wired into `onData` itself, not merely correct in
+ * isolation (`smtp-data-budget.test.ts` covers the semaphore in a vacuum).
+ * Every assertion here drives SEVERAL transactions at once, because a test
+ * that drives one cannot distinguish a bounded listener from an unbounded one
+ * — the defect is only visible in the aggregate.
+ */
+describe("onData DATA budget wiring", () => {
+  const CAP = smtpDataBudgetCapacity();
+  const originalEnv = process.env;
+
+  const makeStream = () => {
+    const stream = {
+      pipe: mock(() => stream),
+      on: mock(() => stream),
+      resume: mock(() => stream),
+    } as unknown as SMTPServerDataStream;
+    return stream;
+  };
+
+  const incomingSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const defer = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+
+  const nextTick = () => new Promise<void>((r) => setImmediate(r));
+
+  beforeEach(() => {
+    _resetSmtpDataBudget();
+    mockSaveMailHandler.mockReset();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve());
+    mockSimpleParser.mockReset();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    _resetSmtpDataBudget();
+  });
+
+  it("holds concurrent transactions to the capacity and still accepts them all", async () => {
+    const gates: Array<ReturnType<typeof defer>> = [];
+    let parsing = 0;
+    let peakParsing = 0;
+    mockSimpleParser.mockImplementation(() => {
+      parsing++;
+      peakParsing = Math.max(peakParsing, parsing);
+      const gate = defer();
+      gates.push(gate);
+      return gate.promise.then(() => {
+        parsing--;
+        return { attachments: [] };
+      });
+    });
+
+    const total = CAP + 3;
+    const settled = Array.from(
+      { length: total },
+      () =>
+        new Promise<Error | null | undefined>((resolve) => {
+          onData(makeStream(), incomingSession(), resolve);
+        })
+    );
+    await nextTick();
+
+    // The bound: `maxClients` would have let all `total` parse at once.
+    expect(peakParsing).toBe(CAP);
+
+    // Drain the queue — each release admits the next waiter, so the gate list
+    // grows as we go and has to be walked rather than snapshotted.
+    for (let drained = 0; drained < total; drained++) {
+      gates[drained].resolve();
+      await nextTick();
+    }
+
+    const errors = await Promise.all(settled);
+    expect(errors.filter(Boolean)).toEqual([]);
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(total);
+    expect(peakParsing).toBe(CAP);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+  });
+
+  it("refuses with 421 and drains the stream when no slot frees up in time", async () => {
+    const holders = Array.from({ length: CAP }, () => defer());
+    const held = holders.map((gate) => withSmtpDataBudget(() => gate.promise));
+    await nextTick();
+
+    const stream = makeStream();
+    jest.useFakeTimers();
+    let err: Error | null | undefined;
+    try {
+      const refused = new Promise<Error | null | undefined>((resolve) => {
+        onData(stream, incomingSession(), resolve);
+      });
+      jest.advanceTimersByTime(smtpDataBudgetWaitCeilingMs() + 1);
+      err = await refused;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    // Without the drain `smtp-server` waits for an `end` the stream cannot
+    // emit, and the peer reads nothing until its own socket timeout.
+    expect(stream.resume).toHaveBeenCalledTimes(1);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+
+    holders.forEach((gate) => gate.resolve());
+    await Promise.all(held);
+  });
+
+  it("frees the slot when a transaction fails, so the next one is admitted", async () => {
+    mockSimpleParser.mockImplementationOnce(() => Promise.reject(new Error("bad message")));
+    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+
+    const first = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), incomingSession(), resolve);
+    });
+    expect(first).toBeInstanceOf(Error);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+
+    const second = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), incomingSession(), resolve);
+    });
+    expect(second).toBeFalsy();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
   });
 });
