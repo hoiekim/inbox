@@ -5,7 +5,6 @@
  * and return { store, authenticated } updates rather than mutating session directly.
  */
 
-import bcrypt from "bcryptjs";
 import { Socket } from "net";
 import {
   getUser,
@@ -15,12 +14,9 @@ import {
   remapReadOnlySession,
 } from "server";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "../auth-rate-limit";
+import { verifyPassword } from "../verify-password";
 import { Store } from "./store";
 import { closeSocket } from "./close-socket";
-
-// Dummy hash used to prevent username enumeration via timing attacks.
-const DUMMY_HASH =
-  "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 
 export interface AuthResult {
   store: Store;
@@ -104,12 +100,9 @@ export async function handleAuthenticate(
     const user = await getUser(inputUser);
     const signedUser = user?.getSigned();
 
-    const pwMatches = await bcrypt.compare(
-      password,
-      user?.password ?? DUMMY_HASH
-    );
+    const pwMatches = await verifyPassword(password, user?.password);
 
-    if (!password || !user || !signedUser || !pwMatches) {
+    if (!user || !signedUser || !pwMatches) {
       const limited = await recordAuthFailure(ip);
       if (limited) {
         write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
@@ -198,12 +191,9 @@ export async function handleLogin(
   const user = await getUser(inputUser);
   const signedUser = user?.getSigned();
 
-  const pwMatches = await bcrypt.compare(
-    cleanPassword,
-    user?.password ?? DUMMY_HASH
-  );
+  const pwMatches = await verifyPassword(cleanPassword, user?.password);
 
-  if (!cleanPassword || !user || !signedUser || !pwMatches) {
+  if (!user || !signedUser || !pwMatches) {
     const limited = await recordAuthFailure(ip);
     if (limited) {
       write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);

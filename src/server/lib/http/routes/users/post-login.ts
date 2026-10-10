@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { MaskedUser } from "common";
 import {
   getUser,
@@ -10,13 +9,9 @@ import {
 import { Route } from "../route";
 import { getClientIp, loginLimiter } from "../../rate-limit";
 import { issueAuthenticatedSession } from "../../issue-session";
+import { verifyPassword } from "../../../verify-password";
 
 export type LoginPostResponse = MaskedUser;
-
-// Valid bcrypt hash used as a constant-time dummy to prevent timing-based
-// username enumeration. bcrypt.compare still runs its full cost-10 work
-// when the user is not found, so response time is indistinguishable.
-const DUMMY_HASH = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 
 export const postLoginRoute = new Route<LoginPostResponse>(
   "POST",
@@ -44,11 +39,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     const user = await getUser(inputUser);
     const signedUser = user?.getSigned();
 
-    // Always run bcrypt.compare regardless of whether the user exists.
-    // This prevents timing attacks that could reveal valid usernames.
-    const pwMatches = user
-      ? await bcrypt.compare(password, user.password as string)
-      : await bcrypt.compare(password, DUMMY_HASH).then(() => false);
+    const pwMatches = await verifyPassword(password, user?.password);
 
     const ip = getClientIp(req);
 

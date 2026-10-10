@@ -479,7 +479,7 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
  * the stored password is replaced with a secret that exists nowhere, which no
  * login can present. Retaining the column as a valid hash (rather than
  * clearing it) keeps the three authentication surfaces on their normal
- * wrong-password path, since `bcrypt.compare` rejects a null hash outright.
+ * wrong-password path.
  *
  * Refusing new logins is only half of it: sessions outlive the password they
  * were minted from, and the cookie is rolling, so the sessions the credential

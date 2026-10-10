@@ -1,5 +1,5 @@
-import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
+import { PassThrough, Readable } from "stream";
 import {
   SMTPServer,
   SMTPServerAddress,
@@ -15,12 +15,24 @@ import {
   ADMIN_RO_USERNAME
 } from "server";
 import { IncomingMail, MailDataToSend } from "common";
-import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "./auth-rate-limit";
-import { getUserDomain } from "./util";
+import {
+  isAuthRateLimited,
+  isRecipientProbeRateLimited,
+  recordAuthFailure,
+  recordRecipientProbe,
+  resetAuthFailures
+} from "./auth-rate-limit";
+import { verifyPassword } from "./verify-password";
+import { addressToUsername, getUserDomain, isLocalAddress } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
 import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
+import { MAX_MESSAGE_BYTES } from "./message-size";
+import {
+  DataBudgetUnavailableError,
+  withSmtpDataBudget
+} from "./smtp-data-budget";
 
 const registerListeners = (
   server: SMTPServer,
@@ -59,6 +71,15 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
+      // smtp-server itself swallows a write ECONNRESET/EPIPE silently once a transaction
+      // is complete (no open envelope) — see its own error gate in smtp-connection.js.
+      // So by the time either string reaches here, the client abandoned an in-flight
+      // transaction (e.g. sent MAIL FROM but never completed DATA/RSET) and reset the
+      // socket before a pending write (often the QUIT reply) landed. No mail content
+      // was ever accepted on that connection. Which errno surfaces is platform/timing
+      // dependent, not semantically different — both need suppressing.
+      msg.includes("write ECONNRESET") ||
+      msg.includes("write EPIPE") ||
       msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
@@ -81,6 +102,12 @@ const registerListeners = (
   server.listen(port, callback);
 };
 
+/**
+ * `smtp-server` discards the promise an async handler returns and hands the
+ * command-loop continuation to `cb`, so a rejection that escapes leaves the
+ * whole session unanswered rather than the one command. Every path here ends
+ * in `cb`, including the failure ones.
+ */
 export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
   if (session.user) return cb(null, { user: session.user });
 
@@ -91,16 +118,19 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   }
 
   const { username, password } = auth;
-  const user = await getUser({ username });
-  const signedUser = user?.getSigned();
 
-  if (!password || !user || !signedUser) {
-    await recordAuthFailure(ip);
-    return cb(null, { user: undefined });
+  let user;
+  let pwMatches = false;
+  try {
+    user = await getUser({ username });
+    pwMatches = await verifyPassword(password, user?.password);
+  } catch (err) {
+    logger.error("SMTP: authentication lookup failed", { remoteAddress: ip }, err);
+    return cb(new LookupFailedError());
   }
 
-  const pwMatches = await bcrypt.compare(password, user.password!);
-  if (!pwMatches) {
+  const signedUser = user?.getSigned();
+  if (!user || !signedUser || !pwMatches) {
     await recordAuthFailure(ip);
     return cb(null, { user: undefined });
   }
@@ -138,6 +168,247 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
   return cb();
 };
 
+/**
+ * RFC 5321 §3.6.1 gives 550 to a message this host will not relay — neither
+ * the sender nor any recipient is local. 550 keeps it in the "policy denied"
+ * family rather than the "server error" family that would train a client to
+ * retry, matching `onMailFrom`'s refusal above.
+ */
+class RelayDeniedError extends Error {
+  responseCode = 550;
+
+  constructor() {
+    super("Error: relay access denied");
+  }
+}
+
+/**
+ * RFC 5321 §3.5.3 gives 550 to a recipient this host is responsible for but
+ * holds no mailbox for. Answered at RCPT TO rather than at DATA so the octets
+ * are never transferred, and permanent so the sender bounces at once instead
+ * of queueing for a mailbox that will not appear.
+ */
+class NoSuchMailboxError extends Error {
+  responseCode = 550;
+
+  constructor() {
+    super("5.1.1 Error: no such mailbox here");
+  }
+}
+
+/**
+ * The mailbox `onRcptTo` accepted held nothing by the end of DATA, so it went
+ * away mid-transaction. Transient, because the authoritative answer for a
+ * recipient that does not exist is given one command earlier — a retry reaches
+ * that 550 rather than this, and this host cannot claim authority over a state
+ * change it did not observe.
+ */
+class MailNotStoredError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.2.1 Error: mailbox unavailable, try again later");
+  }
+}
+
+/**
+ * A lookup this host needed to answer a command did not return, so it has
+ * observed nothing about the account either way. RFC 5321 §4.2.3 gives 451 to
+ * a local error in processing — transient, because a permanent refusal would
+ * make a sender bounce mail over an outage the sender cannot see.
+ */
+class LookupFailedError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.3.0 Error: temporary lookup failure");
+  }
+}
+
+/**
+ * The peer has spent its recipient-probe budget. Transient and free — no
+ * lookup runs behind it, and it is answered for every local recipient alike
+ * so that a throttled peer learns nothing from the difference.
+ */
+class TooManyProbesError extends Error {
+  responseCode = 451;
+
+  constructor() {
+    super("4.7.0 Error: too many unknown recipients, try again later");
+  }
+}
+
+/** RFC 5321 §4.2.3 gives 552 to a message that exceeds the fixed maximum size. */
+class MessageTooLargeError extends Error {
+  responseCode = 552;
+
+  constructor() {
+    super(
+      `Error: message exceeds fixed maximum message size ${MAX_MESSAGE_BYTES}`
+    );
+  }
+}
+
+/**
+ * Refuses a recipient inside the served zone that maps onto no account.
+ *
+ * `isLocalAddress` answers by label, so every `<anything>.$EMAIL_DOMAIN` is
+ * this host's to answer for, while only the labels {@link addressToUsername}
+ * maps onto a real account have a mailbox behind them. Deciding that here is
+ * what keeps the set of recipients answered `250` equal to the set stored for:
+ * at DATA the message would already have been transferred, and the save path
+ * skips an unresolvable username silently.
+ *
+ * A foreign recipient is not this host's to judge and passes — the relay
+ * decision belongs to {@link onData}, which needs the envelope complete.
+ *
+ * Naming a nonexistent mailbox is answerable here or in a bounce, and a bounce
+ * tells the same sender the same thing at the cost of carrying the message
+ * first, so refusing early trades nothing away.
+ *
+ * The refusal is also a yes/no on username existence, and this listener takes
+ * `RCPT TO` unauthenticated, so each one is charged to a per-IP budget that
+ * prices it exactly as a failed credential is priced. Past the budget the
+ * answer is a uniform transient refusal and no lookup runs, which is what
+ * bounds the connection-pool draw an unauthenticated peer can cause.
+ */
+export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
+  address: SMTPServerAddress,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+) => {
+  const ip = session.remoteAddress ?? "unknown";
+  try {
+    const { EMAIL_DOMAIN } = process.env;
+    if (!EMAIL_DOMAIN) return cb();
+    if (!isLocalAddress(address.address, EMAIL_DOMAIN)) return cb();
+
+    if (isRecipientProbeRateLimited(ip)) return cb(new TooManyProbesError());
+
+    const username = addressToUsername(address.address);
+    const user = username ? await getUser({ username }) : undefined;
+    if (user) return cb();
+
+    logger.warn("SMTP: refused a recipient with no mailbox", {
+      remoteAddress: ip,
+      username
+    });
+    await recordRecipientProbe(ip);
+    return cb(new NoSuchMailboxError());
+  } catch (err) {
+    logger.error("SMTP: recipient lookup failed", { remoteAddress: ip }, err);
+    return cb(new LookupFailedError());
+  }
+};
+
+/**
+ * A DATA transaction, carried to the parser only as far as the ceiling.
+ *
+ * `refused` is read after every `await` the handlers do: the reply has already
+ * gone out by then, so the side effect that `await` was leading up to must not
+ * run, and nothing may answer the transaction a second time.
+ */
+interface BoundedMessage {
+  stream: Readable;
+  refused: boolean;
+  /**
+   * Disarms the ceiling watcher and reads the rest of DATA out without
+   * holding it. Every path that answers the transaction calls this first: the
+   * watcher answers through the same `cb`, and `smtp-server` registers one
+   * end-of-data listener per `cb` it hands out, so a second answer puts a
+   * second reply on the wire and resumes command parsing a transaction early.
+   */
+  drain: () => void;
+}
+
+/**
+ * Bounds what one DATA transaction can make the process hold.
+ *
+ * `smtp-server` offers no enforcement to lean on. Its `size` option makes
+ * `EHLO` advertise `SIZE` and refuses a `MAIL FROM` that declares more, but a
+ * sender that declares nothing still streams whatever it likes: the library
+ * computes `stream.sizeExceeded` in `_endDataMode`, once the final octet has
+ * already been written, and never acts on it. So the count is kept here, where
+ * the octets arrive, and the parser is cut off at the ceiling rather than told
+ * about it afterwards.
+ *
+ * Two shapes this deliberately avoids. The source keeps flowing past the cut,
+ * because the reply is only sent once DATA ends and a source nobody reads
+ * never ends. And no cut is silent: `mailparser` settles on an `error` but not
+ * on the `close` that a bare `destroy()` emits, so a silent cut leaves its
+ * promise pending and everything it accumulated reachable until the connection
+ * goes away. Refusals are still answered through `cb`, which is in hand the
+ * whole time, and never through that error.
+ */
+const boundMessageSize = (
+  source: SMTPServerDataStream,
+  session: SMTPServerSession,
+  cb: (err?: Error | null) => void
+): BoundedMessage => {
+  const bounded = new PassThrough();
+  // The outgoing handler reaches `simpleParser` only after a user lookup, so a
+  // refusal can destroy this before anything is listening.
+  bounded.on("error", () => {});
+  const message: BoundedMessage = {
+    stream: bounded,
+    refused: false,
+    drain: () => {
+      message.refused = true;
+      bounded.destroy(new Error("message refused"));
+      source.resume();
+    }
+  };
+  let bytes = 0;
+
+  const refuse = (err: Error) => {
+    message.drain();
+    cb(err);
+  };
+
+  source.on("data", (chunk: Buffer) => {
+    if (message.refused) return;
+
+    bytes += chunk.length;
+    if (bytes > MAX_MESSAGE_BYTES) {
+      logger.warn("SMTP: refused a message over the maximum size", {
+        remoteAddress: session.remoteAddress,
+        maxBytes: MAX_MESSAGE_BYTES
+      });
+      refuse(new MessageTooLargeError());
+      return;
+    }
+
+    if (!bounded.write(chunk)) {
+      source.pause();
+      bounded.once("drain", () => source.resume());
+    }
+  });
+
+  source.once("end", () => {
+    if (!message.refused) bounded.end();
+  });
+
+  source.once("error", (err) => {
+    if (message.refused) return;
+    logger.error("SMTP: DATA stream failed", {}, err);
+    refuse(err);
+  });
+
+  return message;
+};
+
+/**
+ * Discards the rest of a DATA stream that was refused before anything read it.
+ *
+ * `smtp-server` holds the reply until the stream emits `end`, and a
+ * `PassThrough` nobody reads never will — so refusing without this leaves the
+ * peer waiting on its own socket timeout instead of reading the code. Flowing
+ * mode drops each chunk as it arrives, which keeps the drain off the heap.
+ */
+const drainDataStream = (stream: SMTPServerDataStream) => {
+  stream.resume();
+};
+
 export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -146,28 +417,72 @@ export const onData = (
   const { EMAIL_DOMAIN } = process.env;
   if (!EMAIL_DOMAIN) {
     logger.warn("SMTP: EMAIL_DOMAIN not set, rejecting all emails.");
+    stream.resume();
     return cb(new Error("Email service not configured"));
   }
 
   const isIncomingEmail = session.envelope.rcptTo.some((addr) => {
-    return addr.address.endsWith(`@${EMAIL_DOMAIN}`);
+    return isLocalAddress(addr.address, EMAIL_DOMAIN);
   });
 
+  // `mailFrom` is a value any sender chooses freely, so a local one selects
+  // submission only on a session that authenticated. Without that, inbound mail
+  // whose envelope sender sits under the served zone — a forwarder, a bounce, a
+  // spoof — is routed to submission and refused, and the genuine relay probe
+  // (local sender, foreign recipient, no auth) draws the transient reply that
+  // invites the retry rather than the permanent one this host owes it.
   const from = session.envelope.mailFrom;
   const isOutgoingEmail =
-    typeof from !== "boolean" && from.address.endsWith(`@${EMAIL_DOMAIN}`);
+    !!session.user &&
+    typeof from !== "boolean" &&
+    isLocalAddress(from.address, EMAIL_DOMAIN);
 
-  if (isOutgoingEmail) onDataOutgoing(stream, session, cb);
-  else if (isIncomingEmail) onDataIncoming(stream, session, cb);
+  if (!isIncomingEmail && !isOutgoingEmail) {
+    logger.warn("SMTP: refused to relay a message with no local party", {
+      remoteAddress: session.remoteAddress
+    });
+    stream.resume();
+    return cb(new RelayDeniedError());
+  }
+
+  // The budget wraps the dispatch rather than sitting inside each lane, so the
+  // slot is taken before either lane touches the stream — the one ordering
+  // that keeps an unadmitted transaction at its stream buffer instead of a
+  // whole decoded message. `boundMessageSize` attaches its listeners only
+  // once the slot is granted, for the same reason.
+  withSmtpDataBudget(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const settle = (err?: Error | null) => (err ? reject(err) : resolve());
+        const message = boundMessageSize(stream, session, settle);
+        if (isOutgoingEmail) onDataOutgoing(message, session, settle);
+        else onDataIncoming(message, session, settle);
+      })
+  ).then(
+    () => cb(),
+    (err) => {
+      if (err instanceof DataBudgetUnavailableError) drainDataStream(stream);
+      // Every other rejection already logged at its own call site (the
+      // byte-ceiling refusal, the vanished-mailbox refusal, the auth
+      // refusal) at the severity its RFC code implies — re-logging here at
+      // error level would turn routine client-fault refusals into
+      // server-error noise.
+      else if (!(err instanceof Error) || !("responseCode" in err))
+        logger.error("Error handling DATA transaction", {}, err);
+      cb(err instanceof Error ? err : new Error(String(err)));
+    }
+  );
 };
 
 const onDataIncoming = (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
-  simpleParser(stream)
+  simpleParser(message.stream)
     .then(async (parsed) => {
+      if (message.refused) return;
+
       const mail: IncomingMail = {
         messageId: parsed.messageId,
         from: parsed.from,
@@ -193,11 +508,27 @@ const onDataIncoming = (
 
       // Extract remote address for spam DNSBL checks
       const remoteAddress = session.remoteAddress;
-      await saveMailHandler(null, mail, { remoteAddress });
+      const stored = await saveMailHandler(null, mail, { remoteAddress });
+      if (message.refused) return;
+
+      // `onRcptTo` refuses the recipients this cannot store for, so a zero here
+      // is a mailbox that went away mid-transaction. Answering an error keeps
+      // the 250 from outrunning the write in every case, including one the
+      // recipient check has no way to see.
+      if (stored === 0) {
+        logger.warn("SMTP: accepted DATA that stored into no mailbox", {
+          remoteAddress
+        });
+        message.drain();
+        return cb(new MailNotStoredError());
+      }
+
       cb();
     })
     .catch((err) => {
+      if (message.refused) return;
       logger.error("Error parsing email", {}, err);
+      message.drain();
       cb(err);
     });
 };
@@ -315,20 +646,25 @@ export const splitEnvelopeRecipients = (
 };
 
 const onDataOutgoing = async (
-  stream: SMTPServerDataStream,
+  message: BoundedMessage,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
 ) => {
   try {
     const username = session.user;
     const user = username && (await getUser({ username }));
+    if (message.refused) return;
+
     const signedUser = user && user.getSigned();
     if (!username || !user || !signedUser) {
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
+      message.drain();
       return cb(new Error("User not authenticated"));
     }
 
-    const parsed = await simpleParser(stream);
+    const parsed = await simpleParser(message.stream);
+    if (message.refused) return;
+
     const mailFrom = session.envelope.mailFrom;
     const envelopeFrom =
       mailFrom && typeof mailFrom !== "boolean" ? mailFrom.address : undefined;
@@ -357,8 +693,11 @@ const onDataOutgoing = async (
     });
 
     await sendMail(signedUser, mailData);
+    if (message.refused) return;
     cb();
   } catch (err) {
+    if (message.refused) return;
+    message.drain();
     cb(err instanceof Error ? err : new Error(String(err)));
   }
 };
@@ -372,8 +711,10 @@ export const initializeSmtp = async () => {
     authOptional: true,
     onAuth,
     onMailFrom,
+    onRcptTo,
     onData,
-    maxClients: SMTP_MAX_CLIENTS
+    maxClients: SMTP_MAX_CLIENTS,
+    size: MAX_MESSAGE_BYTES
   };
 
   const credentials = getTlsCredentials();
