@@ -10,6 +10,7 @@ import { PassThrough, Readable } from "stream";
 import * as authRateLimit from "./auth-rate-limit";
 import { MAX_MESSAGE_BYTES } from "./message-size";
 import { restoreLeaves } from "test-helpers";
+import { logger } from "./logger";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -2546,11 +2547,149 @@ describe("onData DATA budget wiring", () => {
     expect(smtpDataBudgetInFlight()).toBe(0);
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
 
-    // The slot is free again — without the watchdog this hangs forever.
+    // The slot is free again — without the watchdog this hangs forever. Under
+    // real timers this arms a real 65s watchdog on the fresh transaction; the
+    // mocked `simpleParser` resolves independently of the stream, so without
+    // waiting for the stream's own `end` here too, that real timer can
+    // outlive this test and fire a stray warning during a later one.
     mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    const secondStream = makeStream();
+    const secondStreamEnded = new Promise<void>((resolve) => secondStream.once("end", resolve));
     const second = await new Promise<Error | null | undefined>((resolve) => {
-      onData(makeStream(), incomingSession(), resolve);
+      onData(secondStream, incomingSession(), resolve);
     });
+    await secondStreamEnded;
     expect(second).toBeFalsy();
+  });
+
+  it("re-arms the idle watchdog on every chunk, so a slow-but-live sender past the ceiling still completes", async () => {
+    // Gated, not immediately-resolved: an unconditional mock would settle
+    // `onDataIncoming`'s lane the instant `boundMessageSize` returns, before
+    // a single chunk is written, making every chunk/clock-advance below
+    // exercise a transaction that already finished — vacuously green whether
+    // or not the watchdog actually re-arms.
+    const gate = defer();
+    mockSimpleParser.mockImplementation(() => gate.promise.then(() => ({ attachments: [] })));
+    const stream = new PassThrough() as unknown as SMTPServerDataStream;
+    // Waited for explicitly below so this test's own watchdog timer is
+    // guaranteed cleared before it ends — otherwise a real leftover timer
+    // can outlive this test and fire a stray warning during a later one.
+    const streamEnded = new Promise<void>((resolve) => stream.once("end", resolve));
+
+    jest.useFakeTimers();
+    let err: Error | null | undefined;
+    try {
+      const result = new Promise<Error | null | undefined>((resolve) => {
+        onData(stream, incomingSession(), resolve);
+      });
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      // Three chunks, each gap just under the ceiling but summing to nearly
+      // triple it — survivable only if every chunk re-arms the watchdog
+      // rather than one arm-on-start timer counting down regardless. The
+      // parser is still gated here, so `result` can only have settled early
+      // via the watchdog firing — the assertion below would catch it.
+      for (let i = 0; i < 3; i++) {
+        stream.write(Buffer.from(`chunk-${i}`));
+        await Promise.resolve();
+        jest.advanceTimersByTime(DATA_IDLE_TIMEOUT_MS - 1000);
+      }
+
+      stream.end();
+      gate.resolve();
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await streamEnded;
+
+      err = await result;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(err).toBeFalsy();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the idle watchdog on a normal completion, so a late tick never fires a spurious abandonment", async () => {
+    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    // Bun's `spyOn`/`mock.module` tracking on a shared singleton is
+    // process-global and can attribute an earlier test's call to this one's
+    // spy — swapping the plain object property directly sidesteps that.
+    const originalWarn = logger.warn;
+    const warnCalls: unknown[][] = [];
+    logger.warn = (...args: unknown[]) => {
+      warnCalls.push(args);
+    };
+    const stream = makeStream();
+    // `boundMessageSize`'s own `end` listener (which clears the watchdog) is
+    // a sibling on this same event, not something the mocked `simpleParser`'s
+    // resolution depends on — wait for it explicitly, or the clock advance
+    // below races it instead of following it.
+    const streamEnded = new Promise<void>((resolve) => stream.once("end", resolve));
+
+    jest.useFakeTimers();
+    try {
+      const err = await new Promise<Error | null | undefined>((resolve) => {
+        onData(stream, incomingSession(), resolve);
+      });
+      expect(err).toBeFalsy();
+      await streamEnded;
+
+      // Nothing should still be armed — advancing well past the ceiling must
+      // not touch the budget or log an abandonment for a message already
+      // delivered.
+      jest.advanceTimersByTime(DATA_IDLE_TIMEOUT_MS * 2);
+      expect(smtpDataBudgetInFlight()).toBe(0);
+      expect(warnCalls).not.toContainEqual([
+        "SMTP: DATA transaction abandoned mid-transfer, releasing its budget slot",
+        expect.anything()
+      ]);
+    } finally {
+      jest.useRealTimers();
+      logger.warn = originalWarn;
+    }
+  });
+
+  it("clears the idle watchdog on every other refusal too, not just a clean end", async () => {
+    // `onDataIncoming` calls `simpleParser` unconditionally as soon as
+    // `boundMessageSize` returns, independent of whether the byte ceiling
+    // goes on to refuse the same message — needs an implementation or the
+    // unmocked call throws before the ceiling ever gets a chance to run.
+    mockSimpleParser.mockImplementation(() => new Promise(() => {}));
+    const originalWarn = logger.warn;
+    const warnCalls: unknown[][] = [];
+    logger.warn = (...args: unknown[]) => {
+      warnCalls.push(args);
+    };
+    const stream = new PassThrough() as unknown as SMTPServerDataStream;
+
+    jest.useFakeTimers();
+    try {
+      const result = new Promise<Error | null | undefined>((resolve) => {
+        onData(stream, incomingSession(), resolve);
+      });
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      // Oversized in one chunk — refuses via `drain()`, the same path an
+      // abandoned-timeout refusal takes, before any `end` ever fires.
+      stream.write(Buffer.alloc(MAX_MESSAGE_BYTES + 1));
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      const err = await result;
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+      warnCalls.length = 0;
+
+      // The ceiling refusal already logged its own warning above — cleared
+      // so only a stray abandonment warning from here on would show up.
+      jest.advanceTimersByTime(DATA_IDLE_TIMEOUT_MS * 2);
+      expect(smtpDataBudgetInFlight()).toBe(0);
+      expect(warnCalls).not.toContainEqual([
+        "SMTP: DATA transaction abandoned mid-transfer, releasing its budget slot",
+        expect.anything()
+      ]);
+    } finally {
+      jest.useRealTimers();
+      logger.warn = originalWarn;
+    }
   });
 });
