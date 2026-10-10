@@ -119,7 +119,8 @@ import {
   onMailFrom,
   onRcptTo,
   resolveOutgoingSender,
-  splitEnvelopeRecipients
+  splitEnvelopeRecipients,
+  DATA_IDLE_TIMEOUT_MS
 } from "./smtp";
 import {
   withSmtpDataBudget,
@@ -2511,5 +2512,45 @@ describe("onData DATA budget wiring", () => {
     });
     expect(second).toBeFalsy();
     expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
+  });
+
+  // `smtp-server` only unpipes and nulls its own stream reference on an
+  // abrupt RST mid-DATA — it never ends or errors the stream this module
+  // reads, so a stream that never fires `data`/`end`/`error` at all is the
+  // faithful repro, not a bug in the fixture.
+  it("releases the slot when the connection is abandoned mid-DATA with no end/error ever firing", async () => {
+    // Stands in for a `simpleParser` call stuck reading a stream that will
+    // never end — the only path to settlement left is the idle watchdog.
+    mockSimpleParser.mockImplementation(() => new Promise(() => {}));
+    const abandonedStream = new PassThrough() as unknown as SMTPServerDataStream;
+
+    jest.useFakeTimers();
+    let err: Error | null | undefined;
+    try {
+      const abandoned = new Promise<Error | null | undefined>((resolve) => {
+        onData(abandonedStream, incomingSession(), resolve);
+      });
+      // The budget's slot-acquire and the executor's own Promise wrapper each
+      // cost a microtask tick before `boundMessageSize` runs and arms the
+      // real `setTimeout` — flush those before advancing the fake clock, or
+      // there is no timer yet to advance.
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+      jest.advanceTimersByTime(DATA_IDLE_TIMEOUT_MS + 1);
+      err = await abandoned;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+
+    // The slot is free again — without the watchdog this hangs forever.
+    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    const second = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), incomingSession(), resolve);
+    });
+    expect(second).toBeFalsy();
   });
 });
