@@ -3,17 +3,26 @@ import {
   isAuthRateLimited,
   recordAuthFailure,
   resetAuthFailures,
-  cleanupExpiredAuthAttempts,
+  isRecipientProbeRateLimited,
+  recordRecipientProbe,
+  resetRecipientProbes,
+  cleanupExpiredRateLimitRecords,
 } from "./auth-rate-limit";
 
 beforeEach(() => {
   resetAuthFailures("10.0.0.1");
   resetAuthFailures("10.0.0.2");
   resetAuthFailures("10.0.0.3");
+  resetRecipientProbes("10.0.0.1");
+  resetRecipientProbes("10.0.0.2");
 });
 
 const failN = async (ip: string, n: number) => {
   for (let i = 0; i < n; i++) await recordAuthFailure(ip);
+};
+
+const probeN = async (ip: string, n: number) => {
+  for (let i = 0; i < n; i++) await recordRecipientProbe(ip);
 };
 
 describe("isAuthRateLimited", () => {
@@ -79,14 +88,59 @@ describe("resetAuthFailures", () => {
   });
 });
 
-describe("cleanupExpiredAuthAttempts", () => {
+describe("cleanupExpiredRateLimitRecords", () => {
   it("returns 0 when no records are expired", async () => {
     await recordAuthFailure("10.0.0.1");
-    const cleaned = cleanupExpiredAuthAttempts();
+    const cleaned = cleanupExpiredRateLimitRecords();
     expect(cleaned).toBe(0);
   });
 
   it("returns 0 when there are no records at all", () => {
-    expect(cleanupExpiredAuthAttempts()).toBe(0);
+    expect(cleanupExpiredRateLimitRecords()).toBe(0);
   });
+});
+
+describe("recipient probe budget", () => {
+  it("returns false for a fresh IP", () => {
+    expect(isRecipientProbeRateLimited("10.0.0.1")).toBe(false);
+  });
+
+  it("returns false below the threshold", async () => {
+    await probeN("10.0.0.1", 9);
+    expect(isRecipientProbeRateLimited("10.0.0.1")).toBe(false);
+  }, 10000);
+
+  it("returns true at the threshold", async () => {
+    await probeN("10.0.0.1", 10);
+    expect(isRecipientProbeRateLimited("10.0.0.1")).toBe(true);
+  }, 10000);
+
+  it("answers true on the call that reaches the threshold", async () => {
+    await probeN("10.0.0.1", 9);
+    expect(await recordRecipientProbe("10.0.0.1")).toBe(true);
+  }, 10000);
+
+  it("tracks each IP separately", async () => {
+    await probeN("10.0.0.1", 10);
+    expect(isRecipientProbeRateLimited("10.0.0.2")).toBe(false);
+  }, 10000);
+
+  // The two budgets answer different questions — a credential and a mailbox —
+  // so spending one must not refuse the other. Sharing a counter would let a
+  // recipient probe lock a legitimate sender out of AUTH.
+  it("does not spend the auth budget", async () => {
+    await probeN("10.0.0.1", 10);
+    expect(isAuthRateLimited("10.0.0.1")).toBe(false);
+  }, 10000);
+
+  it("is not spent by the auth budget", async () => {
+    await failN("10.0.0.1", 10);
+    expect(isRecipientProbeRateLimited("10.0.0.1")).toBe(false);
+  }, 10000);
+
+  it("resets on demand", async () => {
+    await probeN("10.0.0.1", 10);
+    resetRecipientProbes("10.0.0.1");
+    expect(isRecipientProbeRateLimited("10.0.0.1")).toBe(false);
+  }, 10000);
 });
