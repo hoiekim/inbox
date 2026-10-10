@@ -1,4 +1,4 @@
-import { describe, expect, it, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
+import { describe, expect, it, jest, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
 import bcrypt from "bcryptjs";
 import type {
   SMTPServer,
@@ -9,6 +9,7 @@ import type {
 import { PassThrough, Readable } from "stream";
 import * as authRateLimit from "./auth-rate-limit";
 import { MAX_MESSAGE_BYTES } from "./message-size";
+import { restoreLeaves } from "test-helpers";
 
 // Mock dependencies before importing project code (Bun requirement)
 const mockGetUser = mock(() => Promise.resolve(null));
@@ -63,6 +64,31 @@ mock.module("mailparser", () => ({
   simpleParser: mockSimpleParser
 }));
 
+const realBcrypt = (globalThis as Record<string, unknown>).__REAL_BCRYPT as {
+  compare: (password: string, hash: string) => Promise<boolean>;
+  hash: (password: string, rounds: number) => Promise<string>;
+  default: Record<string, unknown>;
+};
+
+// Every `bcrypt.compare` onAuth makes, as `[password, hash]`. The real
+// implementation still runs underneath — a stub answering a constant would let
+// the success cases pass without a working comparison. Restored for the next
+// test file by `restoreLeaves` in this file's afterAll.
+const compareCalls: [string, string][] = [];
+const trackedCompare = (password: string, hash: string) => {
+  compareCalls.push([password, hash]);
+  return realBcrypt.compare(password, hash);
+};
+
+mock.module("bcryptjs", () => ({
+  ...realBcrypt,
+  compare: trackedCompare,
+  default: { ...realBcrypt.default, compare: trackedCompare },
+}));
+
+/** A complete bcrypt digest — 22 salt chars plus 31 of hash, base64-ish alphabet. */
+const BCRYPT_DIGEST = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
 // Stub auth-rate-limit so we can drive the rate-limit branch in onAuth without
 // needing 10 real failed attempts (each takes 500ms in production code). We use
 // spyOn (restored in afterAll) rather than mock.module: mock.module is process-
@@ -95,6 +121,13 @@ import {
   resolveOutgoingSender,
   splitEnvelopeRecipients
 } from "./smtp";
+import {
+  withSmtpDataBudget,
+  smtpDataBudgetCapacity,
+  smtpDataBudgetInFlight,
+  smtpDataBudgetWaitCeilingMs,
+  _resetSmtpDataBudget
+} from "./smtp-data-budget";
 
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
@@ -117,6 +150,7 @@ afterAll(() => {
   // afterAll re-mocks it back before the next file runs.
   const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
   if (realServer) mock.module("server", () => realServer);
+  restoreLeaves();
 });
 
 describe("onAuth handler", () => {
@@ -321,6 +355,85 @@ describe("onAuth handler", () => {
     expect((readOnlyLog?.[1] as Record<string, unknown>).authenticatedAs).toBe(
       ADMIN_RO_USERNAME
     );
+  });
+});
+
+describe("onAuth username enumeration resistance", () => {
+  const hashOf = (password: string) => realBcrypt.hash(password, 4);
+
+  const existingUser = async () => ({
+    password: await hashOf("correct-horse"),
+    getSigned: () => ({ username: "testuser" }),
+  });
+
+  const drive = (username: string, password: string) =>
+    new Promise<{ user?: string }>((resolve) => {
+      const auth = { username, password } as SMTPServerAuthentication;
+      onAuth!(auth, { remoteAddress: "203.0.113.7" } as SMTPServerSession, (_err, data) =>
+        resolve(data || {})
+      );
+    });
+
+  beforeEach(() => {
+    compareCalls.length = 0;
+    mockGetUser.mockReset();
+    mockGetUser.mockImplementation(() => Promise.resolve(null));
+    mockIsAuthRateLimited.mockReset();
+    mockIsAuthRateLimited.mockImplementation(() => false);
+    mockRecordAuthFailure.mockReset();
+    mockRecordAuthFailure.mockImplementation(() => Promise.resolve(false));
+    mockResetAuthFailures.mockReset();
+    mockResetAuthFailures.mockImplementation(() => undefined);
+  });
+
+  it("runs a bcrypt comparison against a real digest when AUTH names no known user", async () => {
+    const result = await drive("nobody", "hunter2");
+
+    expect(result.user).toBeUndefined();
+    expect(compareCalls).toHaveLength(1);
+    const [password, hash] = compareCalls[0]!;
+    expect(password).toBe("hunter2");
+    expect(hash).toMatch(BCRYPT_DIGEST);
+  });
+
+  it("spends the same number of bcrypt rounds on an unknown user as on a wrong password", async () => {
+    // The refusal is identical either way, so the round count is the only
+    // observable that separates an equalised implementation from one that
+    // answers an unknown username in microseconds.
+    await drive("nobody", "hunter2");
+    const unknownUserRounds = compareCalls.length;
+
+    compareCalls.length = 0;
+    mockGetUser.mockImplementation(existingUser);
+    await drive("testuser", "hunter2");
+
+    expect(unknownUserRounds).toBe(1);
+    expect(compareCalls).toHaveLength(unknownUserRounds);
+  });
+
+  it("does not reuse a real account's digest for the unknown-user comparison", async () => {
+    mockGetUser.mockImplementation(existingUser);
+    await drive("testuser", "hunter2");
+    const realDigest = compareCalls[0]![1];
+
+    compareCalls.length = 0;
+    mockGetUser.mockImplementation(() => Promise.resolve(null));
+    await drive("nobody", "hunter2");
+
+    expect(compareCalls[0]![1]).not.toBe(realDigest);
+    expect(await realBcrypt.compare("hunter2", compareCalls[0]![1])).toBe(false);
+  });
+
+  it("runs the comparison when the stored digest is empty", async () => {
+    mockGetUser.mockImplementation(() =>
+      Promise.resolve({ password: "", getSigned: () => ({ username: "testuser" }) })
+    );
+
+    const result = await drive("testuser", "hunter2");
+
+    expect(result.user).toBeUndefined();
+    expect(compareCalls).toHaveLength(1);
+    expect(compareCalls[0]![1]).toMatch(BCRYPT_DIGEST);
   });
 });
 
@@ -1833,10 +1946,12 @@ describe("registerListeners error handler", () => {
     server.emit("error", new Error("Socket closed before TLS handshake"));
     server.emit("error", new Error("read ECONNRESET"));
     server.emit("error", new Error("TLS handshake timeout"));
+    server.emit("error", new Error("write ECONNRESET"));
+    server.emit("error", new Error("write EPIPE"));
 
     expect(mockLogger.error).not.toHaveBeenCalled();
     const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(6);
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(8);
   });
 
   it("logs error on non-suppressible failures", async () => {
@@ -2253,5 +2368,148 @@ describe("evictSmtpConnections", () => {
 
     expect(evictSmtpConnections("alice")).toBe(0);
     expect(alice.close).not.toHaveBeenCalled();
+  });
+});
+
+
+/**
+ * Proves the DATA budget is wired into `onData` itself, not merely correct in
+ * isolation (`smtp-data-budget.test.ts` covers the semaphore in a vacuum).
+ * Every assertion here drives SEVERAL transactions at once, because a test
+ * that drives one cannot distinguish a bounded listener from an unbounded one
+ * — the defect is only visible in the aggregate.
+ */
+describe("onData DATA budget wiring", () => {
+  const CAP = smtpDataBudgetCapacity();
+  const originalEnv = process.env;
+
+  // A real stream, not a { pipe, on } stub: `onData` now runs every
+  // transaction through `boundMessageSize`, which attaches real
+  // `data`/`end`/`error` listeners the stub doesn't have.
+  const makeStream = () => {
+    const stream = new PassThrough();
+    stream.end();
+    return stream as unknown as SMTPServerDataStream;
+  };
+
+  const incomingSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SMTPServerSession;
+
+  const defer = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  };
+
+  const nextTick = () => new Promise<void>((r) => setImmediate(r));
+
+  beforeEach(() => {
+    _resetSmtpDataBudget();
+    mockSaveMailHandler.mockReset();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve());
+    mockSimpleParser.mockReset();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    _resetSmtpDataBudget();
+  });
+
+  it("holds concurrent transactions to the capacity and still accepts them all", async () => {
+    const gates: Array<ReturnType<typeof defer>> = [];
+    let parsing = 0;
+    let peakParsing = 0;
+    mockSimpleParser.mockImplementation(() => {
+      parsing++;
+      peakParsing = Math.max(peakParsing, parsing);
+      const gate = defer();
+      gates.push(gate);
+      return gate.promise.then(() => {
+        parsing--;
+        return { attachments: [] };
+      });
+    });
+
+    const total = CAP + 3;
+    const settled = Array.from(
+      { length: total },
+      () =>
+        new Promise<Error | null | undefined>((resolve) => {
+          onData(makeStream(), incomingSession(), resolve);
+        })
+    );
+    await nextTick();
+
+    // The bound: `maxClients` would have let all `total` parse at once.
+    expect(peakParsing).toBe(CAP);
+
+    // Drain the queue — each release admits the next waiter, so the gate list
+    // grows as we go and has to be walked rather than snapshotted.
+    for (let drained = 0; drained < total; drained++) {
+      gates[drained].resolve();
+      await nextTick();
+    }
+
+    const errors = await Promise.all(settled);
+    expect(errors.filter(Boolean)).toEqual([]);
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(total);
+    expect(peakParsing).toBe(CAP);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+  });
+
+  it("refuses with 421 and drains the stream when no slot frees up in time", async () => {
+    const holders = Array.from({ length: CAP }, () => defer());
+    const held = holders.map((gate) => withSmtpDataBudget(() => gate.promise));
+    await nextTick();
+
+    const stream = makeStream();
+    const resumeSpy = spyOn(stream, "resume");
+    jest.useFakeTimers();
+    let err: Error | null | undefined;
+    try {
+      const refused = new Promise<Error | null | undefined>((resolve) => {
+        onData(stream, incomingSession(), resolve);
+      });
+      jest.advanceTimersByTime(smtpDataBudgetWaitCeilingMs() + 1);
+      err = await refused;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    // Without the drain `smtp-server` waits for an `end` the stream cannot
+    // emit, and the peer reads nothing until its own socket timeout.
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+
+    holders.forEach((gate) => gate.resolve());
+    await Promise.all(held);
+  });
+
+  it("frees the slot when a transaction fails, so the next one is admitted", async () => {
+    mockSimpleParser.mockImplementationOnce(() => Promise.reject(new Error("bad message")));
+    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+
+    const first = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), incomingSession(), resolve);
+    });
+    expect(first).toBeInstanceOf(Error);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+
+    const second = await new Promise<Error | null | undefined>((resolve) => {
+      onData(makeStream(), incomingSession(), resolve);
+    });
+    expect(second).toBeFalsy();
+    expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
   });
 });

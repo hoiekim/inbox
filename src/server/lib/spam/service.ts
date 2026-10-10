@@ -2,14 +2,18 @@
  * Spam Filter Service
  * 
  * 4-layer spam detection architecture:
- * - Layer 0: Allowlist check (skip trusted senders)
+ * - Layer 0: Allowlist check (skip trusted senders whose identity corroborates)
  * - Layer 1: DNS blocklist check (Spamhaus, Spamcop)
  * - Layer 2: Rule engine (header/content analysis)
  * - Layer 3: Placeholder for future ML classifier
+ *
+ * Layer 1 is evaluated before Layer 0 because a blocklisted connection
+ * withdraws the Layer 0 exemption.
  */
 
 import { SpamCheckResult, SpamFilterConfig, EmailContext } from "./types";
-import { checkDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
+import { checkDnsbls as realCheckDnsbls, DEFAULT_DNSBLS } from "./dnsbl";
+import { isEnvelopeAligned } from "./alignment";
 import { logger } from "../logger";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
 import { isAllowlisted as realIsAllowlisted } from "../postgres/repositories/spam_allowlists";
@@ -17,9 +21,11 @@ import { classifyEmail as realClassifyEmail } from "./classifier";
 
 type IsAllowlistedFn = typeof realIsAllowlisted;
 type ClassifyEmailFn = typeof realClassifyEmail;
+type CheckDnsblsFn = typeof realCheckDnsbls;
 export interface CheckSpamDeps {
   isAllowlisted?: IsAllowlistedFn;
   classifyEmail?: ClassifyEmailFn;
+  checkDnsbls?: CheckDnsblsFn;
 }
 
 /**
@@ -31,6 +37,34 @@ const DEFAULT_CONFIG: SpamFilterConfig = {
   dnsbls: DEFAULT_DNSBLS,
   enableRules: true,
   customRules: [],
+};
+
+/**
+ * Why an allowlisted sender is denied the Layer 0 exemption, or null to grant it.
+ *
+ * The allowlist matches the `From:` header, which the sending client writes
+ * freely. Granting a total bypass on that alone hands guaranteed delivery to
+ * anyone who types an allowlisted address, so the exemption additionally
+ * requires the two signals the server does not take on the sender's word: an
+ * envelope sender that corroborates the header, and a connection a blocklist
+ * was asked about and did not list. A blocklist that was never asked — the
+ * address is outside IPv4, the query timed out, the resolver was refused —
+ * withholds the second signal rather than supplying it.
+ */
+const exemptionRefusal = (
+  email: EmailContext,
+  dnsbl: { score: number; evaluated: boolean },
+): string | null => {
+  if (!isEnvelopeAligned(email.fromAddress, email.envelopeFromAddress)) {
+    return "Allowlisted sender not confirmed by the envelope sender";
+  }
+  if (dnsbl.score > 0) {
+    return "Allowlisted sender arrived from a blocklisted address";
+  }
+  if (!dnsbl.evaluated) {
+    return "Allowlisted sender arrived from an address no blocklist answered for";
+  }
+  return null;
 };
 
 /**
@@ -49,22 +83,48 @@ export async function checkSpam(
 ): Promise<SpamCheckResult> {
   const isAllowlisted = deps.isAllowlisted ?? realIsAllowlisted;
   const classifyEmail = deps.classifyEmail ?? realClassifyEmail;
+  const checkDnsbls = deps.checkDnsbls ?? realCheckDnsbls;
   const cfg = { ...DEFAULT_CONFIG, ...config };
   const reasons: string[] = [];
   let totalScore = 0;
   let flaggedBy: SpamCheckResult["flaggedBy"];
+
+  // Layer 1: DNS blocklist check
+  let dnsblScore = 0;
+  let dnsblReasons: string[] = [];
+  // A layer turned off by config states no opinion, so it withholds nothing.
+  // An enabled layer that never ran does, and must not read as a clearance.
+  let dnsblEvaluated = !cfg.enableDnsbl;
+  if (cfg.enableDnsbl && email.remoteAddress) {
+    try {
+      const dnsblResult = await checkDnsbls(email.remoteAddress, cfg.dnsbls);
+      dnsblScore = dnsblResult.score;
+      dnsblReasons = dnsblResult.reasons;
+      dnsblEvaluated = dnsblResult.evaluated;
+    } catch (error) {
+      logger.warn("[SpamFilter] DNSBL check failed", {}, error);
+      // Continue with other checks
+    }
+  }
 
   // Layer 0: Allowlist check
   if (email.fromAddress) {
     try {
       const allowed = await isAllowlisted(userId, email.fromAddress);
       if (allowed) {
-        return {
-          score: 0,
-          reasons: ["Sender is allowlisted"],
-          isSpam: false,
-          flaggedBy: "allowlist",
-        };
+        const refusal = exemptionRefusal(email, {
+          score: dnsblScore,
+          evaluated: dnsblEvaluated,
+        });
+        if (!refusal) {
+          return {
+            score: 0,
+            reasons: ["Sender is allowlisted"],
+            isSpam: false,
+            flaggedBy: "allowlist",
+          };
+        }
+        reasons.push(refusal);
       }
     } catch (error) {
       logger.warn("[SpamFilter] Allowlist check failed", {}, error);
@@ -72,19 +132,10 @@ export async function checkSpam(
     }
   }
 
-  // Layer 1: DNS blocklist check
-  if (cfg.enableDnsbl && email.remoteAddress) {
-    try {
-      const dnsblResult = await checkDnsbls(email.remoteAddress, cfg.dnsbls);
-      if (dnsblResult.score > 0) {
-        totalScore += dnsblResult.score;
-        reasons.push(...dnsblResult.reasons);
-        if (!flaggedBy) flaggedBy = "dnsbl";
-      }
-    } catch (error) {
-      logger.warn("[SpamFilter] DNSBL check failed", {}, error);
-      // Continue with other checks
-    }
+  if (dnsblScore > 0) {
+    totalScore += dnsblScore;
+    reasons.push(...dnsblReasons);
+    if (!flaggedBy) flaggedBy = "dnsbl";
   }
 
   // Layer 2: Rule engine
@@ -124,22 +175,4 @@ export async function checkSpam(
     isSpam,
     flaggedBy: isSpam ? flaggedBy : undefined,
   };
-}
-
-/**
- * Quick check if sender is in user's allowlist.
- * Use this for fast skip before expensive checks.
- */
-export async function isSenderAllowlisted(
-  userId: string,
-  fromAddress: string,
-  deps: { isAllowlisted?: IsAllowlistedFn } = {},
-): Promise<boolean> {
-  const isAllowlisted = deps.isAllowlisted ?? realIsAllowlisted;
-  try {
-    return await isAllowlisted(userId, fromAddress);
-  } catch (error) {
-    logger.warn("[SpamFilter] Allowlist lookup failed", {}, error);
-    return false;
-  }
 }

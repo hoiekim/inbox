@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import { readFileSync } from "fs";
 import { PassThrough, Readable } from "stream";
 import {
@@ -23,12 +22,17 @@ import {
   recordRecipientProbe,
   resetAuthFailures
 } from "./auth-rate-limit";
+import { verifyPassword } from "./verify-password";
 import { addressToUsername, getUserDomain, isLocalAddress } from "./util";
 import { sendAlarm } from "./alarm";
 import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
 import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
 import { MAX_MESSAGE_BYTES } from "./message-size";
+import {
+  DataBudgetUnavailableError,
+  withSmtpDataBudget
+} from "./smtp-data-budget";
 
 const registerListeners = (
   server: SMTPServer,
@@ -67,6 +71,15 @@ const registerListeners = (
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
+      // smtp-server itself swallows a write ECONNRESET/EPIPE silently once a transaction
+      // is complete (no open envelope) — see its own error gate in smtp-connection.js.
+      // So by the time either string reaches here, the client abandoned an in-flight
+      // transaction (e.g. sent MAIL FROM but never completed DATA/RSET) and reset the
+      // socket before a pending write (often the QUIT reply) landed. No mail content
+      // was ever accepted on that connection. Which errno surfaces is platform/timing
+      // dependent, not semantically different — both need suppressing.
+      msg.includes("write ECONNRESET") ||
+      msg.includes("write EPIPE") ||
       msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
@@ -106,23 +119,18 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
 
   const { username, password } = auth;
 
+  let user;
   let pwMatches = false;
   try {
-    const user = await getUser({ username });
-    const signedUser = user?.getSigned();
-
-    if (!password || !user || !signedUser) {
-      await recordAuthFailure(ip);
-      return cb(null, { user: undefined });
-    }
-
-    pwMatches = await bcrypt.compare(password, user.password!);
+    user = await getUser({ username });
+    pwMatches = await verifyPassword(password, user?.password);
   } catch (err) {
     logger.error("SMTP: authentication lookup failed", { remoteAddress: ip }, err);
     return cb(new LookupFailedError());
   }
 
-  if (!pwMatches) {
+  const signedUser = user?.getSigned();
+  if (!user || !signedUser || !pwMatches) {
     await recordAuthFailure(ip);
     return cb(null, { user: undefined });
   }
@@ -389,6 +397,18 @@ const boundMessageSize = (
   return message;
 };
 
+/**
+ * Discards the rest of a DATA stream that was refused before anything read it.
+ *
+ * `smtp-server` holds the reply until the stream emits `end`, and a
+ * `PassThrough` nobody reads never will — so refusing without this leaves the
+ * peer waiting on its own socket timeout instead of reading the code. Flowing
+ * mode drops each chunk as it arrives, which keeps the drain off the heap.
+ */
+const drainDataStream = (stream: SMTPServerDataStream) => {
+  stream.resume();
+};
+
 export const onData = (
   stream: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -425,9 +445,33 @@ export const onData = (
     return cb(new RelayDeniedError());
   }
 
-  const message = boundMessageSize(stream, session, cb);
-  if (isOutgoingEmail) onDataOutgoing(message, session, cb);
-  else onDataIncoming(message, session, cb);
+  // The budget wraps the dispatch rather than sitting inside each lane, so the
+  // slot is taken before either lane touches the stream — the one ordering
+  // that keeps an unadmitted transaction at its stream buffer instead of a
+  // whole decoded message. `boundMessageSize` attaches its listeners only
+  // once the slot is granted, for the same reason.
+  withSmtpDataBudget(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const settle = (err?: Error | null) => (err ? reject(err) : resolve());
+        const message = boundMessageSize(stream, session, settle);
+        if (isOutgoingEmail) onDataOutgoing(message, session, settle);
+        else onDataIncoming(message, session, settle);
+      })
+  ).then(
+    () => cb(),
+    (err) => {
+      if (err instanceof DataBudgetUnavailableError) drainDataStream(stream);
+      // Every other rejection already logged at its own call site (the
+      // byte-ceiling refusal, the vanished-mailbox refusal, the auth
+      // refusal) at the severity its RFC code implies — re-logging here at
+      // error level would turn routine client-fault refusals into
+      // server-error noise.
+      else if (!(err instanceof Error) || !("responseCode" in err))
+        logger.error("Error handling DATA transaction", {}, err);
+      cb(err instanceof Error ? err : new Error(String(err)));
+    }
+  );
 };
 
 const onDataIncoming = (

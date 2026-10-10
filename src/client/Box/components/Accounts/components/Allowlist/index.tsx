@@ -200,7 +200,9 @@ const Allowlist = ({ onClose }: { onClose: () => void }) => {
         </header>
 
         <p className="allowlist-hint">
-          Senders matching these patterns bypass all spam filtering.
+          Senders matching these patterns skip spam filtering when the message
+          also proves it came from them. A forged sender address is still
+          filtered normally.
         </p>
 
         <div className="allowlist-add">

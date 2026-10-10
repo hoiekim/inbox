@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createFifoSemaphore } from "./fifo-semaphore";
-import { parseConcurrencyValue } from "./concurrency-env";
+import { createFifoSemaphore } from "../fifo-semaphore";
+import { parseConcurrencyValue } from "../concurrency-env";
 import { yieldCommandBudgetDuring } from "./command-budget-hold";
 
 const DEFAULT_CONCURRENCY = 3;
