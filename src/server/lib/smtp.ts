@@ -250,6 +250,23 @@ class MessageTooLargeError extends Error {
 }
 
 /**
+ * `smtp-server` unpipes and nulls its own stream reference when the
+ * connection drops mid-DATA — an abrupt RST, or its own idle-socket
+ * timeout — but it never ends or errors the stream handed to this module,
+ * so nothing here naturally wakes up on that path. RFC 5321 §3.8's 421
+ * never reaches the peer in practice (the connection is already gone); it
+ * exists so this answers through the same machinery every other refusal
+ * does.
+ */
+class AbandonedTransactionError extends Error {
+  responseCode = 421;
+
+  constructor() {
+    super("4.4.2 Error: connection lost mid-transaction");
+  }
+}
+
+/**
  * Refuses a recipient inside the served zone that maps onto no account.
  *
  * `isLocalAddress` answers by label, so every `<anything>.$EMAIL_DOMAIN` is
@@ -339,7 +356,18 @@ interface BoundedMessage {
  * promise pending and everything it accumulated reachable until the connection
  * goes away. Refusals are still answered through `cb`, which is in hand the
  * whole time, and never through that error.
+ *
+ * A third shape it has to answer on its own: the connection dying before any
+ * of `data`/`end`/`error` fires at all (see {@link AbandonedTransactionError}).
+ * Left unanswered, `cb` never runs, so the concurrency-budget slot this
+ * transaction holds (`withSmtpDataBudget` in {@link onData}) never releases —
+ * at the default capacity of 2, two abandoned connections permanently refuse
+ * every later inbound message. The idle ceiling is armed up front and on
+ * every chunk, so a slow-but-live sender is never cut off; only a source that
+ * goes fully silent trips it.
  */
+export const DATA_IDLE_TIMEOUT_MS = 65 * 1000;
+
 const boundMessageSize = (
   source: SMTPServerDataStream,
   session: SMTPServerSession,
@@ -354,6 +382,7 @@ const boundMessageSize = (
     refused: false,
     drain: () => {
       message.refused = true;
+      clearTimeout(idleTimer);
       bounded.destroy(new Error("message refused"));
       source.resume();
     }
@@ -365,8 +394,21 @@ const boundMessageSize = (
     cb(err);
   };
 
+  let idleTimer: ReturnType<typeof setTimeout>;
+  const armIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      logger.warn("SMTP: DATA transaction abandoned mid-transfer, releasing its budget slot", {
+        remoteAddress: session.remoteAddress
+      });
+      refuse(new AbandonedTransactionError());
+    }, DATA_IDLE_TIMEOUT_MS);
+  };
+  armIdleTimer();
+
   source.on("data", (chunk: Buffer) => {
     if (message.refused) return;
+    armIdleTimer();
 
     bytes += chunk.length;
     if (bytes > MAX_MESSAGE_BYTES) {
@@ -385,10 +427,12 @@ const boundMessageSize = (
   });
 
   source.once("end", () => {
+    clearTimeout(idleTimer);
     if (!message.refused) bounded.end();
   });
 
   source.once("error", (err) => {
+    clearTimeout(idleTimer);
     if (message.refused) return;
     logger.error("SMTP: DATA stream failed", {}, err);
     refuse(err);
