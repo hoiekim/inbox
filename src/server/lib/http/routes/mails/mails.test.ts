@@ -357,7 +357,10 @@ describe("getAccountsRoute", () => {
 // ── get-body route ────────────────────────────────────────────────────────────
 
 describe("getBodyRoute", () => {
-  beforeEach(() => mockGetMailBody.mockClear());
+  beforeEach(() => {
+    mockGetMailBody.mockClear();
+    mockMarkRead.mockClear();
+  });
 
   it("returns mail body when found", async () => {
     const { getBodyRoute } = await import("./get-body");
@@ -384,6 +387,51 @@ describe("getBodyRoute", () => {
     const result = await getBodyRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toBeTruthy();
+  });
+
+  it("marks the mail read when the body is served, so IMAP sees \\Seen", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+
+    const req = makeReq({ params: { id: MAIL_ID } });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).toHaveBeenCalledTimes(1);
+    expect(mockMarkRead).toHaveBeenCalledWith("u1", MAIL_ID);
+  });
+
+  it("still serves the body when the mark fails", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+    mockMarkRead.mockRejectedValueOnce(new Error("db down"));
+
+    const req = makeReq({ params: { id: MAIL_ID } });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect((result as ApiResponse<unknown>).body).toEqual(fakeMail);
+  });
+
+  it("skips the mark for read-only sessions but still serves the body", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+
+    const readOnlyUser = remapReadOnlySession(
+      new SignedUser({ id: "u1", username: "admin", email: "admin@localhost" }),
+      ADMIN_RO_USERNAME
+    );
+    const req = makeReq({
+      params: { id: MAIL_ID },
+      session: { user: readOnlyUser },
+    });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).not.toHaveBeenCalled();
   });
 });
 
