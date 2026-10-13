@@ -22,8 +22,9 @@ const makeSession = () => {
   // session has no selected mailbox). These suites cover which sessions get
   // notified, so the stub just reports a count.
   const notifyMailboxUpdate = mock(() => Promise.resolve(3));
-  const session = { write, notifyMailboxUpdate } as unknown as ImapSession;
-  return { session, write, notifyMailboxUpdate };
+  const notifyFlagChange = mock(() => Promise.resolve());
+  const session = { write, notifyMailboxUpdate, notifyFlagChange } as unknown as ImapSession;
+  return { session, write, notifyMailboxUpdate, notifyFlagChange };
 };
 
 describe("IdleManager.notifyNewMail mailbox filtering", () => {
@@ -75,6 +76,48 @@ describe("IdleManager.notifyNewMail mailbox filtering", () => {
     await idleManager.notifyNewMail(["alice"], ["usps@hoie.kim"]);
 
     expect(bob.notifyMailboxUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("IdleManager.notifyFlagChange", () => {
+  let s1: ReturnType<typeof makeSession>;
+  let s2: ReturnType<typeof makeSession>;
+
+  beforeEach(() => {
+    idleManager.shutdown();
+    s1 = makeSession();
+    s2 = makeSession();
+    idleManager.addIdleSession("s-1", s1.session, "t1", "INBOX", "alice");
+    idleManager.addIdleSession("s-2", s2.session, "t2", "INBOX", "bob");
+  });
+
+  afterAll(() => {
+    idleManager.shutdown();
+  });
+
+  it("notifies only the sessions of the named users", async () => {
+    await idleManager.notifyFlagChange(["alice"], ["m1"]);
+
+    expect(s1.notifyFlagChange).toHaveBeenCalledTimes(1);
+    expect(s1.notifyFlagChange).toHaveBeenCalledWith(["m1"]);
+    expect(s2.notifyFlagChange).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when no mail ids are given", async () => {
+    await idleManager.notifyFlagChange(["alice"], []);
+
+    expect(s1.notifyFlagChange).not.toHaveBeenCalled();
+    expect(s2.notifyFlagChange).not.toHaveBeenCalled();
+  });
+
+  it("removes the session when notification throws", async () => {
+    s1.notifyFlagChange.mockRejectedValueOnce(new Error("socket dead"));
+
+    await idleManager.notifyFlagChange(["alice"], ["m1"]);
+
+    // The failing session is dropped; a repeat notify reaches nobody.
+    await idleManager.notifyFlagChange(["alice"], ["m1"]);
+    expect(s1.notifyFlagChange).toHaveBeenCalledTimes(1);
   });
 });
 

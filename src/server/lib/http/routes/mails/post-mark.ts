@@ -60,12 +60,16 @@ export const postMarkMailRoute = new Route<MarkMailPostResponse>(
         .catch((error) =>
           logger.error("Failed to decrement badge count", {}, error)
         );
+      // Best-effort: tell IDLE IMAP sessions so connected mail clients see
+      // the new flags without waiting for their next sync.
+      void push.notifyFlagChange([user.username], [mail_id]);
     }
 
     if (typeof save === "boolean") {
       if (!(await markSaved(user.id, mail_id, save))) {
         return { status: "failed", message: "Failed to update the saved flag" };
       }
+      void push.notifyFlagChange([user.username], [mail_id]);
     }
 
     return { status: "success" };

@@ -36,6 +36,7 @@ const makeMocks = (env: Record<string, string | undefined> = {
     async () => new Map() as Map<string, { count: number; latest?: Date }>,
   );
   const notifyNewMail = mock(() => {});
+  const notifyFlagChange = mock(() => {});
 
   const logger = {
     debug: mock(() => {}),
@@ -50,7 +51,7 @@ const makeMocks = (env: Record<string, string | undefined> = {
       repo as never,
       getActiveUsers as never,
       getNotifications as never,
-      { notifyNewMail },
+      { notifyNewMail, notifyFlagChange },
       logger,
       env,
     );
@@ -63,6 +64,7 @@ const makeMocks = (env: Record<string, string | undefined> = {
     getActiveUsers,
     getNotifications,
     notifyNewMail,
+    notifyFlagChange,
     logger,
   };
 };
@@ -394,6 +396,31 @@ describe("notifyNewMails", () => {
     expect(m.repo.deleteSubscription).not.toHaveBeenCalled();
     expect(m.repo.updateLastNotified).not.toHaveBeenCalled();
     expect(m.logger.error).toHaveBeenCalled();
+  });
+});
+
+describe("notifyFlagChange", () => {
+  it("delegates to idleManager.notifyFlagChange", async () => {
+    const m = makeMocks();
+    const push = m.make();
+    push.initPush();
+
+    await push.notifyFlagChange(["alice"], ["mail-1", "mail-2"]);
+
+    expect(m.notifyFlagChange).toHaveBeenCalledTimes(1);
+    expect(m.notifyFlagChange.mock.calls[0]).toEqual([["alice"], ["mail-1", "mail-2"]] as never);
+  });
+
+  it("never throws when the idle manager fails", async () => {
+    const m = makeMocks();
+    m.notifyFlagChange.mockImplementation(() => {
+      throw new Error("boom");
+    });
+    const push = m.make();
+    push.initPush();
+
+    await expect(push.notifyFlagChange(["alice"], ["mail-1"])).resolves.toBeUndefined();
+    expect(m.logger.warn).toHaveBeenCalled();
   });
 });
 

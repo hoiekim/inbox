@@ -16,6 +16,8 @@ import {
   expungeDeletedMails,
   expungeMailsByUid,
   getAllUids as pgGetAllUids,
+  getMailFlagUpdates as pgGetMailFlagUpdates,
+  MailFlagUpdate,
   getFirstUnseenUid as pgGetFirstUnseenUid,
   getHighestModseq as pgGetHighestModseq,
   getUidNext as pgGetUidNext,
@@ -350,6 +352,24 @@ export class Store {
       return await pgGetAllUids(this.user.id, mailboxArg, isSent);
     } catch (error) {
       logger.error("Error getting all UIDs", { component: "imap.store", box }, error);
+      return null;
+    }
+  };
+
+  /**
+   * UID + flag columns for specific mails in a mailbox view, for pushing
+   * untagged FETCH (FLAGS) updates to IDLE sessions after an out-of-band
+   * flag change. Mails not visible in the view are omitted.
+   */
+  getMailFlagUpdates = async (
+    box: string,
+    mailIds: string[]
+  ): Promise<MailFlagUpdate[] | null> => {
+    try {
+      const { mailboxArg, isSent } = this.resolveMappedBox(box);
+      return await pgGetMailFlagUpdates(this.user.id, mailboxArg, isSent, mailIds);
+    } catch (error) {
+      logger.error("Error getting mail flag updates", { component: "imap.store", box }, error);
       return null;
     }
   };

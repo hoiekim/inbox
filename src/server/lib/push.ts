@@ -19,7 +19,10 @@ type WebPush = Pick<typeof webPush, "setVapidDetails" | "sendNotification">;
 type Repo = typeof pushSubscriptionsRepo;
 type GetActiveUsers = typeof realGetActiveUsers;
 type GetNotifications = typeof realGetNotifications;
-type IdleManager = { notifyNewMail: (usernames: string[], mailboxes?: string[]) => void };
+type IdleManager = {
+  notifyNewMail: (usernames: string[], mailboxes?: string[]) => void;
+  notifyFlagChange: (usernames: string[], mailIds: string[]) => void;
+};
 type Logger = Pick<typeof realLogger, "debug" | "info" | "warn" | "error">;
 type Env = Record<string, string | undefined>;
 
@@ -192,6 +195,19 @@ export const createPush = (
     );
   };
 
+  /**
+   * Best-effort push of flag changes to IDLE IMAP sessions. Called after an
+   * out-of-band flag change (e.g. an HTTP mark) so connected mail clients
+   * learn the new flags without waiting for their next sync. Never throws.
+   */
+  const notifyFlagChange = async (usernames: string[], mailIds: string[]) => {
+    try {
+      await idleManager.notifyFlagChange(usernames, mailIds);
+    } catch (error) {
+      logger.warn("Flag-change notification failed", { component: "push" }, error as Error);
+    }
+  };
+
   const decrementBadgeCount = async (users: SignedUser[]) => {
     if (!vapidConfigured) return;
 
@@ -234,6 +250,7 @@ export const createPush = (
     getSubscriptions,
     refreshSubscription,
     notifyNewMails,
+    notifyFlagChange,
     decrementBadgeCount,
   };
 };

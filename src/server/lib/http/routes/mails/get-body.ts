@@ -1,5 +1,5 @@
 import { MailBodyDataType, isUuid } from "common";
-import { getMailBody, markRead, refuseReadOnly } from "server";
+import { getMailBody, markRead, push, refuseReadOnly } from "server";
 import { Route } from "../route";
 import { logger } from "../../../logger";
 
@@ -23,7 +23,11 @@ export const getBodyRoute = new Route<BodyGetResponse>(
     // Read-only sessions may read without marking.
     if (refuseReadOnly(user, "Marking mail").ok) {
       try {
-        await markRead(user.id, req.params.id);
+        if (await markRead(user.id, req.params.id)) {
+          // Best-effort: tell IDLE IMAP sessions so connected mail clients
+          // see the new flags without waiting for their next sync.
+          void push.notifyFlagChange([user.username], [req.params.id]);
+        }
       } catch (error) {
         logger.error(
           "Failed to mark mail read on HTTP body fetch",
