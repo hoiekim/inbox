@@ -28,6 +28,7 @@ import {
   buildExpungeUidsFilters,
   buildExpungeUidsSelectQuery,
   buildFirstUnseenUidQuery,
+  buildMailFlagUpdatesQuery,
   buildMailsByRangeQuery,
   buildSearchMailsByUidQuery,
 } from "./imap-query";
@@ -565,30 +566,7 @@ export const getMailFlagUpdates = async (
 ): Promise<MailFlagUpdate[]> => {
   if (mail_ids.length === 0) return [];
   try {
-    let sql: string;
-    let values: unknown[];
-    const flagCols = [READ, SAVED, DELETED, DRAFT, ANSWERED].join(", ");
-    if (usesDomainUidSpace(mailbox)) {
-      sql = `
-        SELECT ${MAIL_ID} AS mail_id, ${UID_DOMAIN} AS uid, ${flagCols} FROM mails
-        WHERE ${USER_ID} = $1 AND ${SENT} = $2 AND ${EXPUNGED} = FALSE
-          AND ${MAIL_ID} = ANY($3)
-      `;
-      values = [user_id, sent, mail_ids];
-    } else {
-      sql = `
-        SELECT m.${MAIL_ID} AS mail_id, x.${UID} AS uid,
-               m.${READ}, m.${SAVED}, m.${DELETED}, m.${DRAFT}, m.${ANSWERED}
-        FROM mails m
-        JOIN ${MAIL_MAILBOX_UID} x
-          ON x.${USER_ID} = m.${USER_ID}
-          AND x.${MAILBOX} = $3
-          AND x.${MAIL_ID} = m.${MAIL_ID}
-        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
-          AND m.${MAIL_ID} = ANY($4)
-      `;
-      values = [user_id, sent, mailbox, mail_ids];
-    }
+    const { sql, values } = buildMailFlagUpdatesQuery(user_id, mailbox, sent, mail_ids);
     const result = await pool.query(sql, values);
     return result.rows.map((row: Record<string, unknown>) => ({
       mail_id: row.mail_id as string,
