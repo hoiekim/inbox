@@ -20,6 +20,7 @@ import {
   IDLE_SOCKET_TIMEOUT_MS,
   SOCKET_TIMEOUT_MS,
 } from "./idle-manager";
+import { formatFlags } from "./util";
 import { getCapabilities } from "./capabilities";
 import { getTlsCredentials } from "../tls";
 import { ImapRequestHandler } from "./handler";
@@ -162,6 +163,35 @@ export class ImapSession {
       this.write(`* ${total} EXISTS\r\n`);
       this.write(`* 0 RECENT\r\n`);
       return total;
+    });
+
+  /**
+   * Push untagged FETCH (FLAGS) updates for messages whose flags changed
+   * out-of-band (e.g. an HTTP mark). Only IDLE sessions are notified; the
+   * update runs on the session's serial chain so it never interleaves with
+   * a command response. Messages not in the session's current view are
+   * skipped silently.
+   */
+  notifyFlagChange = (mailIds: string[]): Promise<void> =>
+    this.runSerial(async () => {
+      if (!this.isIdling || !this.selectedMailbox || !this.store) return;
+      const updates = await this.store.getMailFlagUpdates(
+        this.selectedMailbox,
+        mailIds
+      );
+      if (!updates) return;
+      for (const update of updates) {
+        const seq = this.seqState.uidToSeq.get(update.uid);
+        if (seq === undefined) continue;
+        const flags = formatFlags({
+          read: update.read,
+          saved: update.saved,
+          deleted: update.deleted,
+          draft: update.draft,
+          answered: update.answered,
+        });
+        this.write(`* ${seq} FETCH (FLAGS (${flags.join(" ")}))\r\n`);
+      }
     });
 
   bytesWritten = 0;

@@ -110,6 +110,40 @@ export class IdleManager {
   }
 
   /**
+   * Notify all IDLE sessions for specific users about flag changes on
+   * specific mails. The session emits untagged FETCH (FLAGS) for the mails
+   * in its current view and skips the rest — unlike new mail, a flag change
+   * cannot add or remove messages, so no mailbox rescan is needed.
+   */
+  async notifyFlagChange(usernames: string[], mailIds: string[]) {
+    if (mailIds.length === 0) return;
+    const usernameSet = new Set(usernames);
+
+    const notifications: Array<{ sessionId: string; idleSession: IdleSession }> = [];
+    this.idleSessions.forEach((idleSession, sessionId) => {
+      if (!usernameSet.has(idleSession.username)) return;
+      notifications.push({ sessionId, idleSession });
+    });
+
+    await Promise.all(
+      notifications.map(async ({ sessionId, idleSession }) => {
+        try {
+          await idleSession.session.notifyFlagChange(mailIds);
+          logger.debug("Notified IDLE session about flag change", {
+            component: "imap.idle",
+            username: idleSession.username,
+            mailbox: idleSession.mailbox,
+            mailCount: mailIds.length,
+          });
+        } catch (error) {
+          logger.error("Error notifying IDLE session of flag change", { component: "imap.idle", sessionId }, error);
+          this.removeIdleSession(sessionId);
+        }
+      })
+    );
+  }
+
+  /**
    * Send heartbeat to all IDLE sessions to keep connections alive
    */
   private startHeartbeat() {

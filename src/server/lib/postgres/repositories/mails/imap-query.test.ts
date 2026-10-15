@@ -18,6 +18,7 @@ import {
   buildExpungeUidsFilters,
   buildExpungeUidsSelectQuery,
   buildFirstUnseenUidQuery,
+  buildMailFlagUpdatesQuery,
   buildMailsByRangeQuery,
   buildSearchMailsByUidQuery,
 } from "./imap-query";
@@ -434,5 +435,37 @@ describe("expunge filters and lookups", () => {
     expect(sql).toContain("x.uid IN ($4,$5,$6)");
     expect(values).toEqual([USER, false, USER_BOX, 4, 9, 11]);
     expect(sql).toContain("m.expunged = FALSE");
+  });
+});
+
+describe("buildMailFlagUpdatesQuery", () => {
+  const IDS = ["id-1", "id-2"];
+
+  it("uses the domain UID column with no mapping join in the domain branch", () => {
+    const { sql, values } = buildMailFlagUpdatesQuery(USER, null, false, IDS);
+    expect(sql).toContain("uid_domain AS uid");
+    expect(sql).not.toContain("JOIN");
+    expect(sql).toContain("mail_id = ANY($3)");
+    expect(values).toEqual([USER, false, IDS]);
+  });
+
+  it("joins the per-mailbox mapping with mailbox at $3 and ids at ANY($4)", () => {
+    // A param-order swap here (mailbox vs mail_ids) returns wrong rows or
+    // throws at the driver — the values array is the guard.
+    const { sql, values } = buildMailFlagUpdatesQuery(USER, ACCOUNT_BOX, false, IDS);
+    expect(sql).toContain("JOIN mail_mailbox_uid x");
+    expect(sql).toContain("x.mailbox = $3");
+    expect(sql).toContain("m.mail_id = ANY($4)");
+    expect(values).toEqual([USER, false, ACCOUNT_BOX, IDS]);
+  });
+
+  it("projects the five flag columns and hides expunged rows on both branches", () => {
+    for (const mailbox of [null, ACCOUNT_BOX]) {
+      const { sql } = buildMailFlagUpdatesQuery(USER, mailbox, false, IDS);
+      for (const col of ["read", "saved", "deleted", "draft", "answered"]) {
+        expect(sql).toContain(col);
+      }
+      expect(sql).toContain("expunged = FALSE");
+    }
   });
 });

@@ -30,6 +30,7 @@ const mockDeleteMail = mock(async () => true);
 const mockMarkRead = mock(async () => true);
 const mockMarkSaved = mock(async () => true);
 const mockDecrementBadgeCount = mock(async () => {});
+const mockNotifyFlagChange = mock(async () => {});
 const mockAddressToUsername = mock((addr: string) => addr.split("@")[0]);
 const mockGetUser = mock(async () => null as unknown);
 
@@ -58,6 +59,7 @@ mock.module("server", () => ({
   markSaved: mockMarkSaved,
   push: {
     decrementBadgeCount: mockDecrementBadgeCount,
+    notifyFlagChange: mockNotifyFlagChange,
     // Other push.* methods are not exercised by mails routes; included so the
     // shared barrel mock is shape-compatible for any test file that lands
     // after this one in Bun's global mock.module hoist order.
@@ -357,7 +359,11 @@ describe("getAccountsRoute", () => {
 // ── get-body route ────────────────────────────────────────────────────────────
 
 describe("getBodyRoute", () => {
-  beforeEach(() => mockGetMailBody.mockClear());
+  beforeEach(() => {
+    mockGetMailBody.mockClear();
+    mockMarkRead.mockClear();
+    mockNotifyFlagChange.mockClear();
+  });
 
   it("returns mail body when found", async () => {
     const { getBodyRoute } = await import("./get-body");
@@ -384,6 +390,64 @@ describe("getBodyRoute", () => {
     const result = await getBodyRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toBeTruthy();
+  });
+
+  it("marks the mail read when the body is served, so IMAP sees \\Seen", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+
+    const req = makeReq({ params: { id: MAIL_ID } });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).toHaveBeenCalledTimes(1);
+    expect(mockMarkRead).toHaveBeenCalledWith("u1", MAIL_ID);
+  });
+
+  it("notifies IDLE sessions after marking read on body fetch", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+    mockMarkRead.mockResolvedValueOnce(true);
+
+    const req = makeReq({ params: { id: MAIL_ID } });
+    await getBodyRoute.callback(req, makeRes(), noopStream);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockNotifyFlagChange).toHaveBeenCalledWith(["alice"], [MAIL_ID]);
+  });
+
+  it("still serves the body when the mark fails", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+    mockMarkRead.mockRejectedValueOnce(new Error("db down"));
+
+    const req = makeReq({ params: { id: MAIL_ID } });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect((result as ApiResponse<unknown>).body).toEqual(fakeMail);
+  });
+
+  it("skips the mark for read-only sessions but still serves the body", async () => {
+    const { getBodyRoute } = await import("./get-body");
+
+    const fakeMail = { id: "m1", html: "<p>Hello</p>" };
+    mockGetMailBody.mockResolvedValueOnce(fakeMail);
+
+    const readOnlyUser = remapReadOnlySession(
+      new SignedUser({ id: "u1", username: "admin", email: "admin@localhost" }),
+      ADMIN_RO_USERNAME
+    );
+    const req = makeReq({
+      params: { id: MAIL_ID },
+      session: { user: readOnlyUser },
+    });
+    const result = await getBodyRoute.callback(req, makeRes(), noopStream);
+    expect((result as ApiResponse<unknown>).status).toBe("success");
+    expect(mockMarkRead).not.toHaveBeenCalled();
   });
 });
 
@@ -430,6 +494,7 @@ describe("postMarkMailRoute", () => {
     mockMarkRead.mockClear();
     mockMarkSaved.mockClear();
     mockDecrementBadgeCount.mockClear();
+    mockNotifyFlagChange.mockClear();
   });
 
   it("marks mail as read and returns success", async () => {
@@ -446,6 +511,41 @@ describe("postMarkMailRoute", () => {
     const result = await postMarkMailRoute.callback(req, res, noopStream);
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect(mockMarkRead).toHaveBeenCalledWith("u1", MAIL_ID);
+  });
+
+  it("notifies IDLE sessions of the flag change after marking read", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    mockMarkRead.mockResolvedValueOnce(true);
+
+    const req = makeReq({
+      method: "POST",
+      body: { mail_id: MAIL_ID, read: true },
+    });
+    const res = makeRes();
+
+    await postMarkMailRoute.callback(req, res, noopStream);
+    // Flush the fire-and-forget notification.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockNotifyFlagChange).toHaveBeenCalledWith(["alice"], [MAIL_ID]);
+  });
+
+  it("notifies IDLE sessions of the flag change after marking saved", async () => {
+    const { postMarkMailRoute } = await import("./post-mark");
+
+    mockGetMailBody.mockResolvedValueOnce({ id: "m1" });
+    mockMarkSaved.mockResolvedValueOnce(true);
+
+    const req = makeReq({
+      method: "POST",
+      body: { mail_id: MAIL_ID, save: true },
+    });
+    const res = makeRes();
+
+    await postMarkMailRoute.callback(req, res, noopStream);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockNotifyFlagChange).toHaveBeenCalledWith(["alice"], [MAIL_ID]);
   });
 
   it("marks mail as saved when save=true", async () => {

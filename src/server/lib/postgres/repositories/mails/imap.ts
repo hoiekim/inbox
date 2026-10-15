@@ -5,6 +5,16 @@ import {
   mailsTable,
   MAIL_ID,
   UID_DOMAIN,
+  UID,
+  MAIL_MAILBOX_UID,
+  USER_ID,
+  MAILBOX,
+  READ,
+  SAVED,
+  DELETED,
+  DRAFT,
+  ANSWERED,
+  SENT,
   MODSEQ,
   EXPUNGED,
   DB_NOW,
@@ -18,6 +28,7 @@ import {
   buildExpungeUidsFilters,
   buildExpungeUidsSelectQuery,
   buildFirstUnseenUidQuery,
+  buildMailFlagUpdatesQuery,
   buildMailsByRangeQuery,
   buildSearchMailsByUidQuery,
 } from "./imap-query";
@@ -527,6 +538,47 @@ export const getAllUids = async (
     return result.rows.map((row: Record<string, unknown>) => row.uid as number);
   } catch (error) {
     logger.error("Failed to get all UIDs", {}, error);
+    return [];
+  }
+};
+
+/**
+ * UID + flag columns for specific mails in a mailbox view, for pushing
+ * untagged FETCH (FLAGS) updates to IDLE sessions after an out-of-band
+ * flag change (e.g. an HTTP mark). Returns one row per mail that is
+ * visible in the mailbox; mails not in the view are omitted.
+ */
+export interface MailFlagUpdate {
+  mail_id: string;
+  uid: number;
+  read: boolean;
+  saved: boolean;
+  deleted: boolean;
+  draft: boolean;
+  answered: boolean;
+}
+
+export const getMailFlagUpdates = async (
+  user_id: string,
+  mailbox: string | null,
+  sent: boolean,
+  mail_ids: string[]
+): Promise<MailFlagUpdate[]> => {
+  if (mail_ids.length === 0) return [];
+  try {
+    const { sql, values } = buildMailFlagUpdatesQuery(user_id, mailbox, sent, mail_ids);
+    const result = await pool.query(sql, values);
+    return result.rows.map((row: Record<string, unknown>) => ({
+      mail_id: row.mail_id as string,
+      uid: row.uid as number,
+      read: !!row[READ],
+      saved: !!row[SAVED],
+      deleted: !!row[DELETED],
+      draft: !!row[DRAFT],
+      answered: !!row[ANSWERED],
+    }));
+  } catch (error) {
+    logger.error("Failed to get mail flag updates", {}, error);
     return [];
   }
 };

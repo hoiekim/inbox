@@ -18,6 +18,10 @@ import {
   MODSEQ,
   SENT,
   DELETED,
+  DRAFT,
+  ANSWERED,
+  READ,
+  SAVED,
   EXPUNGED,
   MAIL_MAILBOX_UID,
   MAILBOX,
@@ -620,4 +624,48 @@ export const buildExpungeUidsSelectQuery = (
     `;
   const selectValues: ParamValue[] = [user_id, sent, mailbox, ...uids];
   return { sql: selectSql, values: selectValues };
+};
+
+/**
+ * UID + flag columns for specific mails in a mailbox view — the read side of
+ * pushing untagged FETCH (FLAGS) updates to IDLE sessions after an
+ * out-of-band flag change (e.g. an HTTP mark). Two SQL shapes:
+ * - domain UID space (mailbox === null or a utility view): the domain uid
+ *   column is authoritative, no mapping join; ($1..$3).
+ * - per-mailbox view: joins `mail_mailbox_uid` for the per-mailbox UID;
+ *   ($1..$4), mailbox binds at $3, the mail id list at ANY($4).
+ * Mails not visible in the mailbox are omitted by construction (the domain
+ * branch's session-side uidToSeq lookup drops anything outside the view).
+ */
+export const buildMailFlagUpdatesQuery = (
+  user_id: string,
+  mailbox: string | null,
+  sent: boolean,
+  mail_ids: string[]
+): { sql: string; values: ParamValue[] } => {
+  const flagCols = [READ, SAVED, DELETED, DRAFT, ANSWERED].join(", ");
+  if (usesDomainUidSpace(mailbox)) {
+    return {
+      sql: `
+        SELECT ${MAIL_ID} AS mail_id, ${UID_DOMAIN} AS uid, ${flagCols} FROM mails
+        WHERE ${USER_ID} = $1 AND ${SENT} = $2 AND ${EXPUNGED} = FALSE
+          AND ${MAIL_ID} = ANY($3)
+      `,
+      values: [user_id, sent, mail_ids],
+    };
+  }
+  return {
+    sql: `
+        SELECT m.${MAIL_ID} AS mail_id, x.${UID} AS uid,
+               m.${READ}, m.${SAVED}, m.${DELETED}, m.${DRAFT}, m.${ANSWERED}
+        FROM mails m
+        JOIN ${MAIL_MAILBOX_UID} x
+          ON x.${USER_ID} = m.${USER_ID}
+          AND x.${MAILBOX} = $3
+          AND x.${MAIL_ID} = m.${MAIL_ID}
+        WHERE m.${USER_ID} = $1 AND m.${SENT} = $2 AND m.${EXPUNGED} = FALSE
+          AND m.${MAIL_ID} = ANY($4)
+      `,
+    values: [user_id, sent, mailbox, mail_ids],
+  };
 };
