@@ -51,6 +51,73 @@ const resolveSessionUser = async (
   };
 };
 
+/** Shared failure reply: rate-limit exhaustion closes the socket, anything
+ * else is a flat "Invalid credentials" that reveals nothing about which
+ * check failed. */
+const failAuth = async (
+  tag: string,
+  ip: string,
+  socket: Socket,
+  write: (data: string) => boolean | undefined
+): Promise<null> => {
+  const limited = await recordAuthFailure(ip);
+  if (limited) {
+    write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+    closeSocket(socket);
+    return null;
+  }
+  write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
+  return null;
+};
+
+type ResolvedSessionUser = NonNullable<Awaited<ReturnType<typeof resolveSessionUser>>>;
+
+/**
+ * The shared authentication core both mechanisms funnel through, so the
+ * security-relevant policy — the rate-limit gate, the password check, the
+ * read-only session resolution, and the failure wording that must not
+ * distinguish "no such user" from "wrong password" — is written once.
+ * Each entry point owns only its own credential framing (PLAIN base64
+ * decoding, LOGIN quote stripping) and its success response.
+ *
+ * Returns the resolved session user on success. On failure, writes the
+ * tagged NO reply (and closes the socket when the rate limiter says so)
+ * and returns null. Throws only on unexpected errors, which
+ * handleAuthenticate converts to BAD (handleLogin has no SASL framing to
+ * fail, so it lets them propagate as before).
+ */
+const authenticateCredentials = async (
+  username: string,
+  password: string,
+  ip: string,
+  socket: Socket,
+  write: (data: string) => boolean | undefined,
+  tag: string
+): Promise<ResolvedSessionUser | null> => {
+  if (isAuthRateLimited(ip)) {
+    write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
+    closeSocket(socket);
+    return null;
+  }
+
+  const user = await getUser({ username, password });
+  const signedUser = user?.getSigned();
+
+  const pwMatches = await verifyPassword(password, user?.password);
+
+  if (!user || !signedUser || !pwMatches) {
+    return failAuth(tag, ip, socket, write);
+  }
+
+  const resolved = await resolveSessionUser(signedUser);
+  if (!resolved) {
+    return failAuth(tag, ip, socket, write);
+  }
+
+  resetAuthFailures(ip);
+  return resolved;
+};
+
 /**
  * Handle AUTHENTICATE PLAIN mechanism.
  *
@@ -79,12 +146,6 @@ export async function handleAuthenticate(
 
   const ip = socket.remoteAddress ?? "unknown";
 
-  if (isAuthRateLimited(ip)) {
-    write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-    closeSocket(socket);
-    return null;
-  }
-
   try {
     const decoded = Buffer.from(initialResponse, "base64").toString("utf8");
     const parts = decoded.split("\0");
@@ -96,36 +157,16 @@ export async function handleAuthenticate(
 
     const [, username, password] = parts;
 
-    const inputUser = { username, password };
-    const user = await getUser(inputUser);
-    const signedUser = user?.getSigned();
+    const resolved = await authenticateCredentials(
+      username,
+      password,
+      ip,
+      socket,
+      write,
+      tag
+    );
+    if (!resolved) return null;
 
-    const pwMatches = await verifyPassword(password, user?.password);
-
-    if (!user || !signedUser || !pwMatches) {
-      const limited = await recordAuthFailure(ip);
-      if (limited) {
-        write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-        closeSocket(socket);
-        return null;
-      }
-      write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
-      return null;
-    }
-
-    const resolved = await resolveSessionUser(signedUser);
-    if (!resolved) {
-      const limited = await recordAuthFailure(ip);
-      if (limited) {
-        write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-        closeSocket(socket);
-        return null;
-      }
-      write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
-      return null;
-    }
-
-    resetAuthFailures(ip);
     // Auth-audit line — never behind the per-command threshold gate in
     // handler.ts (a fast bcrypt round on strong hardware would drop the
     // per-command "IMAP command completed" line to DEBUG). Auth events
@@ -177,46 +218,20 @@ export async function handleLogin(
 
   const ip = socket.remoteAddress ?? "unknown";
 
-  if (isAuthRateLimited(ip)) {
-    write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-    closeSocket(socket);
-    return null;
-  }
-
   const [username, password] = args;
   const cleanUsername = username.replace(/^"(.*)"$/, "$1");
   const cleanPassword = password.replace(/^"(.*)"$/, "$1");
 
-  const inputUser = { username: cleanUsername, password: cleanPassword };
-  const user = await getUser(inputUser);
-  const signedUser = user?.getSigned();
+  const resolved = await authenticateCredentials(
+    cleanUsername,
+    cleanPassword,
+    ip,
+    socket,
+    write,
+    tag
+  );
+  if (!resolved) return null;
 
-  const pwMatches = await verifyPassword(cleanPassword, user?.password);
-
-  if (!user || !signedUser || !pwMatches) {
-    const limited = await recordAuthFailure(ip);
-    if (limited) {
-      write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-      closeSocket(socket);
-      return null;
-    }
-    write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
-    return null;
-  }
-
-  const resolved = await resolveSessionUser(signedUser);
-  if (!resolved) {
-    const limited = await recordAuthFailure(ip);
-    if (limited) {
-      write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
-      closeSocket(socket);
-      return null;
-    }
-    write(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n`);
-    return null;
-  }
-
-  resetAuthFailures(ip);
   // Auth-audit line — same rationale as the AUTHENTICATE success log
   // above. Threshold gate in handler.ts is scoped to per-command
   // memory/latency triage; auth events need their own INFO surface.
