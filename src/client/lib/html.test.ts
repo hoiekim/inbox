@@ -112,6 +112,132 @@ describe("processHtmlForViewer — image tracking mitigation", () => {
   });
 });
 
+describe("processHtmlForViewer — Referer-beacon vectors (issue #1003)", () => {
+  test("meta referrer=no-referrer is the first thing in the built document", () => {
+    expect(
+      processHtmlForViewer(`<p>x</p>`).startsWith(
+        '<meta name="referrer" content="no-referrer">'
+      )
+    ).toBe(true);
+  });
+
+  test("meta referrer is placed ahead of the <html> tag in the built document", () => {
+    // happy-dom's parser does not implement the spec's before-<head> foster
+    // parenting, so assert on the string: the meta is the document's first
+    // token, which puts it in <head> in a real browser parser.
+    const out = processHtmlForViewer(`<p>x</p>`);
+    expect(out.indexOf('<meta name="referrer"')).toBe(0);
+    expect(out.indexOf("<html")).toBeGreaterThan(0);
+  });
+
+  test("strips a mail-authored <meta name=referrer> so it cannot override the viewer policy", () => {
+    const doc = viewerDoc(
+      `<head><meta name="referrer" content="unsafe-url"></head><p>x</p>`
+    );
+    const metas = Array.from(doc.querySelectorAll("meta[name=referrer]"));
+    expect(metas).toHaveLength(1);
+    expect(metas[0]!.getAttribute("content")).toBe("no-referrer");
+  });
+
+  test("drops <link rel=stylesheet> outright", () => {
+    const doc = viewerDoc(
+      `<link rel="stylesheet" href="https://x.test/a.css"><p>hi</p>`
+    );
+    expect(doc.querySelector("link")).toBeNull();
+    expect(doc.body.textContent).toContain("hi");
+  });
+
+  test("strips @import and url() from <style> but keeps the rest of the CSS", () => {
+    const doc = viewerDoc(
+      `<style id="mail">@import url("https://x.test/a.css"); p { color: red; background-image: url("https://x.test/bg.png"); margin: 0; }</style>`
+    );
+    const css = doc.querySelector("style#mail")?.textContent ?? "";
+    expect(css).not.toContain("@import");
+    expect(css).not.toContain("url(");
+    expect(css).toContain("color: red");
+    expect(css).toContain("margin: 0");
+  });
+
+  test("strips @import with a bare string URL", () => {
+    const doc = viewerDoc(
+      `<style id="mail">@import "https://x.test/a.css"; p { color: red; }</style>`
+    );
+    const css = doc.querySelector("style#mail")?.textContent ?? "";
+    expect(css).not.toContain("@import");
+    expect(css).not.toContain("x.test");
+    expect(css).toContain("color: red");
+  });
+
+  test("strips background-image url() from an inline style, keeping other declarations", () => {
+    const doc = viewerDoc(
+      `<p style="color: blue; background-image: url('https://x.test/bg.png')">x</p>`
+    );
+    const style = doc.querySelector("p")?.getAttribute("style") ?? "";
+    expect(style).not.toContain("url(");
+    expect(style).not.toContain("x.test");
+    expect(style).toContain("color: blue");
+  });
+
+  test("removes an inline style attribute left empty after stripping", () => {
+    const doc = viewerDoc(
+      `<p style="background-image:url(https://x.test/bg.png)">x</p>`
+    );
+    expect(doc.querySelector("p")?.hasAttribute("style")).toBe(false);
+  });
+
+  test("keeps an inline style with no remote references untouched", () => {
+    const doc = viewerDoc(`<p style="color: blue; margin: 0">x</p>`);
+    const style = doc.querySelector("p")?.getAttribute("style") ?? "";
+    expect(style).toContain("color: blue");
+    expect(style).toContain("margin: 0");
+  });
+
+  test.each([
+    ["input", "src", `<input type="image" src="javascript:alert(1)">`],
+    ["video", "poster", `<video poster="javascript:alert(1)">`],
+    ["table", "background", `<table background="javascript:alert(1)">`]
+  ] as const)("strips javascript: in %s on <%s>", (_tag, attrName, html) => {
+    const doc = viewerDoc(html);
+    expect(doc.body.innerHTML).not.toContain("javascript:");
+    const el = doc.querySelector(_tag);
+    expect(el?.hasAttribute(attrName)).toBe(false);
+  });
+
+  test("keeps https poster and background", () => {
+    const doc = viewerDoc(
+      `<video poster="https://x.test/p.png"><table background="https://x.test/b.png">`
+    );
+    expect(doc.querySelector("video")?.getAttribute("poster")).toBe(
+      "https://x.test/p.png"
+    );
+    expect(doc.querySelector("table")?.getAttribute("background")).toBe(
+      "https://x.test/b.png"
+    );
+  });
+
+  test("keeps https input type=image src", () => {
+    const doc = viewerDoc(
+      `<input type="image" src="https://x.test/go.png">`
+    );
+    expect(doc.querySelector("input")?.getAttribute("src")).toBe(
+      "https://x.test/go.png"
+    );
+  });
+
+  test("strips javascript: hiding in a later srcset candidate", () => {
+    const doc = viewerDoc(
+      `<img srcset="https://x.test/a.png 1x, javascript:alert(1) 2x">`
+    );
+    expect(doc.querySelector("img")?.hasAttribute("srcset")).toBe(false);
+  });
+
+  test("keeps a clean srcset", () => {
+    const srcset = "https://x.test/a.png 1x, https://x.test/b.png 2x";
+    const doc = viewerDoc(`<img srcset="${srcset}">`);
+    expect(doc.querySelector("img")?.getAttribute("srcset")).toBe(srcset);
+  });
+});
+
 describe("processHtmlForViewer — output shape", () => {
   test("wraps sanitized markup with the viewer <style> block", () => {
     const out = processHtmlForViewer(`<p>body text</p>`);

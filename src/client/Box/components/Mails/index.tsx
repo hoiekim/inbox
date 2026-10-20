@@ -158,11 +158,15 @@ const RenderedMail = ({
     // viewer (no `allow-scripts`, no top-navigation), so email scripts stay
     // inert and `<meta http-equiv=refresh>` can't redirect the tab. The
     // sanitizer stays defense-in-depth, not the sole barrier.
+    // The shell also carries its own <meta name="referrer"> so this path no
+    // longer relies on the blob: URL for Referer suppression (the inner
+    // srcdoc document gets its own from processHtmlForViewer).
     const processed = processHtmlForViewer(data.html);
     // Escape for embedding in the double-quoted `srcdoc` attribute.
     const srcdoc = processed.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
     const shell =
       '<!doctype html><html><head><meta charset="utf-8" />' +
+      '<meta name="referrer" content="no-referrer" />' +
       "<style>html,body{margin:0;padding:0;height:100%}" +
       "iframe{border:0;width:100%;height:100%}</style></head>" +
       '<body><iframe sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" ' +

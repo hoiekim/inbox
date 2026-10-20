@@ -1,4 +1,19 @@
 /**
+ * Strip remote-resource references out of a CSS string while keeping the
+ * rest of the declarations intact:
+ * - `@import` rules (they fetch remote stylesheets, a Referer beacon),
+ * - `url(...)` tokens (background-image / @font-face beacons), and
+ * - declarations left dangling with an empty value by the above.
+ * The leftover declarations keep rendering. Applied to <style> blocks and
+ * inline style="" attributes.
+ */
+const stripRemoteCssUrls = (css: string): string =>
+  css
+    .replace(/@import\s[^;]*;?/gi, "")
+    .replace(/url\(\s*(['"]?)[\s\S]*?\1\s*\)/gi, "")
+    .replace(/(^|;)\s*[a-zA-Z-]+\s*:\s*(?=;|$)/gi, "$1");
+
+/**
  * Strip dangerous elements and attributes from an HTML string using
  * DOMParser — no external library required.
  *
@@ -8,15 +23,41 @@
  * dangerous URI schemes before the HTML is injected into the iframe.
  * The iframe uses `allow-popups allow-popups-to-escape-sandbox` so that
  * links opened in new tabs escape the sandbox and render normally.
+ *
+ * Remote-resource fetches are Referer beacons: besides the per-<img>
+ * referrerpolicy, document-scoped `<meta name="referrer">` (added by
+ * processHtmlForViewer) plus <link> removal and url()/@import stripping in
+ * this function close the remaining vectors (CSS, <input type=image>,
+ * <video poster>, <table background>, srcset).
  */
 const sanitizeEmailHtml = (html: string): string => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, "text/html");
 
-  // Remove elements that can execute code or load external resources silently
-  const dangerous = ["script", "iframe", "object", "embed", "applet", "base"];
+  // Remove elements that can execute code or load external resources silently.
+  // <link> is dropped outright: a mail has no legitimate external stylesheet,
+  // and a <link rel="stylesheet"> fetch would send the inbox origin as Referer.
+  const dangerous = ["script", "iframe", "object", "embed", "applet", "base", "link"];
   dangerous.forEach((tag) => {
     doc.querySelectorAll(tag).forEach((el) => el.remove());
+  });
+
+  // A mail-authored <meta name="referrer"> would override the viewer's own
+  // policy (the last meta wins), so drop those; processHtmlForViewer re-adds
+  // no-referrer at the top of the built document.
+  doc.querySelectorAll("meta").forEach((meta) => {
+    if ((meta.getAttribute("name") ?? "").toLowerCase() === "referrer") {
+      meta.remove();
+    }
+  });
+
+  // Strip remote-resource references out of <style> blocks and inline style=""
+  // attributes while keeping the rest of the CSS: @import rules fetch remote
+  // stylesheets and url(...) carries background-image / @font-face beacons.
+  // Dropping whole style blocks would break legitimate mail rendering, so this
+  // is surgical.
+  doc.querySelectorAll("style").forEach((style) => {
+    style.textContent = stripRemoteCssUrls(style.textContent ?? "");
   });
 
   // Strip dangerous attributes on every element
@@ -26,9 +67,16 @@ const sanitizeEmailHtml = (html: string): string => {
   // SVG <a xlink:href> is the XML-namespaced equivalent of HTML href, and
   // <button formaction> is the action equivalent for form submission. Both
   // accept the same URI schemes as href/action and need the same scrubbing.
+  // srcset, poster, and background are image-source attributes like src
+  // (<picture><source srcset>, <video poster>, <table background>) and get
+  // the same script-scheme scrub; data: stays allowed as an inert image
+  // source, exactly as for <img src>.
   const SCRIPT_URI_ATTRS = new Set([
     "href",
     "src",
+    "srcset",
+    "poster",
+    "background",
     "action",
     "xlink:href",
     "formaction",
@@ -39,13 +87,29 @@ const sanitizeEmailHtml = (html: string): string => {
     "xlink:href",
     "formaction",
   ]);
+  // srcset is a comma-separated candidate list ("url 1x, url 2x"), so a
+  // script-scheme URL can hide after the first candidate — test each one.
+  const hasScriptScheme = (name: string, value: string): boolean =>
+    name === "srcset"
+      ? value
+          .split(",")
+          .some((candidate) =>
+            SCRIPT_URI.test(candidate.trim().split(/\s+/)[0] ?? "")
+          )
+      : SCRIPT_URI.test(value);
+
   doc.querySelectorAll("*").forEach((el) => {
     Array.from(el.attributes).forEach((attr) => {
       if (DANGEROUS_ATTR.test(attr.name)) {
         el.removeAttribute(attr.name);
+      } else if (attr.name === "style") {
+        // Strip remote CSS references out of inline styles, keeping the rest.
+        const cleaned = stripRemoteCssUrls(attr.value);
+        if (!cleaned.trim()) el.removeAttribute(attr.name);
+        else el.setAttribute(attr.name, cleaned);
       } else if (
         SCRIPT_URI_ATTRS.has(attr.name) &&
-        SCRIPT_URI.test(attr.value)
+        hasScriptScheme(attr.name, attr.value)
       ) {
         el.removeAttribute(attr.name);
       } else if (
@@ -124,7 +188,14 @@ export const processHtmlForViewer = (html: string) => {
   // This stripping adds an extra layer against script tags, event handlers,
   // and dangerous URI schemes.
   const sanitized = sanitizeEmailHtml(html);
-  return `
+  // Document-scoped Referer suppression, covering <img> plus every other
+  // remote-resource vector (CSS, <link>, <input type=image>, <video poster>,
+  // <table background>, and anything added later). Placed first so the HTML
+  // parser lands it in the document <head>; mail-authored <meta
+  // name="referrer"> is stripped by the sanitizer above so it cannot
+  // override this (the last meta wins). The per-<img> referrerpolicy
+  // attribute is now redundant but left in place (harmless).
+  return `<meta name="referrer" content="no-referrer">
 <style>
   body {
       margin: 0;
