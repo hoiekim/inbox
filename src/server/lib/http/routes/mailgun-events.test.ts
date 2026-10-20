@@ -383,6 +383,43 @@ describe("postMailgunEventsRoute unsigned-field bounds (issue #996)", () => {
     );
     expect(result.status).toBe("success");
   });
+
+  it("coerces truthy non-string delivery-status fields instead of throwing 5xx", async () => {
+    // A truthy non-string message/description (object, array, true) reached
+    // extractReason's filter `.trim()` and threw a TypeError outside the DB
+    // try/catch — a 500 that pushes Mailgun into hours-long retries, the
+    // exact failure mode this route eliminates.
+    for (const bad of [{ nested: true }, ["x"], true, 42]) {
+      const result = await call(
+        signed(
+          buildEvent({
+            "delivery-status": {
+              code: 550,
+              message: bad,
+              description: bad,
+            },
+          }),
+        ),
+      );
+      expect(result.status).toBe("success");
+    }
+  });
+
+  it("keeps the surviving string parts when only some delivery-status fields coerce", async () => {
+    const result = await call(
+      signed(
+        buildEvent({
+          "delivery-status": {
+            code: 550,
+            message: { bogus: true },
+            description: "mailbox unavailable",
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe("success");
+    expect(queryArgsJson()).toContain("550 · mailbox unavailable");
+  });
 });
 
 describe("POST /api/mailgun-events per-IP request cap", () => {

@@ -155,11 +155,18 @@ const safeOccurredAt = (rawTs: unknown): string => {
 
 const extractReason = (data: MailgunEventData): string | null => {
   const ds = data["delivery-status"];
-  if (!ds) return null;
+  // `delivery-status` is unsigned attacker JSON: treat anything that is not
+  // an object with string fields the way the route treats every other
+  // non-string optional — coerce to null. A truthy non-string (object,
+  // array, true) here would otherwise reach the filter's `.trim()` below
+  // and throw outside the DB try/catch, 500ing the route.
+  if (!ds || typeof ds !== "object") return null;
+  const asString = (v: unknown): string | null =>
+    typeof v === "string" ? v : null;
   const parts = [
     ds.code != null ? String(ds.code) : null,
-    ds.message ?? null,
-    ds.description ?? null,
+    asString(ds.message),
+    asString(ds.description),
   ].filter((p): p is string => !!p && p.trim().length > 0);
   return parts.length ? parts.join(" · ") : null;
 };
