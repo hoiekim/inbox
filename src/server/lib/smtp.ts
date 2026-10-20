@@ -60,6 +60,8 @@ const registerListeners = (
       // no suitable signature algorithm, etc.) without enumerating each string.
       msg.includes("tls_early_post_process_client_hello") || // ClientHello stage rejections
       msg.includes("tls_post_process_client_hello") ||       // post-ClientHello cipher/extension failures
+      msg.includes("tls_parse_ctos_") ||                     // malformed ClientHello extension (max_fragment_length, SNI, ALPN, ...)
+      msg.includes("tls_collect_extensions") ||              // duplicate or malformed ClientHello extension block
       msg.includes("tls_validate_record_header") ||          // malformed/wrong-protocol record header
       msg.includes("extract_keyshares") ||                   // TLS 1.3 key exchange failure (bad key share)
       msg.includes("final_key_share") ||                     // TLS 1.3 key exchange failure (no suitable key share)

@@ -1950,10 +1950,17 @@ describe("registerListeners error handler", () => {
     server.emit("error", new Error("TLS handshake timeout"));
     server.emit("error", new Error("write ECONNRESET"));
     server.emit("error", new Error("write EPIPE"));
+    server.emit(
+      "error",
+      new Error(
+        "C0BC3644C57F0000:error:0A00006E:SSL routines:tls_parse_ctos_maxfragmentlen:bad extension:../deps/openssl/openssl/ssl/statem/extensions_srvr.c:184:\n"
+      )
+    );
+    server.emit("error", new Error("SSL routines:tls_collect_extensions:bad extension"));
 
     expect(mockLogger.error).not.toHaveBeenCalled();
     const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(8);
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(10);
   });
 
   it("logs error on non-suppressible failures", async () => {
