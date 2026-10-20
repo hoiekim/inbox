@@ -12,9 +12,12 @@ jobs:
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - name: Block committed private keys and cert files
+      - name: Block committed secrets (keys, tokens, credentials, env files)
         run: |
-          # Check for private key/cert file extensions in the diff
+          # File-name checks: key/cert files by extension, env files by name.
+          # .gitignore does not stop `git add -f`, so CI re-checks the name on
+          # every PR. The committed `.env.example` and source modules named
+          # like env (src/server/lib/env.ts is a real module) stay allowed.
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
           echo "Changed files:"
           echo "$CHANGED_FILES"
@@ -26,17 +29,59 @@ jobs:
             exit 1
           fi
 
-          # Check for private key content patterns in staged diff
-          KEY_PATTERNS=$(git diff origin/${{ github.base_ref }}...HEAD -- . \
-            ':!*.md' ':!*.txt' ':!*.lock' ':!bun.lockb' ':!.github/workflows/**' \
-            | grep -E '^\+.*(BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY|BEGIN CERTIFICATE)' || true)
-          if [ -n "$KEY_PATTERNS" ]; then
-            echo "ERROR: Private key or certificate content detected in diff:"
-            echo "$KEY_PATTERNS"
+          ENV_FILES=$(echo "$CHANGED_FILES" | grep -E '(^|/)\.?env(\..*)?$' \
+            | grep -v -E '\.env\.example$' | grep -v -E '\.(ts|tsx|js|jsx|mjs|cjs)$' || true)
+          if [ -n "$ENV_FILES" ]; then
+            echo "ERROR: Committed env files detected (keep samples in .env.example):"
+            echo "$ENV_FILES"
             exit 1
           fi
 
-          echo "No private keys or cert files detected."
+          # Content checks: high-confidence credential shapes in added lines.
+          # Obviously-fake fixture values (CONTRIBUTING.md's idioms) are
+          # allowlisted so tests keep reading naturally.
+          ADDED_LINES=$(git diff origin/${{ github.base_ref }}...HEAD -- . \
+            ':!*.md' ':!*.txt' ':!*.lock' ':!bun.lockb' ':!.github/workflows/**' \
+            | grep -E '^\+' | grep -v '^+++' \
+            | grep -v -E 'TEST_KEY_DO_NOT_USE|fake-token-12345|TEST_VAPID_KEY_PLACEHOLDER|test_key_not_real_do_not_use|fake-jwt-token-for-testing|test-(public|private)-key-not-real' || true)
+
+          CREDENTIAL_PATTERNS=$(echo "$ADDED_LINES" | grep -E \
+            -e 'key-[0-9a-f]{32}' \
+            -e 'postgres(ql)?://[^/:@[:space:]]+:[^@[:space:]]+@' \
+            -e '[Bb]earer [A-Za-z0-9._~+/-]{20,}' \
+            -e 'BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY|BEGIN CERTIFICATE' \
+            || true)
+          # VAPID keys are base64url scalars, not PEM, so the armor regex
+          # never sees them: flag a 43-char base64url token only on lines
+          # that mention vapid.
+          VAPID_PATTERNS=$(echo "$ADDED_LINES" | grep -i 'vapid' \
+            | grep -E '[A-Za-z0-9_-]{43}' || true)
+
+          if [ -n "$CREDENTIAL_PATTERNS" ]; then
+            echo "ERROR: Credential-like content detected in added lines:"
+            echo "$CREDENTIAL_PATTERNS"
+            exit 1
+          fi
+          if [ -n "$VAPID_PATTERNS" ]; then
+            echo "ERROR: VAPID-key-shaped value detected in added lines:"
+            echo "$VAPID_PATTERNS"
+            exit 1
+          fi
+
+          echo "No secrets detected."
+
+  security-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: SECURITY.md must exist and document the reporting path
+        run: |
+          # The Security tab promises a private reporting channel; fail loudly
+          # if the policy file drifts away from that promise (issue #984).
+          test -f SECURITY.md || { echo "ERROR: SECURITY.md missing from the repository root"; exit 1; }
+          grep -qi "report a vulnerability" SECURITY.md || { echo "ERROR: SECURITY.md lost its reporting section"; exit 1; }
+          echo "SECURITY.md present with a reporting section."
 
   test:
     runs-on: ubuntu-latest
