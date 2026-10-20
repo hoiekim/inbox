@@ -25,34 +25,9 @@ export const createHttpApp = (store: session.Store): express.Application => {
   const sessionSecret = resolveSessionSecret();
   const app = createExpressApp();
 
-  // Security headers
-  app.use((_req, res, next) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-    if (isProduction()) {
-      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-    }
-    next();
-  });
-
-  app.use(json({ limit: "10mb" }));
-  app.use(
-    session({
-      secret: sessionSecret,
-      resave: true,
-      saveUninitialized: false,
-      rolling: true,
-      cookie: {
-        secure: isProduction(),
-        sameSite: "strict",
-        maxAge: 1000 * 60 * 60 * 24 * 7
-      },
-      store
-    })
-  );
-
-  // Security response headers (defense-in-depth)
+  // Security response headers. This is the single place security headers are
+  // registered — a second copy re-setting the same values here would be
+  // shadowed by registration order, so any new header belongs in this block.
   app.use((_req, res, next) => {
     // Restrict resource origins. 'unsafe-inline' for styles is required by React.
     // 'blob:' in img-src allows inline email images loaded as object URLs.
@@ -78,10 +53,28 @@ export const createHttpApp = (store: session.Store): express.Application => {
     );
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
-    res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    if (isProduction()) {
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
     next();
   });
+
+  app.use(json({ limit: "10mb" }));
+  app.use(
+    session({
+      secret: sessionSecret,
+      resave: true,
+      saveUninitialized: false,
+      rolling: true,
+      cookie: {
+        secure: isProduction(),
+        sameSite: "strict",
+        maxAge: 1000 * 60 * 60 * 24 * 7
+      },
+      store
+    })
+  );
 
   app.use("/api", apiRouter);
 
