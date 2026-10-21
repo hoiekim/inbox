@@ -46,17 +46,31 @@ interface MailgunWebhookBody {
 }
 
 const verifySignature = (sig: MailgunSignature | undefined, key: string): boolean => {
-  if (!sig?.timestamp || !sig.token || !sig.signature) return false;
-  const ageMs = Date.now() - Number(sig.timestamp) * 1000;
+  // The body is caller-supplied JSON: the `string` annotations on
+  // MailgunSignature are erased at runtime, so a truthiness check alone lets
+  // a JSON number/object/boolean reach `Hmac.update` / `Buffer.from(…, "hex")`,
+  // which throw — turning an unauthenticated bad signature into a 500 plus a
+  // Route Error alarm instead of a clean rejection. Non-strings are rejected
+  // here, before anything that can throw on them.
+  if (!sig) return false;
+  const { timestamp, token, signature } = sig;
+  if (
+    typeof timestamp !== "string" || !timestamp ||
+    typeof token !== "string" || !token ||
+    typeof signature !== "string" || !signature
+  ) {
+    return false;
+  }
+  const ageMs = Date.now() - Number(timestamp) * 1000;
   if (!Number.isFinite(ageMs) || ageMs > REPLAY_WINDOW_MS || ageMs < -REPLAY_WINDOW_MS) {
     return false;
   }
   const expected = crypto
     .createHmac("sha256", key)
-    .update(sig.timestamp + sig.token)
+    .update(timestamp + token)
     .digest("hex");
   // Convert to Uint8Array to satisfy timingSafeEqual's ArrayBufferView bound.
-  const provided = new Uint8Array(Buffer.from(sig.signature, "hex"));
+  const provided = new Uint8Array(Buffer.from(signature, "hex"));
   const derived = new Uint8Array(Buffer.from(expected, "hex"));
   return provided.length === derived.length && crypto.timingSafeEqual(provided, derived);
 };
