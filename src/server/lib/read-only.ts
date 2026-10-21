@@ -1,5 +1,6 @@
 import { SignedUser } from "common";
 import { addressToUsername } from "./util";
+import { getUser } from "./users";
 
 /**
  * Reserved username for the read-only administrative role. A row with this
@@ -89,4 +90,40 @@ export const remapReadOnlySession = (
   delete remapped.token;
   delete remapped.expiry;
   return remapped;
+};
+
+/**
+ * Resolves the effective SignedUser to attach to a session for an
+ * authenticated credential. For the reserved read-only credential this is
+ * admin's SignedUser remapped via {@link remapReadOnlySession} (`isReadOnly` /
+ * `authenticatedAs` set, so read paths see admin's data and mutating gates
+ * refuse); for every other credential it is the caller's own signed user
+ * unchanged.
+ *
+ * This is the single home of the four-step read-only decision (username test,
+ * admin lookup, `getSigned()` null-check, remap) previously written twice —
+ * once as a private helper in `imap/auth.ts`, once inline in
+ * `http/routes/users/post-login.ts`. A change to what a read-only session
+ * resolves to now lands in one place.
+ *
+ * Returns null when the read-only credential authenticated but no admin row
+ * exists. The caller turns that into its surface's refusal (an IMAP `NO`, an
+ * HTTP failure body) so a session is never issued without an effective
+ * identity; the failure-branch side effects (rate-limiter charges, audit
+ * logging) stay at the call site, where each surface already owns them.
+ */
+export const resolveSessionUser = async (
+  signedUser: SignedUser | null | undefined
+): Promise<{ user: SignedUser; isReadOnly: boolean } | null> => {
+  if (!signedUser) return null;
+  if (signedUser.username !== ADMIN_RO_USERNAME) {
+    return { user: signedUser, isReadOnly: false };
+  }
+  const admin = await getUser({ username: ADMIN_USERNAME });
+  const signedAdmin = admin?.getSigned();
+  if (!signedAdmin) return null;
+  return {
+    user: remapReadOnlySession(signedAdmin, ADMIN_RO_USERNAME),
+    isReadOnly: true,
+  };
 };
