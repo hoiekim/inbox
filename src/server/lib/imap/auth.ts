@@ -9,9 +9,7 @@ import { Socket } from "net";
 import {
   getUser,
   logger,
-  ADMIN_USERNAME,
-  ADMIN_RO_USERNAME,
-  remapReadOnlySession,
+  resolveSessionUser,
 } from "server";
 import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "../auth-rate-limit";
 import { verifyPassword } from "../verify-password";
@@ -26,30 +24,6 @@ export interface AuthResult {
   /** Original username the caller sent, before any session-scope remap. */
   authenticatedAs: string;
 }
-
-/**
- * Resolves the effective SignedUser to attach to the store. For the reserved
- * read-only credential, this is admin's SignedUser with `isReadOnly` /
- * `authenticatedAs` set; for every other credential, it is the caller's own
- * signed user unchanged. Returns null when the read-only credential
- * authenticated but no admin row exists — treated by callers as a failed
- * authentication so the session is never issued without an effective identity.
- */
-const resolveSessionUser = async (
-  signedUser: ReturnType<NonNullable<Awaited<ReturnType<typeof getUser>>>["getSigned"]>
-) => {
-  if (!signedUser) return null;
-  if (signedUser.username !== ADMIN_RO_USERNAME) {
-    return { user: signedUser, isReadOnly: false };
-  }
-  const admin = await getUser({ username: ADMIN_USERNAME });
-  const signedAdmin = admin?.getSigned();
-  if (!signedAdmin) return null;
-  return {
-    user: remapReadOnlySession(signedAdmin, ADMIN_RO_USERNAME),
-    isReadOnly: true,
-  };
-};
 
 /** Shared failure reply: rate-limit exhaustion closes the socket, anything
  * else is a flat "Invalid credentials" that reveals nothing about which

@@ -2,9 +2,8 @@ import { MaskedUser } from "common";
 import {
   getUser,
   logger,
-  ADMIN_USERNAME,
   ADMIN_RO_USERNAME,
-  remapReadOnlySession,
+  resolveSessionUser,
 } from "server";
 import { Route } from "../route";
 import { getClientIp, loginLimiter } from "../../rate-limit";
@@ -48,25 +47,21 @@ export const postLoginRoute = new Route<LoginPostResponse>(
       return { status: "failed", message: "Invalid credentials." };
     }
 
-    // Session-scoped read-only remap. The caller authenticated with the
-    // reserved read-only credential, so the session identity is the
-    // effective (admin) user for every read path — mutating gates read
-    // `isReadOnly` and refuse. If the effective user is missing (the
-    // read-only account was seeded before admin's row exists), fall back
-    // to bad-credentials rather than issuing an unremapped session.
-    let sessionUser = signedUser;
-    if (signedUser.username === ADMIN_RO_USERNAME) {
-      const admin = await getUser({ username: ADMIN_USERNAME });
-      const signedAdmin = admin?.getSigned();
-      if (!signedAdmin) {
-        loginLimiter.recordFailure(ip);
-        return { status: "failed", message: "Invalid credentials." };
-      }
-      sessionUser = remapReadOnlySession(signedAdmin, ADMIN_RO_USERNAME);
+    // Session-scoped read-only remap, shared with IMAP in read-only.ts. If the
+    // effective user is missing (the read-only account was seeded before
+    // admin's row exists), fall back to bad-credentials rather than issuing
+    // an unremapped session.
+    const resolved = await resolveSessionUser(signedUser);
+    if (!resolved) {
+      loginLimiter.recordFailure(ip);
+      return { status: "failed", message: "Invalid credentials." };
+    }
+    const { user: sessionUser, isReadOnly } = resolved;
+    if (isReadOnly) {
       logger.info("HTTP LOGIN success (read-only)", {
         component: "http",
         authenticatedAs: ADMIN_RO_USERNAME,
-        effectiveUserId: signedAdmin.id,
+        effectiveUserId: sessionUser.id,
         ip,
       });
     }
