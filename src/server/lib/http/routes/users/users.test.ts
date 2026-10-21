@@ -345,7 +345,10 @@ describe("postLoginRoute", () => {
         session: import("express-session").Session & { user: unknown };
       }).session.user
     ).toBeNull();
-    expect(recordFailureSpy).toHaveBeenCalledWith("127.0.0.1");
+    expect(recordFailureSpy).toHaveBeenCalledWith(
+      "127.0.0.1",
+      ADMIN_RO_USERNAME.toLowerCase()
+    );
     recordFailureSpy.mockRestore();
   });
 

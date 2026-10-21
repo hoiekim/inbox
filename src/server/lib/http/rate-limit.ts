@@ -24,35 +24,93 @@ const allAttemptMaps: Map<string, AttemptRecord>[] = [];
 
 export interface RateLimiter {
   middleware: (req: Request, res: Response, next: NextFunction) => void;
-  recordFailure: (ip: string) => void;
-  reset: (ip: string) => void;
+  /**
+   * Record a failure against the IP's aggregate bucket, and — when an
+   * account is given — against that account's own bucket under the IP.
+   */
+  recordFailure: (ip: string, account?: string) => void;
+  /**
+   * Forgive failures. With an account, only that account's own bucket is
+   * cleared and the per-IP aggregate keeps accumulating; without one, the
+   * whole IP bucket (aggregate plus every account bucket under it) is
+   * cleared, preserving the pre-account-granularity contract.
+   */
+  reset: (ip: string, account?: string) => void;
 }
+
+/**
+ * The attempted login identity a request is bucketed under: the username when
+ * present, otherwise the email, normalized so trivial case/whitespace rotation
+ * of the identity does not buy a fresh bucket. Returns undefined when the body
+ * names no identity; the per-IP aggregate still applies in that case.
+ */
+export const loginIdentityOf = (req: Request): string | undefined => {
+  const body = req.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return undefined;
+  }
+  const raw =
+    typeof body.username === "string" && body.username !== ""
+      ? body.username
+      : typeof body.email === "string" && body.email !== ""
+        ? body.email
+        : undefined;
+  return raw === undefined ? undefined : raw.trim().toLowerCase();
+};
 
 /**
  * Create a rate limiter with read-only middleware + explicit record/reset hooks.
  *
  * The middleware only checks the limit; route handlers decide which outcomes
- * count by calling `recordFailure(ip)` on real failures or `reset(ip)` on
- * success. Mirrors the `auth-rate-limit.ts` shape used by IMAP/SMTP so that
- * successful logins don't pin the counter and transient 500s don't burn the
- * per-IP quota.
+ * count by calling `recordFailure(ip, account)` on real failures or
+ * `reset(ip, account)` on success. Mirrors the `auth-rate-limit.ts` shape used
+ * by IMAP/SMTP so that successful logins don't pin the counter and transient
+ * 500s don't burn the per-IP quota.
  *
- * Each call to createLimiter gets its own isolated attempt Map so that
+ * When `options.identityOf` is given (as for the login limiter), failures are
+ * tracked at two granularities: a per-IP aggregate bucket that every failure
+ * from the IP feeds, plus one bucket per attempted identity under that IP.
+ * The middleware refuses when either trips, and a success clears only the
+ * authenticating account's own bucket — the aggregate keeps accumulating, so
+ * one account's success can no longer forgive another account's failures from
+ * the same IP (#1032).
+ *
+ * Each call to createLimiter gets its own isolated attempt Maps so that
  * separate limiters (e.g. loginLimiter and tokenLimiter) do not share
  * counters.
  *
  * @param maxAttempts Maximum attempts allowed within the window
  * @param message Error message to return when limit is exceeded
+ * @param options.identityOf Extracts the attempted identity from a request so
+ *   the middleware can check that account's bucket in addition to the IP's
  */
 export const createLimiter = (
   maxAttempts: number,
-  message: string
+  message: string,
+  options?: { identityOf?: (req: Request) => string | undefined }
 ): RateLimiter => {
   const attempts = new Map<string, AttemptRecord>();
-  allAttemptMaps.push(attempts);
+  const accountAttempts = new Map<string, AttemptRecord>();
+  allAttemptMaps.push(attempts, accountAttempts);
 
-  const isLimited = (ip: string): boolean => {
-    const record = attempts.get(ip);
+  const identityOf = options?.identityOf;
+
+  // `\u0000` separates the components; getClientIp never yields one, so a
+  // crafted account string cannot collide with a different (ip, account) pair.
+  const accountKey = (ip: string, account: string) => `${ip}\u0000${account}`;
+
+  const bump = (map: Map<string, AttemptRecord>, key: string): void => {
+    const now = Date.now();
+    const record = map.get(key);
+    if (record && now < record.resetAt) {
+      record.count++;
+    } else {
+      map.set(key, { count: 1, resetAt: now + WINDOW_MS });
+    }
+  };
+
+  const isLimited = (map: Map<string, AttemptRecord>, key: string): boolean => {
+    const record = map.get(key);
     return (
       !!record && Date.now() < record.resetAt && record.count >= maxAttempts
     );
@@ -61,23 +119,39 @@ export const createLimiter = (
   return {
     middleware: (req: Request, res: Response, next: NextFunction) => {
       const ip = getClientIp(req);
-      if (isLimited(ip)) {
+      const account = identityOf?.(req);
+      if (
+        isLimited(attempts, ip) ||
+        (account !== undefined &&
+          isLimited(accountAttempts, accountKey(ip, account)))
+      ) {
         res.status(429).json({ status: "failed", message });
         return;
       }
       next();
     },
-    recordFailure: (ip: string) => {
-      const now = Date.now();
-      const record = attempts.get(ip);
-      if (record && now < record.resetAt) {
-        record.count++;
-      } else {
-        attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+    recordFailure: (ip: string, account?: string) => {
+      bump(attempts, ip);
+      if (account !== undefined) {
+        bump(accountAttempts, accountKey(ip, account));
       }
     },
-    reset: (ip: string) => {
-      attempts.delete(ip);
+    reset: (ip: string, account?: string) => {
+      if (account === undefined) {
+        // Whole-bucket reset: forgive the IP and every account bucket under
+        // it, matching the pre-account-granularity contract.
+        attempts.delete(ip);
+        const prefix = `${ip}\u0000`;
+        for (const key of accountAttempts.keys()) {
+          if (key.startsWith(prefix)) {
+            accountAttempts.delete(key);
+          }
+        }
+        return;
+      }
+      // Scoped reset: forgive only this account's own failures. The per-IP
+      // aggregate is deliberately left to keep accumulating across accounts.
+      accountAttempts.delete(accountKey(ip, account));
     }
   };
 };
@@ -130,7 +204,8 @@ export const stopCleanupScheduler = () => {
 // records against them.
 export const loginLimiter = createLimiter(
   5,
-  "Too many login attempts, try again later"
+  "Too many login attempts, try again later",
+  { identityOf: loginIdentityOf }
 );
 
 export const tokenLimiter = createLimiter(

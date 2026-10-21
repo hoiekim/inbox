@@ -6,7 +6,7 @@ import {
   resolveSessionUser,
 } from "server";
 import { Route } from "../route";
-import { getClientIp, loginLimiter } from "../../rate-limit";
+import { getClientIp, loginLimiter, loginIdentityOf } from "../../rate-limit";
 import { issueAuthenticatedSession } from "../../issue-session";
 import { verifyPassword } from "../../../verify-password";
 
@@ -41,9 +41,14 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     const pwMatches = await verifyPassword(password, user?.password);
 
     const ip = getClientIp(req);
+    // The attempted identity: failures accumulate per (ip, account) and the
+    // success below forgives only this account's own bucket. The per-IP
+    // aggregate is never reset here, so alternating accounts from one IP
+    // cannot wipe the counter (#1032).
+    const account = loginIdentityOf(req);
 
     if (!pwMatches || !signedUser) {
-      loginLimiter.recordFailure(ip);
+      loginLimiter.recordFailure(ip, account);
       return { status: "failed", message: "Invalid credentials." };
     }
 
@@ -53,7 +58,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     // an unremapped session.
     const resolved = await resolveSessionUser(signedUser);
     if (!resolved) {
-      loginLimiter.recordFailure(ip);
+      loginLimiter.recordFailure(ip, account);
       return { status: "failed", message: "Invalid credentials." };
     }
     const { user: sessionUser, isReadOnly } = resolved;
@@ -75,7 +80,10 @@ export const postLoginRoute = new Route<LoginPostResponse>(
       req.session.save((err) => (err ? reject(err) : resolve()));
     });
 
-    loginLimiter.reset(ip);
+    // Scoped reset: forgive only the authenticating account's own bucket. The
+    // per-IP aggregate keeps its count, so a success here cannot wipe another
+    // account's failures from the same IP (#1032).
+    loginLimiter.reset(ip, account);
     return { status: "success", body: sessionUser };
   }
 );
