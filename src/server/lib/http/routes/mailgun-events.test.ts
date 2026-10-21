@@ -166,6 +166,38 @@ describe("postMailgunEventsRoute", () => {
     expect(result.message).toContain("Invalid signature");
   });
 
+  it("rejects non-string signature fields as invalid instead of throwing", async () => {
+    // The signature arrives as caller-supplied JSON, so its `string`
+    // annotations are erased at runtime. A truthiness-only guard let a JSON
+    // number/object/boolean reach `Hmac.update` / `Buffer.from(…, "hex")`,
+    // which throw — answering 500 and firing a Route Error alarm for an
+    // unauthenticated body. Every shape below must reject as an invalid
+    // signature, with no alarm.
+    const now = Math.floor(Date.now() / 1000);
+    const shapes: unknown[] = [
+      // Throw path 1: numeric addition instead of concatenation, then
+      // Hmac.update(number) throws.
+      { timestamp: now, token: 42, signature: "ab".repeat(32) },
+      // Throw path 2: Buffer.from(non-string, "hex") throws.
+      { timestamp: String(now), token: "t", signature: { nested: "object" } },
+      { timestamp: String(now), token: "t", signature: true },
+      { timestamp: String(now), token: "t", signature: 12345 },
+    ];
+    for (const signature of shapes) {
+      const result = await call({
+        signature: signature as never,
+        "event-data": buildEvent(),
+      });
+      expect(result.status).toBe("failed");
+      expect(result.message).toContain("Invalid signature");
+    }
+    // No throw means Route.handler never ran its catch block: no 500 and,
+    // critically, no Route Error alarm for attacker-shaped input.
+    expect(
+      sendAlarmSpy.mock.calls.filter(([title]) => String(title).startsWith("Route Error"))
+    ).toHaveLength(0);
+  });
+
   it("rejects a body missing event-data", async () => {
     const timestamp = nowTs();
     const token = "t";
