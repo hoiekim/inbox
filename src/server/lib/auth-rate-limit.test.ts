@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import {
   isAuthRateLimited,
+  normalizeAuthAccount,
   recordAuthFailure,
   resetAuthFailures,
   isRecipientProbeRateLimited,
@@ -97,6 +98,61 @@ describe("cleanupExpiredRateLimitRecords", () => {
 
   it("returns 0 when there are no records at all", () => {
     expect(cleanupExpiredRateLimitRecords()).toBe(0);
+  });
+});
+
+describe("account-scoped auth buckets", () => {
+  const failAccountN = async (ip: string, account: string, n: number) => {
+    for (let i = 0; i < n; i++) await recordAuthFailure(ip, account);
+  };
+
+  it("keeps each account's failures separate under one IP", async () => {
+    await failAccountN("10.0.1.1", "victim", 6);
+    await failAccountN("10.0.1.1", "attacker", 3);
+    // Aggregate is 9: under the threshold; the per-account buckets hold 6
+    // and 3, so neither trips on its own.
+    expect(isAuthRateLimited("10.0.1.1")).toBe(false);
+    expect(isAuthRateLimited("10.0.1.1", "victim")).toBe(false);
+    expect(isAuthRateLimited("10.0.1.1", "attacker")).toBe(false);
+  }, 15_000);
+
+  it("a success as another account does not forgive the victim's failures", async () => {
+    // The bypass this scoping closes: alternate victim guesses with own
+    // successful logins from the same IP. Each success must forgive only
+    // the successful account's own bucket.
+    await failAccountN("10.0.1.2", "victim", 9);
+    resetAuthFailures("10.0.1.2", "attacker"); // attacker's own login succeeds
+    expect(isAuthRateLimited("10.0.1.2", "victim")).toBe(false);
+    await failAccountN("10.0.1.2", "victim", 1);
+    expect(isAuthRateLimited("10.0.1.2", "victim")).toBe(true);
+    expect(isAuthRateLimited("10.0.1.2")).toBe(true);
+  }, 15_000);
+
+  it("scoped reset clears only the account's own bucket; the aggregate keeps accumulating", async () => {
+    await failAccountN("10.0.1.3", "victim", 5);
+    await failAccountN("10.0.1.3", "attacker", 4);
+    resetAuthFailures("10.0.1.3", "attacker");
+    expect(isAuthRateLimited("10.0.1.3", "attacker")).toBe(false);
+    expect(isAuthRateLimited("10.0.1.3", "victim")).toBe(false);
+    // The aggregate (9) was untouched by the scoped reset: one more failure
+    // from any account trips the per-IP ceiling.
+    await failAccountN("10.0.1.3", "victim", 1);
+    expect(isAuthRateLimited("10.0.1.3")).toBe(true);
+  }, 15_000);
+
+  it("whole-IP reset still clears every bucket under the IP", async () => {
+    await failAccountN("10.0.1.4", "victim", 6);
+    await failAccountN("10.0.1.4", "attacker", 4);
+    expect(isAuthRateLimited("10.0.1.4")).toBe(true);
+    resetAuthFailures("10.0.1.4");
+    expect(isAuthRateLimited("10.0.1.4")).toBe(false);
+    expect(isAuthRateLimited("10.0.1.4", "victim")).toBe(false);
+    expect(isAuthRateLimited("10.0.1.4", "attacker")).toBe(false);
+  }, 15_000);
+
+  it("normalizes the account so case/whitespace rotation buys no fresh bucket", () => {
+    expect(normalizeAuthAccount("  Victim ")).toBe("victim");
+    expect(normalizeAuthAccount("")).toBe(undefined);
   });
 });
 

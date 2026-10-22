@@ -44,7 +44,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     // The attempted identity: failures accumulate per (ip, account) and the
     // success below forgives only this account's own bucket. The per-IP
     // aggregate is never reset here, so alternating accounts from one IP
-    // cannot wipe the counter (#1032).
+    // cannot wipe the counter.
     const account = loginIdentityOf(req);
 
     if (!pwMatches || !signedUser) {
@@ -82,7 +82,7 @@ export const postLoginRoute = new Route<LoginPostResponse>(
 
     // Scoped reset: forgive only the authenticating account's own bucket. The
     // per-IP aggregate keeps its count, so a success here cannot wipe another
-    // account's failures from the same IP (#1032).
+    // account's failures from the same IP.
     loginLimiter.reset(ip, account);
     return { status: "success", body: sessionUser };
   }

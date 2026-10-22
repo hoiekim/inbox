@@ -340,7 +340,7 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
 // cap into unlimited guesses at any other user. Failures are now tracked per
 // (ip, account) under a per-IP aggregate ceiling; success forgives only the
 // authenticating account's own bucket.
-describe("account-scoped login buckets (#1032)", () => {
+describe("account-scoped login buckets", () => {
   const CAP = 5;
 
   const makeLoginLimiter = async () => {

@@ -227,7 +227,7 @@ describe("handleAuthenticate", () => {
       "A3 NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n",
     ]);
     expect(socket.destroyed).toBe(true);
-    expect(mockIsAuthRateLimited).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockIsAuthRateLimited).toHaveBeenCalledWith(REMOTE_IP, 'admin');
     expect(mockGetUser).not.toHaveBeenCalled();
     expect(mockRecordAuthFailure).not.toHaveBeenCalled();
   });
@@ -275,7 +275,7 @@ describe("handleAuthenticate", () => {
     expect(socket.writes).toEqual([
       "A5 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, 'nobody');
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(false);
   });
@@ -298,7 +298,7 @@ describe("handleAuthenticate", () => {
     expect(socket.writes).toEqual([
       "A6 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, 'admin');
   });
 
   it("refuses an empty password even when the stored hash would match it", async () => {
@@ -356,7 +356,7 @@ describe("handleAuthenticate", () => {
     expect(socket.writes).toEqual([
       `A9 OK [CAPABILITY ${CAPABILITIES}] AUTHENTICATE completed\r\n`,
     ]);
-    expect(mockResetAuthFailures).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockResetAuthFailures).toHaveBeenCalledWith(REMOTE_IP, 'admin');
     expect(mockRecordAuthFailure).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(false);
   });
@@ -425,7 +425,7 @@ describe("handleLogin", () => {
       "B2 NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n",
     ]);
     expect(harness.socket.destroyed).toBe(true);
-    expect(mockIsAuthRateLimited).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockIsAuthRateLimited).toHaveBeenCalledWith(REMOTE_IP, 'admin');
     expect(mockGetUser).not.toHaveBeenCalled();
     expect(mockRecordAuthFailure).not.toHaveBeenCalled();
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
@@ -478,7 +478,7 @@ describe("handleLogin", () => {
     expect(harness.socket.writes).toEqual([
       "B5 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, 'nobody');
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
     expect(harness.socket.destroyed).toBe(false);
   });
@@ -496,7 +496,7 @@ describe("handleLogin", () => {
     expect(harness.socket.writes).toEqual([
       "B10 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, 'admin');
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
   });
 
@@ -513,7 +513,7 @@ describe("handleLogin", () => {
     expect(harness.socket.writes).toEqual([
       "B11 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, 'admin');
   });
 
   it("refuses an account with no signable identity instead of throwing", async () => {
@@ -574,7 +574,7 @@ describe("handleLogin", () => {
     expect(harness.socket.writes).toEqual([
       `B8 OK [CAPABILITY ${CAPABILITIES}] LOGIN completed\r\n`,
     ]);
-    expect(mockResetAuthFailures).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockResetAuthFailures).toHaveBeenCalledWith(REMOTE_IP, 'admin');
     expect(mockRecordAuthFailure).not.toHaveBeenCalled();
     expect(harness.socket.destroyed).toBe(false);
     expect(mockLoggerInfo).toHaveBeenCalledWith("IMAP LOGIN success", {
@@ -750,7 +750,7 @@ describe("read-only credential session resolution", () => {
     expect(socket.writes).toEqual([
       "E3 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, ADMIN_RO_USERNAME);
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(false);
   });
@@ -839,7 +839,7 @@ describe("read-only credential session resolution", () => {
     expect(harness.socket.writes).toEqual([
       "E6 NO [AUTHENTICATIONFAILED] Invalid credentials.\r\n",
     ]);
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP);
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith(REMOTE_IP, ADMIN_RO_USERNAME);
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
     expect(harness.socket.destroyed).toBe(false);
   });

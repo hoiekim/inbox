@@ -73,7 +73,7 @@ export const loginIdentityOf = (req: Request): string | undefined => {
  * The middleware refuses when either trips, and a success clears only the
  * authenticating account's own bucket — the aggregate keeps accumulating, so
  * one account's success can no longer forgive another account's failures from
- * the same IP (#1032).
+ * the same IP.
  *
  * Each call to createLimiter gets its own isolated attempt Maps so that
  * separate limiters (e.g. loginLimiter and tokenLimiter) do not share

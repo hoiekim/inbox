@@ -18,6 +18,7 @@ import { IncomingMail, MailDataToSend } from "common";
 import {
   isAuthRateLimited,
   isRecipientProbeRateLimited,
+  normalizeAuthAccount,
   recordAuthFailure,
   recordRecipientProbe,
   resetAuthFailures
@@ -115,11 +116,16 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
 
   const ip = session.remoteAddress ?? "unknown";
 
-  if (isAuthRateLimited(ip)) {
+  const { username, password } = auth;
+  // The attempted identity: failures accumulate per (ip, account) and the
+  // success below forgives only this account's own bucket. The per-IP
+  // aggregate is never reset here, so alternating accounts from one IP
+  // cannot wipe the counter.
+  const account = normalizeAuthAccount(username);
+
+  if (isAuthRateLimited(ip, account)) {
     return cb(new Error("Too many failed authentication attempts"));
   }
-
-  const { username, password } = auth;
 
   let user;
   let pwMatches = false;
@@ -133,11 +139,14 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
 
   const signedUser = user?.getSigned();
   if (!user || !signedUser || !pwMatches) {
-    await recordAuthFailure(ip);
+    await recordAuthFailure(ip, account);
     return cb(null, { user: undefined });
   }
 
-  resetAuthFailures(ip);
+  // Scoped reset: forgive only the authenticating account's own bucket. The
+  // per-IP aggregate keeps its count, so a success here cannot wipe another
+  // account's failures from the same IP.
+  resetAuthFailures(ip, account);
   // Audit line names the original credential. Read-only sessions pass this
   // gate and are refused later at the single mutating gate this surface
   // has, `onMailFrom` (below) — matching HTTP and IMAP where the read-only

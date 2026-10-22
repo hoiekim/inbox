@@ -9,11 +9,16 @@
  * budget, and a recipient that resolves to no mailbox is charged to the
  * recipient budget. Both are per-IP and share the window and the delay.
  *
- * Policy:
+ * Policy (auth budget):
  *  - After the budget's maximum failed attempts from the same IP in WINDOW_MS,
  *    the caller should refuse without doing the lookup.
  *  - A 500ms delay is added after each failure to slow brute-force attempts.
- *  - A successful auth resets the auth counter for that IP.
+ *  - Failures are tracked at two granularities: a per-IP aggregate bucket
+ *    that every failure from the IP feeds, plus one bucket per attempted
+ *    account under that IP. The gate refuses when either trips, and a
+ *    successful auth clears only the authenticating account's own bucket —
+ *    the aggregate keeps accumulating, so one account's success can no
+ *    longer forgive another account's failures from the same IP.
  */
 
 const MAX_FAILURES = 10;
@@ -28,7 +33,27 @@ interface AttemptRecord {
 }
 
 const authAttempts = new Map<string, AttemptRecord>();
+const authAccountAttempts = new Map<string, AttemptRecord>();
 const recipientProbes = new Map<string, AttemptRecord>();
+
+// `\u0000` separates the components; neither an IP nor a normalized account
+// name can contain one, so a crafted account string cannot collide with a
+// different (ip, account) pair.
+const accountKey = (ip: string, account: string): string => `${ip}\u0000${account}`;
+
+/**
+ * The account identity an auth attempt is bucketed under: the attempted
+ * username, normalized so trivial case/whitespace rotation of the identity
+ * does not buy a fresh bucket. Returns undefined when the username is empty;
+ * the per-IP aggregate still applies in that case.
+ */
+export const normalizeAuthAccount = (
+  username: string | undefined
+): string | undefined => {
+  if (username === undefined) return undefined;
+  const account = username.trim().toLowerCase();
+  return account === "" ? undefined : account;
+};
 
 const getRecord = (
   store: Map<string, AttemptRecord>,
@@ -56,26 +81,56 @@ const record = async (
 
 /**
  * Check whether the given IP is currently rate-limited.
- * Returns true if the IP has exceeded the failure threshold.
+ * Returns true if the IP's aggregate bucket has exceeded the failure
+ * threshold, or — when an account is given — that account's own bucket has.
  */
-export const isAuthRateLimited = (ip: string): boolean => {
-  return getRecord(authAttempts, ip).count >= MAX_FAILURES;
+export const isAuthRateLimited = (ip: string, account?: string): boolean => {
+  if (getRecord(authAttempts, ip).count >= MAX_FAILURES) return true;
+  return (
+    account !== undefined &&
+    getRecord(authAccountAttempts, accountKey(ip, account)).count >=
+      MAX_FAILURES
+  );
 };
 
 /**
- * Record a failed auth attempt for the given IP.
+ * Record a failed auth attempt for the given IP, and — when an account is
+ * given — against that account's own bucket under the IP.
  * Adds a delay to slow brute-force attacks.
  * Returns true if the IP is now rate-limited (hit the threshold this call).
  */
-export const recordAuthFailure = (ip: string): Promise<boolean> => {
-  return record(authAttempts, ip, MAX_FAILURES);
+export const recordAuthFailure = async (
+  ip: string,
+  account?: string
+): Promise<boolean> => {
+  const aggregateLimited = await record(authAttempts, ip, MAX_FAILURES);
+  if (account === undefined) return aggregateLimited;
+  // The account bucket rides the same failure event, so there is only one
+  // delay per failure.
+  const attempt = getRecord(authAccountAttempts, accountKey(ip, account));
+  attempt.count++;
+  return aggregateLimited || attempt.count >= MAX_FAILURES;
 };
 
 /**
- * Reset the failure counter for the given IP on successful auth.
+ * Reset the failure counter on successful auth. With an account, only that
+ * account's own bucket is cleared and the per-IP aggregate keeps
+ * accumulating; without one, the whole IP bucket (aggregate plus every
+ * account bucket under it) is cleared, preserving the
+ * pre-account-granularity contract.
  */
-export const resetAuthFailures = (ip: string): void => {
-  authAttempts.delete(ip);
+export const resetAuthFailures = (ip: string, account?: string): void => {
+  if (account === undefined) {
+    authAttempts.delete(ip);
+    const prefix = `${ip}\u0000`;
+    for (const key of authAccountAttempts.keys()) {
+      if (key.startsWith(prefix)) {
+        authAccountAttempts.delete(key);
+      }
+    }
+    return;
+  }
+  authAccountAttempts.delete(accountKey(ip, account));
 };
 
 /**
@@ -116,7 +171,7 @@ export const resetRecipientProbes = (ip: string): void => {
 export const cleanupExpiredRateLimitRecords = (): number => {
   const now = Date.now();
   let cleaned = 0;
-  for (const store of [authAttempts, recipientProbes]) {
+  for (const store of [authAttempts, authAccountAttempts, recipientProbes]) {
     for (const [ip, attempt] of store) {
       if (now >= attempt.resetAt) {
         store.delete(ip);

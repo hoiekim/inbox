@@ -289,8 +289,8 @@ describe("onAuth handler", () => {
       onAuth!(auth, session, (_err, data) => resolve(data || {}));
     });
 
-    expect(mockIsAuthRateLimited).toHaveBeenCalledWith("unknown");
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith("unknown");
+    expect(mockIsAuthRateLimited).toHaveBeenCalledWith("unknown", "nope");
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith("unknown", "nope");
   });
 
   it("records failure and rejects when getSigned returns falsy", async () => {
@@ -306,7 +306,7 @@ describe("onAuth handler", () => {
     });
 
     expect(result.user).toBeUndefined();
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith("9.9.9.9");
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith("9.9.9.9", "testuser");
   });
 
   it("records failure on wrong-password path", async () => {
@@ -322,7 +322,7 @@ describe("onAuth handler", () => {
       onAuth!(auth, session, (_err, data) => resolve(data || {}));
     });
 
-    expect(mockRecordAuthFailure).toHaveBeenCalledWith("1.1.1.1");
+    expect(mockRecordAuthFailure).toHaveBeenCalledWith("1.1.1.1", "testuser");
     expect(mockResetAuthFailures).not.toHaveBeenCalled();
   });
 
