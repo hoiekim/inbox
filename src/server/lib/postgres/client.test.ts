@@ -1,6 +1,5 @@
-import { describe, test, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, test, expect, mock, spyOn, beforeAll, afterAll } from "bun:test";
 import { EventEmitter } from "events";
-import type { Pool } from "pg";
 
 // Capture real pg before mocking so we can restore at end-of-file.
 const realPg = { ...(await import("pg")) };
@@ -12,7 +11,7 @@ class FakePool {
   _clients: string[] = ["c1", "c2", "c3"];
   config: unknown;
   // EventEmitter-style mutation field — set trap regression test.
-  listeners: Array<(err: Error) => void> = [];
+  listeners: Record<string, Array<(arg: unknown) => void>> = {};
   constructor(config: unknown) {
     this.config = config;
     ctorCalls();
@@ -28,8 +27,8 @@ class FakePool {
   connect() {
     return Promise.resolve({ query: () => {}, release: () => {} });
   }
-  on(_event: string, handler: (err: Error) => void) {
-    this.listeners.push(handler);
+  on(event: string, handler: (arg: unknown) => void) {
+    (this.listeners[event] ??= []).push(handler);
   }
 }
 
@@ -39,7 +38,7 @@ mock.module("pg", () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 }));
 
-const { pool, resetPool, logDroppedConnections } = await import("./client");
+const { pool, resetPool } = await import("./client");
 
 afterAll(() => {
   // Restore pg so subsequent test files don't see FakePool.
@@ -110,22 +109,44 @@ describe("pool config", () => {
   });
 });
 
-describe("logDroppedConnections", () => {
+describe("dropped connections", () => {
   const dropped = Object.assign(new Error("terminating connection due to administrator command"), {
     code: "57P01",
   });
+  const builtPool = () => {
+    resetPool();
+    void pool.ending;
+    return pool as unknown as FakePool;
+  };
 
-  test("a checked-out client's dropped connection does not throw", () => {
-    const target = new EventEmitter();
-    logDroppedConnections(target as unknown as Pool);
-    const client = new EventEmitter();
-    target.emit("connect", client);
-    expect(() => client.emit("error", dropped)).not.toThrow();
+  test("a checked-out client's dropped connection is logged and does not throw", () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const client = new EventEmitter();
+      for (const onConnect of builtPool().listeners.connect ?? []) onConnect(client);
+      expect(() => client.emit("error", dropped)).not.toThrow();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0]?.[1]).toBe(dropped);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
-  test("an idle client's error re-emitted on the pool does not throw", () => {
-    const target = new EventEmitter();
-    logDroppedConnections(target as unknown as Pool);
-    expect(() => target.emit("error", dropped)).not.toThrow();
+  test("an idle client's error re-emitted on the pool is not logged a second time", () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const onError = builtPool().listeners.error ?? [];
+      expect(onError).toHaveLength(1);
+      onError[0]?.(dropped);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("a rebuilt pool gets the listeners too", () => {
+    builtPool();
+    resetPool();
+    expect(builtPool().listeners.connect).toHaveLength(1);
   });
 });
