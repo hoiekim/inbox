@@ -334,3 +334,91 @@ describe("rate-limit bucket over HTTP, production trust-proxy posture", () => {
     }
   });
 });
+
+// Regression tests for #1032: a successful login used to delete the IP's
+// entire failure bucket, so one self-registered account turned the 5-per-15-min
+// cap into unlimited guesses at any other user. Failures are now tracked per
+// (ip, account) under a per-IP aggregate ceiling; success forgives only the
+// authenticating account's own bucket.
+describe("account-scoped login buckets", () => {
+  const CAP = 5;
+
+  const makeLoginLimiter = async () => {
+    const { createLimiter, loginIdentityOf } = await import("./rate-limit");
+    return createLimiter(CAP, "too many", { identityOf: loginIdentityOf });
+  };
+
+  const loginReq = (ip: string, username: string) =>
+    ({
+      ip,
+      body: { username, password: "x" },
+      headers: {},
+      socket: { remoteAddress: ip }
+    }) as unknown as import("express").Request;
+
+  const check = (limiter: import("./rate-limit").RateLimiter, req: import("express").Request) => {
+    const res = makeRes();
+    const next = mock(() => {});
+    limiter.middleware(req, res, next);
+    return { res, next };
+  };
+
+  it("a success as another account does not forgive the victim's failures", async () => {
+    const limiter = await makeLoginLimiter();
+    const ip = "203.0.113.21";
+
+    // Four failed guesses as the victim.
+    for (let i = 0; i < 4; i++) limiter.recordFailure(ip, "victim");
+    // One successful login as the attacker's own account — clears only the
+    // attacker's own bucket.
+    limiter.reset(ip, "attacker");
+    // The fifth failed guess as the victim is recorded...
+    limiter.recordFailure(ip, "victim");
+
+    const { res, next } = check(limiter, loginReq(ip, "victim"));
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rotating the username trips the per-IP ceiling", async () => {
+    const limiter = await makeLoginLimiter();
+    const ip = "203.0.113.22";
+
+    // One failure each under five distinct identities: no single account
+    // bucket is near the cap, but the IP aggregate has five failures.
+    for (let i = 1; i <= 5; i++) limiter.recordFailure(ip, `target${i}`);
+
+    // A sixth attempt under yet another fresh identity is still refused.
+    const { res, next } = check(limiter, loginReq(ip, "target6"));
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("a user's own successful login clears their own failures", async () => {
+    const limiter = await makeLoginLimiter();
+    const ip = "203.0.113.23";
+
+    // Four failures as alice, then she logs in successfully.
+    for (let i = 0; i < 4; i++) limiter.recordFailure(ip, "alice");
+    limiter.reset(ip, "alice");
+
+    // No lingering penalty: her next attempt passes the middleware even though
+    // the per-IP aggregate still holds her four failures.
+    const { res, next } = check(limiter, loginReq(ip, "alice"));
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("a whole-IP reset still clears every bucket under the IP", async () => {
+    const limiter = await makeLoginLimiter();
+    const ip = "203.0.113.24";
+
+    limiter.recordFailure(ip, "alice");
+    limiter.recordFailure(ip, "alice");
+    limiter.reset(ip);
+
+    const { res, next } = check(limiter, loginReq(ip, "alice"));
+    expect(res.status).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+});

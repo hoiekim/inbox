@@ -11,7 +11,12 @@ import {
   logger,
   resolveSessionUser,
 } from "server";
-import { isAuthRateLimited, recordAuthFailure, resetAuthFailures } from "../auth-rate-limit";
+import {
+  isAuthRateLimited,
+  normalizeAuthAccount,
+  recordAuthFailure,
+  resetAuthFailures,
+} from "../auth-rate-limit";
 import { verifyPassword } from "../verify-password";
 import { Store } from "./store";
 import { closeSocket } from "./close-socket";
@@ -32,9 +37,10 @@ const failAuth = async (
   tag: string,
   ip: string,
   socket: Socket,
-  write: (data: string) => boolean | undefined
+  write: (data: string) => boolean | undefined,
+  account?: string
 ): Promise<null> => {
-  const limited = await recordAuthFailure(ip);
+  const limited = await recordAuthFailure(ip, account);
   if (limited) {
     write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
     closeSocket(socket);
@@ -68,7 +74,12 @@ const authenticateCredentials = async (
   write: (data: string) => boolean | undefined,
   tag: string
 ): Promise<ResolvedSessionUser | null> => {
-  if (isAuthRateLimited(ip)) {
+  // The attempted identity: failures accumulate per (ip, account) and the
+  // success below forgives only this account's own bucket. The per-IP
+  // aggregate is never reset here, so alternating accounts from one IP
+  // cannot wipe the counter.
+  const account = normalizeAuthAccount(username);
+  if (isAuthRateLimited(ip, account)) {
     write(`${tag} NO [AUTHENTICATIONFAILED] Too many failed attempts\r\n`);
     closeSocket(socket);
     return null;
@@ -80,15 +91,18 @@ const authenticateCredentials = async (
   const pwMatches = await verifyPassword(password, user?.password);
 
   if (!user || !signedUser || !pwMatches) {
-    return failAuth(tag, ip, socket, write);
+    return failAuth(tag, ip, socket, write, account);
   }
 
   const resolved = await resolveSessionUser(signedUser);
   if (!resolved) {
-    return failAuth(tag, ip, socket, write);
+    return failAuth(tag, ip, socket, write, account);
   }
 
-  resetAuthFailures(ip);
+  // Scoped reset: forgive only the authenticating account's own bucket. The
+  // per-IP aggregate keeps its count, so a success here cannot wipe another
+  // account's failures from the same IP.
+  resetAuthFailures(ip, account);
   return resolved;
 };
 
