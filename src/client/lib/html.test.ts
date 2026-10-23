@@ -96,6 +96,50 @@ describe("processHtmlForViewer — dangerous URI scheme neutralization", () => {
     const doc = viewerDoc(`<a href="https://safe.test/path">x</a>`);
     expect(doc.querySelector("a")?.getAttribute("href")).toBe("https://safe.test/path");
   });
+
+  // Issue #1018: per the WHATWG URL standard the parser strips leading C0
+  // controls and space, and removes every tab/LF/CR from anywhere in the
+  // input, before reading the scheme — so java<TAB>script: and
+  // \x01javascript: both resolve to javascript: in the browser. The old
+  // ^\s* anchors missed them.
+  test.each([
+    "java\tscript:alert(1)", // tab inside the scheme
+    "java\nscript:alert(1)", // LF inside the scheme
+    "\x01javascript:alert(1)", // leading C0 control
+    " \x02 javascript:alert(1)", // leading C0 controls + space
+    "vb\tscript:msgbox(1)",
+    "jav\rascript:alert(1)", // CR inside the scheme
+  ])("strips scheme obfuscated with control characters: %j", (uri) => {
+    const doc = viewerDoc(`<a href="${uri}">x</a>`);
+    expect(doc.querySelector("a")?.hasAttribute("href")).toBe(false);
+  });
+
+  test.each(["da\tta:text/html,x", "\x01data:text/html,x"])(
+    "strips data: obfuscated with control characters in href: %j",
+    (uri) => {
+      const doc = viewerDoc(`<a href="${uri}">x</a>`);
+      expect(doc.querySelector("a")?.hasAttribute("href")).toBe(false);
+    },
+  );
+
+  test("strips control-character-obfuscated scheme in xlink:href and formaction", () => {
+    const doc = viewerDoc(`<svg><a xlink:href="java\tscript:alert(1)"><text>x</text></a></svg>`);
+    expect(doc.querySelector("a")?.hasAttribute("xlink:href")).toBe(false);
+    const doc2 = viewerDoc(`<button formaction="\x01javascript:alert(1)">x</button>`);
+    expect(doc2.querySelector("button")?.hasAttribute("formaction")).toBe(false);
+  });
+
+  test("strips control-character-obfuscated scheme hiding in a later srcset candidate", () => {
+    const doc = viewerDoc(
+      `<img srcset="https://x.test/a.png 1x, java\tscript:alert(1) 2x">`
+    );
+    expect(doc.querySelector("img")?.hasAttribute("srcset")).toBe(false);
+  });
+
+  test("does not strip a URL that merely contains control characters after a safe scheme", () => {
+    const doc = viewerDoc(`<a href="https://safe.test/pa\tth">x</a>`);
+    expect(doc.querySelector("a")?.getAttribute("href")).toBe("https://safe.test/pa\tth");
+  });
 });
 
 describe("processHtmlForViewer — image tracking mitigation", () => {
