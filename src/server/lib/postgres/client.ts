@@ -39,9 +39,28 @@ const config: PoolConfig = {
   },
 };
 
+/**
+ * Keeps a dropped connection (e.g. Postgres restarting) from becoming an
+ * uncaught exception. pg emits it on the client, and pg-pool detaches its own
+ * listener while a client is checked out, so every client gets one here. The
+ * dead client's next query rejects and the pool replaces it.
+ */
+const logDroppedConnections = (target: Pool): void => {
+  target.on("connect", (client) => {
+    client.on("error", (err) => {
+      console.error("Database connection lost:", err);
+    });
+  });
+  // pg-pool re-emits an idle client's error here, after the client listener logged it.
+  target.on("error", () => {});
+};
+
 let _pool: Pool | null = null;
 const getPool = (): Pool => {
-  if (!_pool) _pool = new Pool(config);
+  if (!_pool) {
+    _pool = new Pool(config);
+    logDroppedConnections(_pool);
+  }
   return _pool;
 };
 export const resetPool = (): void => {
@@ -69,12 +88,6 @@ export const pool: Pool = new Proxy({} as Pool, {
   getPrototypeOf() {
     return Reflect.getPrototypeOf(getPool());
   },
-});
-
-// Log unexpected pool-level errors so they appear in server logs and are not silently swallowed.
-// Without this, a background idle client error would surface as an unhandled rejection.
-pool.on("error", (err) => {
-  console.error("Unexpected database pool error:", err);
 });
 
 // Graceful shutdown is handled centrally in start.ts (SIGTERM/SIGINT → shutdown()).
