@@ -76,17 +76,70 @@ const verifySignature = (sig: MailgunSignature | undefined, key: string): boolea
 };
 
 /**
- * Alarm gate. Mailgun's newer schema collapses `permanent_fail` /
- * `temporary_fail` into `failed` + a `severity` field; keep the legacy
- * event names on the allowlist so both schemas alarm correctly. Bare
- * `failed` with `severity === "temporary"` is greylist / DNS retry /
- * IP-rep throttling — noise for a signal-first webhook, so it's
- * excluded (Mailgun retries those internally without our intervention).
+ * Field bounds for the unsigned `event-data` object. Mailgun's HMAC covers
+ * only `signature.{timestamp, token}` — every field below arrives
+ * unauthenticated inside the 15-min replay window of a captured signature,
+ * so each TEXT column gets a length cap at the route boundary, where
+ * `safeOccurredAt` already bounds `timestamp`. Caps sit far above anything
+ * Mailgun itself sends (its event `id` is 22-50 chars, the longest known
+ * event name is 12 chars, `severity` is `temporary`/`permanent`) but a
+ * caller-chosen multi-MB string no longer reaches a TEXT column or the
+ * TEXT PRIMARY KEY that defeats the retry dedupe.
+ *
+ * Over-cap values are REJECTED, not truncated — a payload outside these
+ * shapes did not come from Mailgun. The route returns its usual
+ * delivered-and-dropped 200 (`status: "failed"`); Mailgun retries for hours
+ * on 5xx, so attacker input must never produce one.
  */
-const shouldAlarm = (data: MailgunEventData): boolean => {
-  if (data.event === "complained") return true;
-  if (data.event === "permanent_fail") return true;
-  if (data.event === "failed") return data.severity === "permanent";
+const KNOWN_MAILGUN_EVENTS = [
+  "accepted",
+  "rejected",
+  "delivered",
+  "failed",
+  "opened",
+  "clicked",
+  "unsubscribed",
+  "complained",
+  "stored",
+  // Legacy event names: Mailgun's newer schema collapses `permanent_fail` /
+  // `temporary_fail` into `failed` + `severity`, but both schemas keep
+  // flowing, so both names stay accepted. `temporary_fail` is accepted but
+  // silent (see shouldAlarm).
+  "permanent_fail",
+  "temporary_fail",
+] as const;
+
+const MAX_EVENT_ID_LENGTH = 128;
+const MAX_RECIPIENT_LENGTH = 320; // RFC 5321 maximum address length
+const MAX_SEVERITY_LENGTH = 32;
+const MAX_REASON_LENGTH = 2048;
+const MAX_MESSAGE_ID_LENGTH = 1024;
+const MAX_RAW_BYTES = 16 * 1024; // real events serialize to a few KB
+
+type KnownMailgunEvent = (typeof KNOWN_MAILGUN_EVENTS)[number];
+
+/** Unknown or non-string event names → null (delivered-and-dropped). */
+const validateEvent = (raw: unknown): KnownMailgunEvent | null =>
+  typeof raw === "string" &&
+  (KNOWN_MAILGUN_EVENTS as readonly string[]).includes(raw)
+    ? (raw as KnownMailgunEvent)
+    : null;
+
+/** True when a present string exceeds its column cap. */
+const overCap = (raw: unknown, max: number): boolean =>
+  typeof raw === "string" && raw.length > max;
+
+/**
+ * Alarm gate. `event` is one of KNOWN_MAILGUN_EVENTS by the time it reaches
+ * here — this is a consequence of that single allow-list, not a second one.
+ * Bare `failed` with `severity === "temporary"` is greylist / DNS retry /
+ * IP-rep throttling — noise for a signal-first webhook, so it's excluded
+ * (Mailgun retries those internally without our intervention).
+ */
+const shouldAlarm = (event: KnownMailgunEvent, severity: string | null): boolean => {
+  if (event === "complained") return true;
+  if (event === "permanent_fail") return true;
+  if (event === "failed") return severity === "permanent";
   return false;
 };
 
@@ -116,13 +169,33 @@ const safeOccurredAt = (rawTs: unknown): string => {
 
 const extractReason = (data: MailgunEventData): string | null => {
   const ds = data["delivery-status"];
-  if (!ds) return null;
+  // `delivery-status` is unsigned attacker JSON: treat anything that is not
+  // an object with string fields the way the route treats every other
+  // non-string optional — coerce to null. A truthy non-string (object,
+  // array, true) here would otherwise reach the filter's `.trim()` below
+  // and throw outside the DB try/catch, 500ing the route.
+  if (!ds || typeof ds !== "object") return null;
+  const asString = (v: unknown): string | null =>
+    typeof v === "string" ? v : null;
   const parts = [
     ds.code != null ? String(ds.code) : null,
-    ds.message ?? null,
-    ds.description ?? null,
+    asString(ds.message),
+    asString(ds.description),
   ].filter((p): p is string => !!p && p.trim().length > 0);
   return parts.length ? parts.join(" · ") : null;
+};
+
+/**
+ * `raw` holds the whole unsigned `event-data` object in a JSONB column.
+ * Real events serialize to a few KB; over the ceiling, store a redaction
+ * marker instead of the payload — never the payload.
+ */
+const boundedRaw = (data: MailgunEventData): Record<string, unknown> => {
+  const serialized = JSON.stringify(data) ?? "";
+  if (Buffer.byteLength(serialized, "utf8") <= MAX_RAW_BYTES) {
+    return data as unknown as Record<string, unknown>;
+  }
+  return { redacted: `event-data exceeded ${MAX_RAW_BYTES} bytes` };
 };
 
 export const postMailgunEventsRoute = new Route<undefined>(
@@ -155,22 +228,47 @@ export const postMailgunEventsRoute = new Route<undefined>(
       return { status: "failed", message: "Malformed event payload" };
     }
 
-    const messageId = data.message?.headers?.["message-id"] ?? null;
-    const occurredAt = safeOccurredAt(data.timestamp);
-    const recipient = data.recipient ?? null;
-    const severity = data.severity ?? null;
+    // Bounds on the unsigned event-data (see the constants above): a payload
+    // outside these shapes did not come from Mailgun — delivered-and-dropped,
+    // never 5xx. Non-string optionals coerce to null (Mailgun's schema has
+    // them as strings); over-cap strings reject the payload outright.
+    if (typeof data.id !== "string" || data.id.length > MAX_EVENT_ID_LENGTH) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
+    const event = validateEvent(data.event);
+    if (event === null) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
+    if (overCap(data.recipient, MAX_RECIPIENT_LENGTH)) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
+    if (overCap(data.severity, MAX_SEVERITY_LENGTH)) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
+    const rawMessageId = data.message?.headers?.["message-id"] ?? null;
+    if (overCap(rawMessageId, MAX_MESSAGE_ID_LENGTH)) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
     const reason = extractReason(data);
+    if (reason !== null && reason.length > MAX_REASON_LENGTH) {
+      return { status: "failed", message: "Malformed event payload" };
+    }
+
+    const messageId = typeof rawMessageId === "string" ? rawMessageId : null;
+    const recipient = typeof data.recipient === "string" ? data.recipient : null;
+    const severity = typeof data.severity === "string" ? data.severity : null;
+    const occurredAt = safeOccurredAt(data.timestamp);
 
     const model = new MailgunEventModel({
       event_id: data.id,
-      event: data.event,
+      event,
       message_id: messageId,
       recipient,
       severity,
       reason,
       occurred_at: occurredAt,
       received_at: new Date().toISOString(),
-      raw: data as unknown as Record<string, unknown>,
+      raw: boundedRaw(data),
     });
 
     // Mailgun retries the same event_id on our 5xx, so a duplicate
@@ -190,15 +288,15 @@ export const postMailgunEventsRoute = new Route<undefined>(
     }
 
     logger.info("Mailgun event", {
-      event: data.event,
+      event,
       message_id: messageId,
       recipient,
       severity,
     });
 
-    if (shouldAlarm(data)) {
+    if (shouldAlarm(event, severity)) {
       const detail = [
-        `**Event:** ${data.event}`,
+        `**Event:** ${event}`,
         recipient ? `**Recipient:** ${recipient}` : null,
         severity ? `**Severity:** ${severity}` : null,
         reason ? `**Reason:** ${reason}` : null,
@@ -208,7 +306,7 @@ export const postMailgunEventsRoute = new Route<undefined>(
         .join("\n");
       // Cooldown per event type so a spam burst doesn't drown out
       // signal from other event types.
-      sendAlarm(`Mailgun: ${data.event}`, detail, `mailgun-${data.event}`).catch(
+      sendAlarm(`Mailgun: ${event}`, detail, `mailgun-${event}`).catch(
         () => undefined,
       );
     }
