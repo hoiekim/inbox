@@ -1,4 +1,6 @@
 import { describe, test, expect, mock, beforeAll, afterAll } from "bun:test";
+import { EventEmitter } from "events";
+import type { Pool } from "pg";
 
 // Capture real pg before mocking so we can restore at end-of-file.
 const realPg = { ...(await import("pg")) };
@@ -37,7 +39,7 @@ mock.module("pg", () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 }));
 
-const { pool, resetPool } = await import("./client");
+const { pool, resetPool, logDroppedConnections } = await import("./client");
 
 afterAll(() => {
   // Restore pg so subsequent test files don't see FakePool.
@@ -105,5 +107,25 @@ describe("pool config", () => {
     const cfg = (pool as unknown as { config: Record<string, unknown> }).config;
     expect(cfg.statement_timeout).toBe(30_000);
     expect(cfg.query_timeout).toBe(30_000);
+  });
+});
+
+describe("logDroppedConnections", () => {
+  const dropped = Object.assign(new Error("terminating connection due to administrator command"), {
+    code: "57P01",
+  });
+
+  test("a checked-out client's dropped connection does not throw", () => {
+    const target = new EventEmitter();
+    logDroppedConnections(target as unknown as Pool);
+    const client = new EventEmitter();
+    target.emit("connect", client);
+    expect(() => client.emit("error", dropped)).not.toThrow();
+  });
+
+  test("an idle client's error re-emitted on the pool does not throw", () => {
+    const target = new EventEmitter();
+    logDroppedConnections(target as unknown as Pool);
+    expect(() => target.emit("error", dropped)).not.toThrow();
   });
 });
