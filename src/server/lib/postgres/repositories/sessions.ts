@@ -64,7 +64,7 @@ export const updateSession = async (
     [SESSION_EMAIL]: user.email,
     [SESSION_IS_READ_ONLY]: user.isReadOnly ?? null,
     [SESSION_AUTHENTICATED_AS]: user.authenticatedAs ?? null,
-    // The revocation fence (issue #1016): stamp the credential generation the
+    // The revocation fence: stamp the credential generation the
     // session was minted from. This must be the version the caller
     // authenticated against — NOT a fresh read of the user row — so a login
     // that straddled a password rotation stamps the stale generation and
@@ -189,7 +189,7 @@ export class PostgresSessionStore extends Store {
         return callback(null, null);
       }
 
-      // The revocation fence (issue #1016): a grant proves itself current on
+      // The revocation fence: a grant proves itself current on
       // every read, not only at issuance. A session row resurrected by an
       // in-flight request after `deleteSessionsForUser`, or a session minted
       // by a login that straddled the rotation, carries the stale generation

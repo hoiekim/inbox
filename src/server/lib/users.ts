@@ -1,11 +1,14 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User, SignedUser } from "common";
-import { searchUser as pgSearchUser } from "./postgres/repositories/users";
+import {
+  searchUser as pgSearchUser,
+  rotateUserPassword,
+} from "./postgres/repositories/users";
 import { deleteSessionsForUser } from "./postgres/repositories/sessions";
 import { evictImapSessions } from "./imap/session-registry";
 import { evictSmtpConnections } from "./smtp-registry";
-import { usersTable, USER_ID, TOKEN, EXPIRY, PASSWORD_VERSION } from "./postgres/models";
+import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 import { logger } from "./logger";
 
 const { APP_HOSTNAME } = process.env;
@@ -211,20 +214,26 @@ export const setUserInfo = async (
 
   await deleteSessionsForUser(id);
 
-  // The revocation fence (issue #1016): the credential generation is bumped
-  // in the SAME UPDATE that writes the new hash, so no interleaving can land
-  // a new hash on the old generation. Every authentication surface stamps
-  // the version its grant was minted from and compares it afterwards — a
-  // session or connection minted before this bump fails its next comparison.
-  const passwordVersion = (existingUser.passwordVersion ?? 1) + 1;
-
-  await usersTable.update(id, {
-    password: passwordHash,
-    [PASSWORD_VERSION]: passwordVersion,
+  // The revocation fence: the credential generation is bumped in the SAME
+  // UPDATE that writes the new hash, so no interleaving can land a new
+  // hash on the old generation. The bump is atomic
+  // (`COALESCE(password_version, 1) + 1` in the UPDATE itself), not a
+  // read-modify-write in JS: two concurrent rotations used to both read
+  // generation N and both write N+1 with different hashes, leaving a grant
+  // stamped N+1 by the first rotation alive after the second. Every
+  // authentication surface stamps the version its grant was minted from
+  // and compares it afterwards — a session or connection minted before
+  // this bump fails its next comparison. The signed session below carries
+  // the generation the UPDATE actually returned, never a pre-computed one.
+  const passwordVersion = await rotateUserPassword(id, {
+    passwordHash,
     username,
     token: null,
-    expiry: null
+    expiry: null,
   });
+  if (passwordVersion === null) {
+    throw new Error("`setUserInfo` failed because the user row is missing.");
+  }
 
   // IMAP and SMTP hold authentication for the life of a connection rather than
   // per request, so a client that authenticated with the old password keeps its

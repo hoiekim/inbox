@@ -266,7 +266,7 @@ describe("onAuth handler", () => {
   });
 
   it("stamps the credential's password_version onto the session at AUTH", async () => {
-    // The revocation fence (issue #1016): the per-command gates compare this
+    // The revocation fence: the per-command gates compare this
     // stamp against the row's current version.
     const hashedPw = await bcrypt.hash("correctpassword", 10);
     const session = {} as SMTPServerSession;
@@ -521,7 +521,7 @@ describe("onMailFrom handler", () => {
   });
 
   it("refuses MAIL FROM with 421 when the credential rotated after AUTH", async () => {
-    // The revocation fence (issue #1016): the connection was stamped with
+    // The revocation fence: the connection was stamped with
     // generation 1 at AUTH; the row is now on 2. `mockResolvedValueOnce`
     // keeps the implementation from leaking into later describes.
     mockGetUser.mockResolvedValueOnce({ passwordVersion: 2 });
@@ -826,7 +826,7 @@ describe("onData handler", () => {
   });
 
   it("refuses an outgoing message when the credential rotated after AUTH", async () => {
-    // The revocation fence (issue #1016): the send gate re-checks the
+    // The revocation fence: the send gate re-checks the
     // stamp, closing the window between RCPT TO and DATA.
     const stream = makeStream();
     const session = {

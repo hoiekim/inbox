@@ -36,7 +36,7 @@ export interface SessionJSON {
   session_email: string;
   session_is_read_only: boolean | null;
   session_authenticated_as: string | null;
-  // The credential generation the session was minted from (issue #1016).
+  // The credential generation the session was minted from.
   // Null on rows written before the fence's migration; reads as 1.
   session_password_version: number | null;
   cookie_original_max_age: number | null;

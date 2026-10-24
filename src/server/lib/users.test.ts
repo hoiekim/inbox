@@ -679,7 +679,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     await setUserInfo({
       email: "a@b.c",
@@ -702,10 +702,13 @@ describe("setUserInfo", () => {
     expect(values).not.toContain("newpw");
   });
 
-  it("bumps password_version in the same UPDATE that writes the new hash", async () => {
-    // The revocation fence (issue #1016): the generation bump and the hash
+  it("bumps password_version atomically in the same UPDATE that writes the new hash", async () => {
+    // The revocation fence: the generation bump and the hash
     // write are one UPDATE, so no interleaving can land a new hash on the
-    // old generation.
+    // old generation. The bump is computed by the database
+    // (`COALESCE(password_version, 1) + 1`), not read-modify-written in
+    // JS: two concurrent rotations must not both write N+1. A mutant that
+    // binds a computed version fails the not-toContain(5) assertion.
     mockQuery
       .mockResolvedValueOnce(
         rows(
@@ -720,7 +723,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 5 }));
 
     await setUserInfo({
       email: "a@b.c",
@@ -731,8 +734,8 @@ describe("setUserInfo", () => {
 
     const [sql, values] = mockQuery.mock.calls[2] as [string, unknown[]];
     expect(sql).toContain("UPDATE");
-    expect(sql).toContain("password_version");
-    expect(values).toContain(5);
+    expect(sql).toContain("COALESCE(password_version, 1) + 1");
+    expect(values).not.toContain(5);
   });
 
   it("starts the version at 2 for rows that predate the fence and signs the bumped version", async () => {
@@ -750,7 +753,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     const signed = await setUserInfo({
       email: "a@b.c",
@@ -759,11 +762,12 @@ describe("setUserInfo", () => {
       token: "tok",
     });
 
-    const [, values] = mockQuery.mock.calls[2] as [string, unknown[]];
-    expect(values).toContain(2);
-    // The session this signs must carry the bumped generation: updateSession
-    // stamps it onto the row, and a pre-bump stamp would fail the fence on
-    // its first comparison after issuance.
+    const [sql, values] = mockQuery.mock.calls[2] as [string, unknown[]];
+    expect(sql).toContain("COALESCE(password_version, 1) + 1");
+    expect(values).not.toContain(2);
+    // The session this signs must carry the bumped generation the UPDATE
+    // returned: updateSession stamps it onto the row, and a pre-bump stamp
+    // would fail the fence on its first comparison after issuance.
     expect(signed.passwordVersion).toBe(2);
   });
 
@@ -784,7 +788,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows({ session_id: "s-1" }, { session_id: "s-2" }))
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     await setUserInfo({
       email: "a@b.c",
@@ -823,7 +827,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     const signed = await setUserInfo({
       email: "a@b.c",
@@ -834,6 +838,7 @@ describe("setUserInfo", () => {
 
     expect(signed).toBeDefined();
     expect(signed.id).toBe("u-1");
+    expect(signed.passwordVersion).toBe(2);
     expect(signed.username).toBe("alice");
     expect(signed.email).toBe("a@b.c");
     expect(JSON.stringify(signed)).not.toMatch(/\$2[aby]\$/);
@@ -876,7 +881,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     try {
       await setUserInfo({

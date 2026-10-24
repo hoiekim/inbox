@@ -13,6 +13,7 @@ type WrittenUser = {
   username: string;
   password?: string;
   email?: string;
+  password_version?: number;
 };
 
 const written: WrittenUser[] = [];
@@ -188,6 +189,8 @@ describe("initializeAdminUser", () => {
     // An undefined password is what keeps the column out of the INSERT, and
     // therefore out of the conflict clause that would otherwise rewrite it.
     expect(written[0].password).toBeUndefined();
+    // No hash change, no generation move: a later boot must not bump.
+    expect(written[0].password_version).toBeUndefined();
     // The identity write the boot does own still happens.
     expect(written[0].email).toBe(`admin@${process.env.EMAIL_DOMAIN || "localhost"}`);
   });
@@ -201,6 +204,10 @@ describe("initializeAdminUser", () => {
     await runInitialize();
 
     expect(written[0].password).toBe("configured");
+    // The reset replaces the hash, so the generation moves in the same
+    // write — otherwise a restored session row would still stamp the old
+    // generation and pass the fence.
+    expect(written[0].password_version).toBe(2);
     expect(warnSpy.mock.calls.flat().join("\n")).toContain("ADMIN_PASSWORD_RESET");
     warnSpy.mockRestore();
   });

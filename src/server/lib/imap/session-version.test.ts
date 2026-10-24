@@ -1,5 +1,5 @@
 /**
- * IMAP credential-revocation fence (issue #1016): `verifyCredentialVersion`
+ * IMAP credential-revocation fence: `verifyCredentialVersion`
  * de-authenticates a connection whose credential rotated after it
  * authenticated, and lets a current one through untouched.
  *

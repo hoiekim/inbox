@@ -83,7 +83,7 @@ export class ImapSession {
   private isReadOnlyUser: boolean = false;
   private authenticatedAs: string | null = null;
   /**
-   * The credential generation the connection was minted from (issue #1016).
+   * The credential generation the connection was minted from.
    * Stamped at LOGIN/AUTHENTICATE time from the credential row; the
    * per-command gate in the handler re-checks it against the row's current
    * version so a connection that outlives a password rotation loses its
@@ -796,7 +796,7 @@ export class ImapSession {
   };
 
   /**
-   * Credential-revocation fence (issue #1016). Compares the generation the
+   * Credential-revocation fence. Compares the generation the
    * connection was stamped with at LOGIN/AUTHENTICATE time against the
    * credential row's current version. On a mismatch — the password was
    * rotated after this connection authenticated — the session is

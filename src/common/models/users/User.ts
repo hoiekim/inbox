@@ -9,7 +9,7 @@ export interface UserType {
   token?: string;
   expiry?: DateString;
   /**
-   * The credential generation the user row is on (issue #1016). Carried
+   * The credential generation the user row is on. Carried
    * through the session so every authentication surface can stamp the
    * version its grant was minted from and compare it later. A bare counter,
    * not a secret — safe to keep on masked/signed copies.
@@ -82,7 +82,7 @@ export class SignedUser extends Model<SignedUser> implements SignedUserType {
    */
   declare authenticatedAs?: string;
   /**
-   * The credential generation the session was minted from (issue #1016).
+   * The credential generation the session was minted from.
    * Every authentication surface stamps this onto its grant at issuance and
    * compares it against the user row's current version afterwards, so a
    * grant minted before a password rotation fails its next comparison.

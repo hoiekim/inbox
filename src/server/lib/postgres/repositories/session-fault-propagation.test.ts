@@ -201,7 +201,7 @@ describe("PostgresSessionStore.get", () => {
 
 describe("PostgresSessionStore.get credential-version fence", () => {
   it("rejects a session stamped behind the user's current password_version and destroys the row", async () => {
-    // The revocation fence (issue #1016): the row was minted on generation 1
+    // The revocation fence: the row was minted on generation 1
     // and the credential has since rotated to 2 — a resurrected row, or a
     // session from a login that straddled the rotation.
     userVersionMode = 2;

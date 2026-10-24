@@ -147,7 +147,7 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   // per-IP aggregate keeps its count, so a success here cannot wipe another
   // account's failures from the same IP.
   resetAuthFailures(ip, account);
-  // Credential-revocation fence (issue #1016): stamp the credential row's
+  // Credential-revocation fence: stamp the credential row's
   // current generation onto the connection. smtp-server only copies
   // `response.user` onto the session, so the stamp goes on the session
   // object directly; the per-command gates below re-check it.
@@ -182,7 +182,7 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = async (
     err.responseCode = 550;
     return cb(err);
   }
-  // Credential-revocation fence (issue #1016): an authenticated connection
+  // Credential-revocation fence: an authenticated connection
   // whose credential rotated after AUTH loses its grant at this command.
   // smtp-server discards the returned promise, so every path ends in `cb`.
   try {
@@ -251,9 +251,9 @@ class LookupFailedError extends Error {
 }
 
 /**
- * The connection authenticated before the credential was rotated (issue
- * #1016). 421 tells the client the service wants the channel back — the same
- * wording the eviction sweep uses — so it reconnects and re-authenticates
+ * The connection authenticated before the credential was rotated. 421
+ * tells the client the service wants the channel back — the same wording
+ * the eviction sweep uses — so it reconnects and re-authenticates
  * rather than retrying the stale grant.
  */
 class CredentialChangedError extends Error {
@@ -266,14 +266,14 @@ class CredentialChangedError extends Error {
 
 /**
  * The session object as this module sees it: smtp-server's own session plus
- * the credential-generation stamp `onAuth` writes (issue #1016).
+ * the credential-generation stamp `onAuth` writes.
  */
 interface VersionStampedSmtpSession extends SMTPServerSession {
   passwordVersion?: number;
 }
 
 /**
- * Credential-revocation fence for SMTP (issue #1016): the generation stamped
+ * Credential-revocation fence for SMTP: the generation stamped
  * at AUTH time is compared against the credential row's current version on
  * every authenticated command, so a connection a sweep could not reach —
  * another process's registry, or an AUTH that straddled the rotation — loses
@@ -379,7 +379,7 @@ export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
 ) => {
   const ip = session.remoteAddress ?? "unknown";
   try {
-    // Credential-revocation fence (issue #1016): an authenticated connection
+    // Credential-revocation fence: an authenticated connection
     // whose credential rotated after AUTH loses its grant at this command.
     // Unauthenticated probing sessions carry no grant and skip the check.
     await checkSmtpCredentialVersion(session);
@@ -794,7 +794,7 @@ const onDataOutgoing = async (
       return cb(new Error("User not authenticated"));
     }
 
-    // Credential-revocation fence (issue #1016): the stamp is compared
+    // Credential-revocation fence: the stamp is compared
     // against the credential row's current version before the message is
     // sent, so a rotation that landed after MAIL FROM / RCPT TO still loses
     // the grant here. The user row was just read above, so no second lookup

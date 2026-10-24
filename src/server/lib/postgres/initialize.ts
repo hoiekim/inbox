@@ -376,6 +376,16 @@ export const initializeAdminUser = async (): Promise<void> => {
     // Undefined drops the column from the INSERT, which drops it from the
     // conflict clause too, so the stored hash survives the boot.
     password: plan.action === "keep" ? undefined : plan.password,
+    // A reset replaces the hash, so the credential generation moves in the
+    // same write — otherwise a session row restored after the boot-time
+    // delete would still stamp the old generation and pass the fence.
+    // Boot runs before any listener binds, so no concurrent rotation can
+    // interleave with this computed bump; a keep/seed boot must not bump,
+    // or every redeploy would log admin out.
+    password_version:
+      plan.action === "reset"
+        ? (existingAdminUser?.password_version ?? 1) + 1
+        : undefined,
     // Pull the domain from EMAIL_DOMAIN so admin's identity stays consistent
     // with `getDomain()` everywhere else. Hardcoding `admin@localhost` made the
     // UI's default-account lookup miss every cloned mail in sandbox/dev
@@ -456,6 +466,14 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
     user_id: existing?.user_id,
     username: ADMIN_RO_USERNAME,
     password: ADMIN_RO_PASSWORD,
+    // Only a rotation moves the generation, in the same write as the new
+    // hash: a grant stamped before the rotation then fails the fence even
+    // if the session delete missed it (a restored row, another process's
+    // connection). An unchanged value must not bump — a steady-state
+    // redeploy logs nobody out — and a first seed takes the DEFAULT 1.
+    password_version: passwordRotated
+      ? (existing?.password_version ?? 1) + 1
+      : undefined,
     // Same domain rationale as admin (see initializeAdminUser above) — a
     // consistent `@EMAIL_DOMAIN` local part keeps the account lookup happy
     // across dev / sandbox / prod.
@@ -500,6 +518,10 @@ const revokeAdminReadOnlyUser = async (): Promise<void> => {
     username: ADMIN_RO_USERNAME,
     password: randomBytes(32).toString("hex"),
     email: existing.email ?? undefined,
+    // Revocation replaces the hash, so the generation moves in the same
+    // write: without the bump, a session row restored after the delete
+    // would still stamp the old generation and pass the fence.
+    password_version: (existing.password_version ?? 1) + 1,
   });
   if (!revoked?._id) throw new Error("Failed to revoke read-only admin user");
 

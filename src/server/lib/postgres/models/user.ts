@@ -35,7 +35,7 @@ export type User = MaskedUser & {
   token?: string | null;
   expiry?: string | null;
   // The credential generation the row is on; null on rows that predate the
-  // revocation fence's migration (issue #1016). Callers treat null as 1.
+  // revocation fence's migration. Callers treat null as 1.
   // Optional because index/write inputs predate any read of the row.
   password_version?: number | null;
 };

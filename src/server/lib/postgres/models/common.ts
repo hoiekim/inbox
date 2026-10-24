@@ -24,7 +24,7 @@ export const PASSWORD = "password";
 export const EMAIL = "email";
 export const TOKEN = "token";
 export const EXPIRY = "expiry";
-// Monotonic credential generation for the revocation fence (issue #1016).
+// Monotonic credential generation for the revocation fence.
 // Bumped in the same UPDATE that writes a new password hash; every
 // authentication surface compares the version a grant was stamped with
 // against the row's current one.
@@ -90,7 +90,7 @@ export const SESSION_USERNAME = "session_username";
 export const SESSION_EMAIL = "session_email";
 export const SESSION_IS_READ_ONLY = "session_is_read_only";
 export const SESSION_AUTHENTICATED_AS = "session_authenticated_as";
-// The credential generation the session was minted from (issue #1016).
+// The credential generation the session was minted from.
 // Stamped at issuance; PostgresSessionStore.get rejects the row when it
 // reads behind the user row's current PASSWORD_VERSION.
 export const SESSION_PASSWORD_VERSION = "session_password_version";

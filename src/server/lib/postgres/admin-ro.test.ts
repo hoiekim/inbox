@@ -13,6 +13,7 @@ type WrittenUser = {
   username: string;
   password?: string;
   email?: string;
+  password_version?: number;
 };
 
 const written: WrittenUser[] = [];
@@ -117,6 +118,9 @@ describe("initializeAdminReadOnlyUser", () => {
     expect(written[0].email).toBe(SEEDED_ROW.email);
     expect(written[0].password).not.toBe(CONFIGURED_PASSWORD);
     expect(written[0].password).toMatch(/^[0-9a-f]{64}$/);
+    // Revocation replaces the hash, so the generation moves in the same
+    // write — a restored session row must not still pass the fence.
+    expect(written[0].password_version).toBe(2);
     expect(infoSpy).toHaveBeenCalled();
     infoSpy.mockRestore();
   });
@@ -144,6 +148,7 @@ describe("initializeAdminReadOnlyUser", () => {
     // A steady-state redeploy must not log the operator out of a role whose
     // credential has not moved.
     expect(mockDeleteSessionsAuthenticatedAs).not.toHaveBeenCalled();
+    expect(written[0].password_version).toBeUndefined();
   });
 
   it("deletes the sessions the previous password issued when the value is rotated", async () => {
@@ -159,6 +164,9 @@ describe("initializeAdminReadOnlyUser", () => {
     expect(mockDeleteSessionsAuthenticatedAs.mock.calls[0][0]).toBe(
       ADMIN_RO_USERNAME
     );
+    // The rotation moves the generation in the same write as the new hash,
+    // so a grant the session delete missed still fails the fence.
+    expect(written[0].password_version).toBe(2);
   });
 
   it("deletes nothing on the first seed, when no row exists to compare against", async () => {

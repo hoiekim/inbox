@@ -971,7 +971,7 @@ export class ImapRequestHandler {
     // pinning it for the whole nested wait.
     await runInCommandBudgetContext(hold, () => runInBodyBudgetContext(async () => {
     try {
-      // Credential-revocation fence (issue #1016): every grant proves itself
+      // Credential-revocation fence: every grant proves itself
       // current on every command, not only at auth time. LOGIN and
       // AUTHENTICATE mint the grant (nothing to re-check yet) and LOGOUT ends
       // it; every other command on an authenticated session compares the

@@ -29,7 +29,7 @@ export interface AuthResult {
   /** Original username the caller sent, before any session-scope remap. */
   authenticatedAs: string;
   /**
-   * The credential generation the session was minted from (issue #1016).
+   * The credential generation the session was minted from.
    * Read from the credential row at auth time — the per-command gate
    * compares this against the row's current version.
    */
@@ -112,7 +112,7 @@ const authenticateCredentials = async (
   // Stamp the credential row's generation — the per-command gate compares
   // this against the row's current version. Read here, at auth time, so a
   // LOGIN that straddled a rotation stamps the stale generation and fails
-  // its next comparison (issue #1016). Keyed on the credential the caller
+  // its next comparison. Keyed on the credential the caller
   // presented, never the remapped effective user: the read-only credential
   // is its own row and survives a rotation on the account it reads.
   return { ...resolved, passwordVersion: user.passwordVersion ?? 1 };

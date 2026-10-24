@@ -2,7 +2,7 @@ import { getUser } from "server";
 
 /**
  * The credential row's current password_version for `username` — the
- * generation the revocation fence (issue #1016) compares a grant's stamped
+ * generation the revocation fence compares a grant's stamped
  * version against.
  *
  * Rows that predate the fence's migration read back null and count as
