@@ -5,7 +5,7 @@ import { searchUser as pgSearchUser } from "./postgres/repositories/users";
 import { deleteSessionsForUser } from "./postgres/repositories/sessions";
 import { evictImapSessions } from "./imap/session-registry";
 import { evictSmtpConnections } from "./smtp-registry";
-import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
+import { usersTable, USER_ID, TOKEN, EXPIRY, PASSWORD_VERSION } from "./postgres/models";
 import { logger } from "./logger";
 
 const { APP_HOSTNAME } = process.env;
@@ -34,7 +34,10 @@ export const getUser = async (
     email: pgUser.email ?? undefined,
     password: pgUser.password,
     token: pgUser.token ?? undefined,
-    expiry: pgUser.expiry ?? undefined
+    expiry: pgUser.expiry ?? undefined,
+    // Rows that predate the revocation fence read back null; the migration's
+    // DEFAULT 1 makes 1 the honest generation for all of them.
+    passwordVersion: pgUser.password_version ?? 1
   });
 };
 
@@ -208,8 +211,16 @@ export const setUserInfo = async (
 
   await deleteSessionsForUser(id);
 
+  // The revocation fence (issue #1016): the credential generation is bumped
+  // in the SAME UPDATE that writes the new hash, so no interleaving can land
+  // a new hash on the old generation. Every authentication surface stamps
+  // the version its grant was minted from and compares it afterwards — a
+  // session or connection minted before this bump fails its next comparison.
+  const passwordVersion = (existingUser.passwordVersion ?? 1) + 1;
+
   await usersTable.update(id, {
     password: passwordHash,
+    [PASSWORD_VERSION]: passwordVersion,
     username,
     token: null,
     expiry: null
@@ -222,7 +233,17 @@ export const setUserInfo = async (
   evictImapSessions(username);
   evictSmtpConnections(username);
 
-  const signed = new User({ id, email, username, password: passwordHash }).getSigned();
+  // The session this signs carries the bumped generation: the route issues it
+  // through `updateSession`, which stamps `passwordVersion` onto the row, and
+  // a stamp of the pre-bump generation would fail the fence on its first
+  // comparison after issuance.
+  const signed = new User({
+    id,
+    email,
+    username,
+    password: passwordHash,
+    passwordVersion
+  }).getSigned();
   if (!signed) {
     throw new Error("`setUserInfo` failed to sign the updated user.");
   }

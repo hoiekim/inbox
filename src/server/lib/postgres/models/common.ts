@@ -24,6 +24,11 @@ export const PASSWORD = "password";
 export const EMAIL = "email";
 export const TOKEN = "token";
 export const EXPIRY = "expiry";
+// Monotonic credential generation for the revocation fence (issue #1016).
+// Bumped in the same UPDATE that writes a new password hash; every
+// authentication surface compares the version a grant was stamped with
+// against the row's current one.
+export const PASSWORD_VERSION = "password_version";
 export const IMAP_UID_VALIDITY = "imap_uid_validity";
 
 // Mails columns
@@ -85,6 +90,10 @@ export const SESSION_USERNAME = "session_username";
 export const SESSION_EMAIL = "session_email";
 export const SESSION_IS_READ_ONLY = "session_is_read_only";
 export const SESSION_AUTHENTICATED_AS = "session_authenticated_as";
+// The credential generation the session was minted from (issue #1016).
+// Stamped at issuance; PostgresSessionStore.get rejects the row when it
+// reads behind the user row's current PASSWORD_VERSION.
+export const SESSION_PASSWORD_VERSION = "session_password_version";
 export const COOKIE_ORIGINAL_MAX_AGE = "cookie_original_max_age";
 export const COOKIE_MAX_AGE = "cookie_max_age";
 export const COOKIE_SIGNED = "cookie_signed";

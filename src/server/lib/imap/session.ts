@@ -31,6 +31,7 @@ import {
   registerAuthenticatedSession,
   unregisterSession,
 } from "./session-registry";
+import { getCredentialPasswordVersion } from "./credential-version";
 
 // Extracted module helpers
 import { handleAuthenticate, handleLogin } from "./auth";
@@ -81,6 +82,14 @@ export class ImapSession {
    */
   private isReadOnlyUser: boolean = false;
   private authenticatedAs: string | null = null;
+  /**
+   * The credential generation the connection was minted from (issue #1016).
+   * Stamped at LOGIN/AUTHENTICATE time from the credential row; the
+   * per-command gate in the handler re-checks it against the row's current
+   * version so a connection that outlives a password rotation loses its
+   * grant at its next command.
+   */
+  private credentialPasswordVersion: number | null = null;
   // RFC 4551 CONDSTORE: once the client sends `ENABLE CONDSTORE`, MODSEQ is
   // emitted on every subsequent FETCH response for the life of the session.
   private condstoreEnabled: boolean = false;
@@ -359,6 +368,7 @@ export class ImapSession {
       this.authenticated = result.authenticated;
       this.isReadOnlyUser = result.isReadOnly;
       this.authenticatedAs = result.authenticatedAs;
+      this.credentialPasswordVersion = result.passwordVersion;
       if (this.authenticated) registerAuthenticatedSession(this);
     }
   };
@@ -376,6 +386,7 @@ export class ImapSession {
       this.authenticated = result.authenticated;
       this.isReadOnlyUser = result.isReadOnly;
       this.authenticatedAs = result.authenticatedAs;
+      this.credentialPasswordVersion = result.passwordVersion;
       if (this.authenticated) registerAuthenticatedSession(this);
     }
   };
@@ -782,6 +793,51 @@ export class ImapSession {
 
   getAuthenticatedAs = (): string | null => {
     return this.authenticatedAs;
+  };
+
+  /**
+   * Credential-revocation fence (issue #1016). Compares the generation the
+   * connection was stamped with at LOGIN/AUTHENTICATE time against the
+   * credential row's current version. On a mismatch — the password was
+   * rotated after this connection authenticated — the session is
+   * de-authenticated and unregistered, and the tagged command is answered
+   * `NO [AUTHENTICATIONFAILED]` so the client re-authenticates instead of
+   * retrying the same grant. Returns true when the caller may proceed.
+   *
+   * This is what closes the gap for connections no sweep can reach: a
+   * second replica's registry, or a LOGIN whose row read preceded the
+   * rotation's UPDATE. Every grant proves itself current at its next
+   * command, not just at auth time.
+   *
+   * A lookup fault propagates to the caller: the dispatch answers it as an
+   * internal error rather than letting a grant that could not be proven
+   * current through.
+   */
+  verifyCredentialVersion = async (tag: string): Promise<boolean> => {
+    if (
+      !this.authenticated ||
+      this.authenticatedAs === null ||
+      this.credentialPasswordVersion === null
+    ) {
+      return true;
+    }
+    const current = await getCredentialPasswordVersion(this.authenticatedAs);
+    if (current <= this.credentialPasswordVersion) return true;
+    this.authenticated = false;
+    this.credentialPasswordVersion = null;
+    unregisterSession(this);
+    logger.info(
+      "IMAP session de-authenticated: credential rotated after auth",
+      {
+        component: "imap",
+        authenticatedAs: this.authenticatedAs,
+        sessionId: this.sessionId,
+      }
+    );
+    this.write(
+      `${tag} NO [AUTHENTICATIONFAILED] Credential changed, please re-authenticate\r\n`
+    );
+    return false;
   };
 
   cleanup = () => {

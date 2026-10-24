@@ -3,12 +3,15 @@ import { logger } from "../../logger";
 import {
   SessionModel,
   sessionsTable,
+  usersTable,
+  USER_ID,
   SESSION_ID,
   SESSION_USER_ID,
   SESSION_USERNAME,
   SESSION_EMAIL,
   SESSION_IS_READ_ONLY,
   SESSION_AUTHENTICATED_AS,
+  SESSION_PASSWORD_VERSION,
   COOKIE_ORIGINAL_MAX_AGE,
   COOKIE_MAX_AGE,
   COOKIE_SIGNED,
@@ -61,6 +64,12 @@ export const updateSession = async (
     [SESSION_EMAIL]: user.email,
     [SESSION_IS_READ_ONLY]: user.isReadOnly ?? null,
     [SESSION_AUTHENTICATED_AS]: user.authenticatedAs ?? null,
+    // The revocation fence (issue #1016): stamp the credential generation the
+    // session was minted from. This must be the version the caller
+    // authenticated against — NOT a fresh read of the user row — so a login
+    // that straddled a password rotation stamps the stale generation and
+    // fails its next comparison instead of inheriting the new one.
+    [SESSION_PASSWORD_VERSION]: user.passwordVersion ?? 1,
     [COOKIE_ORIGINAL_MAX_AGE]: cookie.originalMaxAge,
     [COOKIE_MAX_AGE]: cookie.maxAge,
     [COOKIE_SIGNED]: cookie.signed,
@@ -177,6 +186,27 @@ export class PostgresSessionStore extends Store {
       const { cookie_expires, cookie_secure, cookie_same_site } = sessionModel;
       if (!cookie_expires || new Date(cookie_expires) < new Date()) {
         this.destroy(session_id);
+        return callback(null, null);
+      }
+
+      // The revocation fence (issue #1016): a grant proves itself current on
+      // every read, not only at issuance. A session row resurrected by an
+      // in-flight request after `deleteSessionsForUser`, or a session minted
+      // by a login that straddled the rotation, carries the stale generation
+      // and is rejected here — regardless of how the row got written.
+      // Rows written before the fence's migration read back null, which is
+      // generation 1, the same default the migration gives the user rows.
+      const stampedVersion = sessionModel.session_password_version ?? 1;
+      const userRow = await usersTable.queryOne({
+        [USER_ID]: sessionModel.session_user_id,
+      });
+      const currentVersion = userRow?.password_version ?? 1;
+      if (stampedVersion < currentVersion) {
+        logger.info(
+          "Session rejected: credential rotated after the session was issued",
+          { session_id, user_id: sessionModel.session_user_id }
+        );
+        await this.destroy(session_id);
         return callback(null, null);
       }
 

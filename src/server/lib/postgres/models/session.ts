@@ -5,6 +5,7 @@ import {
   SESSION_EMAIL,
   SESSION_IS_READ_ONLY,
   SESSION_AUTHENTICATED_AS,
+  SESSION_PASSWORD_VERSION,
   COOKIE_ORIGINAL_MAX_AGE,
   COOKIE_MAX_AGE,
   COOKIE_SIGNED,
@@ -35,6 +36,9 @@ export interface SessionJSON {
   session_email: string;
   session_is_read_only: boolean | null;
   session_authenticated_as: string | null;
+  // The credential generation the session was minted from (issue #1016).
+  // Null on rows written before the fence's migration; reads as 1.
+  session_password_version: number | null;
   cookie_original_max_age: number | null;
   cookie_max_age: number | null;
   cookie_signed: boolean | null;
@@ -56,6 +60,10 @@ const sessionSchema = {
   // non-read-only session, which is what it was.
   [SESSION_IS_READ_ONLY]: "BOOLEAN",
   [SESSION_AUTHENTICATED_AS]: "VARCHAR(255)",
+  // Nullable so the auto-migration can add it to an existing sessions
+  // table; a row written before this column existed reads back as
+  // generation 1, which is what it was.
+  [SESSION_PASSWORD_VERSION]: "INTEGER",
   [COOKIE_ORIGINAL_MAX_AGE]: "BIGINT",
   [COOKIE_MAX_AGE]: "BIGINT",
   [COOKIE_SIGNED]: "BOOLEAN",
@@ -77,6 +85,7 @@ export class SessionModel extends Model<SessionJSON, SessionSchema> {
   declare session_email: string;
   declare session_is_read_only: boolean | null;
   declare session_authenticated_as: string | null;
+  declare session_password_version: number | null;
   declare cookie_original_max_age: number | null;
   declare cookie_max_age: number | null;
   declare cookie_signed: boolean | null;
@@ -95,6 +104,7 @@ export class SessionModel extends Model<SessionJSON, SessionSchema> {
     session_email: isString,
     session_is_read_only: isNullableBoolean,
     session_authenticated_as: isNullableString,
+    session_password_version: isNullableNumber,
     cookie_original_max_age: isNullableNumber,
     cookie_max_age: isNullableNumber,
     cookie_signed: isNullableBoolean,
@@ -119,6 +129,7 @@ export class SessionModel extends Model<SessionJSON, SessionSchema> {
       session_email: this.session_email,
       session_is_read_only: this.session_is_read_only,
       session_authenticated_as: this.session_authenticated_as,
+      session_password_version: this.session_password_version,
       cookie_original_max_age: this.cookie_original_max_age,
       cookie_max_age: this.cookie_max_age,
       cookie_signed: this.cookie_signed,

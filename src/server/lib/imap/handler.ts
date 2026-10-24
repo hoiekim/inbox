@@ -971,6 +971,23 @@ export class ImapRequestHandler {
     // pinning it for the whole nested wait.
     await runInCommandBudgetContext(hold, () => runInBodyBudgetContext(async () => {
     try {
+      // Credential-revocation fence (issue #1016): every grant proves itself
+      // current on every command, not only at auth time. LOGIN and
+      // AUTHENTICATE mint the grant (nothing to re-check yet) and LOGOUT ends
+      // it; every other command on an authenticated session compares the
+      // stamped generation against the credential row's current one. A
+      // mismatch de-authenticates the connection here — this is what reaches
+      // the connections a sweep cannot (a second replica's registry, or a
+      // LOGIN that straddled the rotation).
+      if (
+        session.isAuthenticated() &&
+        request.type !== "LOGIN" &&
+        request.type !== "AUTHENTICATE" &&
+        request.type !== "LOGOUT"
+      ) {
+        if (!(await session.verifyCredentialVersion(tag))) return;
+      }
+
       switch (request.type) {
         case "CAPABILITY":
           session.capability(tag);
