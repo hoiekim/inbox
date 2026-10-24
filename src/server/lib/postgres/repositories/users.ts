@@ -1,5 +1,19 @@
 import bcrypt from "bcryptjs";
-import { MaskedUser, User, usersTable, USER_ID, EMAIL, IMAP_UID_VALIDITY } from "../models";
+import { pool } from "../client";
+import {
+  MaskedUser,
+  User,
+  usersTable,
+  USER_ID,
+  USERNAME,
+  PASSWORD,
+  PASSWORD_VERSION,
+  TOKEN,
+  EXPIRY,
+  EMAIL,
+  IMAP_UID_VALIDITY,
+  USERS,
+} from "../models";
 
 export type IndexUserInput = Omit<User, "user_id" | "password"> & {
   user_id?: string;
@@ -21,16 +35,58 @@ export const maskUser = (user: User): MaskedUser => {
 export const writeUser = async (
   user: IndexUserInput
 ): Promise<{ _id: string } | undefined> => {
-  const { user_id, username, password, email } = user;
+  const { user_id, username, password, email, password_version } = user;
   const hashedPassword = password ? await bcrypt.hash(password, 10) : undefined;
 
   const row: Record<string, unknown> = { username, password: hashedPassword };
   if (user_id) row.user_id = user_id;
   if (email) row.email = email;
+  // Carried onto the conflict clause only when the caller passes it, so a
+  // boot-path rotation can bump the generation in the SAME upsert that
+  // writes the new hash. Callers that omit it leave the stored generation
+  // alone (a new row takes the column DEFAULT 1).
+  if (password_version !== undefined) row[PASSWORD_VERSION] = password_version;
 
   const result = await usersTable.upsert(row);
   if (result) return { _id: result.user_id as string };
   return undefined;
+};
+
+/**
+ * Rotate a user's credential and bump its generation atomically.
+ *
+ * The query builder only binds values, so a `SET password_version = ... + 1`
+ * cannot go through `usersTable.update` — this is the direct-SQL exception,
+ * like the mailbox lookups that need a comparison the builder cannot express.
+ * The bump, the new hash, and the token/expiry clearing are one UPDATE, so
+ * two concurrent rotations cannot both read generation N and both write N+1
+ * with different hashes. Returns the generation the row now carries (the
+ * caller signs with this, never with a value it computed before the write),
+ * or null when the row does not exist. Rows that predate the fence read
+ * back null, and COALESCE treats those as generation 1, so their first
+ * bumped generation is 2.
+ */
+export const rotateUserPassword = async (
+  user_id: string,
+  updates: {
+    passwordHash: string;
+    username: string;
+    token: string | null;
+    expiry: string | null;
+  }
+): Promise<number | null> => {
+  const result = await pool.query(
+    `UPDATE ${USERS} SET ${PASSWORD} = $2, ${PASSWORD_VERSION} = COALESCE(${PASSWORD_VERSION}, 1) + 1, ${USERNAME} = $3, ${TOKEN} = $4, ${EXPIRY} = $5, updated = CURRENT_TIMESTAMP WHERE ${USER_ID} = $1 RETURNING ${PASSWORD_VERSION}`,
+    [
+      user_id,
+      updates.passwordHash,
+      updates.username,
+      updates.token,
+      updates.expiry,
+    ]
+  );
+  const version = result.rows[0]?.[PASSWORD_VERSION];
+  return typeof version === "number" ? version : null;
 };
 
 export const searchUser = async (

@@ -1,7 +1,10 @@
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User, SignedUser } from "common";
-import { searchUser as pgSearchUser } from "./postgres/repositories/users";
+import {
+  searchUser as pgSearchUser,
+  rotateUserPassword,
+} from "./postgres/repositories/users";
 import { deleteSessionsForUser } from "./postgres/repositories/sessions";
 import { evictImapSessions } from "./imap/session-registry";
 import { evictSmtpConnections } from "./smtp-registry";
@@ -34,7 +37,10 @@ export const getUser = async (
     email: pgUser.email ?? undefined,
     password: pgUser.password,
     token: pgUser.token ?? undefined,
-    expiry: pgUser.expiry ?? undefined
+    expiry: pgUser.expiry ?? undefined,
+    // Rows that predate the revocation fence read back null; the migration's
+    // DEFAULT 1 makes 1 the honest generation for all of them.
+    passwordVersion: pgUser.password_version ?? 1
   });
 };
 
@@ -208,12 +214,26 @@ export const setUserInfo = async (
 
   await deleteSessionsForUser(id);
 
-  await usersTable.update(id, {
-    password: passwordHash,
+  // The revocation fence: the credential generation is bumped in the SAME
+  // UPDATE that writes the new hash, so no interleaving can land a new
+  // hash on the old generation. The bump is atomic
+  // (`COALESCE(password_version, 1) + 1` in the UPDATE itself), not a
+  // read-modify-write in JS: two concurrent rotations used to both read
+  // generation N and both write N+1 with different hashes, leaving a grant
+  // stamped N+1 by the first rotation alive after the second. Every
+  // authentication surface stamps the version its grant was minted from
+  // and compares it afterwards — a session or connection minted before
+  // this bump fails its next comparison. The signed session below carries
+  // the generation the UPDATE actually returned, never a pre-computed one.
+  const passwordVersion = await rotateUserPassword(id, {
+    passwordHash,
     username,
     token: null,
-    expiry: null
+    expiry: null,
   });
+  if (passwordVersion === null) {
+    throw new Error("`setUserInfo` failed because the user row is missing.");
+  }
 
   // IMAP and SMTP hold authentication for the life of a connection rather than
   // per request, so a client that authenticated with the old password keeps its
@@ -222,7 +242,17 @@ export const setUserInfo = async (
   evictImapSessions(username);
   evictSmtpConnections(username);
 
-  const signed = new User({ id, email, username, password: passwordHash }).getSigned();
+  // The session this signs carries the bumped generation: the route issues it
+  // through `updateSession`, which stamps `passwordVersion` onto the row, and
+  // a stamp of the pre-bump generation would fail the fence on its first
+  // comparison after issuance.
+  const signed = new User({
+    id,
+    email,
+    username,
+    password: passwordHash,
+    passwordVersion
+  }).getSigned();
   if (!signed) {
     throw new Error("`setUserInfo` failed to sign the updated user.");
   }

@@ -8,6 +8,13 @@ export interface UserType {
   password?: string;
   token?: string;
   expiry?: DateString;
+  /**
+   * The credential generation the user row is on. Carried
+   * through the session so every authentication surface can stamp the
+   * version its grant was minted from and compare it later. A bare counter,
+   * not a secret — safe to keep on masked/signed copies.
+   */
+  passwordVersion?: number;
 }
 
 export class User extends Model<User> implements UserType {
@@ -17,10 +24,18 @@ export class User extends Model<User> implements UserType {
   declare password?: string;
   declare token?: string;
   declare expiry?: DateString;
+  declare passwordVersion?: number;
 
   mask = () => {
-    const { id, email, username, token, expiry } = this;
-    return new MaskedUser({ id, email, username, token, expiry });
+    const { id, email, username, token, expiry, passwordVersion } = this;
+    return new MaskedUser({
+      id,
+      email,
+      username,
+      token,
+      expiry,
+      passwordVersion,
+    });
   };
 
   getSigned = () => {
@@ -38,6 +53,7 @@ export class MaskedUser extends Model<MaskedUser> implements MaskedUserType {
   declare username?: string;
   declare token?: string;
   declare expiry?: string;
+  declare passwordVersion?: number;
 }
 
 export type SignedUserType = WithRequired<
@@ -65,6 +81,13 @@ export class SignedUser extends Model<SignedUser> implements SignedUserType {
    * action to the credential that produced it.
    */
   declare authenticatedAs?: string;
+  /**
+   * The credential generation the session was minted from.
+   * Every authentication surface stamps this onto its grant at issuance and
+   * compares it against the user row's current version afterwards, so a
+   * grant minted before a password rotation fails its next comparison.
+   */
+  declare passwordVersion?: number;
 
   constructor(init?: Partial<SignedUser>) {
     super(init);

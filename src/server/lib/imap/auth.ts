@@ -28,6 +28,12 @@ export interface AuthResult {
   isReadOnly: boolean;
   /** Original username the caller sent, before any session-scope remap. */
   authenticatedAs: string;
+  /**
+   * The credential generation the session was minted from.
+   * Read from the credential row at auth time — the per-command gate
+   * compares this against the row's current version.
+   */
+  passwordVersion: number;
 }
 
 /** Shared failure reply: rate-limit exhaustion closes the socket, anything
@@ -73,7 +79,7 @@ const authenticateCredentials = async (
   socket: Socket,
   write: (data: string) => boolean | undefined,
   tag: string
-): Promise<ResolvedSessionUser | null> => {
+): Promise<(ResolvedSessionUser & { passwordVersion: number }) | null> => {
   // The attempted identity: failures accumulate per (ip, account) and the
   // success below forgives only this account's own bucket. The per-IP
   // aggregate is never reset here, so alternating accounts from one IP
@@ -103,7 +109,13 @@ const authenticateCredentials = async (
   // per-IP aggregate keeps its count, so a success here cannot wipe another
   // account's failures from the same IP.
   resetAuthFailures(ip, account);
-  return resolved;
+  // Stamp the credential row's generation — the per-command gate compares
+  // this against the row's current version. Read here, at auth time, so a
+  // LOGIN that straddled a rotation stamps the stale generation and fails
+  // its next comparison. Keyed on the credential the caller
+  // presented, never the remapped effective user: the read-only credential
+  // is its own row and survives a rotation on the account it reads.
+  return { ...resolved, passwordVersion: user.passwordVersion ?? 1 };
 };
 
 /**
@@ -179,6 +191,7 @@ export async function handleAuthenticate(
       authenticated: true,
       isReadOnly: resolved.isReadOnly,
       authenticatedAs: username,
+      passwordVersion: resolved.passwordVersion,
     };
   } catch (error) {
     logger.error("AUTHENTICATE error", { component: "imap" }, error);
@@ -237,5 +250,6 @@ export async function handleLogin(
     authenticated: true,
     isReadOnly: resolved.isReadOnly,
     authenticatedAs: cleanUsername,
+    passwordVersion: resolved.passwordVersion,
   };
 }

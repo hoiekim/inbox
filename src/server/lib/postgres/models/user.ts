@@ -2,6 +2,7 @@ import {
   USER_ID,
   USERNAME,
   PASSWORD,
+  PASSWORD_VERSION,
   EMAIL,
   EXPIRY,
   TOKEN,
@@ -33,12 +34,19 @@ export type User = MaskedUser & {
   // `setUserInfo` can validate them. `null` when no in-flight signup token.
   token?: string | null;
   expiry?: string | null;
+  // The credential generation the row is on; null on rows that predate the
+  // revocation fence's migration. Callers treat null as 1.
+  // Optional because index/write inputs predate any read of the row.
+  password_version?: number | null;
 };
 
 const userSchema = {
   [USER_ID]: "UUID PRIMARY KEY DEFAULT gen_random_uuid()",
   [USERNAME]: "VARCHAR(255) UNIQUE NOT NULL",
   [PASSWORD]: "VARCHAR(255)",
+  // Added by the auto-migration on existing rows: every row predates the
+  // fence, so generation 1 is the honest value for all of them.
+  [PASSWORD_VERSION]: "INTEGER DEFAULT 1",
   [EMAIL]: "VARCHAR(255)",
   [EXPIRY]: "TIMESTAMPTZ",
   [TOKEN]: "VARCHAR(255)",
@@ -53,6 +61,7 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
   declare user_id: string;
   declare username: string;
   declare password: string | null;
+  declare password_version: number | null;
   declare email: string | null;
   declare expiry: string | null;
   declare token: string | null;
@@ -64,6 +73,7 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
     user_id: isString,
     username: isString,
     password: isNullableString,
+    password_version: isNullableNumber,
     email: isNullableString,
     expiry: isNullableString,
     token: isNullableString,
@@ -90,6 +100,7 @@ export class UserModel extends Model<MaskedUser, UserSchema> {
       user_id: this.user_id,
       username: this.username,
       password: this.password,
+      password_version: this.password_version,
       email: this.email,
       token: this.token,
       expiry: this.expiry,

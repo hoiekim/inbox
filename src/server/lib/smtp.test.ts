@@ -265,6 +265,47 @@ describe("onAuth handler", () => {
     expect(mockResetAuthFailures).toHaveBeenCalledTimes(1);
   });
 
+  it("stamps the credential's password_version onto the session at AUTH", async () => {
+    // The revocation fence: the per-command gates compare this
+    // stamp against the row's current version.
+    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const session = {} as SMTPServerSession;
+    const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
+    mockGetUser.mockResolvedValue({
+      password: hashedPw,
+      passwordVersion: 3,
+      getSigned: () => ({ username: "testuser" })
+    });
+
+    await new Promise<{ user?: string }>((resolve) => {
+      onAuth!(auth, session, (_err, data) => resolve(data || {}));
+    });
+
+    expect(
+      (session as SMTPServerSession & { passwordVersion?: number })
+        .passwordVersion
+    ).toBe(3);
+  });
+
+  it("stamps version 1 when the credential row predates the fence", async () => {
+    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const session = {} as SMTPServerSession;
+    const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
+    mockGetUser.mockResolvedValue({
+      password: hashedPw,
+      getSigned: () => ({ username: "testuser" })
+    });
+
+    await new Promise<{ user?: string }>((resolve) => {
+      onAuth!(auth, session, (_err, data) => resolve(data || {}));
+    });
+
+    expect(
+      (session as SMTPServerSession & { passwordVersion?: number })
+        .passwordVersion
+    ).toBe(1);
+  });
+
   it("rejects auth when IP is rate-limited", async () => {
     mockIsAuthRateLimited.mockImplementation(() => true);
     const session = { remoteAddress: "5.6.7.8" } as SMTPServerSession;
@@ -477,6 +518,69 @@ describe("onMailFrom handler", () => {
     });
 
     expect(err).toBeNull();
+  });
+
+  it("refuses MAIL FROM with 421 when the credential rotated after AUTH", async () => {
+    // The revocation fence: the connection was stamped with
+    // generation 1 at AUTH; the row is now on 2. `mockResolvedValueOnce`
+    // keeps the implementation from leaking into later describes.
+    mockGetUser.mockResolvedValueOnce({ passwordVersion: 2 });
+    const session = {
+      user: "alice",
+      passwordVersion: 1,
+      remoteAddress: "10.0.0.3",
+    } as unknown as SMTPServerSession;
+    const address = { address: "alice@test.com" } as never;
+
+    const err = await new Promise<Error | null>((resolve) => {
+      onMailFrom!(address, session, (e) => resolve(e || null));
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toBe(
+      "4.4.2 Credential changed, please re-authenticate"
+    );
+    expect(
+      (err as Error & { responseCode?: number }).responseCode
+    ).toBe(421);
+  });
+
+  it("passes MAIL FROM when the stamped version is current", async () => {
+    mockGetUser.mockResolvedValueOnce({ passwordVersion: 2 });
+    const session = {
+      user: "alice",
+      passwordVersion: 2,
+      remoteAddress: "10.0.0.4",
+    } as unknown as SMTPServerSession;
+    const address = { address: "alice@test.com" } as never;
+
+    const err = await new Promise<Error | null>((resolve) => {
+      onMailFrom!(address, session, (e) => resolve(e || null));
+    });
+
+    expect(err).toBeNull();
+  });
+
+  it("answers transiently when the version lookup fails", async () => {
+    // A grant that cannot be proven current is not exercised.
+    mockGetUser.mockRejectedValueOnce(
+      new Error("timeout exceeded when trying to connect")
+    );
+    const session = {
+      user: "alice",
+      passwordVersion: 1,
+      remoteAddress: "10.0.0.5",
+    } as unknown as SMTPServerSession;
+    const address = { address: "alice@test.com" } as never;
+
+    const err = await new Promise<Error | null>((resolve) => {
+      onMailFrom!(address, session, (e) => resolve(e || null));
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(
+      (err as Error & { responseCode?: number }).responseCode
+    ).toBe(451);
   });
 });
 
@@ -718,6 +822,40 @@ describe("onData handler", () => {
 
     expect(err).toBeUndefined();
     expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+  });
+
+  it("refuses an outgoing message when the credential rotated after AUTH", async () => {
+    // The revocation fence: the send gate re-checks the
+    // stamp, closing the window between RCPT TO and DATA.
+    const stream = makeStream();
+    const session = {
+      user: "admin",
+      passwordVersion: 1,
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SMTPServerSession;
+
+    mockGetUser.mockResolvedValue({
+      passwordVersion: 2,
+      getSigned: () => ({ username: "admin" })
+    });
+
+    const err = await new Promise<Error | null | undefined>((resolve) => {
+      onData(stream, session, (e) => resolve(e));
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toBe(
+      "4.4.2 Credential changed, please re-authenticate"
+    );
+    expect(
+      (err as Error & { responseCode?: number }).responseCode
+    ).toBe(421);
+    expect(mockSendMail).not.toHaveBeenCalled();
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
   });
 

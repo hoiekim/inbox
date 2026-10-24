@@ -35,6 +35,7 @@ const USER_ROW = {
   user_id: "user-123",
   username: "admin",
   password: null,
+  password_version: 1,
   email: null,
   expiry: null,
   token: null,
