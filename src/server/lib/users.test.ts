@@ -7,19 +7,22 @@ import {
   beforeAll,
   afterAll,
   mock,
+  spyOn,
 } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User } from "common";
+import { logger } from "./logger";
 
 // Native mock.module pattern (mirrors budget's repositories/users.test.ts):
 // mock `pg` so the lazy pool in `postgres/client.ts` instantiates this
 // FakePool, then run the REAL `users.ts` functions against it. `mockQuery`
 // is the single seam every `usersTable` / `pgSearchUser` call funnels through
-// (`pool.query`). `afterAll` re-mocks pg back to the preload's real snapshot,
-// re-registers the real logger and `resetPool()` drops the cached FakePool, so
-// the next test file in the same `bun test` process starts clean. No DI.
+// (`pool.query`). `afterAll` re-mocks pg back to the preload's real snapshot
+// and `resetPool()` drops the cached FakePool, so the next test file in the
+// same `bun test` process starts clean. The logger is spied on, not mocked
+// (see below) — a module mock would leak past `afterAll`. No DI.
 const mockQuery = mock(
   async (_sql: string, _values?: unknown[]) =>
     ({ rows: [] as unknown[], rowCount: 0 as number | null })
@@ -42,23 +45,14 @@ const pgMock = () => ({
 
 mock.module("pg", pgMock);
 
-// `restoreLeaves` covers node-module leaves only, so this file captures the
-// real logger itself and re-registers it in `afterAll` — `mock.module` is
-// process-global and would otherwise stub every later file in the same run.
-const realLogger = await import("./logger");
-
-const mockLoggerError = mock(() => {});
-const mockLoggerInfo = mock(() => {});
-const loggerMock = () => ({
-  logger: {
-    debug: mock(() => {}),
-    info: mockLoggerInfo,
-    warn: mock(() => {}),
-    error: mockLoggerError,
-  },
-});
-
-mock.module("./logger", loggerMock);
+// The logger is spied on, not module-mocked: `mock.module("./logger")` is
+// process-global and its `afterAll` re-registration does NOT restore the
+// real logger for later files in the same `bun test` process (verified:
+// error-handler.test.ts's logging test saw 0 lines after this file ran).
+// `spyOn` replaces only the two spied methods on the shared logger object
+// and `mockRestore` in `afterAll` puts the originals back, so nothing leaks.
+const mockLoggerError = spyOn(logger, "error").mockImplementation(() => {});
+const mockLoggerInfo = spyOn(logger, "info").mockImplementation(() => {});
 
 // Import the subjects AND resetPool only after the pg mock is registered, so
 // `client.ts`'s `import { Pool } from "pg"` resolves to FakePool.
@@ -94,13 +88,13 @@ beforeAll(() => {
   // file's tests, so every query below hits FakePool — not real Postgres (which
   // is ECONNREFUSED on CI). This is the contract the lazy pool documents.
   mock.module("pg", pgMock);
-  mock.module("./logger", loggerMock);
   resetPool();
 });
 
 afterAll(() => {
   restoreLeaves();
-  mock.module("./logger", () => realLogger);
+  mockLoggerError.mockRestore();
+  mockLoggerInfo.mockRestore();
   resetPool();
 });
 
