@@ -1,5 +1,6 @@
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { pool, resetPool } from "../client";
 
 type Captured = { sql: string; params: unknown[] };
 const captured: Captured[] = [];
@@ -21,7 +22,25 @@ const mockPoolQuery = mock(async (sql: string, params?: unknown[]) => {
   return { rows, rowCount };
 });
 
-mock.module("../client", () => ({ pool: { query: mockPoolQuery } }));
+// The stub is installed through the pool Proxy's set trap, the way the
+// session-store tests do it — NOT via `mock.module("../client")`. That mock
+// is process-global and rebinds the models' `pool` import to a plain object
+// for every file that loads afterwards, so a later file's own pg mock and
+// `resetPool()` can never steer Table writes back to its stub:
+// mailgun-events.test.ts's insert assertions saw 0 calls in full-suite runs
+// for exactly this reason. The Proxy stays the models' pool; only its
+// `query` is stubbed, and `afterAll` drops the pool so the next file starts
+// clean.
+const installQueryStub = () => {
+  (pool as unknown as { query: typeof mockPoolQuery }).query = mockPoolQuery;
+};
+
+resetPool();
+installQueryStub();
+
+afterAll(() => {
+  resetPool();
+});
 
 // Import only AFTER the pool mock is in place so the module resolves to it.
 import {
@@ -38,6 +57,7 @@ beforeEach(() => {
   planned = [];
   nextRows = [];
   nextRowCount = null;
+  installQueryStub();
 });
 
 describe("SpamAllowlistTable constraint declaration", () => {
