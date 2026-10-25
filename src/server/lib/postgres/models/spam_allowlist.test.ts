@@ -42,7 +42,8 @@ afterAll(() => {
   resetPool();
 });
 
-// Import only AFTER the pool mock is in place so the module resolves to it.
+// The subjects import the models' pool Proxy, so the stub installed above
+// serves their queries whatever Pool binding is live.
 import {
   spamAllowlistTable,
   SpamAllowlistModel,
