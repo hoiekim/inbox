@@ -29,6 +29,7 @@ import { imapTrace } from "./trace";
 import { closeSocket } from "./close-socket";
 import {
   registerAuthenticatedSession,
+  unregisterConnection,
   unregisterSession,
 } from "./session-registry";
 import { getCredentialPasswordVersion } from "./credential-version";
@@ -842,6 +843,7 @@ export class ImapSession {
 
   cleanup = () => {
     unregisterSession(this);
+    unregisterConnection(this);
     if (this.isIdling) {
       idleManager.removeIdleSession(this.sessionId);
       this.isIdling = false;

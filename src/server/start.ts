@@ -10,6 +10,7 @@ import {
   initializeSmtp,
   initializeHttp,
   idleManager,
+  closeImapServers,
 } from "server";
 import { pool } from "server";
 import { sendAlarm } from "./lib/alarm";
@@ -89,21 +90,25 @@ const start = async () => {
     idleManager.shutdown();
     console.info("IDLE sessions cleaned up");
 
-    // Close IMAP servers (send BYE to active sessions handled by socket destroy)
-    await Promise.all(
-      imapServers.map(
-        (s) => new Promise<void>((resolve) => s.close(() => resolve()))
-      )
-    );
-    console.info("IMAP servers closed");
-
-    // Close SMTP servers (finish active transactions)
-    await Promise.all(
-      smtpServers.map(
-        (s) => new Promise<void>((resolve) => s.close(() => resolve()))
-      )
-    );
-    console.info("SMTP servers closed");
+    // A listener's `close` callback waits for its open connections, so each
+    // protocol ends its own: IMAP sends BYE to every session and tears it down
+    // (`closeImapServers`), SMTP gives in-flight DATA `SMTP_CLOSE_TIMEOUT_MS`
+    // before answering the rest 421. The two are independent and run at once,
+    // so this phase costs the longer bound rather than the sum.
+    await Promise.all([
+      closeImapServers(imapServers).then((drained) =>
+        console.info(
+          drained
+            ? "IMAP servers closed"
+            : "IMAP servers did not drain in time; continuing shutdown"
+        )
+      ),
+      Promise.all(
+        smtpServers.map(
+          (s) => new Promise<void>((resolve) => s.close(() => resolve()))
+        )
+      ).then(() => console.info("SMTP servers closed")),
+    ]);
 
     // The maintenance client is checked out for the duration of the phase, and
     // `pool.end()` waits for every client to be released — so the phase has to
