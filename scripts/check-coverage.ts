@@ -29,6 +29,13 @@ for (const line of readFileSync(LCOV_PATH, "utf8").split("\n")) {
   if (key in totals) totals[key as keyof typeof totals] += Number(value);
 }
 
+// No `src/` records means the reporter's `SF:` paths changed shape, not that
+// coverage is perfect; passing on empty totals would silently disable the gate.
+if (totals.LF === 0 && totals.FNF === 0) {
+  console.log(`FAIL no src/ records in ${LCOV_PATH} (check the SF: path format)`);
+  process.exit(1);
+}
+
 const actual = {
   lines: totals.LF ? totals.LH / totals.LF : 1,
   functions: totals.FNF ? totals.FNH / totals.FNF : 1,
