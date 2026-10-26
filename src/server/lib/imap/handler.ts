@@ -15,6 +15,7 @@ import {
   runInCommandBudgetContext,
 } from "./command-budget-hold";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
+import { registerConnection, unregisterConnection } from "./session-registry";
 import { logger } from "server";
 import { MAX_MESSAGE_BYTES } from "../message-size";
 
@@ -297,6 +298,9 @@ export class ImapRequestHandler {
       this.session.socket.removeAllListeners("close");
       this.session.socket.removeAllListeners("error");
       this.session.socket.removeAllListeners("timeout");
+      // A STARTTLS swap: the predecessor's `close` listener went with the
+      // rest, so its `cleanup` never runs to drop it from the sweep.
+      unregisterConnection(this.session);
     }
 
     // Nothing learned before the swap carries across it — a half-finished SASL
@@ -307,6 +311,7 @@ export class ImapRequestHandler {
 
     const session = new ImapSession(this, socket);
     this.session = session;
+    registerConnection(session);
 
     // Octets, not a string: `{N}` counts OCTETS, and a UTF-8 decode makes
     // `length` a count of UTF-16 code units instead — so slicing a literal off

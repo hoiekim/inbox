@@ -853,6 +853,19 @@ const onDataOutgoing = async (
 
 const SMTP_MAX_CLIENTS = 100;
 
+/**
+ * How long `SMTPServer.close` waits on open connections before it answers the
+ * rest `421 Server shutting down` and returns. The library's own default is
+ * 30s, three times compose's 10s stop grace, and an idle client holds it for
+ * all of it — long enough for the SIGKILL to land before the pool drains.
+ *
+ * The window is for a transaction already in DATA: once `close` runs, any new
+ * command is answered 421 on arrival, so only a message still streaming in
+ * needs it. One cut off here gets a transient reply and is retried by the
+ * sender, so the bound costs a redelivery, never a message.
+ */
+export const SMTP_CLOSE_TIMEOUT_MS = 5 * 1000;
+
 export const initializeSmtp = async () => {
   const servers: SMTPServer[] = [];
 
@@ -863,7 +876,8 @@ export const initializeSmtp = async () => {
     onRcptTo,
     onData,
     maxClients: SMTP_MAX_CLIENTS,
-    size: MAX_MESSAGE_BYTES
+    size: MAX_MESSAGE_BYTES,
+    closeTimeout: SMTP_CLOSE_TIMEOUT_MS
   };
 
   const credentials = getTlsCredentials();

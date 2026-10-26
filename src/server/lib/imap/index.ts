@@ -1,4 +1,4 @@
-import { createServer, Socket } from "net";
+import { createServer, Server, Socket } from "net";
 import { createServer as createTLSServer } from "tls";
 import { ImapRequestHandler } from "./handler";
 import { getCapabilities } from "./capabilities";
@@ -6,6 +6,9 @@ import { readFileSync } from "fs";
 import { logger } from "server";
 import { getTlsCredentials } from "../tls";
 import { sendAlarm } from "../alarm";
+import { boundCrashStep } from "../crash-alarm";
+import { CLOSE_FLUSH_TIMEOUT_MS } from "./close-socket";
+import { shutdownImapSessions } from "./session-registry";
 
 export { idleManager } from "./idle-manager";
 
@@ -81,4 +84,37 @@ export const initializeImap = async () => {
   }
 
   return servers;
+};
+
+/**
+ * How long shutdown waits for the IMAP listeners to close. Every session the
+ * sweep reaches is destroyed by CLOSE_FLUSH_TIMEOUT_MS at the latest; the
+ * margin lets those `close` events land. Anything still open after it belongs
+ * to no session — an implicit-TLS handshake still in flight, which would
+ * otherwise hold the listener for node's 120s `handshakeTimeout`.
+ */
+export const IMAP_SHUTDOWN_TIMEOUT_MS = CLOSE_FLUSH_TIMEOUT_MS + 1000;
+
+/**
+ * Stop the IMAP listeners and end every connection on them.
+ *
+ * Every live session is sent an untagged BYE (RFC 3501 §7.1.5) and torn down
+ * through `closeSocket`, so the listeners' `close` callbacks fire once the
+ * flush window has run instead of once each client idles out. The wait is
+ * still bounded: the process exit that follows takes down whatever the sweep
+ * could not reach.
+ *
+ * @returns whether every listener closed within the bound
+ */
+export const closeImapServers = async (servers: Server[]) => {
+  let closed = false;
+  const allClosed = Promise.all(
+    servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve())))
+  ).then(() => {
+    closed = true;
+  });
+  const sessions = shutdownImapSessions();
+  logger.info("IMAP sessions closed for shutdown", { component: "imap", sessions });
+  await boundCrashStep(allClosed, IMAP_SHUTDOWN_TIMEOUT_MS);
+  return closed;
 };
