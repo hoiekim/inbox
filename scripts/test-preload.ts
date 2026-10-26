@@ -49,6 +49,12 @@ const realBcrypt = require("bcryptjs");
 const realServer = require("server");
 (globalThis as Record<string, unknown>).__REAL_SERVER = { ...realServer };
 
+// `alarm` is not on the barrel, so it gets its own snapshot. Route tests stub
+// `sendAlarm` to keep Discord out of the run; without the restore the next
+// file's `sendAlarm(...).catch(...)` runs against that stub.
+const realAlarm = require("server/lib/alarm");
+(globalThis as Record<string, unknown>).__REAL_ALARM = { ...realAlarm };
+
 // `fs` / `net` / `tls` snapshots — mirror `__REAL_SERVER`. Files that
 // mock any of these builtins via `mock.module(name, ...)` restore
 // them in `afterAll` to stop the mock from leaking into subsequent

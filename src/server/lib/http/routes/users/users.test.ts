@@ -86,6 +86,8 @@ afterAll(() => {
   restoreLeaves();
   const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
   if (realServer) mock.module("server", () => realServer);
+  const realAlarm = (globalThis as Record<string, unknown>).__REAL_ALARM;
+  if (realAlarm) mock.module("../../../alarm", () => realAlarm);
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

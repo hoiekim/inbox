@@ -1,5 +1,5 @@
 
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import { SignedUser } from "common";
 
 const mockGetAccountStats = mock(() => Promise.resolve([]));
@@ -38,6 +38,14 @@ mock.module("server", () => ({
   getUserDomain: (username: string) =>
     username === "admin" ? "example.com" : `${username}.example.com`,
 }));
+
+// `mock.module` is process-global with no unmock API, and the stub `logger`
+// above reaches `lib/logger.ts` through the barrel — hand the real barrel back
+// so the next file in the same run does not inherit it.
+afterAll(() => {
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
+  if (realServer) mock.module("server", () => realServer);
+});
 
 import { Store, simplifyCriterion } from "./store";
 import { UTILITY_FOLDERS } from "./util";

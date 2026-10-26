@@ -110,6 +110,17 @@ mock.module("../../../logger", () => ({
   logger: { debug: mock(() => {}), info: mock(() => {}), warn: mockLoggerWarn, error: mockLoggerError },
 }));
 
+// `mock.module` is process-global with no unmock API — hand the real barrel
+// and logger back so the next file in the same run does not inherit the stubs.
+afterAll(() => {
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER as
+    | Record<string, unknown>
+    | undefined;
+  if (!realServer) return;
+  mock.module("server", () => realServer);
+  mock.module("../../../logger", () => ({ logger: realServer.logger, default: realServer.logger }));
+});
+
 // Mock deep imports used by post-spam-mark.ts (its trainWithEmail + getMailById
 // reach into specific server submodules, not the "server" barrel).
 const mockGetMailById = mock(async () => null as unknown);
