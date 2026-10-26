@@ -147,6 +147,12 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   // per-IP aggregate keeps its count, so a success here cannot wipe another
   // account's failures from the same IP.
   resetAuthFailures(ip, account);
+  // Credential-revocation fence: stamp the credential row's
+  // current generation onto the connection. smtp-server only copies
+  // `response.user` onto the session, so the stamp goes on the session
+  // object directly; the per-command gates below re-check it.
+  (session as VersionStampedSmtpSession).passwordVersion =
+    user.passwordVersion ?? 1;
   // Audit line names the original credential. Read-only sessions pass this
   // gate and are refused later at the single mutating gate this surface
   // has, `onMailFrom` (below) — matching HTTP and IMAP where the read-only
@@ -164,7 +170,7 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
  * denied" family rather than the "server error" family that would train
  * clients to retry.
  */
-export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
+export const onMailFrom: SMTPServerOptions["onMailFrom"] = async (
   _address: SMTPServerAddress,
   session: SMTPServerSession,
   cb: (err?: Error | null) => void
@@ -175,6 +181,14 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = (
     };
     err.responseCode = 550;
     return cb(err);
+  }
+  // Credential-revocation fence: an authenticated connection
+  // whose credential rotated after AUTH loses its grant at this command.
+  // smtp-server discards the returned promise, so every path ends in `cb`.
+  try {
+    await checkSmtpCredentialVersion(session);
+  } catch (err) {
+    return cb(err instanceof Error ? err : new Error(String(err)));
   }
   return cb();
 };
@@ -235,6 +249,64 @@ class LookupFailedError extends Error {
     super("4.3.0 Error: temporary lookup failure");
   }
 }
+
+/**
+ * The connection authenticated before the credential was rotated. 421
+ * tells the client the service wants the channel back — the same wording
+ * the eviction sweep uses — so it reconnects and re-authenticates
+ * rather than retrying the stale grant.
+ */
+class CredentialChangedError extends Error {
+  responseCode = 421;
+
+  constructor() {
+    super("4.4.2 Credential changed, please re-authenticate");
+  }
+}
+
+/**
+ * The session object as this module sees it: smtp-server's own session plus
+ * the credential-generation stamp `onAuth` writes.
+ */
+interface VersionStampedSmtpSession extends SMTPServerSession {
+  passwordVersion?: number;
+}
+
+/**
+ * Credential-revocation fence for SMTP: the generation stamped
+ * at AUTH time is compared against the credential row's current version on
+ * every authenticated command, so a connection a sweep could not reach —
+ * another process's registry, or an AUTH that straddled the rotation — loses
+ * its grant at its next command instead of at the life of its socket.
+ * Unauthenticated sessions carry no grant and are not checked. A lookup
+ * fault is answered transient (LookupFailedError): a grant that cannot be
+ * proven current is not exercised.
+ */
+const checkSmtpCredentialVersion = async (
+  session: SMTPServerSession
+): Promise<void> => {
+  const username = session.user;
+  if (!username) return;
+  const stamped =
+    (session as VersionStampedSmtpSession).passwordVersion ?? 1;
+  let user;
+  try {
+    user = await getUser({ username });
+  } catch (err) {
+    logger.error(
+      "SMTP: credential version lookup failed",
+      { remoteAddress: session.remoteAddress },
+      err
+    );
+    throw new LookupFailedError();
+  }
+  if ((user?.passwordVersion ?? 1) > stamped) {
+    logger.info("SMTP: refused a command on a rotated credential", {
+      authenticatedAs: username,
+    });
+    throw new CredentialChangedError();
+  }
+};
 
 /**
  * The peer has spent its recipient-probe budget. Transient and free — no
@@ -307,6 +379,11 @@ export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
 ) => {
   const ip = session.remoteAddress ?? "unknown";
   try {
+    // Credential-revocation fence: an authenticated connection
+    // whose credential rotated after AUTH loses its grant at this command.
+    // Unauthenticated probing sessions carry no grant and skip the check.
+    await checkSmtpCredentialVersion(session);
+
     const { EMAIL_DOMAIN } = process.env;
     if (!EMAIL_DOMAIN) return cb();
     if (!isLocalAddress(address.address, EMAIL_DOMAIN)) return cb();
@@ -715,6 +792,23 @@ const onDataOutgoing = async (
       logger.warn("SMTP: Unauthenticated user attempted to send email.");
       message.drain();
       return cb(new Error("User not authenticated"));
+    }
+
+    // Credential-revocation fence: the stamp is compared
+    // against the credential row's current version before the message is
+    // sent, so a rotation that landed after MAIL FROM / RCPT TO still loses
+    // the grant here. The user row was just read above, so no second lookup
+    // is needed. `onData` itself stays synchronous — the DATA stream's
+    // handlers must attach before the first bytes arrive — which is why the
+    // check lives at the send gate rather than at DATA dispatch.
+    const stamped =
+      (session as VersionStampedSmtpSession).passwordVersion ?? 1;
+    if ((user.passwordVersion ?? 1) > stamped) {
+      logger.info("SMTP: refused an outgoing message on a rotated credential", {
+        authenticatedAs: username,
+      });
+      message.drain();
+      return cb(new CredentialChangedError());
     }
 
     const parsed = await simpleParser(message.stream);

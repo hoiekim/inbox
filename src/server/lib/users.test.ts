@@ -121,6 +121,7 @@ const makeUserRow = (overrides: Record<string, unknown> = {}) => ({
   user_id: "u-1",
   username: "alice",
   password: "hashed",
+  password_version: 1,
   email: "alice@example.com",
   expiry: null,
   token: null,
@@ -337,6 +338,20 @@ describe("getUser", () => {
     expect(result?.username).toBe("alice");
     expect(result?.email).toBe("alice@example.com");
     expect(result?.password).toBe("hashed");
+  });
+
+  it("maps password_version onto the user, defaulting null to 1", async () => {
+    // Rows that predate the revocation fence's migration read back null;
+    // the migration's DEFAULT 1 makes 1 the honest generation for them.
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password_version: null }))
+    );
+    expect((await getUser({ id: "u-1" }))?.passwordVersion).toBe(1);
+
+    mockQuery.mockResolvedValueOnce(
+      rows(makeUserRow({ password_version: 3 }))
+    );
+    expect((await getUser({ id: "u-1" }))?.passwordVersion).toBe(3);
   });
 
   it("forwards id/username/email into the SELECT parameter values", async () => {
@@ -664,7 +679,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     await setUserInfo({
       email: "a@b.c",
@@ -687,6 +702,75 @@ describe("setUserInfo", () => {
     expect(values).not.toContain("newpw");
   });
 
+  it("bumps password_version atomically in the same UPDATE that writes the new hash", async () => {
+    // The revocation fence: the generation bump and the hash
+    // write are one UPDATE, so no interleaving can land a new hash on the
+    // old generation. The bump is computed by the database
+    // (`COALESCE(password_version, 1) + 1`), not read-modify-written in
+    // JS: two concurrent rotations must not both write N+1. A mutant that
+    // binds a computed version fails the not-toContain(5) assertion.
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hashed",
+            password_version: 4,
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 5 }));
+
+    await setUserInfo({
+      email: "a@b.c",
+      username: "alice",
+      password: "newpw",
+      token: "tok",
+    });
+
+    const [sql, values] = mockQuery.mock.calls[2] as [string, unknown[]];
+    expect(sql).toContain("UPDATE");
+    expect(sql).toContain("COALESCE(password_version, 1) + 1");
+    expect(values).not.toContain(5);
+  });
+
+  it("starts the version at 2 for rows that predate the fence and signs the bumped version", async () => {
+    mockQuery
+      .mockResolvedValueOnce(
+        rows(
+          makeUserRow({
+            user_id: "u-1",
+            username: "alice",
+            email: "a@b.c",
+            password: "hashed",
+            password_version: null,
+            token: "tok",
+          })
+        )
+      )
+      .mockResolvedValueOnce(rows())
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
+
+    const signed = await setUserInfo({
+      email: "a@b.c",
+      username: "alice",
+      password: "newpw",
+      token: "tok",
+    });
+
+    const [sql, values] = mockQuery.mock.calls[2] as [string, unknown[]];
+    expect(sql).toContain("COALESCE(password_version, 1) + 1");
+    expect(values).not.toContain(2);
+    // The session this signs must carry the bumped generation the UPDATE
+    // returned: updateSession stamps it onto the row, and a pre-bump stamp
+    // would fail the fence on its first comparison after issuance.
+    expect(signed.passwordVersion).toBe(2);
+  });
+
   it("deletes the user's sessions before it writes the new password", async () => {
     // Ordering is the assertion, not just presence: a DELETE issued after the
     // UPDATE would leave a failed eviction on a row whose token is already
@@ -704,7 +788,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows({ session_id: "s-1" }, { session_id: "s-2" }))
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     await setUserInfo({
       email: "a@b.c",
@@ -743,7 +827,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     const signed = await setUserInfo({
       email: "a@b.c",
@@ -754,6 +838,7 @@ describe("setUserInfo", () => {
 
     expect(signed).toBeDefined();
     expect(signed.id).toBe("u-1");
+    expect(signed.passwordVersion).toBe(2);
     expect(signed.username).toBe("alice");
     expect(signed.email).toBe("a@b.c");
     expect(JSON.stringify(signed)).not.toMatch(/\$2[aby]\$/);
@@ -796,7 +881,7 @@ describe("setUserInfo", () => {
         )
       )
       .mockResolvedValueOnce(rows())
-      .mockResolvedValueOnce(rows({ user_id: "u-1" }));
+      .mockResolvedValueOnce(rows({ user_id: "u-1", password_version: 2 }));
 
     try {
       await setUserInfo({

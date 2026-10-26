@@ -18,6 +18,7 @@ const makeUserRow = (username: string) => ({
   user_id: `user-${username}`,
   username,
   password: null,
+  password_version: 1,
   email: `${username}@localhost`,
   expiry: null,
   token: null,

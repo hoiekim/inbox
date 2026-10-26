@@ -25,6 +25,24 @@ let writeMode: Mode = "ok";
 let readMode: Mode = "ok";
 let purgeMode: Mode = "ok";
 let revokeMode: Mode = "ok";
+// The user row's password_version the fence reads; "missing" simulates a
+// deleted account row, "throw" a lookup fault.
+let userVersionMode: number | "missing" | "throw" = 1;
+
+const issuedSql: string[] = [];
+
+const liveUserRow = (password_version: number) => ({
+  user_id: USER.id,
+  username: USER.username,
+  password: "hashed",
+  password_version,
+  email: USER.email,
+  expiry: null,
+  token: null,
+  updated: new Date().toISOString(),
+  is_deleted: false,
+  imap_uid_validity: null,
+});
 
 const SESSION_ID = "fault-propagation-session-id";
 const WEEK_MS = 1000 * 60 * 60 * 24 * 7;
@@ -42,6 +60,7 @@ const liveSessionRow = () => ({
   session_email: USER.email,
   session_is_read_only: null,
   session_authenticated_as: null,
+  session_password_version: 1,
   cookie_original_max_age: WEEK_MS,
   cookie_max_age: WEEK_MS,
   cookie_signed: null,
@@ -55,6 +74,7 @@ const liveSessionRow = () => ({
 });
 
 const mockQuery = mock(async (sql: string) => {
+  issuedSql.push(sql);
   if (sql.startsWith("INSERT INTO sessions")) {
     if (writeMode === "throw") throw new Error("could not serialize session write");
     const rows = writeMode === "empty" ? [] : [liveSessionRow()];
@@ -63,6 +83,11 @@ const mockQuery = mock(async (sql: string) => {
   if (sql.startsWith("SELECT") && sql.includes("FROM sessions")) {
     if (readMode === "throw") throw new Error("connection terminated unexpectedly");
     const rows = readMode === "empty" ? [] : [liveSessionRow()];
+    return { rows, rowCount: rows.length };
+  }
+  if (sql.startsWith("SELECT") && sql.includes("FROM users")) {
+    if (userVersionMode === "throw") throw new Error("connection terminated unexpectedly");
+    const rows = userVersionMode === "missing" ? [] : [liveUserRow(userVersionMode)];
     return { rows, rowCount: rows.length };
   }
   if (sql.startsWith("DELETE FROM sessions") && sql.includes("cookie_expires")) {
@@ -93,6 +118,8 @@ beforeEach(() => {
   readMode = "ok";
   purgeMode = "ok";
   revokeMode = "ok";
+  userVersionMode = 1;
+  issuedSql.length = 0;
   installQueryStub();
 });
 
@@ -169,6 +196,58 @@ describe("PostgresSessionStore.get", () => {
 
     expect(err).toBeNull();
     expect((session as { user: SignedUser }).user.id).toBe(USER.id);
+  });
+});
+
+describe("PostgresSessionStore.get credential-version fence", () => {
+  it("rejects a session stamped behind the user's current password_version and destroys the row", async () => {
+    // The revocation fence: the row was minted on generation 1
+    // and the credential has since rotated to 2 — a resurrected row, or a
+    // session from a login that straddled the rotation.
+    userVersionMode = 2;
+
+    const { err, session } = await getResult(SESSION_ID);
+
+    expect(err).toBeNull();
+    expect(session).toBeNull();
+    // The rejected row is destroyed so it cannot be resurrected again.
+    expect(
+      issuedSql.some((sql) =>
+        sql.startsWith("DELETE FROM sessions WHERE session_id = $1")
+      )
+    ).toBe(true);
+  });
+
+  it("keeps a session stamped at the current version", async () => {
+    userVersionMode = 1;
+
+    const { err, session } = await getResult(SESSION_ID);
+
+    expect(err).toBeNull();
+    expect((session as { user: SignedUser }).user.id).toBe(USER.id);
+  });
+
+  it("treats a missing user row as generation 1 (no behavior change)", async () => {
+    userVersionMode = "missing";
+
+    const { err, session } = await getResult(SESSION_ID);
+
+    expect(err).toBeNull();
+    expect((session as { user: SignedUser }).user.id).toBe(USER.id);
+  });
+
+  it("calls back with the error when the version lookup raises", async () => {
+    // A grant that cannot be proven current is not exercised — but the
+    // failure must surface as an error, not as a silent logout.
+    userVersionMode = "throw";
+
+    const { err, session } = await getResult(SESSION_ID);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain(
+      "connection terminated unexpectedly"
+    );
+    expect(session).toBeFalsy();
   });
 });
 
