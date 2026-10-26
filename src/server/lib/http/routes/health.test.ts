@@ -1,4 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
+import { restoreLeaves } from "test-helpers";
 
 // ── Mock net, tls, fs, and postgres BEFORE importing health router ───────────
 
@@ -76,7 +77,31 @@ mock.module("fs", () => ({
 }));
 
 const mockPoolQuery = mock(async () => [{ "?column?": 1 }]);
-mock.module("../../postgres/client", () => ({ pool: { query: mockPoolQuery } }));
+// Mock the pg LEAF, not the postgres client module: mock.module is
+// process-global, and mocking the client module leaked its stub pool into
+// every file that imported the client afterwards — it broke
+// mailgun-events.test.ts's store assertions (the insert went to this stub
+// instead of that file's pg mock, so its mockQuery saw zero calls).
+// Mocking pg instead lets client.ts bind the fake Pool class when the health
+// router is first imported, and afterAll restores pg via restoreLeaves.
+class FakePool {
+  query = mockPoolQuery;
+  end = async () => {};
+  connect = async () => ({ query: mockPoolQuery, release: () => {} });
+  on() {}
+}
+const pgMock = () => ({
+  Pool: FakePool,
+  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
+  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
+});
+mock.module("pg", pgMock);
+// The client module is already loaded (preload imports the server barrel),
+// and its pool Proxy caches the real Pool instance at load — so the pg mock
+// above alone does not rebind it. Re-registering the mock plus resetPool()
+// (the mailgun-events.test.ts pattern) drops the cached pool and makes the
+// next query construct the fake Pool instead.
+import { resetPool } from "../../postgres/client";
 
 // ── Helper to call the health router GET "/" directly ─────────────────────────
 
@@ -139,6 +164,8 @@ const restoreEnv = () => {
 
 describe("healthRouter GET /", () => {
   beforeEach(() => {
+    mock.module("pg", pgMock);
+    resetPool();
     mockPoolQuery.mockClear();
     mockCreateConnection.mockClear();
     mockTlsConnect.mockClear();
@@ -157,6 +184,7 @@ describe("healthRouter GET /", () => {
 
   afterAll(() => {
     restoreEnv();
+    restoreLeaves();
     const realFsSnapshot = (globalThis as Record<string, unknown>).__REAL_FS;
     if (realFsSnapshot) mock.module("fs", () => realFsSnapshot);
     const realNetSnapshot = (globalThis as Record<string, unknown>).__REAL_NET;
