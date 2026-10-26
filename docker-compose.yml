@@ -14,7 +14,7 @@ services:
     depends_on:
       - postgres
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3004/api/health"]
+      test: ["CMD", "bun", "./healthcheck.js"]
       interval: 30s
       timeout: 10s
       retries: 3
