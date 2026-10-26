@@ -1,4 +1,4 @@
-import { describe, it, expect, mock } from "bun:test";
+import { describe, it, expect, mock, afterAll } from "bun:test";
 
 mock.module("../../logger", () => ({
   logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
@@ -6,6 +6,19 @@ mock.module("../../logger", () => ({
 mock.module("../../alarm", () => ({
   sendAlarm: mock(async () => {}),
 }));
+
+// `mock.module` is process-global with no unmock API — hand the real modules
+// back so the next file in the same run does not inherit these stubs.
+afterAll(() => {
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER as
+    | Record<string, unknown>
+    | undefined;
+  if (realServer) {
+    mock.module("../../logger", () => ({ logger: realServer.logger, default: realServer.logger }));
+  }
+  const realAlarm = (globalThis as Record<string, unknown>).__REAL_ALARM;
+  if (realAlarm) mock.module("../../alarm", () => realAlarm);
+});
 
 import { Route, StreamingStatus, authRequired, AUTH_ERROR_MESSAGE } from "./route";
 

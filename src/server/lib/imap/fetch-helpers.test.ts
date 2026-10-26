@@ -57,6 +57,10 @@ import type { MailType } from "common";
 
 afterAll(() => {
   for (const id of writtenIds) fs.rmSync(attachmentPath(id), { force: true });
+  // The stub `logger` above reaches `lib/logger.ts` through the barrel — hand
+  // the real barrel back so the next file in the same run does not inherit it.
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
+  if (realServer) mock.module("server", () => realServer);
 });
 
 // Wire content is `string | Buffer` — the residual materialized paths

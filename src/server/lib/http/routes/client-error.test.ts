@@ -41,6 +41,10 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));
   });
+  // `mock.module` is process-global with no unmock API — hand the real alarm
+  // back so the next file in the same run does not inherit the stub.
+  const realAlarm = (globalThis as Record<string, unknown>).__REAL_ALARM;
+  if (realAlarm) mock.module("../../alarm", () => realAlarm);
 });
 
 beforeEach(() => {

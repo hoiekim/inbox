@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, afterEach, beforeEach } from "bun:test";
+import { describe, it, expect, mock, afterAll, afterEach, beforeEach } from "bun:test";
 import express from "express";
 import session from "express-session";
 import { createHmac } from "crypto";
@@ -40,12 +40,21 @@ const makeRes = (init?: { headersSent?: boolean; writableEnded?: boolean }) => {
 };
 
 const originalConsoleError = console.error;
+const originalAlarmWebhook = process.env.DISCORD_ALARM_WEBHOOK;
 
 // Ahead of every test in every suite, not after each test in one: bun
 // auto-loads `.env`, and alarm.ts is a no-op only while this is unset. The two
 // sink tests set it inside their own bodies, so they run with it present.
 beforeEach(() => {
   delete process.env.DISCORD_ALARM_WEBHOOK;
+});
+
+// The last sink test leaves it pointing at a sink that is already closed — put
+// back what the run started with, or every later file's real `sendAlarm` dials
+// that dead port.
+afterAll(() => {
+  if (originalAlarmWebhook !== undefined) process.env.DISCORD_ALARM_WEBHOOK = originalAlarmWebhook;
+  else delete process.env.DISCORD_ALARM_WEBHOOK;
 });
 
 afterEach(() => {

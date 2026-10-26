@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import type { ApiResponse } from "../route";
 import { SignedUser } from "common";
 import {
@@ -58,6 +58,13 @@ mock.module("server", () => ({
   refuseReadOnly,
   remapReadOnlySession,
 }));
+
+// The stubs above reach the leaf modules through the barrel (`lib/logger.ts`
+// included) — hand the real barrel back so the next file does not inherit them.
+afterAll(() => {
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER;
+  if (realServer) mock.module("server", () => realServer);
+});
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

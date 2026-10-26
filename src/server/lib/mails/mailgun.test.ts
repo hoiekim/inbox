@@ -4,6 +4,10 @@ import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 // production, so the visible-To assertions run against the shape that ships.
 // It also has to differ from the module's own "mydomain" default, or an
 // assertion about it passes just as well against a build that never reads it.
+const ORIGINAL_ENV = {
+  EMAIL_DOMAIN: process.env.EMAIL_DOMAIN,
+  MAILGUN_KEY: process.env.MAILGUN_KEY,
+};
 process.env.EMAIL_DOMAIN = "example.com";
 process.env.MAILGUN_KEY = "test-key";
 
@@ -64,6 +68,19 @@ import { MailDataToSend } from "common";
 afterAll(() => {
   const realFs = (globalThis as Record<string, unknown>).__REAL_FS;
   if (realFs) mock.module("fs", () => realFs);
+  const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER as
+    | Record<string, unknown>
+    | undefined;
+  if (realServer) {
+    mock.module("server", () => realServer);
+    mock.module("../logger", () => ({ logger: realServer.logger, default: realServer.logger }));
+  }
+  // An `EMAIL_DOMAIN` left at "example.com" makes every later file's
+  // `addressToUsername("victim@example.com")` answer "admin".
+  for (const [name, value] of Object.entries(ORIGINAL_ENV)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 const baseMail = new MailDataToSend({
