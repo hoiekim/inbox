@@ -31,6 +31,9 @@ import {
 } from "./session-registry";
 
 const BYE = "* BYE Server shutting down\r\n";
+// Above the bound these tests can legitimately run to, so a slow runner fails
+// on the timing assertion rather than on the harness clock.
+const SLOW_TEST_TIMEOUT_MS = 10_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -134,7 +137,7 @@ describe("IMAP shutdown over real TCP", () => {
     expect(elapsedMs).toBeLessThan(IMAP_SHUTDOWN_TIMEOUT_MS);
     await waitFor(() => client.received().endsWith(BYE), 1000);
     expect(client.received()).toEndWith(BYE);
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 
   it("sends an IDLE session one BYE when the IDLE sweep has already closed it", async () => {
     // start.ts runs `idleManager.shutdown()` first, which says BYE to IDLE
@@ -175,7 +178,7 @@ describe("IMAP shutdown over real TCP", () => {
     expect(drained).toBe(false);
     expect(elapsedMs).toBeGreaterThanOrEqual(IMAP_SHUTDOWN_TIMEOUT_MS - 50);
     expect(elapsedMs).toBeLessThan(IMAP_SHUTDOWN_TIMEOUT_MS + 1000);
-  });
+  }, SLOW_TEST_TIMEOUT_MS);
 });
 
 /** Minimal duplex stand-in: records writes, closes on `end`. */
