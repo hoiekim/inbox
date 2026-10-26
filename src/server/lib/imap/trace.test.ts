@@ -11,7 +11,11 @@ describe("imapTrace", () => {
   let infoSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
+    // `spyOn` hands back the existing mock when `logger.info` already is one —
+    // a file that module-mocked the logger leaves it that way for the rest of
+    // the process — and with it every call that file and later ones made.
     infoSpy = spyOn(logger, "info");
+    infoSpy.mockClear();
   });
   afterEach(() => {
     infoSpy.mockRestore();
