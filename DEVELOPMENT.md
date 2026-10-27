@@ -64,6 +64,7 @@ The IMAP/SMTP port env vars exist primarily to let non-root sandboxes bind high 
 | `APP_HOSTNAME` | Recommended | The hostname mail clients use to connect to IMAP/SMTP. Must match the TLS certificate CN/SAN. Used in autoconfig XML and IMAP/SMTP TLS greetings. |
 | `EMAIL_DOMAIN` | Yes | The domain used for email addresses (`*@EMAIL_DOMAIN`). MX records should point to this domain's mail server. |
 | `MAILGUN_KEY` | For sending | Mailgun API key. Required to send outgoing mail. |
+| `MAILGUN_URL` | Optional | Root of Mailgun's HTTP API. Defaults to `https://api.mailgun.net`; set `https://api.eu.mailgun.net` for an EU-region domain. |
 | `DISCORD_ALARM_WEBHOOK` | Optional | Discord webhook URL for server error alarms (unhandled exceptions, 5xx errors). |
 
 ### `APP_HOSTNAME` vs `EMAIL_DOMAIN`
