@@ -5,6 +5,7 @@
     "": {
       "name": "inbox",
       "dependencies": {
+        "form-data": "^4.0.4",
         "mailgun.js": "^12.0.3",
         "mailparser": "^3.7.5",
         "smtp-server": "^3.14.0",
