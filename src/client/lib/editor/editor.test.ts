@@ -7,6 +7,7 @@ afterAll(() => GlobalRegistrator.unregister());
 const { Editor } = await import("./editor");
 const { handleCopy, handleDragStart, handleDrop, handlePaste } = await import("./clipboard");
 const { Transaction } = await import("./state");
+const { deleteSelection, selectAll } = await import("./commands");
 
 const at = (editor: InstanceType<typeof Editor>, pos: number) => {
   const tr = new Transaction(editor.state);
@@ -85,6 +86,102 @@ describe("Editor", () => {
     editor.destroy();
     editor.dom.remove();
   });
+});
+
+describe("input events", () => {
+  test("text typed during a composition is left to the browser and read back once", async () => {
+    const editor = new Editor({ content: "<p>a</p>" });
+    document.body.appendChild(editor.dom);
+    const text = editor.dom.querySelector("p")!.firstChild as Text;
+    editor.focus();
+    document.getSelection()!.setBaseAndExtent(text, 1, text, 1);
+    editor.dom.dispatchEvent(new Event("compositionstart"));
+    const input = new InputEvent("beforeinput", {
+      inputType: "insertText",
+      data: "한",
+      isComposing: true,
+      cancelable: true,
+      bubbles: true
+    });
+    editor.dom.dispatchEvent(input);
+    expect(input.defaultPrevented).toBe(false);
+    expect(editor.getHTML()).toBe("<p>a</p>");
+    text.data = "a한";
+    editor.dom.dispatchEvent(new Event("compositionend"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(editor.getHTML()).toBe("<p>a한</p>");
+    editor.destroy();
+    editor.dom.remove();
+  });
+
+  test("an input the browser applies anyway is not also applied to the model", async () => {
+    for (const cancelable of [true, false]) {
+      const editor = new Editor({ content: "<p>abcd</p>" });
+      document.body.appendChild(editor.dom);
+      const text = editor.dom.querySelector("p")!.firstChild as Text;
+      editor.focus();
+      document.getSelection()!.setBaseAndExtent(text, 4, text, 4);
+      const input = new InputEvent("beforeinput", {
+        inputType: "deleteContentBackward",
+        cancelable,
+        bubbles: true
+      });
+      editor.dom.dispatchEvent(input);
+      expect(input.defaultPrevented).toBe(cancelable);
+      if (!input.defaultPrevented) {
+        // The browser's own edit: one character off whatever the DOM holds now.
+        expect(editor.getHTML()).toBe("<p>abcd</p>");
+        const node = editor.dom.querySelector("p")!.firstChild as Text;
+        node.data = node.data.slice(0, -1);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(editor.getHTML()).toBe("<p>abc</p>");
+      editor.destroy();
+      editor.dom.remove();
+    }
+  });
+
+  test("a composition over a selection spanning blocks merges them", async () => {
+    const editor = new Editor({ content: "<p>abc</p><p>def</p>" });
+    document.body.appendChild(editor.dom);
+    const [first, second] = Array.from(editor.dom.querySelectorAll("p"));
+    const t1 = first!.firstChild as Text;
+    const t2 = second!.firstChild as Text;
+    editor.focus();
+    document.getSelection()!.setBaseAndExtent(t1, 2, t2, 2);
+    editor.dom.dispatchEvent(new Event("compositionstart"));
+    second!.remove();
+    t1.data = "ab한f";
+    document.getSelection()!.setBaseAndExtent(t1, 3, t1, 3);
+    editor.dom.dispatchEvent(new Event("compositionend"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(editor.getHTML()).toBe("<p>ab한f</p>");
+    expect(editor.dom.querySelectorAll("p").length).toBe(1);
+    editor.destroy();
+    editor.dom.remove();
+  });
+});
+
+describe("select all", () => {
+  const shapes = [
+    "<hr><p>x</p>",
+    "<ul><li><p>a</p></li></ul><p>b</p>",
+    "<blockquote><p>q</p></blockquote>",
+    "<p>a</p><hr>",
+    "<pre><code>c</code></pre><p>d</p>"
+  ];
+  for (const content of shapes) {
+    test(`replaces all of ${content} with what is typed`, () => {
+      const editor = new Editor({ content });
+      editor.run(selectAll);
+      editor.insertText("Z");
+      expect(editor.getHTML()).toBe("<p>Z</p>");
+      editor.run(selectAll);
+      editor.run(deleteSelection);
+      expect(editor.getHTML()).toBe("<p></p>");
+      editor.destroy();
+    });
+  }
 });
 
 describe("paste", () => {

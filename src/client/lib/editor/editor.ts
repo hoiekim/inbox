@@ -333,9 +333,9 @@ export class Editor {
   }
 
   private handleBeforeInput(event: InputEvent) {
-    const prevent = () => {
-      if (event.cancelable) event.preventDefault();
-    };
+    // An input the browser will apply anyway is read back from the DOM once it lands.
+    if (!event.cancelable) return;
+    const prevent = () => event.preventDefault();
     switch (event.inputType) {
       case "insertText":
         if (this.view.composing || event.isComposing) return;

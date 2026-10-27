@@ -678,7 +678,13 @@ class TextBuilder {
   }
 }
 
-const trimNewlines = (text: string) => text.replace(/^\n+|\n+$/g, "");
+const trimNewlines = (text: string) => {
+  let start = 0;
+  let end = text.length;
+  while (start < end && text[start] === "\n") start++;
+  while (end > start && text[end - 1] === "\n") end--;
+  return text.substring(start, end);
+};
 
 const letterSequence = (n: number, base: string) => {
   const digits: number[] = [];
@@ -811,7 +817,7 @@ const formatList = (el: Element, builder: TextBuilder, nextPrefix: () => string)
   const nested = el.parent?.name === "li";
   let maxPrefixLength = 0;
   const items = el.children
-    .filter((child) => !isText(child) || !/^\s*$/.test(child.text))
+    .filter((child) => !isText(child) || /\S/.test(child.text))
     .map((node) => {
       if (!isElement(node) || node.name !== "li") return { node, prefix: "" };
       const prefix = nested ? nextPrefix().trimStart() : nextPrefix();

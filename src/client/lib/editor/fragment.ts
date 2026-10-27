@@ -1,9 +1,9 @@
 import type { Mark, Node } from "./model";
 import { $, type Pos } from "./resolved";
 import type { Schema } from "./schema";
-import { Transaction, isEmpty, selFrom, selTo, type EditorState } from "./state";
+import { Transaction, selFrom, selTo } from "./state";
 import { build, flatten, toItems, type Token } from "./tokens";
-import { deleteSelection, type Command } from "./commands";
+import { deleteRangeInto, type Command } from "./commands";
 
 /**
  * The selected part of a document as whole nodes: textblocks the selection
@@ -61,20 +61,6 @@ const plainText = (nodes: Node[]): string =>
     })
     .join("");
 
-const deleteRange = (tr: Transaction, from: number, to: number) => {
-  const state: EditorState = {
-    schema: tr.schema,
-    doc: tr.doc,
-    selection: { anchor: from, head: to },
-    storedMarks: null
-  };
-  let result: Transaction | null = null;
-  deleteSelection(state, (t) => {
-    result = t;
-  });
-  if (result) for (const step of (result as Transaction).steps) tr.step(step);
-};
-
 /**
  * Inserts pasted nodes at the selection, fitting them into the textblock
  * there: inline content goes in as is, and blocks split the textblock with
@@ -84,13 +70,15 @@ export const insertNodes =
   (nodes: Node[]): Command =>
   (state, dispatch) => {
     const tr = new Transaction(state);
-    if (!isEmpty(state.selection)) {
-      const from = selFrom(state.selection);
-      const to = selTo(state.selection);
-      if (state.selection.node) tr.delete(from, to);
-      else deleteRange(tr, from, to);
+    const from = selFrom(state.selection);
+    const to = selTo(state.selection);
+    let at = from;
+    if (state.selection.node) {
+      tr.delete(from, to);
+    } else if (from !== to) {
+      at = deleteRangeInto(tr, from, to);
     }
-    if (!insertAt(tr, tr.mapping.map(selFrom(state.selection), -1), nodes)) return false;
+    if (!insertAt(tr, at, nodes)) return false;
     dispatch?.(tr.scroll());
     return true;
   };

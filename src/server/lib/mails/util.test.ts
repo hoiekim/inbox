@@ -157,7 +157,7 @@ describe("getText", () => {
       </html>
     `;
     const text = getText(html);
-    expect(text).toContain("NEWSLETTER"); // h1 gets uppercased by html-to-text
+    expect(text).toContain("NEWSLETTER"); // headings are uppercased
     expect(text).toContain("Dear subscriber");
     expect(text).toContain("new products");
     expect(text).toContain("Best regards");

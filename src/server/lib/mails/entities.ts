@@ -48,7 +48,7 @@ const NAMED = new Map<string, string>(
     })
 );
 
-/** Names that decode without a semicolon, longest first. */
+/** Names that also decode without a semicolon. */
 const LEGACY = (
   "Aacute Agrave Atilde Ccedil Eacute Egrave Iacute Igrave Ntilde Oacute Ograve Oslash " +
   "Otilde Uacute Ugrave Yacute aacute agrave atilde brvbar ccedil curren divide eacute " +
@@ -73,44 +73,28 @@ const fromCodePoint = (codePoint: number) => {
   return String.fromCodePoint(NUMERIC_REMAP.get(codePoint) ?? codePoint);
 };
 
-const NAME = /^([0-9A-Za-z]+);/;
-const DECIMAL = /^#([0-9]+);?/;
-const HEX = /^#[xX]([0-9a-fA-F]+);?/;
-const AMBIGUOUS = /^[0-9A-Za-z]+/;
+const LEGACY_NAMES = new Set(LEGACY);
+const LEGACY_MAX = Math.max(...LEGACY.map((name) => name.length));
 
-export const decodeEntities = (text: string): string => {
-  let out = "";
-  let last = 0;
-  let i = text.indexOf("&");
-  while (i !== -1) {
-    out += text.slice(last, i);
-    const rest = text.slice(i + 1, i + 40);
-    let decoded: string | null = null;
-    let length = 0;
-    let match = NAME.exec(rest);
-    if (match && NAMED.has(match[1]!)) {
-      decoded = NAMED.get(match[1]!)!;
-      length = match[0].length;
-    } else {
-      const legacy = LEGACY.find((name) => rest.startsWith(name) && rest[name.length] !== ";");
-      if (legacy) {
-        const next = /[=a-zA-Z0-9]/.test(rest[legacy.length] ?? "") ? rest[legacy.length]! : "";
-        decoded = NAMED.get(legacy)! + next;
-        length = legacy.length + next.length;
-      } else if ((match = DECIMAL.exec(text.slice(i + 1)))) {
-        decoded = fromCodePoint(parseInt(match[1]!, 10));
-        length = match[0].length;
-      } else if ((match = HEX.exec(text.slice(i + 1)))) {
-        decoded = fromCodePoint(parseInt(match[1]!, 16));
-        length = match[0].length;
-      } else if ((match = AMBIGUOUS.exec(rest))) {
-        decoded = "&" + match[0];
-        length = match[0].length;
-      }
-    }
-    out += decoded ?? "&";
-    last = i + 1 + length;
-    i = text.indexOf("&", last);
+/** A character reference candidate; none of its parts can backtrack into another. */
+const REFERENCE = /&(?:#[xX]([0-9a-fA-F]+);?|#([0-9]+);?|([0-9A-Za-z]+)(;?))/g;
+
+/** The longest legacy name starting `name`, unless it is all of `name` and a semicolon follows. */
+const legacyPrefix = (name: string, semicolon: boolean) => {
+  for (let length = Math.min(LEGACY_MAX, name.length); length >= 2; length--) {
+    const candidate = name.substring(0, length);
+    if (LEGACY_NAMES.has(candidate) && (length < name.length || !semicolon)) return candidate;
   }
-  return out + text.slice(last);
+  return null;
 };
+
+export const decodeEntities = (text: string): string =>
+  text.replace(REFERENCE, (match, hex?: string, decimal?: string, name?: string, semi?: string) => {
+    if (hex) return fromCodePoint(parseInt(hex, 16));
+    if (decimal) return fromCodePoint(parseInt(decimal, 10));
+    const named = semi ? NAMED.get(name!) : undefined;
+    if (named !== undefined) return named;
+    const legacy = legacyPrefix(name!, !!semi);
+    if (legacy) return NAMED.get(legacy)! + match.substring(1 + legacy.length);
+    return match;
+  });

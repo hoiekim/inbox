@@ -98,6 +98,25 @@ describe("htmlToPlainText", () => {
     expect(htmlToPlainText('<p>a</p><div class="x')).toBe("a");
   });
 
+  it("stays linear on long runs of line breaks, newlines and references", () => {
+    // Quadratic handling of any of these takes seconds to minutes at this size.
+    const inputs = [
+      `<blockquote><p>a</p>${"<br>".repeat(100_000)}<p>b</p></blockquote>`,
+      `<blockquote><pre>a${"\n".repeat(400_000)}b</pre></blockquote>`,
+      "<blockquote>" +
+        "&#".repeat(200_000) +
+        "&amp;".repeat(100_000) +
+        "&notit;".repeat(50_000) +
+        "</blockquote>"
+    ];
+    for (const html of inputs) {
+      const started = performance.now();
+      const text = htmlToPlainText(html);
+      expect(performance.now() - started).toBeLessThan(3000);
+      expect(text.startsWith("> ")).toBe(true);
+    }
+  });
+
   it("converts large input", () => {
     const row = "<tr><td>cell <b>bold</b> &amp; text</td></tr>";
     const text = htmlToPlainText(`<table>${row.repeat(50000)}</table>`);

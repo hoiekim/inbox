@@ -42,6 +42,14 @@ describe("docToHtml", () => {
     expect(docToHtml(doc(code))).toBe('<pre><code class="language-js">a &lt; b\n</code></pre>');
   });
 
+  test("escapes attribute values so they cannot close the attribute or the tag", () => {
+    const language = 'x"><img src=x onerror=alert(1)>';
+    const code = { type: "codeBlock", attrs: { language }, content: [text("y")] };
+    expect(docToHtml(doc(code))).toBe(
+      '<pre><code class="language-x&quot;&gt;&lt;img src=x onerror=alert(1)&gt;">y</code></pre>'
+    );
+  });
+
   test("keeps a shared mark open across neighbouring text", () => {
     expect(docToHtml(doc(p(text("a", "bold"), text("b", "bold", "italic"), text("c"))))).toBe(
       "<p><strong>a<em>b</em></strong>c</p>"

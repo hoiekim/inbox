@@ -4,8 +4,9 @@ import { cut, insertNodes, textToNodes } from "./fragment";
 import { parseHtml } from "./parse-html";
 import { $ } from "./resolved";
 import type { Schema } from "./schema";
-import { createState, isEmpty, selFrom, selTo, Transaction } from "./state";
-import { textBetween } from "./tokens";
+import { isEmpty, selFrom, selTo, Transaction } from "./state";
+import { addToMarkSet } from "./steps";
+import { build, flatten, textBetween, type Token } from "./tokens";
 import { deleteSelection, marksAt } from "./commands";
 import type { Editor } from "./editor";
 
@@ -36,35 +37,50 @@ const PASTE_RULES: [RegExp, string, number][] = [
   [/(^|\s)~~(?!\s+~~)([^~]+)~~(?!\s+~~)/g, "strike", 2]
 ];
 
-/** Applies the paste rules to one textblock's inline content. */
+const marksOf = (token: Token) =>
+  token.kind === "char" ? token.marks : token.kind === "leaf" ? token.node.marks : undefined;
+
+const withMarks = (token: Token, marks: Mark[]): Token => {
+  if (token.kind === "char") return { ...token, marks };
+  if (token.kind === "leaf") return { ...token, node: { ...token.node, marks } };
+  return token;
+};
+
+/** Applies the paste rules to one textblock's inline content, one linear pass per rule. */
 const markInline = (content: Node[], schema: Schema): Node[] => {
-  let doc: Node = { type: "doc", content: [{ type: "paragraph", content }] };
+  let tokens = flatten(content, "paragraph", schema);
   for (const [re, type, delimiter] of PASTE_RULES) {
-    const paragraph = doc.content![0]!;
     // Line breaks and other leaves are not whitespace to the rules.
-    const text = (paragraph.content ?? [])
-      .map((n) => (n.type === "text" ? n.text! : "\ufffc"))
-      .join("");
-    const matches = [...text.matchAll(re)].reverse();
-    if (!matches.length) continue;
-    const tr = new Transaction(createState(schema, doc));
-    for (const m of matches) {
-      const start = 1 + m.index! + m[1]!.length;
+    const text = tokens.map((t) => (t.kind === "char" ? t.ch : "\ufffc")).join("");
+    const action = new Uint8Array(tokens.length);
+    const DROP = 1;
+    const MARK = 2;
+    let changed = false;
+    for (const m of text.matchAll(re)) {
+      const start = m.index! + m[1]!.length;
       const innerEnd = start + delimiter + m[2]!.length;
-      const excluded = (paragraph.content ?? []).some((n, i, all) => {
-        const offset = all.slice(0, i).reduce((sum, x) => sum + (x.text?.length ?? 1), 1);
-        const end = offset + (n.text?.length ?? 1);
-        if (end <= start || offset >= innerEnd + delimiter) return false;
-        return !!n.marks?.some((mark) => mark.type !== type && schema.excludes(mark.type, type));
-      });
+      const end = innerEnd + delimiter;
+      let excluded = false;
+      for (let k = start; k < end && !excluded; k++) {
+        excluded = !!marksOf(tokens[k]!)?.some(
+          (mark) => mark.type !== type && schema.excludes(mark.type, type)
+        );
+      }
       if (excluded) continue;
-      tr.delete(innerEnd, innerEnd + delimiter);
-      tr.delete(start, start + delimiter);
-      tr.addMark(start, start + m[2]!.length, schema.mark(type));
+      changed = true;
+      for (let k = start; k < end; k++) {
+        action[k] = k < start + delimiter || k >= innerEnd ? DROP : MARK;
+      }
     }
-    doc = tr.doc;
+    if (!changed) continue;
+    const mark = schema.mark(type);
+    tokens = tokens.flatMap((token, k) => {
+      if (action[k] === DROP) return [];
+      if (action[k] === MARK) return [withMarks(token, addToMarkSet(marksOf(token), mark, schema))];
+      return [token];
+    });
   }
-  return doc.content![0]!.content ?? [];
+  return build(tokens) ?? content;
 };
 
 const applyPasteRules = (nodes: Node[], schema: Schema): Node[] =>

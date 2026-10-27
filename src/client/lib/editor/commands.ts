@@ -82,27 +82,44 @@ const marksToKeep = (state: EditorState): Mark[] | null => {
   return marks.length ? marks : null;
 };
 
+/** Whether the selection spans the whole document, as select-all makes it. */
+export const coversDoc = (state: EditorState) =>
+  selFrom(state.selection) === 0 &&
+  selTo(state.selection) === contentSize(state.doc, state.schema);
+
 export const insertText =
   (text: string, from?: number, to?: number): Command =>
   (state, dispatch) =>
     run(state, dispatch, (tr) => {
       const a = from ?? selFrom(state.selection);
       const b = to ?? selTo(state.selection);
-      const parent = $(state.doc, a, state.schema).parent;
+      const marks = marksAt(state);
+      const at = a !== b ? deleteRangeInto(tr, a, b) : a;
+      const parent = $(tr.doc, at, state.schema).parent;
       if (!state.schema.isTextblock(parent.type)) return false;
-      const marks = state.schema.isCode(parent.type) ? [] : marksAt(state);
-      if (a !== b) deleteRangeInto(tr, a, b);
-      const at = tr.mapping.map(a, -1);
-      const allowed = marks.filter((m) => state.schema.allowsMark(parent.type, m.type));
+      const allowed = state.schema.isCode(parent.type)
+        ? []
+        : marks.filter((m) => state.schema.allowsMark(parent.type, m.type));
       tr.insertText(text, at, at, allowed);
       cursor(tr, at + text.length);
     });
 
 /**
- * Deletes [from, to). When the range crosses blocks, the content of the last
- * touched textblock joins the first one.
+ * Deletes [from, to) and returns where the caret goes. When the range crosses
+ * blocks, the content of the last touched textblock joins the first one; when
+ * it is the whole document, one empty paragraph is left.
  */
-const deleteRangeInto = (tr: Transaction, from: number, to: number) => {
+export const deleteRangeInto = (tr: Transaction, from: number, to: number): number => {
+  const schema = tr.schema;
+  if (from === 0 && to === contentSize(tr.doc, schema)) {
+    tr.replace(0, to, [{ o: "paragraph" }, { c: 1 }]);
+    return 1;
+  }
+  deleteRangeBetweenBlocks(tr, from, to);
+  return tr.mapping.map(from, -1);
+};
+
+const deleteRangeBetweenBlocks = (tr: Transaction, from: number, to: number) => {
   const schema = tr.schema;
   const $from = $(tr.doc, from, schema);
   const $to = $(tr.doc, to, schema);
@@ -174,8 +191,7 @@ export const deleteSelection: Command = (state, dispatch) => {
       cursor(tr, from);
       return;
     }
-    deleteRangeInto(tr, from, to);
-    cursor(tr, tr.mapping.map(from, -1));
+    cursor(tr, deleteRangeInto(tr, from, to));
   });
 };
 
@@ -337,6 +353,13 @@ export const isList = (type: string) => type === "bulletList" || type === "order
 /** Enter. */
 export const splitBlock: Command = (state, dispatch) => {
   const { schema } = state;
+  if (coversDoc(state)) {
+    return run(state, dispatch, (tr) => {
+      const at = deleteRangeInto(tr, 0, selTo(state.selection));
+      tr.replace(at, at, [{ c: 1 }, { o: "paragraph" }]);
+      cursor(tr, at + 2);
+    });
+  }
   const from = selFrom(state.selection);
   const $from = $(state.doc, from, schema);
   const parent = $from.parent;
@@ -365,8 +388,7 @@ export const splitBlock: Command = (state, dispatch) => {
   }
   const keep = marksToKeep(state);
   return run(state, dispatch, (tr) => {
-    if (!isEmpty(state.selection)) deleteRangeInto(tr, from, selTo(state.selection));
-    const at = tr.mapping.map(from, -1);
+    const at = isEmpty(state.selection) ? from : deleteRangeInto(tr, from, selTo(state.selection));
     const atEnd = $(tr.doc, at, schema).atEnd;
     const keepType = !atEnd || parent.type === "paragraph";
     const nextType = keepType ? parent.type : "paragraph";
@@ -386,8 +408,7 @@ export const splitListItem: Command = (state, dispatch) => {
   if (itemDepth < 0) return false;
   const keep = marksToKeep(state);
   return run(state, dispatch, (tr) => {
-    if (!isEmpty(state.selection)) deleteRangeInto(tr, from, selTo(state.selection));
-    const at = tr.mapping.map(from, -1);
+    const at = isEmpty(state.selection) ? from : deleteRangeInto(tr, from, selTo(state.selection));
     tr.replace(at, at, [{ c: 1 }, { c: 1 }, { o: "listItem" }, { o: "paragraph" }]);
     cursor(tr, at + 4);
     if (keep) tr.setStoredMarks(keep);
@@ -397,12 +418,14 @@ export const splitListItem: Command = (state, dispatch) => {
 export const insertHardBreak: Command = (state, dispatch) => {
   const { schema } = state;
   const $from = $(state.doc, selFrom(state.selection), schema);
-  if (!schema.isTextblock($from.parent.type) || schema.isCode($from.parent.type)) return false;
-  const keep = marksToKeep(state);
+  const all = coversDoc(state);
+  if (!all && (!schema.isTextblock($from.parent.type) || schema.isCode($from.parent.type))) {
+    return false;
+  }
+  const keep = all ? null : marksToKeep(state);
   return run(state, dispatch, (tr) => {
     const from = selFrom(state.selection);
-    if (!isEmpty(state.selection)) deleteRangeInto(tr, from, selTo(state.selection));
-    const at = tr.mapping.map(from, -1);
+    const at = isEmpty(state.selection) ? from : deleteRangeInto(tr, from, selTo(state.selection));
     tr.replace(at, at, [{ n: { type: "hardBreak" } }]);
     cursor(tr, at + 1);
     if (keep) tr.setStoredMarks(keep);
@@ -827,12 +850,10 @@ export const sinkListItem: Command = (state, dispatch) => {
   });
 };
 
+/** Selects the whole document, so typing or deleting replaces everything. */
 export const selectAll: Command = (state, dispatch) =>
   run(state, dispatch, (tr) => {
-    const size = contentSize(state.doc, state.schema);
-    const start = textblockStartAfter(state.doc, 0, state.schema) ?? 0;
-    const end = textblockEndBefore(state.doc, size, state.schema) ?? size;
-    tr.setSelection({ anchor: start, head: end });
+    tr.setSelection({ anchor: 0, head: contentSize(state.doc, state.schema) });
   });
 
 /** Leaves a code block, with a paragraph after it. */

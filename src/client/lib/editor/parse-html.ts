@@ -115,6 +115,12 @@ interface Context {
   /** Opened by an element; leaving it for another context costs extra. */
   solid: boolean;
   preserveWhitespace: boolean;
+  /**
+   * At the very start of a paste (and each first child down from there): the
+   * pasted piece may begin partway into it, so content it would only take
+   * after a leading paragraph is accepted as it is.
+   */
+  openLeft: boolean;
 }
 
 export interface ParseOptions {
@@ -139,7 +145,16 @@ class Parser {
     private readonly options: ParseOptions
   ) {
     const root = options.paste ? null : "doc";
-    this.nodes = [{ type: root, content: [], matched: [], solid: true, preserveWhitespace: false }];
+    this.nodes = [
+      {
+        type: root,
+        content: [],
+        matched: [],
+        solid: true,
+        preserveWhitespace: false,
+        openLeft: !!options.paste
+      }
+    ];
   }
 
   private get top() {
@@ -173,7 +188,8 @@ class Parser {
     }
     if (ctx.type === "listItem" && !ctx.matched.length) {
       if (type === "paragraph") return [];
-      return inline ? ["paragraph"] : null;
+      if (inline) return ["paragraph"];
+      return ctx.openLeft && type !== "listItem" ? [] : null;
     }
     if (inline) return ["paragraph"];
     if (type === "listItem") return ["bulletList"];
@@ -185,11 +201,16 @@ class Parser {
     const content = mergeText(ctx.content);
     const last = content[content.length - 1];
     if (!ctx.preserveWhitespace && last?.type === "text") {
-      const trimmed = last.text!.replace(/[ \t\r\n\u000c]+$/, "");
+      const trimmed = trimTrailingWhitespace(last.text!);
       if (trimmed) content[content.length - 1] = { ...last, text: trimmed };
       else content.pop();
     }
     if (ctx.type === null || schema.isTextblock(ctx.type)) return content;
+    // A pasted list item that starts partway in gets the paragraph it skipped;
+    // one that starts with a list is merged into its parent list later.
+    if (ctx.type === "listItem" && content.length && content[0]!.type !== "paragraph") {
+      return this.isList(content[0]!.type) ? content : [schema.node("paragraph"), ...content];
+    }
     // Containers get the content their schema requires.
     if (content.length) return content;
     if (this.isList(ctx.type)) {
@@ -227,7 +248,8 @@ class Parser {
       content: [],
       matched: [],
       solid,
-      preserveWhitespace: code || top.preserveWhitespace
+      preserveWhitespace: code || top.preserveWhitespace,
+      openLeft: top.openLeft && !top.content.length
     });
     this.open++;
   }
@@ -431,9 +453,33 @@ class Parser {
       out.push(...(node.type === "listItem" ? node.content ?? [] : [node]));
     }
     flush();
+    if (out[0] && this.isList(out[0].type)) out[0] = this.liftLeadingList(out[0]);
     return out;
   }
+
+  /**
+   * A pasted list whose first item starts with a nested list (an item cut
+   * open before its text) takes that nested list's items in its place.
+   */
+  private liftLeadingList(list: Node): Node {
+    const [first, ...rest] = list.content ?? [];
+    const nested = first?.content?.[0];
+    if (!first || !nested || !this.isList(nested.type)) return list;
+    const lifted = this.liftLeadingList(nested).content ?? [];
+    const remainder = (first.content ?? []).slice(1);
+    if (remainder.length && lifted.length) {
+      const last = lifted[lifted.length - 1]!;
+      lifted[lifted.length - 1] = { ...last, content: [...(last.content ?? []), ...remainder] };
+    }
+    return { ...list, content: [...lifted, ...rest] };
+  }
 }
+
+const trimTrailingWhitespace = (text: string) => {
+  let end = text.length;
+  while (end > 0 && " \t\r\n\f".includes(text[end - 1]!)) end--;
+  return text.substring(0, end);
+};
 
 const mergeText = (nodes: Node[]): Node[] => {
   const out: Node[] = [];

@@ -1,6 +1,16 @@
 import { sameAttrs, sameMarks, type Mark, type Node } from "./model";
 import type { Schema } from "./schema";
-import { Transaction, type EditorState, type Selection } from "./state";
+import {
+  isEmpty,
+  selFrom,
+  selTo,
+  Transaction,
+  type EditorState,
+  type Selection
+} from "./state";
+import { $ } from "./resolved";
+import { contentSize } from "./tokens";
+import { deleteRangeInto, textblockEndBefore, textblockStartAfter } from "./commands";
 import { Desc } from "./desc";
 import { nodeRenderers, renderMark } from "./render";
 
@@ -44,6 +54,7 @@ export class EditorView {
   composing = false;
   private composingDesc: Desc | null = null;
   private composedBlocks = new Set<Desc>();
+  private composedRange: { from: number; to: number } | null = null;
   private compositionTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionWriting = false;
   private appliedAttrs: { el: HTMLElement; names: string[] }[] = [];
@@ -483,10 +494,25 @@ export class EditorView {
     const current = this.state.selection;
     if (current.node && sel.anchor === current.anchor) return;
     if (sel.anchor === current.anchor && sel.head === current.head && !current.node) return;
+    if (this.keepsWholeDocSelection(sel)) return;
     const tr = new Transaction(this.state);
     tr.setSelection(sel);
     this.props.dispatch(tr);
   };
+
+  /**
+   * The browser shows a whole-document selection as one from the first
+   * textblock's start to the last one's end; reading that back keeps the
+   * whole-document selection.
+   */
+  private keepsWholeDocSelection(sel: Selection) {
+    const { doc, selection } = this.state;
+    const size = contentSize(doc, this.schema);
+    if (selFrom(selection) !== 0 || selTo(selection) !== size) return false;
+    const first = textblockStartAfter(doc, 0, this.schema) ?? 0;
+    const last = textblockEndBefore(doc, size, this.schema) ?? size;
+    return selFrom(sel) <= first && selTo(sel) >= last;
+  }
 
   // -------------------------------------------------------------------------
   // DOM observation (fallback for edits the browser made on its own)
@@ -530,6 +556,12 @@ export class EditorView {
           if (removed?.parent && !this.schema.isTextblock(removed.parent.node.type)) {
             containers.add(removed.parent);
           }
+        }
+        // Blocks the browser added on its own are not in the model; take them out.
+        const container = this.contentDescs.get(record.target);
+        if (container && !this.schema.isTextblock(container.node.type)) {
+          const untracked = [...record.addedNodes].some((n) => !this.domDescs.has(n));
+          if (untracked) containers.add(container);
         }
       }
       const block = this.textblockOf(desc);
@@ -597,6 +629,32 @@ export class EditorView {
       return;
     }
     if (sel) tr.setSelection(sel);
+    tr.setMeta("domChange", true);
+    this.props.dispatch(tr);
+  }
+
+  /**
+   * After a composition over a selection: deletes the selection in the model,
+   * as the browser did in the DOM (merging blocks when it spanned several),
+   * then reads the composed text back from the block it landed in.
+   */
+  private reconcileReplacedRange(range: { from: number; to: number }, block: Desc | null) {
+    const tr = new Transaction(this.state);
+    const at = deleteRangeInto(tr, range.from, range.to);
+    const $at = $(tr.doc, at, this.schema);
+    let caret = at;
+    if (block?.contentDOM && this.dom.contains(block.contentDOM)) {
+      const diff = diffInline($at.parent.content ?? [], this.readInline(block));
+      if (diff && tr.maybeStep({
+        stepType: "replace",
+        from: $at.start() + diff.from,
+        to: $at.start() + diff.toOld,
+        slice: diff.slice
+      })) {
+        caret = $at.start() + diff.from + Transaction.sliceSize(diff.slice);
+      }
+    }
+    tr.setSelection({ anchor: caret, head: caret });
     tr.setMeta("domChange", true);
     this.props.dispatch(tr);
   }
@@ -677,8 +735,13 @@ export class EditorView {
       }
       this.onSelectionChange();
       this.composing = true;
-      const sel = this.readSelection();
-      this.composingDesc = sel ? this.textblockOf(this.descAround(sel.head)) : null;
+      const { selection } = this.state;
+      const replaces = !isEmpty(selection) && !selection.node;
+      // Composing over a selection replaces it, possibly merging blocks.
+      this.composedRange = replaces ? { from: selFrom(selection), to: selTo(selection) } : null;
+      const sel = replaces ? null : this.readSelection();
+      const caret = replaces ? selFrom(selection) : sel?.head;
+      this.composingDesc = caret === undefined ? null : this.textblockOf(this.descAround(caret));
     });
     this.on(this.dom, "compositionend", () => {
       // Some browsers fire compositionend before the final input event; let
@@ -708,6 +771,18 @@ export class EditorView {
 
   private finishComposition() {
     this.compositionTimer = null;
+    const range = this.composedRange;
+    this.composedRange = null;
+    if (range) {
+      const block = this.composingDesc;
+      this.composing = false;
+      this.composingDesc = null;
+      this.composedBlocks = new Set();
+      this.observer.takeRecords();
+      this.reconcileReplacedRange(range, block);
+      this.props.onCompositionEnd?.();
+      return;
+    }
     const blocks = this.composedBlocks;
     for (const record of this.observer.takeRecords()) {
       const block = this.textblockOf(this.nearestDesc(record.target));
