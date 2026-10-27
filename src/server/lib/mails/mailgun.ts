@@ -1,7 +1,3 @@
-import FormData from "form-data";
-import fs from "fs";
-import Mailgun from "mailgun.js";
-import type { MailgunMessageData, CustomFile } from "mailgun.js/definitions";
 import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
@@ -9,19 +5,211 @@ import type { UploadedFile } from "../http/upload";
 import { logger } from "../logger";
 import { sendAlarm } from "../alarm";
 
-const { MAILGUN_KEY = "mailgun_key" } = process.env;
+const DEFAULT_MAILGUN_URL = "https://api.mailgun.net";
+const REQUEST_TIMEOUT_MS = 30000;
+const MAX_BODY_BYTES = 50 * 1024 * 1024;
 
-const getAttachments = (files?: UploadedFileDynamicArray): CustomFile[] => {
-  const parseFile = (file: UploadedFile): CustomFile => ({
-    data: fs.readFileSync(file.tempFilePath),
+/** A file part of a Mailgun message, streamed from disk while the request uploads. */
+export interface MailgunAttachment {
+  path: string;
+  filename: string;
+  contentType: string;
+}
+
+/** The `POST /v3/{domain}/messages` parameters this module sends, in wire order. */
+export interface MailgunMessage {
+  from: string;
+  to: string[];
+  cc?: string;
+  bcc?: string;
+  subject?: string;
+  html?: string;
+  text?: string;
+  attachment: MailgunAttachment[];
+  "h:In-Reply-To"?: string;
+}
+
+/** Mailgun's answer to an accepted message: the queued message's id and a status line. */
+export interface MailgunResponse {
+  status: number;
+  id?: string;
+  message?: string;
+}
+
+/**
+ * A failed Mailgun request. `status` is the HTTP status, or 400 when no response
+ * arrived; `message` is the response's error or status text, `details` its message.
+ */
+export class MailgunAPIError extends Error {
+  status: number;
+  details: string;
+  type = "MailgunAPIError";
+
+  constructor(status: number, statusText: string, body: unknown) {
+    const fields = typeof body === "object" && body ? (body as Record<string, unknown>) : {};
+    super();
+    this.message = String(fields.error || "") || statusText;
+    this.status = status;
+    this.details = typeof body === "string" ? body : String(fields.message || "");
+  }
+}
+
+const getAttachments = (files?: UploadedFileDynamicArray): MailgunAttachment[] => {
+  const parseFile = (file: UploadedFile): MailgunAttachment => ({
+    path: file.tempFilePath,
     filename: file.name,
-    contentType: file.mimetype,
-    knownLength: file.size
+    contentType: file.mimetype
   });
 
   if (Array.isArray(files)) return files.map(parseFile);
   else if (files) return [parseFile(files)];
   else return [];
+};
+
+const encoder = new TextEncoder();
+const CRLF = encoder.encode("\r\n");
+
+// An attachment's filename and content type both come from the client, and a
+// quote or line break in either would end the part header early. The filename
+// is escaped the way browsers do it; a content type carrying any control
+// character is replaced with the generic binary type.
+const quoteFilename = (name: string) =>
+  name.replace(/"/g, "%22").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+
+const partContentType = (type: string) =>
+  type && !/[\x00-\x1f\x7f]/.test(type) ? type : "application/octet-stream";
+
+/**
+ * Encodes a message as multipart/form-data. Empty fields are left out, an array
+ * repeats its field once per item, and attachments are read from disk only as the
+ * request body is pulled, so no attachment is ever held in memory whole.
+ */
+export const encodeMailgunMessage = (message: MailgunMessage) => {
+  const boundary = `--------------------------${crypto.randomUUID().replace(/-/g, "")}`;
+  const partHead = (disposition: string, contentType?: string) =>
+    encoder.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; ${disposition}\r\n` +
+        (contentType ? `Content-Type: ${contentType}\r\n` : "") +
+        "\r\n"
+    );
+
+  const parts: (Uint8Array | Blob)[] = [];
+  for (const [name, value] of Object.entries(message)) {
+    if (!value) continue;
+    if (name === "attachment") {
+      for (const file of value as MailgunAttachment[]) {
+        const disposition = `name="attachment"; filename="${quoteFilename(file.filename)}"`;
+        const head = partHead(disposition, partContentType(file.contentType));
+        parts.push(head, Bun.file(file.path), CRLF);
+      }
+      continue;
+    }
+    for (const item of [value].flat() as string[]) {
+      parts.push(partHead(`name="${name}"`), encoder.encode(item), CRLF);
+    }
+  }
+  parts.push(encoder.encode(`--${boundary}--\r\n`));
+
+  const length = parts.reduce(
+    (total, part) => total + (part instanceof Blob ? part.size : part.byteLength),
+    0
+  );
+  let index = 0;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (index < parts.length) {
+        const part = parts[index]!;
+        if (!(part instanceof Blob)) {
+          index += 1;
+          controller.enqueue(part);
+          return;
+        }
+        reader ??= part.stream().getReader();
+        const { done, value } = await reader.read();
+        if (!done) {
+          controller.enqueue(value);
+          return;
+        }
+        reader = undefined;
+        index += 1;
+      }
+      controller.close();
+    },
+    cancel: (reason) => reader?.cancel(reason)
+  });
+
+  return { body, length, contentType: `multipart/form-data; boundary=${boundary}` };
+};
+
+const parseBody = (text: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
+
+/** Why a request got no response, in the terms a caller's error mapping reads. */
+const networkFailure = (error: unknown): MailgunAPIError => {
+  const { name, code, message } = (error ?? {}) as {
+    name?: string;
+    code?: string;
+    message?: string;
+  };
+  if (name === "TimeoutError") {
+    return new MailgunAPIError(400, "ECONNABORTED", `timeout of ${REQUEST_TIMEOUT_MS}ms exceeded`);
+  }
+  return new MailgunAPIError(400, code || name || "", message || String(error));
+};
+
+/**
+ * Sends one message through Mailgun's HTTP API, failing after 30 seconds or without
+ * a request when the body would pass 50 MiB. The API root is `MAILGUN_URL` when set
+ * and non-empty; it and `MAILGUN_KEY` are read per call like `EMAIL_DOMAIN`.
+ */
+export const createMailgunMessage = async (
+  domain: string,
+  message: MailgunMessage
+): Promise<MailgunResponse> => {
+  const { MAILGUN_KEY = "mailgun_key" } = process.env;
+  const apiRoot = process.env.MAILGUN_URL || DEFAULT_MAILGUN_URL;
+  const url = `${apiRoot.replace(/\/+$/, "")}/v3/${domain}/messages`;
+  const { body, length, contentType } = encodeMailgunMessage(message);
+  if (length > MAX_BODY_BYTES) {
+    throw new MailgunAPIError(
+      400,
+      "ERR_FR_MAX_BODY_LENGTH_EXCEEDED",
+      "Request body larger than maxBodyLength limit"
+    );
+  }
+
+  let status: number;
+  let statusText: string;
+  let data: unknown;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`api:${MAILGUN_KEY}`)}`,
+        "Content-Type": contentType,
+        "Content-Length": String(length)
+      },
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    });
+    ({ status, statusText } = response);
+    data = parseBody(await response.text());
+  } catch (error) {
+    throw networkFailure(error);
+  }
+
+  if (status < 200 || status >= 300) {
+    const body = data || `Request failed with status code ${status}`;
+    throw new MailgunAPIError(status, statusText, body);
+  }
+  if (data === "Mailgun Magnificent API") throw new MailgunAPIError(400, "Incorrect url", data);
+  return { status, ...(typeof data === "string" ? { message: data } : (data as object)) };
 };
 
 // One multipart upload per address against a 30s-timeout client, so an
@@ -86,20 +274,11 @@ export const sendMailgunMail = async (
   // host-domain recipient, which routes the copy back at our own MX.
   const visibleTo = externalTo.length ? externalTo : externalCc;
 
-  const mailgun = new Mailgun(FormData);
-  const mg = mailgun.client({
-    username: "api",
-    key: MAILGUN_KEY,
-    timeout: 30000
-  });
-
-  // Built once: the per-recipient send below would otherwise hold a fresh copy
-  // of every attachment for every recipient, all alive in the same tick.
   const attachment = getAttachments(files);
   const message = (
     to: string[],
     hidden?: { cc?: string; bcc?: string }
-  ): MailgunMessageData => ({
+  ): MailgunMessage => ({
     from,
     to,
     cc: hidden?.cc,
@@ -115,7 +294,7 @@ export const sendMailgunMail = async (
   // the relay comes back at our own MX on an unauthenticated leg, which is
   // refused with a 450 and retried for Mailgun's full window.
   if (visibleTo.length) {
-    const data = await mg.messages.create(
+    const data = await createMailgunMessage(
       EMAIL_DOMAIN,
       message(visibleTo, {
         // A promoted Cc already IS the visible To; repeating it here renders
@@ -129,7 +308,7 @@ export const sendMailgunMail = async (
   }
 
   const results = await sendBatched(externalBcc, (address) =>
-    mg.messages.create(EMAIL_DOMAIN, message([address]))
+    createMailgunMessage(EMAIL_DOMAIN, message([address]))
   );
   const delivered = results.find((result) => result.status === "fulfilled");
   const failed = externalBcc.filter((_, i) => results[i].status === "rejected");
