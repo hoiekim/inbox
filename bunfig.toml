@@ -8,6 +8,6 @@ preload = ["./scripts/test-preload.ts"]
 # Exclude test files themselves from the coverage report
 coverageSkipTestFiles = true
 
-# Conservative aggregate thresholds — enforce CI fails on coverage regression.
-# Ratchet up as coverage improves.
-coverageThreshold = { lines = 0.50, functions = 0.28 }
+# No `coverageThreshold` here: Bun 1.4.1+ checks it per file, not against the
+# aggregate. The aggregate gate is `scripts/check-coverage.ts`, run by
+# `bun run test:coverage`.

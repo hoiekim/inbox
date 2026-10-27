@@ -52,6 +52,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // The oversize case answers before the request body is consumed, so its
+  // connection can still be open here; `close` alone would wait on it.
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
