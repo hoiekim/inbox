@@ -2007,6 +2007,7 @@ interface FakeServer {
   // The real SMTPServer tracks its live connections here; the eviction sweep
   // reads it, so the stub carries one too.
   connections: Set<unknown>;
+  options: Record<string, unknown>;
 }
 
 const createdServers: FakeServer[] = [];
@@ -2016,6 +2017,7 @@ const makeFakeServer = (): FakeServer => {
   const server: FakeServer = {
     listeners,
     connections: new Set<unknown>(),
+    options: {},
     on(event, listener) {
       if (!listeners.has(event)) listeners.set(event, []);
       listeners.get(event)!.push(listener);
@@ -2037,6 +2039,7 @@ mock.module("smtp-server", () => ({
   SMTPServer: class {
     constructor(opts: Record<string, unknown>) {
       const fake = makeFakeServer();
+      fake.options = opts;
       createdServers.push(fake);
       createdOptions.push(opts);
       return fake as unknown as SMTPServer;
@@ -2101,26 +2104,50 @@ describe("registerListeners error handler", () => {
     expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(10);
   });
 
-  it("suppresses any error smtp-server raised during the TLS upgrade, whatever its wording", async () => {
-    const server = await bootSingleServer();
-    const upgradeError = (message: string) =>
-      Object.assign(new Error(message), { code: "ECONNRESET", meta: { protocol: "smtp", stage: "connect" } });
-    server.emit("error", upgradeError("socket hang up"));
-    server.emit("error", upgradeError("some future runtime wording"));
+  const bootWithTls = async () => {
+    const { writeFileSync, mkdtempSync, rmSync } = await import("fs");
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+    const dir = mkdtempSync(join(tmpdir(), "smtp-tls-error-test-"));
+    writeFileSync(join(dir, "cert.pem"), "DUMMY CERT");
+    writeFileSync(join(dir, "key.pem"), "DUMMY KEY");
+    process.env.SSL_CERTIFICATE = join(dir, "cert.pem");
+    process.env.SSL_CERTIFICATE_KEY = join(dir, "key.pem");
+    try {
+      const initializeSmtp = await loadInitializeSmtp();
+      await initializeSmtp();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    return {
+      implicitTls: createdServers.find((s) => s.options.secure === true)!,
+      startTls: createdServers.find((s) => s.options.secure === false)!
+    };
+  };
 
-    expect(mockLogger.error).not.toHaveBeenCalled();
-    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(2);
+  const resetError = (message: string, meta?: { stage: string }) =>
+    Object.assign(new Error(message), { code: "ECONNRESET", ...(meta && { meta: { protocol: "smtp", ...meta } }) });
+
+  const smtpServerLines = (fn: typeof mockLogger.warn) =>
+    fn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("SMTP Server"));
+
+  it("suppresses any implicit-TLS handshake error, whatever its wording", async () => {
+    const { implicitTls } = await bootWithTls();
+    implicitTls.emit("error", resetError("socket hang up", { stage: "connect" }));
+    implicitTls.emit("error", resetError("some future runtime wording", { stage: "connect" }));
+
+    expect(smtpServerLines(mockLogger.error)).toEqual([]);
+    expect(smtpServerLines(mockLogger.warn).length).toBe(2);
   });
 
-  it("still pages for the same wording when it was not raised during the TLS upgrade", async () => {
-    const server = await bootSingleServer();
-    server.emit("error", new Error("socket hang up"));
-    server.emit("error", Object.assign(new Error("socket hang up"), { meta: { stage: "data" } }));
+  it("still pages for the same error when it was not raised by the implicit-TLS handshake", async () => {
+    const { implicitTls, startTls } = await bootWithTls();
+    implicitTls.emit("error", resetError("socket hang up"));
+    implicitTls.emit("error", resetError("socket hang up", { stage: "data" }));
+    startTls.emit("error", resetError("socket hang up", { stage: "connect" }));
 
-    expect(mockLogger.error).toHaveBeenCalledTimes(2);
-    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
-    expect(warnings.filter((w) => w.includes("SMTP Server"))).toEqual([]);
+    expect(smtpServerLines(mockLogger.error).length).toBe(3);
+    expect(smtpServerLines(mockLogger.warn)).toEqual([]);
   });
 
   it("logs error on non-suppressible failures", async () => {

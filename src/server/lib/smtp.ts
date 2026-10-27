@@ -35,10 +35,13 @@ import {
   withSmtpDataBudget
 } from "./smtp-data-budget";
 
-// smtp-server sets meta.stage "connect" only on its implicit-TLS and STARTTLS
-// upgrade errors, i.e. before any SMTP command. The message under it differs
-// by runtime ("Socket closed while initiating TLS" on Node, "socket hang up" on Bun).
-const isTlsUpgradeFailure = (err: Error): boolean =>
+// On an implicit-TLS server, smtp-server tags handshake errors with meta.stage
+// "connect" and detaches that handler once the handshake succeeds, so the tag
+// means "before any SMTP command". Its STARTTLS handler is never detached, so
+// the tag can mark a mid-transaction error there. The message under the tag
+// differs by runtime ("Socket closed while initiating TLS" on Node, "socket hang up" on Bun).
+const isImplicitTlsHandshakeFailure = (server: SMTPServer, err: Error): boolean =>
+  server.options.secure === true &&
   (err as Error & { meta?: { stage?: string } }).meta?.stage === "connect";
 
 const registerListeners = (
@@ -61,7 +64,7 @@ const registerListeners = (
     // - Plus a few smtp-server-level strings for connection-drop cases.
     const msg = err.message ?? "";
     if (
-      isTlsUpgradeFailure(err) ||
+      isImplicitTlsHandshakeFailure(server, err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
       // covers all variants (unsupported protocol, version too low, no shared cipher,
