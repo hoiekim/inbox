@@ -2101,6 +2101,28 @@ describe("registerListeners error handler", () => {
     expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(10);
   });
 
+  it("suppresses any error smtp-server raised during the TLS upgrade, whatever its wording", async () => {
+    const server = await bootSingleServer();
+    const upgradeError = (message: string) =>
+      Object.assign(new Error(message), { code: "ECONNRESET", meta: { protocol: "smtp", stage: "connect" } });
+    server.emit("error", upgradeError("socket hang up"));
+    server.emit("error", upgradeError("some future runtime wording"));
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(2);
+  });
+
+  it("still pages for the same wording when it was not raised during the TLS upgrade", async () => {
+    const server = await bootSingleServer();
+    server.emit("error", new Error("socket hang up"));
+    server.emit("error", Object.assign(new Error("socket hang up"), { meta: { stage: "data" } }));
+
+    expect(mockLogger.error).toHaveBeenCalledTimes(2);
+    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => w.includes("SMTP Server"))).toEqual([]);
+  });
+
   it("logs error on non-suppressible failures", async () => {
     const server = await bootSingleServer();
     server.emit("error", new Error("unexpected internal failure"));
