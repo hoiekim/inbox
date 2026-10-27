@@ -2,6 +2,7 @@ import { describe, it, expect, mock } from "bun:test";
 import path from "path";
 
 import { issueAuthenticatedSession } from "./issue-session";
+import type { HttpRequest } from "./request";
 
 describe("issueAuthenticatedSession", () => {
   it("attaches the identity only after the reissue has resolved", async () => {
@@ -19,12 +20,11 @@ describe("issueAuthenticatedSession", () => {
       configurable: true,
       enumerable: true,
     });
-    session.regenerate = mock((cb: (err: Error | null) => void) => {
+    session.regenerate = mock(async () => {
       order.push("regenerate");
       attached = null;
-      cb(null);
     });
-    const req = { session } as unknown as import("express").Request;
+    const req = { session } as unknown as HttpRequest;
     const user = { id: "u1", username: "alice" };
 
     await issueAuthenticatedSession(req, user as never);
@@ -36,9 +36,11 @@ describe("issueAuthenticatedSession", () => {
   it("leaves the session anonymous when the reissue fails", async () => {
     const session: Record<string, unknown> = {
       user: null,
-      regenerate: mock((cb: (err: Error | null) => void) => cb(new Error("store down"))),
+      regenerate: mock(async () => {
+        throw new Error("store down");
+      }),
     };
-    const req = { session } as unknown as import("express").Request;
+    const req = { session } as unknown as HttpRequest;
 
     await expect(
       issueAuthenticatedSession(req, { id: "u1", username: "alice" } as never)

@@ -161,7 +161,7 @@ Security-critical parsers have dedicated test coverage:
 1. **Mock only what the module under test actually imports.** Don't mock extra exports "just in case" — they leak into other test files.
 2. **Never mock utility functions** (`getDomain`, `getUserDomain`, `isValidEmail`) unless the code under test directly calls them.
 3. **If a mock must override a barrel** (`'server'`), re-export everything the barrel normally exports to avoid breaking downstream tests.
-4. **Restore what you mock in `afterAll`**, from the snapshot `scripts/test-preload.ts` took before any file ran (`__REAL_SERVER`, `__REAL_ALARM`, `__REAL_FS`, …; `restoreLeaves()` for `pg` / `web-push` / `bcryptjs`). Mocking `"server"` writes through the barrel's re-exports into the source module, so a stub `logger` on the barrel replaces `lib/logger.ts`'s export for every importer. A snapshot taken inside the test file is not enough: it can capture an earlier file's leaked stub.
+4. **Restore what you mock in `afterAll`**, from the snapshot `scripts/test-preload.ts` took before any file ran (`__REAL_SERVER`, `__REAL_ALARM`, `__REAL_FS`, …; `restoreLeaves()` for the pool driver / `web-push`). Mocking `"server"` writes through the barrel's re-exports into the source module, so a stub `logger` on the barrel replaces `lib/logger.ts`'s export for every importer. A snapshot taken inside the test file is not enough: it can capture an earlier file's leaked stub.
 
 **Example of the bug pattern:**
 ```typescript
@@ -715,7 +715,7 @@ Rate limit counters should be shared across HTTP/IMAP/SMTP to prevent protocol-s
 
 Merges to `main` trigger Docker image build and deployment. The Dockerfile builder stage runs `bun run typecheck`, `bun run test`, and `bun run build` — the deployment fails if any of these fail. CD does not require a passing CI run for the same reason (redundant checks).
 
-The production image runs the server bundle on Bun (`oven/bun:<version>-slim`), the same release the builder stage and CI use. Keep the three pinned to one version, and do not go below Bun 1.4: earlier releases cannot upgrade an accepted socket to TLS server-side (`new tls.TLSSocket(socket, { isServer: true })`), so SMTP port 465, SMTP STARTTLS and IMAP STARTTLS hang during the handshake without raising an error.
+The production image runs the server bundle on Bun (`oven/bun:<version>-slim`), the same release the builder stage and CI use. Keep the three pinned to one version, and do not go below Bun 1.4.4: releases before 1.4 cannot upgrade an accepted socket to TLS server-side (`new tls.TLSSocket(socket, { isServer: true })`), so SMTP port 465, SMTP STARTTLS and IMAP STARTTLS hang during the handshake without raising an error, and before 1.4.4 `Bun.SQL` returns no column metadata, which the database pool needs to shape its results (it refuses to run without it).
 
 ## Common Tasks
 

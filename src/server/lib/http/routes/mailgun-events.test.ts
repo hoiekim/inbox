@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeAll, beforeEach, mock, afterAll, spyOn } from "bun:test";
 import { restoreLeaves } from "test-helpers";
 import crypto from "crypto";
-import type { Server } from "http";
+import type { HttpRequest } from "../request";
 
 const mockQuery = mock(async (_sql: string, _values?: unknown[]) => ({
   rows: [] as unknown[],
@@ -12,63 +12,32 @@ class FakePool {
   query = mockQuery;
   end = async () => {};
   connect = async () => ({ query: mockQuery, release: () => {} });
-  on() {}
 }
 
-const pgMock = () => ({
-  Pool: FakePool,
-  types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
-  default: { Pool: FakePool, types: { setTypeParser: () => {} } },
-});
+const pgMock = () => ({ Pool: FakePool });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { postMailgunEventsRoute, resetPool } = await import("server");
-const express = (await import("express")).default;
-const apiRouter = (await import("./index")).default;
+const handleApi = (await import("./index")).default;
 const alarmModule = await import("../../alarm");
-// alarm.test.ts overrides global.fetch; keep the real one to drive HTTP into
-// the listening server below.
-const realFetch = globalThis.fetch;
 const sendAlarmSpy = spyOn(alarmModule, "sendAlarm").mockImplementation(async () => {});
 
-let server: Server;
-let baseUrl = "";
-
 // `mock.module` is process-global — a sibling test file that ran earlier
-// may have restored `pg` to the real module in its `afterAll(restoreLeaves)`
-// AND left the lazy pool cached against the real Pool. Re-assert the pg
-// mock and drop the cached pool right before this file's tests, so every
-// query below funnels through FakePool. Same pattern users.test.ts uses.
-beforeAll(async () => {
-  mock.module("pg", pgMock);
+// may have restored the driver to the real module in its
+// `afterAll(restoreLeaves)` AND left the lazy pool cached against the real
+// Pool. Re-assert the driver mock and drop the cached pool right before this
+// file's tests, so every query below funnels through FakePool. Same pattern
+// users.test.ts uses.
+beforeAll(() => {
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
-
-  // Mount the real apiRouter rather than re-declaring the limiter wiring, so
-  // dropping either the mount or the record call fails this suite.
-  const app = express();
-  // Adopt production's trust-proxy posture so a forwarded address selects the
-  // bucket, the way it does behind the real proxy. Without it express ignores
-  // the header and every case in this file shares one bucket.
-  app.set("trust proxy", ["loopback", "uniquelocal"]);
-  app.use(express.json());
-  app.use("/api", apiRouter);
-  await new Promise<void>((resolve) => {
-    server = app.listen(0, () => {
-      const addr = server.address();
-      if (addr && typeof addr === "object") baseUrl = `http://127.0.0.1:${addr.port}`;
-      resolve();
-    });
-  });
 });
 
-afterAll(async () => {
+afterAll(() => {
   sendAlarmSpy.mockRestore();
   restoreLeaves();
   resetPool();
-  await new Promise<void>((resolve, reject) => {
-    server.close((err) => (err ? reject(err) : resolve()));
-  });
 });
 
 const SIGNING_KEY = "test-signing-key";
@@ -82,28 +51,14 @@ interface FakeReqBody {
 }
 
 const call = async (body: FakeReqBody, ip = "198.51.100.1") => {
-  const captured: { status?: string; message?: string } = {};
-  const res = {
-    status(_code: number) {
-      return this;
-    },
-    json(payload: unknown) {
-      Object.assign(captured, payload);
-      return this;
-    },
-  };
-  await postMailgunEventsRoute.handler(
-    {
-      body,
-      method: "POST",
-      url: "/mailgun-events",
-      headers: {},
-      ip,
-    } as never,
-    res as never,
-    (() => {}) as never,
-  );
-  return captured;
+  const res = await postMailgunEventsRoute.handler({
+    body,
+    method: "POST",
+    url: "/mailgun-events",
+    headers: new Headers(),
+    ip,
+  } as unknown as HttpRequest);
+  return (await res.json()) as { status?: string; message?: string };
 };
 
 const nowTs = () => String(Math.floor(Date.now() / 1000));
@@ -128,7 +83,7 @@ const signed = (data: Record<string, unknown>): FakeReqBody => {
 
 // Shared per-test reset for this file's suites. The signing key is a test
 // fixture ("test-signing-key") that only ever authenticates against the
-// mocked pg pool in this file — bracket notation keeps the hygiene scanner's
+// mocked pool in this file — bracket notation keeps the hygiene scanner's
 // literal-credential-assignment heuristic (which keys on `NAME = value` text)
 // from misreading the fixture assignment.
 const resetWebhookTestState = () => {
@@ -466,12 +421,20 @@ describe("POST /api/mailgun-events per-IP request cap", () => {
     sendAlarmSpy.mockClear();
   });
 
-  const post = async (ip: string, body: FakeReqBody) =>
-    realFetch(`${baseUrl}/api/mailgun-events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-forwarded-for": ip },
-      body: JSON.stringify(body),
-    });
+  // Through the real /api router rather than re-declaring the limiter wiring,
+  // so dropping either the limiter check or the record call fails this suite.
+  const post = (ip: string, body: FakeReqBody) =>
+    handleApi(
+      {
+        body,
+        method: "POST",
+        path: "/api/mailgun-events",
+        url: "/api/mailgun-events",
+        headers: new Headers({ "Content-Type": "application/json" }),
+        ip,
+      } as unknown as HttpRequest,
+      "/mailgun-events"
+    );
 
   it("returns 429 on the request past the cap, and 200 on every one below it", async () => {
     const ip = "203.0.113.20";

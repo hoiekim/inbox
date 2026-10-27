@@ -30,7 +30,7 @@ export const postMarkSpamMailRoute = new Route<SpamMarkPostResponse>(
     const guard = refuseReadOnly(user, "Marking spam");
     if (!guard.ok) return { status: "failed", message: guard.message };
 
-    const body: SpamMarkPostBody = req.body;
+    const body = req.body as SpamMarkPostBody;
     const { mail_id, is_spam } = body;
 
     if (typeof is_spam !== "boolean") {

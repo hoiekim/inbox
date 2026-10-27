@@ -12,7 +12,7 @@
  * object — a session built in-process never leaves the request that made it.
  *
  * The stub is installed through the pool Proxy's set trap rather than
- * `mock.module("pg", ...)` — same seam as `session-destroy-propagation.test.ts`.
+ * `mock.module("server/lib/postgres/pool", ...)` — same seam as `session-destroy-propagation.test.ts`.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from "bun:test";
 import { SignedUser } from "common";
@@ -95,20 +95,10 @@ const runtimeCookie = () => ({
 });
 
 const roundTrip = async (user: SignedUser): Promise<SignedUser> => {
-  await new Promise<void>((resolve, reject) => {
-    store.set(
-      SESSION_ID,
-      { user, cookie: runtimeCookie() } as never,
-      (err) => (err ? reject(err) : resolve())
-    );
-  });
-  return new Promise<SignedUser>((resolve, reject) => {
-    store.get(SESSION_ID, (err, session) => {
-      if (err) return reject(err);
-      if (!session) return reject(new Error("session did not round trip"));
-      resolve((session as unknown as { user: SignedUser }).user);
-    });
-  });
+  await store.set(SESSION_ID, { user, cookie: runtimeCookie() } as never);
+  const session = await store.get(SESSION_ID);
+  if (!session) throw new Error("session did not round trip");
+  return session.user;
 };
 
 describe("read-only attribution across the session store round trip", () => {
@@ -155,12 +145,7 @@ describe("read-only attribution across the session store round trip", () => {
     // never a read-only session, so it must not rehydrate as one.
     persistedRow = { ...persistedRow, session_is_read_only: null, session_authenticated_as: null };
 
-    const rehydrated = await new Promise<SignedUser>((resolve, reject) => {
-      store.get(SESSION_ID, (err, session) => {
-        if (err) return reject(err);
-        resolve((session as unknown as { user: SignedUser }).user);
-      });
-    });
+    const rehydrated = (await store.get(SESSION_ID))!.user;
 
     expect(rehydrated.isReadOnly).toBeUndefined();
     expect(refuseReadOnly(rehydrated, "Sending mail").ok).toBe(true);

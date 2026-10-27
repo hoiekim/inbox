@@ -27,7 +27,7 @@
  * boot fast-path past it, silently and forever.
  */
 
-import { PoolClient, QueryConfig } from "pg";
+import type { PoolClient, QueryConfig } from "./pool";
 import { pool } from "./client";
 import { logger } from "../logger";
 
@@ -61,14 +61,12 @@ export interface MaintenanceWork {
 export const MAINTENANCE_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * pg's client-side read timer is independent of the server GUC, so every
+ * The pool's client-side read timer is independent of the server GUC, so every
  * statement here has to carry it explicitly. It cannot be disabled per-query:
- * `client.js` reads `config.query_timeout || connectionParameters.query_timeout`,
- * so 0 falls back to the pool's 30s.
+ * a `query_timeout` of 0 falls back to the pool's 30s.
  */
 const CLIENT_READ_TIMEOUT_MS = MAINTENANCE_TIMEOUT_MS + 30_000;
 
-/** `query_timeout` is read per-query by pg 8 but absent from `QueryConfig`. */
 interface TimedQueryConfig extends QueryConfig {
   query_timeout: number;
 }

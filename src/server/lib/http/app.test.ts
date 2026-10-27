@@ -1,9 +1,8 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { json } from "express";
-import type { Server } from "http";
 import path from "path";
 
-import { createExpressApp } from "./app";
+import { resolveProxyTrust } from "./app";
+import type { ProxyTrust } from "./request";
 
 const originalNodeEnv = process.env.NODE_ENV;
 const restoreNodeEnv = () => {
@@ -11,79 +10,61 @@ const restoreNodeEnv = () => {
   else delete process.env.NODE_ENV;
 };
 
-describe("createExpressApp", () => {
+const PEERS = [
+  "127.0.0.1",
+  "::ffff:127.0.0.1",
+  "::1",
+  "10.1.2.3",
+  "172.18.0.2",
+  "192.168.1.9",
+  "fd00::7",
+  "203.0.113.9",
+  "::ffff:203.0.113.9",
+];
+
+const trustedPeers = (trust: ProxyTrust) => PEERS.filter((peer) => trust(peer));
+
+describe("resolveProxyTrust", () => {
   afterEach(restoreNodeEnv);
 
-  it("resolves both runtime settings from the environment it is called in", () => {
+  it("resolves the trusted-proxy list from the environment it is called in", () => {
     process.env.NODE_ENV = "production";
-    const prod = createExpressApp();
+    const prod = resolveProxyTrust();
     process.env.NODE_ENV = "development";
-    const dev = createExpressApp();
+    const dev = resolveProxyTrust();
 
-    // Both values are asserted exactly. A hop count in place of the address
-    // list would let a peer that never passed the proxy name its own `req.ip`,
-    // and `false` is express's own default, so a stray unconditional set in
-    // development fails here too.
-    expect([
-      prod.get("env"),
-      prod.get("trust proxy"),
-      dev.get("env"),
-      dev.get("trust proxy")
-    ]).toEqual([
-      "production",
-      ["loopback", "uniquelocal"],
-      "development",
-      false
+    // Production trusts loopback and private addresses by ADDRESS, so a public
+    // peer that never passed the proxy cannot name its own `req.ip`; outside
+    // production no peer is trusted at all.
+    expect(trustedPeers(prod)).toEqual([
+      "127.0.0.1",
+      "::ffff:127.0.0.1",
+      "::1",
+      "10.1.2.3",
+      "172.18.0.2",
+      "192.168.1.9",
+      "fd00::7",
     ]);
+    expect(trustedPeers(dev)).toEqual([]);
   });
 
-  // The consequence the `env` setting exists for, driven over a real socket
-  // rather than asserted on the setting alone: finalhandler decides from
-  // `app.get("env")` whether an unhandled error's stack goes into the response
-  // body. A malformed-JSON POST reaches it with no authentication.
-  it("does not disclose a stack trace on a malformed body in production", async () => {
+  it("trusts nothing that is not an address", () => {
     process.env.NODE_ENV = "production";
-    const app = createExpressApp();
-    app.use(json());
-    app.post("/probe", (_req, res) => res.send("ok"));
-
-    let server: Server | undefined;
-    try {
-      server = await new Promise<Server>((resolve) => {
-        const s = app.listen(0, () => resolve(s));
-      });
-      const { port } = server.address() as { port: number };
-      const res = await fetch(`http://127.0.0.1:${port}/probe`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{ not json"
-      });
-      const body = await res.text();
-
-      expect(res.status).toBe(400);
-      expect([
-        body.includes("SyntaxError"),
-        body.includes("at "),
-        body.includes(".js:")
-      ]).toEqual([false, false, false]);
-    } finally {
-      server?.close();
-    }
+    const trust = resolveProxyTrust();
+    expect(["", "unknown", "localhost", "127.1"].filter((peer) => trust(peer))).toEqual([]);
   });
 });
 
-describe("bundled createExpressApp", () => {
+describe("bundled resolveProxyTrust", () => {
   afterEach(restoreNodeEnv);
 
-  // The two cases above cannot fail for the bug this guards. Unbundled, express
-  // seeds `env` correctly from its own `process.env.NODE_ENV` read, so deleting
-  // our explicit set changes nothing — the fold only happens at build time.
-  // Building the module the way `pack.ts` does is the only place the defect is
-  // observable, which is why the source-level suite missed it originally.
+  // Unbundled, a `process.env.NODE_ENV` read is decided at run time anyway; the
+  // fold into a literal only happens at build time. Building the module the way
+  // `pack.ts` does is the only place that defect is observable.
   it("still answers to the runtime NODE_ENV after bundling", async () => {
     const result = await Bun.build({
       entrypoints: [path.resolve(import.meta.dir, "app.ts")],
-      target: "node"
+      target: "bun",
     });
     expect(result.success).toBe(true);
 
@@ -91,22 +72,15 @@ describe("bundled createExpressApp", () => {
     // fs/os call is resolved against whatever another suite's process-global
     // mock.module left in place, which silently skipped this whole describe
     // in a full-directory run.
-    const outfile = path.join(
-      "/tmp",
-      `inbox-http-app-${process.pid}`,
-      "app.js"
-    );
+    const outfile = path.join("/tmp", `inbox-http-app-${process.pid}`, "app.js");
     await Bun.write(outfile, result.outputs[0]!);
     const bundled = await import(outfile);
 
     process.env.NODE_ENV = "production";
-    const prod = bundled.createExpressApp();
+    const prod = bundled.resolveProxyTrust();
     process.env.NODE_ENV = "development";
-    const dev = bundled.createExpressApp();
+    const dev = bundled.resolveProxyTrust();
 
-    expect([prod.get("env"), dev.get("env")]).toEqual([
-      "production",
-      "development"
-    ]);
+    expect([prod("10.1.2.3"), dev("10.1.2.3")]).toEqual([true, false]);
   });
 });

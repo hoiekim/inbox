@@ -4,19 +4,29 @@
  * and automatically adds missing columns on startup.
  */
 
-import { PoolClient } from "pg";
-import { builtinsTypes } from "pg-types";
+import type { PoolClient } from "./pool";
 import { pool } from "./client";
 import { Schema } from "./models/base";
 import { logger } from "../logger";
 
+/** PostgreSQL's built-in type names, upper-cased. */
+type BuiltinPgType =
+  | "BOOL" | "BYTEA" | "CHAR" | "INT8" | "INT2" | "INT4" | "REGPROC" | "TEXT" | "OID" | "TID"
+  | "XID" | "CID" | "JSON" | "XML" | "PG_NODE_TREE" | "SMGR" | "PATH" | "POLYGON" | "CIDR"
+  | "FLOAT4" | "FLOAT8" | "ABSTIME" | "RELTIME" | "TINTERVAL" | "CIRCLE" | "MACADDR8" | "MONEY"
+  | "MACADDR" | "INET" | "ACLITEM" | "BPCHAR" | "VARCHAR" | "DATE" | "TIME" | "TIMESTAMP"
+  | "TIMESTAMPTZ" | "INTERVAL" | "TIMETZ" | "BIT" | "VARBIT" | "NUMERIC" | "REFCURSOR"
+  | "REGPROCEDURE" | "REGOPER" | "REGOPERATOR" | "REGCLASS" | "REGTYPE" | "UUID"
+  | "TXID_SNAPSHOT" | "PG_LSN" | "PG_NDISTINCT" | "PG_DEPENDENCIES" | "TSVECTOR" | "TSQUERY"
+  | "GTSVECTOR" | "REGCONFIG" | "REGDICTIONARY" | "JSONB" | "REGNAMESPACE" | "REGROLE";
+
 /**
- * Normalized PostgreSQL type names used for comparison.
- * Based on builtinsTypes from pg-types, plus common SQL aliases.
- * We normalize to these canonical forms for consistent comparison.
+ * Normalized PostgreSQL type names used for comparison: the built-in names plus
+ * common SQL aliases. We normalize to these canonical forms for consistent
+ * comparison.
  */
 type NormalizedPgType =
-  | builtinsTypes
+  | BuiltinPgType
   | "INTEGER"    // Alias for INT4
   | "BIGINT"     // Alias for INT8
   | "SMALLINT"   // Alias for INT2

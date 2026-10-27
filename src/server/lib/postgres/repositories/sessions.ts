@@ -1,4 +1,3 @@
-import { Store } from "express-session";
 import { logger } from "../../logger";
 import {
   SessionModel,
@@ -23,7 +22,7 @@ import {
   COOKIE_SAME_SITE,
 } from "../models";
 
-// Import the common types (we'll need to adapt these)
+import type { SessionStore } from "../../http/session";
 import {
   Cookie,
   RuntimeCookie,
@@ -148,12 +147,10 @@ export const deleteSessionsForUser = async (
 };
 
 /**
- * Can be passed to 'store' option of express-session middleware to achieve persistent
- * session memory.
+ * Persists HTTP sessions in PostgreSQL.
  */
-export class PostgresSessionStore extends Store {
+export class PostgresSessionStore implements SessionStore {
   constructor() {
-    super();
     this.autoRemoveScheduler();
   }
 
@@ -168,142 +165,112 @@ export class PostgresSessionStore extends Store {
   /**
    * Gets session with given session_id.
    * @param session_id
-   * @param callback
-   * @returns
+   * @returns The session, or null when no live session carries that id. A
+   * failed read rejects.
    */
-  get = async (
-    session_id: string,
-    callback: (err: unknown, session?: RuntimeSessionType | null) => void
-  ) => {
-    try {
-      const sessionModel = await searchSession(session_id);
+  get = async (session_id: string): Promise<RuntimeSessionType | null> => {
+    const sessionModel = await searchSession(session_id);
 
-      if (!sessionModel) {
-        callback(null, null);
-        return;
-      }
+    if (!sessionModel) return null;
 
-      const { cookie_expires, cookie_secure, cookie_same_site } = sessionModel;
-      if (!cookie_expires || new Date(cookie_expires) < new Date()) {
-        this.destroy(session_id);
-        return callback(null, null);
-      }
-
-      // The revocation fence: a grant proves itself current on
-      // every read, not only at issuance. A session row resurrected by an
-      // in-flight request after `deleteSessionsForUser`, or a session minted
-      // by a login that straddled the rotation, carries the stale generation
-      // and is rejected here — regardless of how the row got written.
-      // Rows written before the fence's migration read back null, which is
-      // generation 1, the same default the migration gives the user rows.
-      const stampedVersion = sessionModel.session_password_version ?? 1;
-      const userRow = await usersTable.queryOne({
-        [USER_ID]: sessionModel.session_user_id,
-      });
-      const currentVersion = userRow?.password_version ?? 1;
-      if (stampedVersion < currentVersion) {
-        logger.info(
-          "Session rejected: credential rotated after the session was issued",
-          { session_id, user_id: sessionModel.session_user_id }
-        );
-        await this.destroy(session_id);
-        return callback(null, null);
-      }
-
-      const cookie = new RuntimeCookie({
-        originalMaxAge: sessionModel.cookie_original_max_age,
-        maxAge: sessionModel.cookie_max_age ?? undefined,
-        signed: sessionModel.cookie_signed ?? undefined,
-        _expires: cookie_expires ? new Date(cookie_expires) : undefined,
-        httpOnly: sessionModel.cookie_http_only ?? undefined,
-        path: sessionModel.cookie_path ?? undefined,
-        domain: sessionModel.cookie_domain ?? undefined,
-        secure: cookie_secure ? JSON.parse(cookie_secure) : undefined,
-        sameSite: cookie_same_site ? JSON.parse(cookie_same_site) : undefined,
-      });
-
-      const runtimeSession = new RuntimeSession();
-      runtimeSession.user.id = sessionModel.session_user_id;
-      runtimeSession.user.username = sessionModel.session_username;
-      runtimeSession.user.email = sessionModel.session_email;
-      if (sessionModel.session_is_read_only) {
-        runtimeSession.user.isReadOnly = true;
-        runtimeSession.user.authenticatedAs =
-          sessionModel.session_authenticated_as ?? undefined;
-      }
-      runtimeSession.cookie = cookie;
-
-      return callback(null, runtimeSession);
-    } catch (error) {
-      return callback(error);
+    const { cookie_expires, cookie_secure, cookie_same_site } = sessionModel;
+    if (!cookie_expires || new Date(cookie_expires) < new Date()) {
+      this.destroy(session_id).catch((error) =>
+        logger.error("Failed to delete session", { session_id }, error)
+      );
+      return null;
     }
+
+    // The revocation fence: a grant proves itself current on
+    // every read, not only at issuance. A session row resurrected by an
+    // in-flight request after `deleteSessionsForUser`, or a session minted
+    // by a login that straddled the rotation, carries the stale generation
+    // and is rejected here — regardless of how the row got written.
+    // Rows written before the fence's migration read back null, which is
+    // generation 1, the same default the migration gives the user rows.
+    const stampedVersion = sessionModel.session_password_version ?? 1;
+    const userRow = await usersTable.queryOne({
+      [USER_ID]: sessionModel.session_user_id,
+    });
+    const currentVersion = userRow?.password_version ?? 1;
+    if (stampedVersion < currentVersion) {
+      logger.info(
+        "Session rejected: credential rotated after the session was issued",
+        { session_id, user_id: sessionModel.session_user_id }
+      );
+      await this.destroy(session_id).catch((error) =>
+        logger.error("Failed to delete session", { session_id }, error)
+      );
+      return null;
+    }
+
+    const cookie = new RuntimeCookie({
+      originalMaxAge: sessionModel.cookie_original_max_age,
+      maxAge: sessionModel.cookie_max_age ?? undefined,
+      signed: sessionModel.cookie_signed ?? undefined,
+      _expires: cookie_expires ? new Date(cookie_expires) : undefined,
+      httpOnly: sessionModel.cookie_http_only ?? undefined,
+      path: sessionModel.cookie_path ?? undefined,
+      domain: sessionModel.cookie_domain ?? undefined,
+      secure: cookie_secure ? JSON.parse(cookie_secure) : undefined,
+      sameSite: cookie_same_site ? JSON.parse(cookie_same_site) : undefined,
+    });
+
+    const runtimeSession = new RuntimeSession();
+    runtimeSession.user.id = sessionModel.session_user_id;
+    runtimeSession.user.username = sessionModel.session_username;
+    runtimeSession.user.email = sessionModel.session_email;
+    if (sessionModel.session_is_read_only) {
+      runtimeSession.user.isReadOnly = true;
+      runtimeSession.user.authenticatedAs =
+        sessionModel.session_authenticated_as ?? undefined;
+    }
+    runtimeSession.cookie = cookie;
+
+    return runtimeSession;
   };
 
   /**
    * Sets session with given session_id and session object.
    * @param session_id
    * @param session
-   * @param callback
    */
-  set = async (
-    session_id: string,
-    session: RuntimeSessionType,
-    callback?: (err?: unknown) => void
-  ) => {
-    if (!callback) return;
+  set = async (session_id: string, session: RuntimeSessionType): Promise<void> => {
+    const { cookie, user } = session;
+    const {
+      secure,
+      sameSite,
+      originalMaxAge,
+      maxAge,
+      signed,
+      httpOnly,
+      path,
+      domain,
+      _expires,
+    } = cookie;
 
-    try {
-      const { cookie, user } = session;
-      const {
-        secure,
-        sameSite,
-        originalMaxAge,
-        maxAge,
-        signed,
-        httpOnly,
-        path,
-        domain,
-        _expires,
-      } = cookie;
+    const storedCookie = new Cookie({
+      secure: JSON.stringify(secure),
+      sameSite: JSON.stringify(sameSite),
+      originalMaxAge,
+      maxAge,
+      signed,
+      httpOnly,
+      path,
+      domain,
+      _expires,
+    });
 
-      const storedCookie = new Cookie({
-        secure: JSON.stringify(secure),
-        sameSite: JSON.stringify(sameSite),
-        originalMaxAge,
-        maxAge,
-        signed,
-        httpOnly,
-        path,
-        domain,
-        _expires,
-      });
+    const storedSession = new Session({ user, cookie: storedCookie });
 
-      const storedSession = new Session({ user, cookie: storedCookie });
-
-      await updateSession(session_id, storedSession);
-
-      callback(null);
-    } catch (error) {
-      return callback(error);
-    }
+    await updateSession(session_id, storedSession);
   };
 
   /**
    * Removes session data from PostgreSQL by given session_id.
    * @param session_id
-   * @param callback
-   * @returns
    */
-  destroy = async (session_id: string, callback?: (err?: unknown) => void) => {
-    try {
-      await deleteSession(session_id);
-      callback?.(null);
-    } catch (error) {
-      if (!callback) {
-        logger.error("Failed to delete session", { session_id }, error);
-        return;
-      }
-      callback(error);
-    }
+  destroy = async (session_id: string): Promise<void> => {
+    await deleteSession(session_id);
   };
 }

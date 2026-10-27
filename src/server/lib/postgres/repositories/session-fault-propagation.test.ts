@@ -1,14 +1,14 @@
 /**
  * A DB fault on the session store's read, write or purge path must reach the
  * caller instead of being reported as a successful, empty, or idempotent
- * outcome. `express-session`'s `Store` protocol treats `callback(null)` as an
- * affirmative claim that the write landed and `callback(null, null)` as an
+ * outcome. The session store's contract treats a resolved `set` as an
+ * affirmative claim that the write landed and a `get` resolving null as an
  * affirmative claim that no such session exists, so a swallowed fault here
  * answers a successful login whose row was never written, or logs a live user
  * out at random.
  *
  * The stub is installed through the pool Proxy's set trap rather than
- * `mock.module("pg", ...)` — same seam as `session-destroy-propagation.test.ts`.
+ * `mock.module("server/lib/postgres/pool", ...)` — same seam as `session-destroy-propagation.test.ts`.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from "bun:test";
 import { SignedUser } from "common";
@@ -139,21 +139,23 @@ const runtimeSession = () =>
     },
   }) as never;
 
-/** Resolves with whatever `set` hands its callback — an error or null. */
+/** Resolves with the error `set` rejected with, or null when it resolved. */
 const setResult = (session_id: string) =>
-  new Promise<unknown>((resolve) => {
-    store.set(session_id, runtimeSession(), (err) => resolve(err ?? null));
-  });
+  store.set(session_id, runtimeSession()).then(
+    () => null,
+    (err: unknown) => err
+  );
 
-/** Resolves with the full callback arguments so an error is distinguishable
- * from the affirmative "no such session" answer. */
+/** Resolves with the outcome so an error is distinguishable from the
+ * affirmative "no such session" answer. */
 const getResult = (session_id: string) =>
-  new Promise<{ err: unknown; session: unknown }>((resolve) => {
-    store.get(session_id, (err, session) => resolve({ err, session: session ?? null }));
-  });
+  store.get(session_id).then(
+    (session) => ({ err: null as unknown, session: session ?? null }),
+    (err: unknown) => ({ err, session: null })
+  );
 
 describe("PostgresSessionStore.set", () => {
-  it("calls back with the error when the session write raises", async () => {
+  it("rejects when the session write raises", async () => {
     writeMode = "throw";
 
     const err = await setResult(SESSION_ID);
@@ -162,7 +164,7 @@ describe("PostgresSessionStore.set", () => {
     expect((err as Error).message).toContain("could not serialize session write");
   });
 
-  it("calls back null when the write lands", async () => {
+  it("resolves when the write lands", async () => {
     const err = await setResult(SESSION_ID);
 
     expect(err).toBeNull();
@@ -170,19 +172,19 @@ describe("PostgresSessionStore.set", () => {
 });
 
 describe("PostgresSessionStore.get", () => {
-  it("calls back with the error when the session read raises", async () => {
+  it("rejects when the session read raises", async () => {
     readMode = "throw";
 
     const { err, session } = await getResult(SESSION_ID);
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("connection terminated unexpectedly");
-    // The error callback must not also carry the affirmative "no such session"
+    // The rejection must not also carry the affirmative "no such session"
     // answer, which is how the swallow spelled a fault.
     expect(session).toBeFalsy();
   });
 
-  it("calls back with no session and no error when the row is genuinely absent", async () => {
+  it("resolves null when the row is genuinely absent", async () => {
     readMode = "empty";
 
     const { err, session } = await getResult(SESSION_ID);
@@ -191,7 +193,7 @@ describe("PostgresSessionStore.get", () => {
     expect(session).toBeNull();
   });
 
-  it("calls back with the stored session when the row is present", async () => {
+  it("resolves the stored session when the row is present", async () => {
     const { err, session } = await getResult(SESSION_ID);
 
     expect(err).toBeNull();
@@ -236,7 +238,7 @@ describe("PostgresSessionStore.get credential-version fence", () => {
     expect((session as { user: SignedUser }).user.id).toBe(USER.id);
   });
 
-  it("calls back with the error when the version lookup raises", async () => {
+  it("rejects when the version lookup raises", async () => {
     // A grant that cannot be proven current is not exercised — but the
     // failure must surface as an error, not as a silent logout.
     userVersionMode = "throw";

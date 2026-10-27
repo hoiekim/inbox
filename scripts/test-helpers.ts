@@ -4,7 +4,7 @@
  * `mock.module(...)` overrides cleanly.
  *
  * Why restore: bun's `mock.module()` is process-global and has no
- * `unmock` API — once a file mocks `"pg"` with a FakePool, every
+ * `unmock` API — once a file mocks the pool driver with a FakePool, every
  * subsequent file in the same `bun test` process sees the mock unless
  * it's explicitly re-mocked back to real. `restoreLeaves()` re-mocks
  * each leaf to the snapshot the preload captured (`globalThis.__REAL_*`)
@@ -16,17 +16,12 @@
  *   import { restoreLeaves } from "test-helpers";
  *   import { afterAll, mock } from "bun:test";
  *
- *   mock.module("pg", () => ({ Pool: FakePool, ... }));
+ *   mock.module("server/lib/postgres/pool", () => ({ Pool: FakePool }));
  *
  *   afterAll(restoreLeaves);
  *
- * Note: `pg`'s lazy-pool getter that lets a test file's `mock.module`
- * actually rebind the cached `Pool` reference is not yet in `client.ts`
- * — that's a separate PR (tracked by inbox#557 step 2). Until then,
- * this helper restores the SPEC binding on `pg` so a subsequent file's
- * fresh `import { Pool } from "pg"` resolves to the real Pool; tests
- * that depend on per-file pool isolation should hold until lazy-pool
- * lands.
+ * `client.ts` builds its pool lazily, so a file that mocks the driver and
+ * calls `resetPool()` gets a pool of its own fake class.
  */
 import { mock } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -34,14 +29,13 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 interface RealLeaves {
-  __REAL_PG: Record<string, unknown> & { default: unknown };
+  __REAL_POOL: Record<string, unknown>;
   __REAL_WEB_PUSH: Record<string, unknown> & { default: unknown };
-  __REAL_BCRYPT: Record<string, unknown> & { default: unknown };
 }
 
 const realLeaves = (): RealLeaves => {
   const g = globalThis as unknown as Partial<RealLeaves>;
-  if (!g.__REAL_PG || !g.__REAL_WEB_PUSH || !g.__REAL_BCRYPT) {
+  if (!g.__REAL_POOL || !g.__REAL_WEB_PUSH) {
     throw new Error(
       "test-helpers: real leaf snapshots missing on globalThis. " +
         "Run tests via `bun test` (which preloads `scripts/test-preload.ts`).",
@@ -51,15 +45,14 @@ const realLeaves = (): RealLeaves => {
 };
 
 /**
- * Re-mock the standard set of leaf deps (`pg`, `web-push`, `bcryptjs`) back
+ * Re-mock the standard set of leaf deps (the pool driver, `web-push`) back
  * to the real module exports captured by the preload. Pass directly to
  * `afterAll(restoreLeaves)`.
  */
 export const restoreLeaves = (): void => {
-  const { __REAL_PG, __REAL_WEB_PUSH, __REAL_BCRYPT } = realLeaves();
-  mock.module("pg", () => __REAL_PG);
+  const { __REAL_POOL, __REAL_WEB_PUSH } = realLeaves();
+  mock.module("server/lib/postgres/pool", () => __REAL_POOL);
   mock.module("web-push", () => __REAL_WEB_PUSH);
-  mock.module("bcryptjs", () => __REAL_BCRYPT);
 };
 
 /**

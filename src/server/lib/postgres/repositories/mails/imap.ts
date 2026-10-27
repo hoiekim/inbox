@@ -76,8 +76,8 @@ export async function* pgTextChunks(
   // step by `chunkChars` chars each round-trip; a chunk shorter than
   // `chunkChars` OR empty means we've drained the column.
   //
-  // The `$3::int FOR $4::int` casts are LOAD-BEARING. `pg` sends JS
-  // number params as text with no OID hint, so Postgres has to infer
+  // The `$3::int FOR $4::int` casts are LOAD-BEARING. Every parameter
+  // binds as untyped text (see postgres/pool.ts), so Postgres has to infer
   // types from the SUBSTRING call site. Three overloads share the
   // shape:
   //   substring(text, int, int)       — numeric offsets (what we want)
@@ -169,7 +169,7 @@ export async function* pgByteChunks(
   // int, int)` is the sole overload on bytea (no SIMILAR-TO-pattern
   // ambiguity to resolve, unlike pgTextChunks's `text` overload set) —
   // but keeping the casts matches pgTextChunks' shape and eliminates any
-  // future risk of pg driver text-encoded params confusing type inference.
+  // future risk of untyped text params confusing type inference.
   let offset = startByte;
   for (;;) {
     const sql = `SELECT SUBSTRING(convert_to(${sourceColumn}, 'UTF8') FROM $3::int FOR $4::int) AS chunk

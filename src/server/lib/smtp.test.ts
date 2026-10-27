@@ -1,5 +1,4 @@
 import { describe, expect, it, jest, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
-import bcrypt from "bcryptjs";
 import type {
   SMTPServer,
   SMTPServerSession,
@@ -65,27 +64,19 @@ mock.module("mailparser", () => ({
   simpleParser: mockSimpleParser
 }));
 
-const realBcrypt = (globalThis as Record<string, unknown>).__REAL_BCRYPT as {
-  compare: (password: string, hash: string) => Promise<boolean>;
-  hash: (password: string, rounds: number) => Promise<string>;
-  default: Record<string, unknown>;
-};
+const realVerify = Bun.password.verify.bind(Bun.password);
 
-// Every `bcrypt.compare` onAuth makes, as `[password, hash]`. The real
+// Every `Bun.password.verify` onAuth makes, as `[password, hash]`. The real
 // implementation still runs underneath — a stub answering a constant would let
 // the success cases pass without a working comparison. Restored for the next
-// test file by `restoreLeaves` in this file's afterAll.
+// test file in this file's afterAll.
 const compareCalls: [string, string][] = [];
-const trackedCompare = (password: string, hash: string) => {
-  compareCalls.push([password, hash]);
-  return realBcrypt.compare(password, hash);
-};
-
-mock.module("bcryptjs", () => ({
-  ...realBcrypt,
-  compare: trackedCompare,
-  default: { ...realBcrypt.default, compare: trackedCompare },
-}));
+const verifySpy = spyOn(Bun.password, "verify").mockImplementation(async (password, hash) => {
+  const text =
+    typeof password === "string" ? password : new TextDecoder().decode(password as Uint8Array);
+  compareCalls.push([text, hash]);
+  return realVerify(password, hash);
+});
 
 /** A complete bcrypt digest — 22 salt chars plus 31 of hash, base64-ish alphabet. */
 const BCRYPT_DIGEST = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -134,6 +125,7 @@ import {
 // Revert the auth-rate-limit spies after this file so the real implementation is
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
 afterAll(() => {
+  verifySpy.mockRestore();
   mockIsAuthRateLimited.mockRestore();
   mockRecordAuthFailure.mockRestore();
   mockResetAuthFailures.mockRestore();
@@ -217,7 +209,7 @@ describe("onAuth handler", () => {
   });
 
   it("rejects auth when password is empty", async () => {
-    const hashedPw = await bcrypt.hash("correct", 10);
+    const hashedPw = await Bun.password.hash("correct", { algorithm: "bcrypt", cost: 10 });
     const session = {} as SMTPServerSession;
     const auth = { username: "testuser", password: "" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -233,7 +225,7 @@ describe("onAuth handler", () => {
   });
 
   it("rejects auth when password is wrong", async () => {
-    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
     const session = {} as SMTPServerSession;
     const auth = { username: "testuser", password: "wrongpassword" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -249,7 +241,7 @@ describe("onAuth handler", () => {
   });
 
   it("authenticates successfully with correct credentials", async () => {
-    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
     const session = {} as SMTPServerSession;
     const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -268,7 +260,7 @@ describe("onAuth handler", () => {
   it("stamps the credential's password_version onto the session at AUTH", async () => {
     // The revocation fence: the per-command gates compare this
     // stamp against the row's current version.
-    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
     const session = {} as SMTPServerSession;
     const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -288,7 +280,7 @@ describe("onAuth handler", () => {
   });
 
   it("stamps version 1 when the credential row predates the fence", async () => {
-    const hashedPw = await bcrypt.hash("correctpassword", 10);
+    const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
     const session = {} as SMTPServerSession;
     const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -351,7 +343,7 @@ describe("onAuth handler", () => {
   });
 
   it("records failure on wrong-password path", async () => {
-    const hashedPw = await bcrypt.hash("right", 10);
+    const hashedPw = await Bun.password.hash("right", { algorithm: "bcrypt", cost: 10 });
     const session = { remoteAddress: "1.1.1.1" } as SMTPServerSession;
     const auth = { username: "testuser", password: "wrong" } as SMTPServerAuthentication;
     mockGetUser.mockResolvedValue({
@@ -371,7 +363,7 @@ describe("onAuth handler", () => {
     // SMTP has only mutating gates, but authenticating admin-ro is
     // permitted so the session shape stays symmetric with HTTP/IMAP —
     // the refusal lives at MAIL FROM (below).
-    const hashedPw = await bcrypt.hash("readonlypass", 10);
+    const hashedPw = await Bun.password.hash("readonlypass", { algorithm: "bcrypt", cost: 10 });
     const session = { remoteAddress: "10.0.0.1" } as SMTPServerSession;
     const auth = {
       username: ADMIN_RO_USERNAME,
@@ -402,7 +394,7 @@ describe("onAuth handler", () => {
 });
 
 describe("onAuth username enumeration resistance", () => {
-  const hashOf = (password: string) => realBcrypt.hash(password, 4);
+  const hashOf = (password: string) => Bun.password.hash(password, { algorithm: "bcrypt", cost: 4 });
 
   const existingUser = async () => ({
     password: await hashOf("correct-horse"),
@@ -464,7 +456,7 @@ describe("onAuth username enumeration resistance", () => {
     await drive("nobody", "hunter2");
 
     expect(compareCalls[0]![1]).not.toBe(realDigest);
-    expect(await realBcrypt.compare("hunter2", compareCalls[0]![1])).toBe(false);
+    expect(await realVerify("hunter2", compareCalls[0]![1])).toBe(false);
   });
 
   it("runs the comparison when the stored digest is empty", async () => {

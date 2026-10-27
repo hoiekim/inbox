@@ -5,24 +5,15 @@ import type { MailgunMessageData, CustomFile } from "mailgun.js/definitions";
 import { MailDataToSend } from "common";
 import { getText, getUserDomain } from "server";
 import { UploadedFileDynamicArray } from "./send";
-import { UploadedFile } from "express-fileupload";
+import type { UploadedFile } from "../http/upload";
 import { logger } from "../logger";
 import { sendAlarm } from "../alarm";
 
 const { MAILGUN_KEY = "mailgun_key" } = process.env;
 
-/**
- * Returns the file data as a Buffer.
- * With useTempFiles:true, file.data is an empty Buffer — read from tempFilePath instead.
- */
-const getFileData = (file: UploadedFile): Buffer => {
-  if (file.tempFilePath) return fs.readFileSync(file.tempFilePath);
-  return file.data;
-};
-
 const getAttachments = (files?: UploadedFileDynamicArray): CustomFile[] => {
   const parseFile = (file: UploadedFile): CustomFile => ({
-    data: getFileData(file),
+    data: fs.readFileSync(file.tempFilePath),
     filename: file.name,
     contentType: file.mimetype,
     knownLength: file.size

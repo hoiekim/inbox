@@ -1,11 +1,21 @@
-import { SessionData as _Session, Cookie as _Cookie } from "express-session";
 import { SignedUser, SignedUserType } from "./User";
 import { Model } from "../Model";
 
 /**
- * The REAL `Cookie` type that's used by express-session in runtime.
+ * A session cookie's attributes as the server holds them while handling a
+ * request.
  */
-export type RuntimeCookieType = Omit<_Cookie, "expires"> & { _expires?: Date };
+export interface RuntimeCookieType {
+  originalMaxAge: number | null;
+  maxAge?: number;
+  signed?: boolean;
+  _expires?: Date;
+  httpOnly?: boolean;
+  path?: string;
+  domain?: string;
+  secure?: boolean | "auto";
+  sameSite?: boolean | "lax" | "strict" | "none";
+}
 
 export class RuntimeCookie
   extends Model<RuntimeCookie>
@@ -52,14 +62,11 @@ export class Cookie extends Model<Cookie> implements CookieType {
   }
 }
 
-/**
- * `SessionData` imported from express-session contains cookie property which is
- * `Cookie` type, which doesn't match with runtime cookie object. `RealSessionData`
- * tries to define what's actually used in runtime.
- */
-export type RuntimeSessionType = Omit<_Session, "cookie"> & {
+/** A session as the server holds it while handling a request. */
+export interface RuntimeSessionType {
+  user: SignedUser;
   cookie: RuntimeCookieType;
-};
+}
 
 export class RuntimeSession
   extends Model<RuntimeSession>
@@ -78,10 +85,10 @@ export class RuntimeSession
 /**
  * Redefines 'cookie' property to make it compatible with database storage.
  */
-export type SessionType = Omit<_Session, "cookie"> & {
+export interface SessionType {
   cookie: CookieType;
   user: SignedUserType;
-};
+}
 
 export class Session extends Model<Session> implements SessionType {
   declare user: SignedUser;

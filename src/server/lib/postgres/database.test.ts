@@ -29,16 +29,16 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
-// Import the subjects only after the pg mock is registered, so the lazy pool in
+// Import the subjects only after the driver mock is registered, so the lazy pool in
 // `postgres/client.ts` instantiates FakePool instead of a real connection.
 const { tables } = await import("./initialize");
 const { usersTable, sessionsTable, mailboxesTable } = await import("./models");
 const { resetPool } = await import("./client");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

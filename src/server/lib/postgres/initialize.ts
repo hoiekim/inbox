@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import bcrypt from "bcryptjs";
 import { pool } from "./client";
+import { verifyPassword } from "../verify-password";
 import {
   writeUser,
   searchUser,
@@ -451,7 +451,7 @@ export const initializeAdminReadOnlyUser = async (): Promise<void> => {
   const existing = await searchUser({ username: ADMIN_RO_USERNAME });
   // Compared before the write, which replaces the hash it is compared against.
   const passwordRotated =
-    !!existing && !(await bcrypt.compare(ADMIN_RO_PASSWORD, existing.password));
+    !!existing && !(await verifyPassword(ADMIN_RO_PASSWORD, existing.password));
 
   // Revoked before the write, not after: the stored hash is the only rotation
   // signal, so a delete that raises once the new hash is persisted leaves the

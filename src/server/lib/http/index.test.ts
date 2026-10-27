@@ -1,17 +1,15 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import express from "express";
-import session from "express-session";
-import type { Server } from "http";
+import type { RuntimeSessionType } from "common";
 
 import { createHttpApp } from "./index";
+import { DEVELOPMENT_FALLBACK } from "./session-secret";
+import { signSessionCookie, type SessionStore } from "./session";
 
 /**
- * The security headers are registered by exactly one middleware in
- * {@link createHttpApp}. A second registration re-setting the same values
- * would be silently shadowed by registration order — this assertion pins the
- * exact security-header set on a representative response, so a future
- * duplicate (or a divergent value, or a re-added X-XSS-Protection) fails
- * loudly here instead of hiding in the ordering.
+ * The security headers are defined in exactly one place in
+ * {@link createHttpApp}. This assertion pins the exact security-header set on
+ * a representative response, so a divergent value or a re-added
+ * X-XSS-Protection fails loudly here.
  */
 const EXPECTED_CSP = [
   "default-src 'self'",
@@ -52,38 +50,45 @@ const restoreEnv = () => {
   else delete process.env.APP_HOSTNAME;
 };
 
-const fetchSecurityHeaders = async (
-  mode: "production" | "development"
-): Promise<{ status: number; headers: Record<string, string> }> => {
+/** Session rows by id, standing in for the Postgres store. */
+class MemoryStore implements SessionStore {
+  readonly rows = new Map<string, RuntimeSessionType>();
+  get = async (id: string) => this.rows.get(id) ?? null;
+  set = async (id: string, session: RuntimeSessionType) => {
+    this.rows.set(id, session);
+  };
+  destroy = async (id: string) => {
+    this.rows.delete(id);
+  };
+}
+
+const useMode = (mode: "production" | "development") => {
   if (mode === "production") {
     process.env.NODE_ENV = "production";
     if (!secretWasSet) process.env.SECRET = "<test-only-secret>";
   } else {
     process.env.NODE_ENV = "development";
   }
+};
 
-  // MemoryStore keeps the session middleware off any real store: the security
-  // header middleware runs upstream of it and applies to every response.
-  const app = createHttpApp(new session.MemoryStore());
+const call = (
+  store: SessionStore,
+  path: string,
+  init?: RequestInit,
+  peer = "127.0.0.1"
+): Promise<Response> => createHttpApp(store)(new Request(`http://localhost${path}`, init), peer);
 
-  let server: Server | undefined;
-  try {
-    server = await new Promise<Server>((resolve) => {
-      const s = app.listen(0, () => resolve(s));
-    });
-    const { port } = server.address() as { port: number };
-    const res = await fetch(
-      `http://127.0.0.1:${port}/.well-known/autoconfig/mail/config-v1.1.xml`
-    );
-    await res.text();
-    const headers: Record<string, string> = {};
-    for (const [name, value] of res.headers.entries()) {
-      headers[name] = value;
-    }
-    return { status: res.status, headers };
-  } finally {
-    server?.close();
+const fetchSecurityHeaders = async (
+  mode: "production" | "development"
+): Promise<{ status: number; headers: Record<string, string> }> => {
+  useMode(mode);
+  const res = await call(new MemoryStore(), "/.well-known/autoconfig/mail/config-v1.1.xml");
+  await res.text();
+  const headers: Record<string, string> = {};
+  for (const [name, value] of res.headers.entries()) {
+    headers[name] = value;
   }
+  return { status: res.status, headers };
 };
 
 const securityHeadersOf = (
@@ -128,162 +133,112 @@ describe("createHttpApp security headers", () => {
   });
 });
 
-/**
- * Registers session-touching probe routes ahead of the catch-all `*` route
- * that {@link createHttpApp} mounts last. The probes must sit downstream of
- * the session middleware (so `req.session` is loaded) but upstream of the
- * catch-all (which would otherwise answer first with index.html). Splicing
- * the router stack is test-only plumbing — production never does this.
- */
-const mountSessionProbes = (app: express.Application): void => {
-  const probes = express.Router();
-  probes.get("/__probe__", (req, res) => {
-    (req.session as unknown as Record<string, unknown>).probe = 1;
-    res.send("ok");
-  });
-  probes.get("/__untouched__", (_req, res) => {
-    res.send("ok");
-  });
-  const stack = (app as unknown as { _router: { stack: unknown[] } })._router.stack;
-  const probeLayers = (probes as unknown as { stack: unknown[] }).stack;
-  const catchAllIdx = stack.findIndex(
-    (layer) => (layer as { route?: { path?: unknown } }).route?.path === "*"
-  );
-  if (catchAllIdx === -1) throw new Error("catch-all route not found in app stack");
-  stack.splice(catchAllIdx, 0, ...probeLayers);
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+
+/** A store holding one live session, and the cookie that names it. */
+const seededStore = (mode: "production" | "development") => {
+  const store = new MemoryStore();
+  store.rows.set("seeded-session-id", {
+    user: { id: "u1", username: "alice", email: "alice@example.com" },
+    cookie: {
+      originalMaxAge: WEEK_MS,
+      _expires: new Date(Date.now() + WEEK_MS),
+      httpOnly: true,
+      path: "/",
+      secure: mode === "production",
+      sameSite: "strict",
+    },
+  } as unknown as RuntimeSessionType);
+  const secret = process.env.SECRET?.trim() ? process.env.SECRET : DEVELOPMENT_FALLBACK;
+  const cookie = `connect.sid=${encodeURIComponent(signSessionCookie("seeded-session-id", secret))}`;
+  return { store, cookie };
 };
 
+/**
+ * A request carrying a live session's cookie. In production the app trusts
+ * loopback proxies and only sends a Secure cookie over a secure request, so
+ * the request arrives as the TLS-terminating proxy would forward it unless
+ * `forwardedProto` says otherwise.
+ */
 const fetchSetCookies = async (
   mode: "production" | "development",
-  probePath: "/__probe__" | "/__untouched__" = "/__probe__"
-): Promise<string[]> => {
-  if (mode === "production") {
-    process.env.NODE_ENV = "production";
-    if (!secretWasSet) process.env.SECRET = "<test-only-secret>";
-  } else {
-    process.env.NODE_ENV = "development";
-  }
-
-  // MemoryStore keeps the session middleware off any real store: the
-  // assertions below read the cookie attributes the session middleware
-  // actually emits on a live response, not the options object.
-  const app = createHttpApp(new session.MemoryStore());
-  mountSessionProbes(app);
-
-  let server: Server | undefined;
-  try {
-    server = await new Promise<Server>((resolve) => {
-      const s = app.listen(0, () => resolve(s));
-    });
-    const { port } = server.address() as { port: number };
-    // In production the app trusts loopback proxies (see createExpressApp)
-    // and express-session only emits a Secure cookie over a secure request,
-    // so the probe request must arrive as the TLS-terminating proxy would
-    // forward it — otherwise the absence of Set-Cookie would be the session
-    // middleware's correct refusal, not an assertion about the cookie.
-    const res = await fetch(`http://127.0.0.1:${port}${probePath}`, {
-      headers: mode === "production" ? { "X-Forwarded-Proto": "https" } : {}
-    });
-    await res.text();
-    expect(res.status).toBe(200);
-    return res.headers.getSetCookie();
-  } finally {
-    server?.close();
-  }
+  forwardedProto: string | null = mode === "production" ? "https" : null
+): Promise<{ setCookies: string[]; store: MemoryStore }> => {
+  useMode(mode);
+  const { store, cookie } = seededStore(mode);
+  const headers: Record<string, string> = { Cookie: cookie };
+  if (forwardedProto) headers["X-Forwarded-Proto"] = forwardedProto;
+  const res = await call(store, "/api/users/login", { headers });
+  await res.text();
+  expect(res.status).toBe(200);
+  return { setCookies: res.headers.getSetCookie(), store };
 };
 
-/**
- * Two requests against one app instance, the second carrying the cookie
- * the first returned. The probe sets the same value on both requests, so
- * the session is unmodified on the second: with `rolling: false` the
- * second response carries no `Set-Cookie` at all, and with `rolling: true`
- * it re-issues one — that re-issuance is the rolling observable.
- */
-const fetchRollingCookies = async (): Promise<{
-  first: string[];
-  second: string[];
-}> => {
-  process.env.NODE_ENV = "development";
-  const app = createHttpApp(new session.MemoryStore());
-  mountSessionProbes(app);
-
-  let server: Server | undefined;
-  try {
-    server = await new Promise<Server>((resolve) => {
-      const s = app.listen(0, () => resolve(s));
-    });
-    const { port } = server.address() as { port: number };
-    const base = `http://127.0.0.1:${port}`;
-    const firstRes = await fetch(`${base}/__probe__`);
-    await firstRes.text();
-    expect(firstRes.status).toBe(200);
-    const first = firstRes.headers.getSetCookie();
-    expect(first).toHaveLength(1);
-    const cookieHeader = first[0].split(";")[0];
-    const secondRes = await fetch(`${base}/__probe__`, {
-      headers: { Cookie: cookieHeader }
-    });
-    await secondRes.text();
-    expect(secondRes.status).toBe(200);
-    return { first, second: secondRes.headers.getSetCookie() };
-  } finally {
-    server?.close();
-  }
+const expiresIn = (setCookie: string) => {
+  const expires = /Expires=([^;]+)/.exec(setCookie)?.[1];
+  expect(expires).toBeDefined();
+  return new Date(expires!).getTime() - Date.now();
 };
 
 describe("createHttpApp session cookie", () => {
   afterEach(restoreEnv);
 
   it("marks the session cookie Secure in production", async () => {
-    const setCookies = await fetchSetCookies("production");
+    const { setCookies } = await fetchSetCookies("production");
     expect(setCookies).toHaveLength(1);
     expect(setCookies[0]).toMatch(/\bSecure\b/);
   });
 
+  it("withholds the Secure cookie from a request that did not arrive over HTTPS", async () => {
+    const { setCookies, store } = await fetchSetCookies("production", null);
+    expect(setCookies).toHaveLength(0);
+    // The session itself is still renewed in the store.
+    expect(store.rows.get("seeded-session-id")!.cookie._expires!.getTime()).toBeGreaterThan(
+      Date.now() + WEEK_MS - 60_000
+    );
+  });
+
   it("leaves the session cookie non-Secure in development", async () => {
-    const setCookies = await fetchSetCookies("development");
+    const { setCookies } = await fetchSetCookies("development");
     expect(setCookies).toHaveLength(1);
     expect(setCookies[0]).not.toMatch(/\bSecure\b/);
   });
 
-  it("carries SameSite=Strict and a 7-day expiry on the session cookie", async () => {
+  it("carries the signed id, Path, HttpOnly, SameSite=Strict and a 7-day Expires", async () => {
     for (const mode of ["production", "development"] as const) {
-      const setCookies = await fetchSetCookies(mode);
+      const { setCookies } = await fetchSetCookies(mode);
       expect(setCookies).toHaveLength(1);
-      expect(setCookies[0]).toMatch(/SameSite=Strict/);
-      // express-session serializes maxAge as an Expires date, not Max-Age —
-      // assert the 7-day lifetime behaviorally off the emitted date.
-      const expires = /Expires=([^;]+)/.exec(setCookies[0])?.[1];
-      expect(expires).toBeDefined();
-      const skewMs = Math.abs(
-        new Date(expires!).getTime() - (Date.now() + 7 * 24 * 3600 * 1000)
+      expect(setCookies[0]).toMatch(
+        /^connect\.sid=s%3Aseeded-session-id\.[A-Za-z0-9%]+; Path=\/; Expires=[^;]+; HttpOnly(; Secure)?; SameSite=Strict$/
       );
-      expect(skewMs).toBeLessThan(60_000);
+      expect(Math.abs(expiresIn(setCookies[0]!) - WEEK_MS)).toBeLessThan(60_000);
     }
   });
 
-  it("re-issues the session cookie on a repeat request (rolling: true)", async () => {
-    // A strict "second Expires later than first Expires" assertion would be
-    // flaky at HTTP-date second granularity when both requests land in the
-    // same second, so this pins the re-issuance plus a 7-day Expires —
-    // together the rolling observable. Flipping `rolling` to `false`
-    // leaves the second response with no `Set-Cookie` and fails this test.
-    const { second } = await fetchRollingCookies();
-    expect(second).toHaveLength(1);
-    expect(second[0]).toMatch(/SameSite=Strict/);
-    const expires = /Expires=([^;]+)/.exec(second[0])?.[1];
-    expect(expires).toBeDefined();
-    const skewMs = Math.abs(
-      new Date(expires!).getTime() - (Date.now() + 7 * 24 * 3600 * 1000)
-    );
-    expect(skewMs).toBeLessThan(60_000);
+  it("re-issues the cookie for a live session on every request (rolling)", async () => {
+    useMode("development");
+    const { store, cookie } = seededStore("development");
+    for (let i = 0; i < 2; i++) {
+      const res = await call(store, "/api/ping", { headers: { Cookie: cookie } });
+      await res.text();
+      expect(res.headers.getSetCookie()).toHaveLength(1);
+      expect(res.headers.getSetCookie()[0]!.split(";")[0]).toBe(cookie);
+    }
   });
 
   it("sets no cookie for a session that was never touched", async () => {
-    // saveUninitialized: false — an anonymous, unmodified session must not
-    // mint a cookie at all.
-    const setCookies = await fetchSetCookies("development", "/__untouched__");
-    expect(setCookies).toHaveLength(0);
+    useMode("development");
+    const res = await call(new MemoryStore(), "/api/ping");
+    await res.text();
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+  });
+
+  it("ignores a cookie whose signature does not verify", async () => {
+    useMode("development");
+    const { store, cookie } = seededStore("development");
+    const res = await call(store, "/api/users/login", { headers: { Cookie: `${cookie.slice(0, -4)}AAAA` } });
+    expect(((await res.json()) as { body: { user?: unknown } }).body.user).toBeUndefined();
+    expect(res.headers.getSetCookie()).toHaveLength(0);
   });
 });
 
@@ -296,22 +251,9 @@ const fetchAutoconfig = async (env: {
   if (env.appHostname !== undefined) process.env.APP_HOSTNAME = env.appHostname;
   else delete process.env.APP_HOSTNAME;
 
-  const app = createHttpApp(new session.MemoryStore());
-
-  let server: Server | undefined;
-  try {
-    server = await new Promise<Server>((resolve) => {
-      const s = app.listen(0, () => resolve(s));
-    });
-    const { port } = server.address() as { port: number };
-    const res = await fetch(
-      `http://127.0.0.1:${port}/.well-known/autoconfig/mail/config-v1.1.xml`
-    );
-    const body = await res.text();
-    return { status: res.status, contentType: res.headers.get("content-type"), body };
-  } finally {
-    server?.close();
-  }
+  const res = await call(new MemoryStore(), "/.well-known/autoconfig/mail/config-v1.1.xml");
+  const body = await res.text();
+  return { status: res.status, contentType: res.headers.get("content-type"), body };
 };
 
 const countOccurrences = (haystack: string, needle: string): number =>
@@ -351,18 +293,18 @@ describe("createHttpApp mail autoconfig", () => {
 describe("createHttpApp boot ordering", () => {
   afterEach(restoreEnv);
 
-  it("resolves the session secret before mounting anything: production without SECRET throws", async () => {
-    // initializeHttp builds the app via createHttpApp and only then calls
-    // app.listen, so a throw here means the boot-refusal guard fires before
-    // any middleware mounts and listen is unreachable — the executable form
-    // of "secret resolution runs before listen". Bracket notation keeps the
-    // env restore out of the secret scanner's literal-assignment heuristic
-    // (same pattern as session-secret.test.ts's withEnv).
+  it("resolves the session secret before serving anything: production without SECRET throws", async () => {
+    // initializeHttp builds the app via createHttpApp and only then starts
+    // the server, so a throw here means the boot-refusal guard fires before
+    // the server can listen — the executable form of "secret resolution runs
+    // before listen". Bracket notation keeps the env restore out of the secret
+    // scanner's literal-assignment heuristic (same pattern as
+    // session-secret.test.ts's withEnv).
     const outerSecret = process.env["SECRET"];
     process.env.NODE_ENV = "production";
     delete process.env["SECRET"];
     try {
-      expect(() => createHttpApp(new session.MemoryStore())).toThrow(/SECRET/);
+      expect(() => createHttpApp(new MemoryStore())).toThrow(/SECRET/);
     } finally {
       if (outerSecret !== undefined) process.env["SECRET"] = outerSecret;
       else delete process.env["SECRET"];

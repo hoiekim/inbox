@@ -48,13 +48,13 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { selectMailbox, statusMailbox } = await import("./mailbox-ops");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

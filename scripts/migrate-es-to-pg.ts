@@ -18,9 +18,7 @@
  *   ES_PASSWORD - Elasticsearch password (default: elastic)
  */
 
-import dotenv from "dotenv";
-dotenv.config({ path: ".env.local" });
-import { Pool, types } from "pg";
+import { Pool } from "../src/server/lib/postgres/pool";
 import crypto from "crypto";
 import * as http from "http";
 import * as https from "https";
@@ -38,13 +36,11 @@ const pgPool = new Pool({
   user: process.env.POSTGRES_USER || "",
   password: process.env.POSTGRES_PASSWORD,
   database: process.env.POSTGRES_DATABASE || "",
-  types: {
-    getTypeParser(id, format) {
-      if (id === types.builtins.NUMERIC) return parseFloat;
-      if (id === types.builtins.INT8) return parseFloat;
-      return types.getTypeParser(id, format);
-    },
-  },
+  max: 10,
+  idleTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 10_000,
+  statementTimeoutMillis: 0,
+  queryTimeoutMillis: 0,
 });
 
 interface ESDocument {

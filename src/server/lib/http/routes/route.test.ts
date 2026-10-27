@@ -20,7 +20,15 @@ afterAll(() => {
   if (realAlarm) mock.module("../../alarm", () => realAlarm);
 });
 
-import { Route, StreamingStatus, authRequired, AUTH_ERROR_MESSAGE } from "./route";
+import {
+  Route,
+  StreamingStatus,
+  authRequired,
+  dispatch,
+  mountedPath,
+  AUTH_ERROR_MESSAGE,
+} from "./route";
+import type { HttpRequest } from "../request";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -32,21 +40,7 @@ const makeReq = (overrides: Record<string, unknown> = {}) =>
     query: {},
     body: {},
     ...overrides,
-  }) as unknown as import("express").Request;
-
-const makeRes = () => {
-  const chunks: string[] = [];
-  const res: Record<string, unknown> = { _code: 200, _body: undefined };
-  res.status = mock((code: number) => { res._code = code; return res; });
-  res.json = mock((body: unknown) => { res._body = body; return res; });
-  res.send = mock((body: unknown) => { res._body = body; return res; });
-  res.write = mock((chunk: string) => { chunks.push(chunk); return true; });
-  res.end = mock(() => res);
-  (res as unknown as { _chunks: string[] })._chunks = chunks;
-  return res as unknown as import("express").Response & { _code: number; _body: unknown; _chunks: string[] };
-};
-
-const makeNext = () => mock(() => {});
+  }) as unknown as HttpRequest;
 
 // ── StreamingStatus ───────────────────────────────────────────────────────────
 
@@ -72,73 +66,33 @@ describe("StreamingStatus", () => {
 // ── Route.handler ─────────────────────────────────────────────────────────────
 
 describe("Route.handler", () => {
-  it("responds with json result when method matches", async () => {
+  it("responds with the json result", async () => {
     const route = new Route("GET", "/test", async () => ({ status: "success" as const, body: { hello: "world" } }));
 
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
+    const res = await route.handler(makeReq());
 
-    await route.handler(req, res, next);
-
-    expect(res.json).toHaveBeenCalledWith({ status: "success", body: { hello: "world" } });
-    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await res.json()).toEqual({ status: "success", body: { hello: "world" } });
   });
 
-  it("calls res.end() when callback returns nothing (void)", async () => {
+  it("answers an empty 200 when the callback returns nothing (void)", async () => {
     const route = new Route("POST", "/test", async () => undefined);
 
-    const req = makeReq({ method: "POST" });
-    const res = makeRes();
-    const next = makeNext();
+    const res = await route.handler(makeReq({ method: "POST" }));
 
-    await route.handler(req, res, next);
-
-    expect(res.end).toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("");
   });
 
-  it("sends Buffer directly with res.send()", async () => {
+  it("sends a Buffer as the raw body", async () => {
     const buf = Buffer.from("binary data");
     const route = new Route("GET", "/bin", async () => buf);
 
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
+    const res = await route.handler(makeReq());
 
-    await route.handler(req, res, next);
-
-    expect(res.send).toHaveBeenCalledWith(buf);
-  });
-
-  it("writes streamed JSON chunks via stream callback", async () => {
-    const route = new Route("GET", "/stream", async (_req, _res, stream) => {
-      stream({ status: "streaming", body: "chunk-1" });
-      stream({ status: "success", body: "chunk-2" });
-    });
-
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
-
-    await route.handler(req, res, next);
-
-    expect((res as unknown as { _chunks: string[] })._chunks.length).toBe(2);
-    expect((res as unknown as { _chunks: string[] })._chunks[0]).toContain("chunk-1");
-  });
-
-  it("writes Buffer chunks directly via stream callback", async () => {
-    const buf = Buffer.from("raw");
-    const route = new Route<Buffer>("GET", "/bufstream", async (_req, _res, stream) => {
-      stream(buf);
-    });
-
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
-
-    await route.handler(req, res, next);
-
-    expect(res.write).toHaveBeenCalledWith(buf);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("binary data");
   });
 
   it("returns 500 json on thrown error", async () => {
@@ -146,14 +100,10 @@ describe("Route.handler", () => {
       throw new Error("kaboom");
     });
 
-    const req = makeReq({ method: "GET" });
-    const res = makeRes();
-    const next = makeNext();
+    const res = await route.handler(makeReq());
 
-    await route.handler(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect((res as unknown as { _body: unknown })._body).toEqual({ status: "error", message: "Internal server error" });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ status: "error", message: "Internal server error" });
   });
 
   it.each(["production", "development", "test", undefined])(
@@ -167,88 +117,101 @@ describe("Route.handler", () => {
         throw new Error('relation "sessions" does not exist');
       });
 
-      const req = makeReq({ method: "GET" });
-      const res = makeRes();
-      const next = makeNext();
-
+      let body: unknown;
       try {
-        await route.handler(req, res, next);
+        body = await (await route.handler(makeReq())).json();
       } finally {
         if (origEnv === undefined) delete process.env.NODE_ENV;
         else process.env.NODE_ENV = origEnv;
       }
 
-      const body = (res as unknown as { _body: unknown })._body;
       expect(body).toEqual({ status: "error", message: "Internal server error" });
       expect(JSON.stringify(body)).not.toContain("sessions");
     }
   );
 });
 
-// ── Route.register ────────────────────────────────────────────────────────────
+// ── Route.match / dispatch ────────────────────────────────────────────────────
 
-describe("Route.register", () => {
-  it("binds to the verb-specific router method (not router.use)", () => {
-    const calls: Array<[string, string]> = [];
-    const fakeRouter = {
-      get: (p: string) => calls.push(["get", p]),
-      post: (p: string) => calls.push(["post", p]),
-      delete: (p: string) => calls.push(["delete", p]),
-      use: (p: string) => calls.push(["use", p]),
-    } as unknown as import("express").Router;
+describe("Route.match", () => {
+  it("answers only its own verb, and HEAD for a GET route", () => {
+    const get = new Route("GET", "/login", async () => undefined);
+    const post = new Route("POST", "/login", async () => undefined);
 
-    new Route("GET", "/g", async () => undefined).register(fakeRouter);
-    new Route("POST", "/p", async () => undefined).register(fakeRouter);
-    new Route("DELETE", "/d", async () => undefined).register(fakeRouter);
-
-    expect(calls).toEqual([
-      ["get", "/g"],
-      ["post", "/p"],
-      ["delete", "/d"],
+    expect([get.match("GET", "/login"), get.match("HEAD", "/login"), get.match("POST", "/login")]).toEqual([
+      {},
+      {},
+      undefined,
     ]);
+    expect(post.match("HEAD", "/login")).toBeUndefined();
   });
 
-  it("does not fall back to router.use (which would mount-match — the #505 cause)", () => {
-    const useCalls: string[] = [];
-    const verbCalls: string[] = [];
-    const fakeRouter = {
-      get: (p: string) => verbCalls.push(`get ${p}`),
-      post: (p: string) => verbCalls.push(`post ${p}`),
-      delete: (p: string) => verbCalls.push(`delete ${p}`),
-      use: (p: string) => useCalls.push(`use ${p}`),
-    } as unknown as import("express").Router;
+  it("matches the whole path, not a prefix (the #505 cause)", () => {
+    const deleteMail = new Route("DELETE", "/:id", async () => undefined);
+    const deleteEntry = new Route("DELETE", "/spam-allowlist/:pattern", async () => undefined);
 
-    new Route("DELETE", "/:id", async () => undefined).register(fakeRouter);
-    new Route("DELETE", "/spam-allowlist/:pattern", async () => undefined).register(fakeRouter);
+    expect(deleteMail.match("DELETE", "/spam-allowlist/a%40b.c")).toBeUndefined();
+    expect(deleteEntry.match("DELETE", "/spam-allowlist/a%40b.c")).toEqual({ pattern: "a@b.c" });
+  });
 
-    expect(useCalls).toEqual([]);
-    expect(verbCalls).toEqual(["delete /:id", "delete /spam-allowlist/:pattern"]);
+  it("ignores case and a trailing slash", () => {
+    const route = new Route("GET", "/headers/:account", async () => undefined);
+    expect(route.match("GET", "/Headers/Alice%40x.y/")).toEqual({ account: "Alice@x.y" });
+    expect(route.match("GET", "/headers/")).toBeUndefined();
+  });
+
+  it("refuses a param that does not decode, as a client error", () => {
+    const route = new Route("GET", "/refresh/:id", async () => undefined);
+    expect(() => route.match("GET", "/refresh/%E0%A4")).toThrow(expect.objectContaining({ status: 400 }));
+  });
+});
+
+describe("dispatch", () => {
+  it("runs the first route that answers, with its params on the request", async () => {
+    const seen: string[] = [];
+    const routes = [
+      new Route("GET", "/a/:id", async (req) => {
+        seen.push(`a:${req.params.id}`);
+        return { status: "success" as const };
+      }),
+      new Route("GET", "/:any/:id", async () => {
+        seen.push("fallback");
+        return { status: "success" as const };
+      }),
+    ];
+
+    const res = await dispatch(routes, makeReq(), "/a/7");
+    expect(res?.status).toBe(200);
+    expect(seen).toEqual(["a:7"]);
+    expect(await dispatch(routes, makeReq({ method: "POST" }), "/a/7")).toBeUndefined();
+  });
+});
+
+describe("mountedPath", () => {
+  it("strips a matching mount prefix, ignoring case", () => {
+    expect([
+      mountedPath("/users/login", "/users"),
+      mountedPath("/Users", "/users"),
+      mountedPath("/users/", "/users"),
+      mountedPath("/usersx", "/users"),
+      mountedPath("/mails", "/users"),
+    ]).toEqual(["/login", "/", "/", undefined, undefined]);
   });
 });
 
 // ── authRequired ──────────────────────────────────────────────────────────────
 
 describe("authRequired", () => {
-  it("calls next() when session.user is set", () => {
+  it("lets the request through when session.user is set", () => {
     const req = makeReq({ session: { user: { id: "u1", username: "alice" } } });
-    const res = makeRes();
-    const next = makeNext();
 
-    authRequired(req, res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
+    expect(authRequired(req)).toBeUndefined();
   });
 
-  it("returns 401 when session.user is absent", () => {
-    const req = makeReq({ session: {} });
-    const res = makeRes();
-    const next = makeNext();
+  it("returns 401 when session.user is absent", async () => {
+    const res = authRequired(makeReq({ session: {} }));
 
-    authRequired(req, res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect((res as unknown as { _body: unknown })._body).toMatchObject({ status: "failed", message: AUTH_ERROR_MESSAGE });
-    expect(next).not.toHaveBeenCalled();
+    expect(res?.status).toBe(401);
+    expect(await res?.json()).toMatchObject({ status: "failed", message: AUTH_ERROR_MESSAGE });
   });
 });

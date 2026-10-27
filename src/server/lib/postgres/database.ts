@@ -2,7 +2,7 @@
  * Generic database query helpers for PostgreSQL.
  */
 
-import { Pool, QueryResult, QueryResultRow } from "pg";
+import type { Pool, QueryResult, QueryResultRow } from "./pool";
 import { Schema, Constraints } from "./models/base";
 
 export const SOFT_DELETE_CONDITION = "(is_deleted IS NULL OR is_deleted = FALSE)";

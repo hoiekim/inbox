@@ -1,10 +1,9 @@
-import { Router } from "express";
 import { createConnection } from "net";
 import { connect as tlsConnect } from "tls";
 import { pool } from "../../postgres/client";
 import { isTlsAvailable } from "../../tls";
-
-const healthRouter = Router();
+import type { HttpRequest } from "../request";
+import { json } from "../respond";
 
 /** TCP check — for plain or STARTTLS ports (just verify port is open). */
 const checkPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
@@ -47,7 +46,10 @@ const checkTlsPort = (port: number, host = "127.0.0.1"): Promise<boolean> =>
 
 type CheckStatus = "ok" | "unhealthy" | "not_configured";
 
-healthRouter.get("/", async (_req, res) => {
+/** `GET /api/health`, with `path` relative to that mount. */
+const handleHealth = async (req: HttpRequest, path: string): Promise<Response | undefined> => {
+  if ((req.method !== "GET" && req.method !== "HEAD") || path !== "/") return undefined;
+
   const checks: Record<string, CheckStatus> = {};
   let allHealthy = true;
 
@@ -108,10 +110,13 @@ healthRouter.get("/", async (_req, res) => {
   }
 
   const statusCode = allHealthy ? 200 : 503;
-  res.status(statusCode).json({
-    status: allHealthy ? "success" : "error",
-    body: { healthy: allHealthy, checks, timestamp: Date.now() },
-  });
-});
+  return json(
+    {
+      status: allHealthy ? "success" : "error",
+      body: { healthy: allHealthy, checks, timestamp: Date.now() },
+    },
+    statusCode
+  );
+};
 
-export default healthRouter;
+export default handleHealth;

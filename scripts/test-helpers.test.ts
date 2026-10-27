@@ -4,21 +4,18 @@ import { restoreLeaves } from "test-helpers";
 afterAll(restoreLeaves);
 
 describe("restoreLeaves", () => {
-  it("puts the full bcryptjs namespace back after a wholesale stub", async () => {
-    const stub = mock(async () => false);
-    mock.module("bcryptjs", () => ({
-      default: { compare: stub },
-      compare: stub,
-    }));
+  it("puts the full pool-driver namespace back after a wholesale stub", async () => {
+    class StubPool {}
+    mock.module("server/lib/postgres/pool", () => ({ Pool: StubPool }));
 
-    const stubbed = (await import("bcryptjs")).default as unknown as Record<string, unknown>;
-    expect(Object.keys(stubbed)).toEqual(["compare"]);
+    const stubbed = (await import("server/lib/postgres/pool")) as unknown as Record<string, unknown>;
+    expect(stubbed.Pool).toBe(StubPool);
 
     restoreLeaves();
 
-    const restored = (await import("bcryptjs")).default;
-    const hash = await restored.hash("hunter2", 10);
-    expect(await restored.compare("hunter2", hash)).toBe(true);
-    expect(await restored.compare("wrong", hash)).toBe(false);
+    const restored = await import("server/lib/postgres/pool");
+    expect(restored.Pool).not.toBe(StubPool);
+    expect(typeof restored.Pool.prototype.connect).toBe("function");
+    expect(new restored.DatabaseError({ errno: "23505", message: "duplicate" }).code).toBe("23505");
   });
 });

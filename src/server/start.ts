@@ -83,7 +83,7 @@ const start = async () => {
     maintenanceAbort.abort();
 
     // Stop accepting new HTTP connections; finish in-flight requests
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await httpServer.stop();
     console.info("HTTP server closed");
 
     // Notify IDLE clients and stop heartbeat timer before closing sockets

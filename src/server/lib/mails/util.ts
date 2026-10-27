@@ -1,6 +1,5 @@
 import fs from "fs";
 import { htmlToText } from "html-to-text";
-import { v4 as uuid } from "uuid";
 import { logger } from "../logger";
 
 export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
@@ -12,12 +11,12 @@ export const nestedPath = (field: string) => {
 export const ATTACHMENT_FOLDER = "./attachments";
 
 export const getAttachmentId = (): string => {
-  let id = uuid();
+  let id = crypto.randomUUID();
   let filePath = getAttachmentFilePath(id);
   while (fs.existsSync(filePath)) {
     logger.warn(`Duplicate uuid is found: ${filePath}`);
     logger.info("Proceeding to regenerate uuid");
-    id = uuid();
+    id = crypto.randomUUID();
     filePath = getAttachmentFilePath(id);
   }
   return id;

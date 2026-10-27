@@ -48,7 +48,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { getCapabilities } = await import("./capabilities");
 const { parseCommand } = await import("./parsers");
@@ -59,7 +59,7 @@ const { ImapSession } = await import("./session");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

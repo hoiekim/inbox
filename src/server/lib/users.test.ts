@@ -10,16 +10,15 @@ import {
   spyOn,
 } from "bun:test";
 import { restoreLeaves } from "test-helpers";
-import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User } from "common";
 import { logger } from "./logger";
 
 // Native mock.module pattern (mirrors budget's repositories/users.test.ts):
-// mock `pg` so the lazy pool in `postgres/client.ts` instantiates this
+// mock the pool driver so the lazy pool in `postgres/client.ts` instantiates this
 // FakePool, then run the REAL `users.ts` functions against it. `mockQuery`
 // is the single seam every `usersTable` / `pgSearchUser` call funnels through
-// (`pool.query`). `afterAll` re-mocks pg back to the preload's real snapshot
+// (`pool.query`). `afterAll` re-mocks the driver back to the preload's real snapshot
 // and `resetPool()` drops the cached FakePool, so the next test file in the
 // same `bun test` process starts clean. The logger is spied on, not mocked
 // (see below) — a module mock would leak past `afterAll`. No DI.
@@ -43,7 +42,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 // The logger is spied on, not module-mocked: `mock.module("./logger")` is
 // process-global and its `afterAll` re-registration does NOT restore the
@@ -54,8 +53,8 @@ mock.module("pg", pgMock);
 const mockLoggerError = spyOn(logger, "error").mockImplementation(() => {});
 const mockLoggerInfo = spyOn(logger, "info").mockImplementation(() => {});
 
-// Import the subjects AND resetPool only after the pg mock is registered, so
-// `client.ts`'s `import { Pool } from "pg"` resolves to FakePool.
+// Import the subjects AND resetPool only after the pool driver mock is
+// registered, so `client.ts`'s `import { Pool } from "./pool"` resolves to FakePool.
 const {
   getSignedUser,
   isValidEmail,
@@ -82,12 +81,12 @@ const {
 
 beforeAll(() => {
   // `mock.module` is process-global: a sibling test file that ran earlier in
-  // the same `bun test` process may have restored `pg` to the real module in
+  // the same `bun test` process may have restored the driver to the real module in
   // its `afterAll(restoreLeaves)` and/or instantiated the lazy pool against the
-  // real Pool. Re-assert our pg mock and drop any cached pool right before this
+  // real Pool. Re-assert our driver mock and drop any cached pool right before this
   // file's tests, so every query below hits FakePool — not real Postgres (which
   // is ECONNREFUSED on CI). This is the contract the lazy pool documents.
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 
@@ -499,8 +498,8 @@ describe("encryptPassword", () => {
     expect(typeof hash).toBe("string");
     expect(hash).not.toBe("hunter2");
     expect(hash).toMatch(/^\$2[aby]\$/);
-    expect(await bcrypt.compare("hunter2", hash)).toBe(true);
-    expect(await bcrypt.compare("wrong", hash)).toBe(false);
+    expect(await Bun.password.verify("hunter2", hash)).toBe(true);
+    expect(await Bun.password.verify("wrong", hash)).toBe(false);
   });
 });
 

@@ -3,7 +3,7 @@
  * point of the pg-SUBSTRING streaming rework is that a large mail body
  * NEVER lives in Node's heap as one allocation for the lifetime of an
  * in-flight FETCH. This test drives `buildFetchResponsePart` end to end
- * with a 500 KB HTML lazy body, instruments the pg mock to record the
+ * with a 500 KB HTML lazy body, instruments the driver mock to record the
  * size of every SUBSTRING result, and asserts:
  *
  *   1. No SUBSTRING pull returns more than PG_TEXT_CHUNK_CHARS characters
@@ -15,7 +15,7 @@
  *   4. Chunk count scales with body size (multiple pulls fired),
  *      proving nothing materialized the whole column at once.
  *
- * Isolated to its own file so the pg-FakePool mock (Bun's `mock.module`
+ * Isolated to its own file so the FakePool mock (Bun's `mock.module`
  * is process-global) does not bleed into the other IMAP test suites.
  */
 
@@ -93,7 +93,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { buildFetchResponsePart } = await import("./fetch-helpers");
 const { resetPool } = await import("../postgres/client");
@@ -102,7 +102,7 @@ const { PG_TEXT_CHUNK_CHARS, PG_TEXT_CHUNK_BYTES } = await import(
 );
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

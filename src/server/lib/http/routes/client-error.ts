@@ -1,8 +1,7 @@
-import { Router } from "express";
 import { sendAlarm } from "../../alarm";
 import { createLimiter, getClientIp } from "../rate-limit";
-
-const clientErrorRouter = Router();
+import type { HttpRequest } from "../request";
+import { json } from "../respond";
 
 const clientErrorLimiter = createLimiter(
   5,
@@ -25,11 +24,15 @@ type ClientErrorBody = {
  * Forwards to Discord alarm. No auth required (beacon fires after page unload),
  * but IP-rate-limited to prevent alarm-channel abuse.
  */
-clientErrorRouter.post("/", clientErrorLimiter.middleware, async (req, res) => {
+const handleClientError = async (req: HttpRequest, path: string): Promise<Response | undefined> => {
+  if (req.method !== "POST" || path !== "/") return undefined;
+  const refused = clientErrorLimiter.check(req);
+  if (refused) return refused;
+
   // Every accepted report consumes one slot in the per-IP quota. Unlike the
   // auth limiters (which only count failures), there is no success/failure
   // distinction here — the cap exists to bound report *volume*, so record on
-  // each request that clears the read-only middleware check.
+  // each request that clears the read-only check.
   clientErrorLimiter.recordFailure(getClientIp(req));
 
   const body = req.body as ClientErrorBody;
@@ -69,7 +72,7 @@ clientErrorRouter.post("/", clientErrorLimiter.middleware, async (req, res) => {
   // unrelated server-side alarms (route 5xx, unhandledRejection, IMAP/SMTP).
   await sendAlarm("Client JS Error", detail, "client-error");
 
-  res.json({ status: "success" });
-});
+  return json({ status: "success" });
+};
 
-export default clientErrorRouter;
+export default handleClientError;

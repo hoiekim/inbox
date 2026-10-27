@@ -8,7 +8,7 @@ async function bundle() {
   const result = await Bun.build({
     entrypoints: [path.resolve(import.meta.dir, "start.ts")],
     outdir: path.resolve(root, "..", "build", "server"),
-    target: "node",
+    target: "bun",
     minify: false
   });
 
