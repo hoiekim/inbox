@@ -62,8 +62,16 @@ const sanitizeEmailHtml = (html: string): string => {
 
   // Strip dangerous attributes on every element
   const DANGEROUS_ATTR = /^on/i; // onclick, onerror, onload, ...
-  const SCRIPT_URI = /^\s*(javascript|vbscript):/i;
-  const HREF_DATA_URI = /^\s*data:/i; // dangerous in href/action (HTML data: can run JS); harmless as <img src>
+  // Per the WHATWG URL standard a parser strips leading C0 controls and
+  // space, then removes every ASCII tab, LF and CR from anywhere in the
+  // input, *before* reading the scheme. So `java<TAB>script:` and
+  // `\x01javascript:` are both `javascript:` to the browser, and the old
+  // `^\s*` anchors modeled neither half. Normalize the way the parser does,
+  // then anchor the scheme tests at position 0.
+  const normalizeUriForSchemeTest = (value: string): string =>
+    value.replace(/^[\x00-\x20]+/, "").replace(/[\x09\x0a\x0d]/g, "");
+  const SCRIPT_URI = /^(javascript|vbscript):/i;
+  const HREF_DATA_URI = /^data:/i; // dangerous in href/action (HTML data: can run JS); harmless as <img src>
   // SVG <a xlink:href> is the XML-namespaced equivalent of HTML href, and
   // <button formaction> is the action equivalent for form submission. Both
   // accept the same URI schemes as href/action and need the same scrubbing.
@@ -94,9 +102,14 @@ const sanitizeEmailHtml = (html: string): string => {
       ? value
           .split(",")
           .some((candidate) =>
-            SCRIPT_URI.test(candidate.trim().split(/\s+/)[0] ?? "")
+            // Normalize before splitting off the descriptor: the parser
+            // strips tabs/LF/CR from the URL itself, so a tab can sit inside
+            // the scheme and splitting on whitespace first would cut it off.
+            SCRIPT_URI.test(
+              normalizeUriForSchemeTest(candidate).trim().split(/\s+/)[0] ?? ""
+            )
           )
-      : SCRIPT_URI.test(value);
+      : SCRIPT_URI.test(normalizeUriForSchemeTest(value));
 
   doc.querySelectorAll("*").forEach((el) => {
     Array.from(el.attributes).forEach((attr) => {
@@ -114,7 +127,7 @@ const sanitizeEmailHtml = (html: string): string => {
         el.removeAttribute(attr.name);
       } else if (
         DATA_URI_ATTRS.has(attr.name) &&
-        HREF_DATA_URI.test(attr.value)
+        HREF_DATA_URI.test(normalizeUriForSchemeTest(attr.value))
       ) {
         el.removeAttribute(attr.name);
       }
