@@ -1,4 +1,3 @@
-
 import {
   describe,
   it,
@@ -18,41 +17,28 @@ beforeAll(() => {
 });
 afterAll(() => GlobalRegistrator.unregister());
 
-type TiptapEditor = {
-  callbacks: Record<string, unknown[]>;
-  getHTML: () => string;
-  commands: { insertContent: (content: string) => boolean; focus: () => boolean };
-};
+const { Editor } = await import("client/lib/editor");
+
+type EditorInstance = InstanceType<typeof Editor>;
 
 /**
- * Reaches the live tiptap `Editor` from the rendered DOM. tiptap appends
- * `view.dom` (`.ProseMirror`) imperatively, so that node carries no fiber —
- * walk up to the nearest React-owned ancestor, then up the fiber chain to
- * `EditorContent`, which holds `editor` in its props.
+ * Counts the editor's live update subscriptions by wrapping `onUpdate` and
+ * the unsubscribe function it returns.
  */
-const findEditor = (): TiptapEditor | null => {
-  let element: Element | null = document.querySelector(".ProseMirror");
-  while (element) {
-    const fiberKey = Object.keys(element).find((k) =>
-      k.startsWith("__reactFiber$")
-    );
-    if (fiberKey) {
-      let fiber = (element as unknown as Record<string, FiberLike>)[fiberKey];
-      for (let depth = 0; fiber && depth < 60; depth++) {
-        const editor = fiber.memoizedProps?.editor;
-        if (editor?.callbacks) return editor;
-        fiber = fiber.return as FiberLike;
-      }
-    }
-    element = element.parentElement;
-  }
-  return null;
+const trackSubscriptions = () => {
+  const original = Editor.prototype.onUpdate;
+  const tracker = { active: 0, editor: null as EditorInstance | null };
+  Editor.prototype.onUpdate = function (this: EditorInstance, fn: () => void) {
+    tracker.active++;
+    tracker.editor = this;
+    const off = original.call(this, fn);
+    return () => {
+      tracker.active--;
+      off();
+    };
+  };
+  return { tracker, restore: () => (Editor.prototype.onUpdate = original) };
 };
-
-interface FiberLike {
-  memoizedProps?: { editor?: TiptapEditor };
-  return?: unknown;
-}
 
 const mountWriter = async () => {
   const { createElement, act } = await import("react");
@@ -98,91 +84,58 @@ const mountWriter = async () => {
 
   return {
     act,
-    // Re-rendering the same element tree from the root is exactly what the old
-    // bare-statement registration reacted to.
     rerender: render,
-    // `probe` runs in the same synchronous turn as `root.unmount()`, before
-    // tiptap's `scheduleDestroy` (a `setTimeout(..., 1)`) can interleave and
-    // replace `callbacks` wholesale. Reading the callback list after `teardown`
-    // resolves would race that timer.
-    teardown: async (probe?: () => void) => {
-      await act(async () => {
-        root.unmount();
-        probe?.();
-      });
+    teardown: async () => {
+      await act(async () => root.unmount());
       container.remove();
     },
   };
 };
 
-describe("Writer tiptap update listener", () => {
+describe("Writer editor update listener", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("binds exactly one `update` handler and does not add one per render", async () => {
+  it("subscribes once and does not add a subscription per render", async () => {
+    const { tracker, restore } = trackSubscriptions();
     const { rerender, teardown } = await mountWriter();
-
     try {
-      const editor = findEditor();
-      expect(editor).not.toBeNull();
-
-      const initial = editor!.callbacks.update.length;
+      expect(tracker.active).toBe(1);
       for (let i = 0; i < 20; i++) await rerender();
-
-      // Before the fix this grew by one per render (20 renders -> +20).
-      expect(editor!.callbacks.update.length).toBe(initial);
+      expect(tracker.active).toBe(1);
     } finally {
       await teardown();
+      restore();
     }
   });
 
-  it("keeps the handler count flat across document edits", async () => {
+  it("keeps one subscription across document edits", async () => {
+    const { tracker, restore } = trackSubscriptions();
     const { act, teardown } = await mountWriter();
-
     try {
-      const editor = findEditor();
-      expect(editor).not.toBeNull();
-      const initial = editor!.callbacks.update.length;
-
       for (let i = 0; i < 20; i++) {
         await act(async () => {
-          editor!.commands.insertContent("a");
+          tracker.editor!.insertText("a");
         });
       }
-
-      expect(editor!.callbacks.update.length).toBe(initial);
+      expect(tracker.active).toBe(1);
     } finally {
       await teardown();
+      restore();
     }
   });
 
-  it("persists the document to localStorage on edit and unbinds on unmount", async () => {
+  it("persists the document to localStorage on edit and unsubscribes on unmount", async () => {
+    const { tracker, restore } = trackSubscriptions();
     const { act, teardown } = await mountWriter();
-
-    let editor!: TiptapEditor;
-    let whileMounted!: number;
-    let afterUnmount: number | undefined;
-
     try {
-      editor = findEditor()!;
-      expect(editor).not.toBeNull();
-      whileMounted = editor.callbacks.update.length;
-
       await act(async () => {
-        editor.commands.insertContent("hello");
+        tracker.editor!.insertText("hello");
       });
       expect(window.localStorage.getItem("initialContent")).toContain("hello");
     } finally {
-      // Read the count inside the unmount turn — see `teardown`. Capturing the
-      // array reference beforehand would not work either: `EventEmitter.off`
-      // filters into a new array rather than splicing in place.
-      await teardown(() => {
-        afterUnmount = editor.callbacks.update.length;
-      });
+      await teardown();
+      restore();
     }
-
-    // tiptap registers its own internal `update` callbacks, so the absolute
-    // count is not zero after teardown — what matters is that the component's
-    // handler is gone.
-    expect(afterUnmount).toBe(whileMounted - 1);
+    expect(tracker.active).toBe(0);
   });
 });
