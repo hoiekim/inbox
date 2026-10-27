@@ -13,6 +13,7 @@ import { encodeMailgunMessage, sendMailgunMail } from "./mailgun";
 // assertion about it passes just as well against a build that never reads it.
 const ORIGINAL_ENV = {
   EMAIL_DOMAIN: process.env.EMAIL_DOMAIN,
+  MAILGUN_KEY: process.env.MAILGUN_KEY,
   MAILGUN_URL: process.env.MAILGUN_URL,
 };
 
@@ -75,6 +76,7 @@ beforeEach(() => {
   respond = () => accepted("msg-id-123");
   loggerError.mockClear();
   process.env.EMAIL_DOMAIN = "example.com";
+  process.env.MAILGUN_KEY = "test-key";
   process.env.MAILGUN_URL = stubUrl;
 });
 
@@ -470,11 +472,60 @@ describe("Mailgun request", () => {
     const [{ method, path: requestPath, headers, raw }] = received as [Received];
     expect(method).toBe("POST");
     expect(requestPath).toBe("/region/v3/example.com/messages");
-    const [scheme, credentials] = (headers.get("authorization") ?? "").split(" ");
-    expect(scheme).toBe("Basic");
-    expect(atob(credentials ?? "")).toStartWith("api:");
+    expect(headers.get("authorization")).toBe(`Basic ${btoa("api:test-key")}`);
     expect(headers.get("content-type")).toMatch(/^multipart\/form-data; boundary=-+[0-9a-f]+$/);
     expect(headers.get("content-length")).toBe(String(raw.byteLength));
+  });
+
+  it("should fall back to Mailgun's public API root when MAILGUN_URL is empty", async () => {
+    process.env.MAILGUN_URL = "";
+    const requested: string[] = [];
+    const fakeFetch = async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return accepted("msg-id-123");
+    };
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(fakeFetch as typeof fetch);
+    try {
+      await sendMailgunMail("admin", baseMail);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    expect(requested).toEqual(["https://api.mailgun.net/v3/example.com/messages"]);
+  });
+
+  it("should give up on an unanswered request as a timed-out 400 after 30 seconds", async () => {
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const requestedTimeouts: number[] = [];
+    const timeoutSpy = spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+      requestedTimeouts.push(ms);
+      return realTimeout(50);
+    });
+    // Answering after the shortened timeout, not never, makes a missing timeout
+    // fail the assertion instead of hanging the run.
+    respond = async () => {
+      await Bun.sleep(1000);
+      return accepted("msg-id-123");
+    };
+    try {
+      await expect(sendMailgunMail("admin", baseMail)).rejects.toMatchObject({
+        status: 400,
+        message: "ECONNABORTED",
+        details: "timeout of 30000ms exceeded",
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+    expect(requestedTimeouts).toEqual([30000]);
+  }, 5000);
+
+  it("should prefer an error body's error field over the status text", async () => {
+    const body = { error: "domain not found", message: "check the domain" };
+    respond = () => Response.json(body, { status: 404 });
+    await expect(sendMailgunMail("admin", baseMail)).rejects.toMatchObject({
+      status: 404,
+      message: "domain not found",
+      details: "check the domain",
+    });
   });
 
   it("should send a Mailgun banner answer as a failure, not a queued message", async () => {
@@ -517,7 +568,12 @@ describe("Mailgun request", () => {
   it("should refuse a body over 50 MiB without opening a request", async () => {
     const filePath = writeFile("oversized.bin", "");
     fs.truncateSync(filePath, 50 * 1024 * 1024 + 1);
-    const file = { name: "big.bin", mimetype: "application/octet-stream", size: 0, tempFilePath: filePath };
+    const file = {
+      name: "big.bin",
+      mimetype: "application/octet-stream",
+      size: 0,
+      tempFilePath: filePath,
+    };
     await expect(sendMailgunMail("admin", baseMail, file)).rejects.toMatchObject({
       status: 400,
       message: "ERR_FR_MAX_BODY_LENGTH_EXCEEDED",
@@ -551,7 +607,12 @@ describe("encodeMailgunMessage", () => {
 
   it("should send field values byte for byte, line breaks included", async () => {
     const html = "<p>Grüße 你好</p>\n<p>two</p>\rthree";
-    const { text } = await encode({ from: "a@example.com", to: ["b@external.com"], html, attachment: [] });
+    const { text } = await encode({
+      from: "a@example.com",
+      to: ["b@external.com"],
+      html,
+      attachment: [],
+    });
     expect(text).toContain(`name="html"\r\n\r\n${html}\r\n--`);
   });
 
@@ -561,7 +622,9 @@ describe("encodeMailgunMessage", () => {
     const { text, form } = await encode({
       from: "a@example.com",
       to: ["b@external.com"],
-      attachment: [{ path: filePath, filename: "résumé 履歴書.pdf", contentType: "application/pdf" }],
+      attachment: [
+        { path: filePath, filename: "résumé 履歴書.pdf", contentType: "application/pdf" },
+      ],
     });
     expect(text).toContain(
       'Content-Disposition: form-data; name="attachment"; filename="résumé 履歴書.pdf"\r\n' +
@@ -579,5 +642,24 @@ describe("encodeMailgunMessage", () => {
       attachment: [{ path: filePath, filename: 'a"b\r\nc.txt', contentType: "text/plain" }],
     });
     expect(text).toContain('filename="a%22b%0D%0Ac.txt"');
+  });
+
+  it("should send a content type holding a line break as generic binary", async () => {
+    const filePath = writeFile("typed.txt", "x");
+    const { text } = await encode({
+      from: "a@example.com",
+      to: ["b@external.com"],
+      attachment: [
+        { path: filePath, filename: "lf.txt", contentType: "text/plain\nX-Injected: 1" },
+        { path: filePath, filename: "cr.txt", contentType: "text/plain\rX-Injected: 2" },
+        { path: filePath, filename: "ok.txt", contentType: "text/plain" },
+      ],
+    });
+    expect(text).not.toContain("X-Injected");
+    expect(text.match(/^Content-Type: .*$/gm)).toEqual([
+      "Content-Type: application/octet-stream",
+      "Content-Type: application/octet-stream",
+      "Content-Type: text/plain",
+    ]);
   });
 });

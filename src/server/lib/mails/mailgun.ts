@@ -5,8 +5,6 @@ import type { UploadedFile } from "../http/upload";
 import { logger } from "../logger";
 import { sendAlarm } from "../alarm";
 
-const { MAILGUN_KEY = "mailgun_key" } = process.env;
-
 const DEFAULT_MAILGUN_URL = "https://api.mailgun.net";
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_BODY_BYTES = 50 * 1024 * 1024;
@@ -71,10 +69,15 @@ const getAttachments = (files?: UploadedFileDynamicArray): MailgunAttachment[] =
 const encoder = new TextEncoder();
 const CRLF = encoder.encode("\r\n");
 
-// A filename is the one client-supplied string inside a part header; escaping
-// it the way browsers do keeps a quote or line break from ending that header.
+// An attachment's filename and content type both come from the client, and a
+// quote or line break in either would end the part header early. The filename
+// is escaped the way browsers do it; a content type carrying any control
+// character is replaced with the generic binary type.
 const quoteFilename = (name: string) =>
   name.replace(/"/g, "%22").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+
+const partContentType = (type: string) =>
+  type && !/[\x00-\x1f\x7f]/.test(type) ? type : "application/octet-stream";
 
 /**
  * Encodes a message as multipart/form-data. Empty fields are left out, an array
@@ -96,7 +99,8 @@ export const encodeMailgunMessage = (message: MailgunMessage) => {
     if (name === "attachment") {
       for (const file of value as MailgunAttachment[]) {
         const disposition = `name="attachment"; filename="${quoteFilename(file.filename)}"`;
-        parts.push(partHead(disposition, file.contentType), Bun.file(file.path), CRLF);
+        const head = partHead(disposition, partContentType(file.contentType));
+        parts.push(head, Bun.file(file.path), CRLF);
       }
       continue;
     }
@@ -161,15 +165,16 @@ const networkFailure = (error: unknown): MailgunAPIError => {
 
 /**
  * Sends one message through Mailgun's HTTP API, failing after 30 seconds or without
- * a request when the body would pass 50 MiB. The API root is `MAILGUN_URL` when set,
- * read per call like `EMAIL_DOMAIN`.
+ * a request when the body would pass 50 MiB. The API root is `MAILGUN_URL` when set
+ * and non-empty; it and `MAILGUN_KEY` are read per call like `EMAIL_DOMAIN`.
  */
 export const createMailgunMessage = async (
   domain: string,
   message: MailgunMessage
 ): Promise<MailgunResponse> => {
-  const { MAILGUN_URL = DEFAULT_MAILGUN_URL } = process.env;
-  const url = `${MAILGUN_URL.replace(/\/+$/, "")}/v3/${domain}/messages`;
+  const { MAILGUN_KEY = "mailgun_key" } = process.env;
+  const apiRoot = process.env.MAILGUN_URL || DEFAULT_MAILGUN_URL;
+  const url = `${apiRoot.replace(/\/+$/, "")}/v3/${domain}/messages`;
   const { body, length, contentType } = encodeMailgunMessage(message);
   if (length > MAX_BODY_BYTES) {
     throw new MailgunAPIError(
