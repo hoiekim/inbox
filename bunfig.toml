@@ -1,5 +1,5 @@
 [test]
-# Preload runs once before any test file. Snapshots real `pg` / `web-push`
+# Preload runs once before any test file. Snapshots the real pool driver / `web-push`
 # exports onto `globalThis.__REAL_*` so `scripts/test-helpers.ts#restoreLeaves`
 # can re-mock leaf deps back to their real exports in test files'
 # `afterAll`. Mirrors budget's pattern.

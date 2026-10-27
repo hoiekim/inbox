@@ -9,7 +9,7 @@ import { sendAlarm } from "./alarm";
 export const CRASH_ALARM_TIMEOUT_MS = 5_000;
 
 /**
- * Max time we wait for the pg pool to drain before the process exits anyway.
+ * Max time we wait for the database pool to drain before the process exits anyway.
  * `pool.end()` stays pending forever while a client is checked out against a
  * dead socket, which is precisely the shape a fatal DB fault arrives in.
  */

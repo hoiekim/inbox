@@ -16,7 +16,7 @@
  * postgres/repositories/mails/condstore-unchangedsince.test.ts, with the
  * reason it cannot be exercised behaviourally from this directory.
  *
- * Isolation mirrors condstore.test.ts: mock `pg` so the lazy pool in
+ * Isolation mirrors condstore.test.ts: mock the pool driver so the lazy pool in
  * postgres/client.ts is a FakePool, then run the REAL code. No mock of the
  * `server` barrel — that one bleeds across files via Bun's process-global
  * mock.module.
@@ -29,7 +29,7 @@ import type { SequenceState } from "./sequence-resolver";
 import type { StoreRequest } from "./types";
 
 // `parseCommand` and `ImapSession` reach postgres/client.ts's lazy pool via the
-// module graph, so `pg` is faked to keep it from opening a socket. Nothing here
+// module graph, so the pool driver is faked to keep it from opening a socket. Nothing here
 // asserts on SQL — the repository's behaviour is covered next to the repository
 // (see the note below) — so the fake only needs to not blow up.
 class FakePool {

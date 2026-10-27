@@ -177,7 +177,7 @@ describe("runBootMaintenance — session and locking", () => {
     expect(await runBootMaintenance(work())).toBe("incomplete");
   });
 
-  // pg reads `config.query_timeout || connectionParameters.query_timeout`, so a
+  // The pool reads `config.query_timeout || <pool default>`, so a
   // per-query 0 falls back to the pool's 30s: every build and the reindex would
   // be killed client-side at 30s with the session's 10-minute budget, set one
   // line later, still in place and the suite still green.

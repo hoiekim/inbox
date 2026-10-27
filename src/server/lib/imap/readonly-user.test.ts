@@ -4,8 +4,8 @@
  * state-mutating IMAP command with `NO [READ-ONLY]` while letting
  * non-mutating ones through. Admin sessions are unaffected.
  *
- * Isolation follows the same pg-FakePool pattern as condstore.test.ts —
- * mock `pg` at process scope so the lazy pool in postgres/client.ts points
+ * Isolation follows the same FakePool pattern as condstore.test.ts —
+ * mock the pool driver at process scope so the lazy pool in postgres/client.ts points
  * at a fake, then exercise the real ImapSession.
  */
 

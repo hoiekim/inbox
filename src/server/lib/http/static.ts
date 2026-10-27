@@ -3,8 +3,11 @@ import path from "path";
 
 const PARENT_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
 
+/** A hidden name such as `.env` or `.git`; `..` is the parent check's concern. */
 const hasDotSegment = (decodedPath: string) =>
-  decodedPath.split("/").some((segment) => segment.length > 1 && segment.startsWith("."));
+  decodedPath
+    .split("/")
+    .some((segment) => segment.length > 1 && segment.startsWith(".") && segment !== "..");
 
 /**
  * A file served with validators, so a revalidating browser gets a 304 and the

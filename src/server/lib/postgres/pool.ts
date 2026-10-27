@@ -113,18 +113,28 @@ const CONVERTERS: Record<number, Converter> = {
   [TIMESTAMPTZ]: toTimestampString,
 };
 
-interface DriverResult extends Array<QueryResultRow> {
+export interface DriverResult extends Array<QueryResultRow> {
   command?: string;
   count?: number | null;
   columns?: { name: string; type: number }[];
 }
 
-const toQueryResult = <R>(raw: DriverResult | DriverResult[]): QueryResult<R> => {
+/**
+ * Shapes a driver result the way the repositories read it. A result that
+ * carries rows but no column metadata comes from a Bun older than 1.4.4,
+ * whose rows would silently skip every conversion, so it throws instead.
+ */
+export const toQueryResult = <R>(raw: DriverResult | DriverResult[]): QueryResult<R> => {
   // A multi-statement simple query yields one result per statement; the last
   // one is what the batch reports.
   const result = (typeof (raw as DriverResult).command === "string"
     ? raw
     : (raw as DriverResult[])[raw.length - 1] ?? []) as DriverResult;
+  if (!result.columns && result.length > 0) {
+    throw new Error(
+      "Bun.SQL returned rows without column metadata; the database pool needs Bun 1.4.4 or later"
+    );
+  }
 
   const conversions = (result.columns ?? []).flatMap(({ name, type }) =>
     CONVERTERS[type] ? [[name, CONVERTERS[type]] as const] : []

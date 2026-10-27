@@ -12,7 +12,7 @@
  *     re-derives it), or a content column missing from the `OF` list (a
  *     write to it never retokenizes).
  *
- *  2. **Behavior against a real Postgres** (opt-in) — pg-FakePool unit
+ *  2. **Behavior against a real Postgres** (opt-in) — FakePool unit
  *     tests never let generated SQL meet a real schema, so the trigger
  *     semantics are only actually pinned by running them. Set
  *     `INBOX_TEST_PG_URL` to a scratch Postgres to enable:

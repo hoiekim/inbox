@@ -83,7 +83,7 @@ const signed = (data: Record<string, unknown>): FakeReqBody => {
 
 // Shared per-test reset for this file's suites. The signing key is a test
 // fixture ("test-signing-key") that only ever authenticates against the
-// mocked pg pool in this file — bracket notation keeps the hygiene scanner's
+// mocked pool in this file — bracket notation keeps the hygiene scanner's
 // literal-credential-assignment heuristic (which keys on `NAME = value` text)
 // from misreading the fixture assignment.
 const resetWebhookTestState = () => {

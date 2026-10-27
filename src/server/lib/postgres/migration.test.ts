@@ -4,7 +4,7 @@
  * whether `initializePostgres` skips its ~35+ DDL round-trips or falls
  * through to the authoritative slow path.
  *
- * Same FakePool pattern the other repository tests use — mock `pg`, run
+ * Same FakePool pattern the other repository tests use — mock the pool driver, run
  * the real query through the pool, control the `schema_meta` response
  * per test.
  */

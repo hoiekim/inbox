@@ -18,7 +18,7 @@ import {
 } from "./session-registry";
 
 // The wiring suite at the bottom drives the real LOGIN path, which reads the
-// users table. Same pg-FakePool pattern as readonly-user.test.ts: mock `pg` at
+// users table. Same FakePool pattern as readonly-user.test.ts: mock the pool driver at
 // process scope so the lazy pool in postgres/client.ts points at a fake, then
 // exercise the real ImapSession.
 const PASSWORD = "correct-horse-battery";

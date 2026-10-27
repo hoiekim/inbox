@@ -25,7 +25,7 @@ const mockPoolQuery = mock(async (sql: string, params?: unknown[]) => {
 // The stub is installed through the pool Proxy's set trap, the way the
 // session-store tests do it — NOT via `mock.module("../client")`. That mock
 // is process-global and rebinds the models' `pool` import to a plain object
-// for every file that loads afterwards, so a later file's own pg mock and
+// for every file that loads afterwards, so a later file's own driver mock and
 // `resetPool()` can never steer Table writes back to its stub:
 // mailgun-events.test.ts's insert assertions saw 0 calls in full-suite runs
 // for exactly this reason. The Proxy stays the models' pool; only its

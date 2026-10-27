@@ -2,8 +2,34 @@ import { describe, it, expect, afterAll, spyOn } from "bun:test";
 
 // Other suites mock this module process-wide; the preload's snapshot is the
 // real driver whatever ran before this file.
-const { Pool, DatabaseError } = ((globalThis as Record<string, unknown>).__REAL_POOL ??
+const { Pool, DatabaseError, toQueryResult } = ((globalThis as Record<string, unknown>).__REAL_POOL ??
   (await import("./pool"))) as typeof import("./pool");
+
+type DriverResult = import("./pool").DriverResult;
+
+const driverResult = (rows: Record<string, unknown>[], extra: Partial<DriverResult>) =>
+  Object.assign(rows, extra) as DriverResult;
+
+describe("toQueryResult", () => {
+  it("refuses rows that arrive without column metadata, naming the Bun floor", () => {
+    expect(() =>
+      toQueryResult(driverResult([{ n: "1" }], { command: "SELECT", count: 1 }))
+    ).toThrow(/Bun 1\.4\.4/);
+  });
+
+  it("accepts a rowless result without column metadata, as DDL and SET return", () => {
+    for (const command of ["CREATE TABLE", "BEGIN", "COMMIT", "SET", "DO", "UPDATE"]) {
+      expect(toQueryResult(driverResult([], { command, count: 0 })).rows).toEqual([]);
+    }
+  });
+
+  it("converts by column type when the metadata is present", () => {
+    const result = toQueryResult(
+      driverResult([{ n: "12" }], { command: "SELECT", count: 1, columns: [{ name: "n", type: 20 }] })
+    );
+    expect(result.rows).toEqual([{ n: 12 }]);
+  });
+});
 
 describe("DatabaseError", () => {
   it("carries the SQLSTATE as `code`, the field callers branch on", () => {
@@ -120,6 +146,26 @@ if (PG_URL) describe("Pool against a real Postgres", () => {
     expect(failure).toBeInstanceOf(DatabaseError);
     expect(failure.code).toBe("23505");
     expect(failure.constraint).toBe(`${table}_pkey`);
+  });
+
+  it("does not mistake a rowless statement for a pre-1.4.4 result", async () => {
+    const client = await pool.connect();
+    try {
+      for (const sql of [
+        `CREATE TABLE IF NOT EXISTS ${table}_ddl (x int)`,
+        "BEGIN",
+        `INSERT INTO ${table}_ddl VALUES (1)`,
+        "COMMIT",
+        "SET statement_timeout = 30000",
+        "DO $$ BEGIN PERFORM 1; END $$",
+        `ALTER TABLE ${table}_ddl ADD COLUMN IF NOT EXISTS y int`,
+        `DROP TABLE ${table}_ddl`,
+      ]) {
+        await client.query(sql);
+      }
+    } finally {
+      client.release();
+    }
   });
 
   it("answers a multi-statement batch with its last result", async () => {

@@ -53,8 +53,8 @@ const EMPTY_PASSWORD_DIGEST = "$2b$04$1ZJlW09Oj.28Pc9tQVIVleBOo11ISY6Ra1sWrn.NHE
 const OVER_72_BYTES = "pässwörd-longer-than-seventy-two-bytes-" + "x".repeat(50);
 
 /**
- * Digests written by the JavaScript bcrypt implementation the stored
- * passwords were hashed with, before verification moved to `Bun.password`.
+ * Digests made by bcryptjs, a truncating bcrypt implementation, in both the
+ * `$2a$` and `$2b$` variants.
  */
 const STORED_DIGESTS = {
   "correct-horse": "$2b$10$39XnZ0siZCL6PF2Tyd9hQOUpJZ0UXyjcT.i8Bux3S7ZCsJLH7aKRK",
@@ -161,7 +161,7 @@ describe("verifyPassword cost is independent of whether the account exists", () 
   });
 });
 
-describe("verifyPassword keeps accepting digests stored before the switch", () => {
+describe("verifyPassword accepts digests made by a truncating bcrypt implementation", () => {
   for (const [password, digest] of Object.entries(STORED_DIGESTS)) {
     it(`accepts ${digest.slice(0, 7)} digest of a ${new TextEncoder().encode(password).length}-byte password`, async () => {
       expect(await verifyPassword(password, digest)).toBe(true);
@@ -169,7 +169,7 @@ describe("verifyPassword keeps accepting digests stored before the switch", () =
     });
   }
 
-  it("reads only the first 72 bytes of a long password, as the stored digests were made", async () => {
+  it("reads only the first 72 bytes of a long password, as a truncating bcrypt hashed it", async () => {
     const digest = STORED_DIGESTS[OVER_72_BYTES];
     const samePrefix = new TextDecoder().decode(new TextEncoder().encode(OVER_72_BYTES).slice(0, 72));
     expect(await verifyPassword(samePrefix, digest)).toBe(true);

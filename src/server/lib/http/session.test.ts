@@ -10,10 +10,9 @@ import {
 } from "./session";
 
 /**
- * A `Set-Cookie` value signed by the signer the previous session middleware
- * used (`cookie-signature`, serialized by `cookie`) for session id
- * `CGvM0kigAKJr5ZXzwHgefCOSrOHdv7hS` under {@link GOLDEN_SECRET}. Cookies
- * already held by browsers have this shape, so they must keep resolving.
+ * A `Set-Cookie` value in the express-session scheme — signed by
+ * `cookie-signature` and serialized by `cookie` — for session id
+ * `CGvM0kigAKJr5ZXzwHgefCOSrOHdv7hS` under {@link GOLDEN_SECRET}.
  */
 const GOLDEN_COOKIE =
   "connect.sid=s%3ACGvM0kigAKJr5ZXzwHgefCOSrOHdv7hS.vUwqSDhDpSNRBbBAYeZgDSpOZqKfiIBGts4Rjs8HwqM";
@@ -58,12 +57,12 @@ const noFault = (error: unknown) => {
 };
 
 describe("session cookie signature", () => {
-  it("resolves a cookie the previous middleware issued", () => {
+  it("verifies a cookie signed with the express-session scheme", () => {
     const value = readCookie(GOLDEN_COOKIE, "connect.sid")!;
     expect(unsignSessionCookie(value, GOLDEN_SECRET)).toBe(GOLDEN_ID);
   });
 
-  it("signs an id exactly as the previous middleware did", () => {
+  it("signs an id in the express-session scheme", () => {
     expect(cookieFor(GOLDEN_ID, GOLDEN_SECRET)).toBe(GOLDEN_COOKIE);
   });
 

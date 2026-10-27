@@ -18,11 +18,11 @@ const STORED_UIDVALIDITY = 1716512400;
 const DOMAIN_UID = 100;
 const ACCOUNT_UID = 42;
 
-// pg-FakePool pattern (see users.test.ts): mock `pg` so the lazy pool in
+// FakePool pattern (see users.test.ts): mock the pool driver so the lazy pool in
 // postgres/client.ts is a FakePool, then run the REAL imap code. The functions
 // under test are driven with fake Stores, but appendMessage reaches the `server`
 // barrel's getDomainUidNext / getAccountUidNext (which query Postgres), so the
-// FakePool keeps those calls off a real connection. We mock `pg` (NOT the
+// FakePool keeps those calls off a real connection. We mock the pool driver (NOT the
 // `server` barrel) so markRead/getDomainUidNext/getAccountUidNext keep their real
 // identities — stubbing them on the barrel would bleed into update.test.ts /
 // search.test.ts. Importing message-ops AFTER the mock is registered guarantees
@@ -101,7 +101,7 @@ const {
 } = await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
 // Dynamic, like the imports above: a hoisted `import … from "server"` would
-// pull the barrel (and postgres/client) before the pg double is registered.
+// pull the barrel (and postgres/client) before the driver double is registered.
 const { getUserDomain } = await import("server");
 
 beforeAll(() => {

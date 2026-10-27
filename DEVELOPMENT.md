@@ -715,7 +715,7 @@ Rate limit counters should be shared across HTTP/IMAP/SMTP to prevent protocol-s
 
 Merges to `main` trigger Docker image build and deployment. The Dockerfile builder stage runs `bun run typecheck`, `bun run test`, and `bun run build` — the deployment fails if any of these fail. CD does not require a passing CI run for the same reason (redundant checks).
 
-The production image runs the server bundle on Bun (`oven/bun:<version>-slim`), the same release the builder stage and CI use. Keep the three pinned to one version, and do not go below Bun 1.4: earlier releases cannot upgrade an accepted socket to TLS server-side (`new tls.TLSSocket(socket, { isServer: true })`), so SMTP port 465, SMTP STARTTLS and IMAP STARTTLS hang during the handshake without raising an error.
+The production image runs the server bundle on Bun (`oven/bun:<version>-slim`), the same release the builder stage and CI use. Keep the three pinned to one version, and do not go below Bun 1.4.4: releases before 1.4 cannot upgrade an accepted socket to TLS server-side (`new tls.TLSSocket(socket, { isServer: true })`), so SMTP port 465, SMTP STARTTLS and IMAP STARTTLS hang during the handshake without raising an error, and before 1.4.4 `Bun.SQL` returns no column metadata, which the database pool needs to shape its results (it refuses to run without it).
 
 ## Common Tasks
 

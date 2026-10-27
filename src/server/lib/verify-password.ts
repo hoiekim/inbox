@@ -27,8 +27,8 @@ const DUMMY_HASH =
 
 /**
  * bcrypt reads at most 72 bytes of key. `Bun.password` pre-hashes a longer
- * string with SHA-512 instead of truncating it, so a long password stored by a
- * truncating implementation would stop verifying unless the input is cut here.
+ * string with SHA-512 instead of truncating it, so a long password hashed by a
+ * truncating bcrypt (bcryptjs, OpenBSD bcrypt) only verifies if the input is cut here.
  */
 const BCRYPT_MAX_KEY_BYTES = 72;
 
