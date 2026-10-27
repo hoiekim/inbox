@@ -287,6 +287,48 @@ describe("input events", () => {
     });
   }
 
+  for (const browserDeletes of [true, false]) {
+    test(`a composition right after a non-cancelable Backspace keeps both${browserDeletes ? "" : " (no DOM change)"}`, async () => {
+      const editor = mount("<p>abc</p>");
+      const text = editor.dom.querySelector("p")!.firstChild as Text;
+      document.getSelection()!.setBaseAndExtent(text, 3, text, 3);
+      editor.dom.dispatchEvent(
+        new InputEvent("beforeinput", { inputType: "deleteContentBackward", cancelable: false, bubbles: true })
+      );
+      if (browserDeletes) {
+        text.data = "ab";
+        document.getSelection()!.setBaseAndExtent(text, 2, text, 2);
+      }
+      // The IME reopens a composition in the same task, before any mutation callback.
+      editor.dom.dispatchEvent(new Event("compositionstart"));
+      const node = editor.dom.querySelector("p")!.firstChild as Text;
+      node.data += "한";
+      document.getSelection()!.setBaseAndExtent(node, node.data.length, node, node.data.length);
+      editor.dom.dispatchEvent(new Event("compositionend"));
+      await settle();
+      expect(editor.getHTML()).toBe("<p>ab한</p>");
+      unmount(editor);
+    });
+  }
+
+  test("composition text in a non-cancelable beforeinput is read back, not redrawn away", async () => {
+    const editor = mount("<p>ab</p>");
+    const text = editor.dom.querySelector("p")!.firstChild as Text;
+    document.getSelection()!.setBaseAndExtent(text, 2, text, 2);
+    editor.dom.dispatchEvent(
+      new InputEvent("beforeinput", {
+        inputType: "insertCompositionText",
+        data: "한",
+        cancelable: false,
+        bubbles: true
+      })
+    );
+    text.data = "ab한";
+    await settle();
+    expect(editor.getHTML()).toBe("<p>ab한</p>");
+    unmount(editor);
+  });
+
   test("a block the browser adds outside any input is taken out again", async () => {
     const editor = mount("<blockquote><p>a</p></blockquote>");
     const stray = document.createElement("p");
