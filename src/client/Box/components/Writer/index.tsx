@@ -9,9 +9,6 @@ import {
 } from "react";
 
 import { useMutation } from "react-query";
-import { useEditor, EditorContent } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import Placeholder from "@tiptap/extension-placeholder";
 
 import {
   ApiResponse,
@@ -27,6 +24,7 @@ import {
   call,
   useIsOnline
 } from "client";
+import { RichTextEditor, useRichTextEditor } from "client/lib/editor";
 
 import { CcIcon, SendIcon, AttachIcon, EraserIcon } from "./components";
 import FileIcon from "../FileIcon";
@@ -118,32 +116,19 @@ const Writer = () => {
       .catch(console.error);
   }, [originalMessageMeta.id, originalMessageHtml, isOnline]);
 
-  const editor = useEditor({
-    extensions: [
-      StarterKit,
-      Placeholder.configure({
-        placeholder: "Say something really cool here!",
-      }),
-    ],
-    content: initialContent
+  const editor = useRichTextEditor({
+    content: initialContent,
+    placeholder: "Say something really cool here!"
   });
 
-  // tiptap's `EventEmitter.on` appends without deduping and `emit` walks the
-  // whole array, so registering from the render body grows the callback list
-  // by one per render and never prunes it. Bind once per editor instance and
-  // unbind on teardown.
-  useEffect(() => {
-    if (!editor) return;
-    const onUpdate = () => setInitialContent(editor.getHTML());
-    editor.on("update", onUpdate);
-    return () => {
-      editor.off("update", onUpdate);
-    };
-  }, [editor, setInitialContent]);
+  useEffect(
+    () => editor.onUpdate(() => setInitialContent(editor.getHTML())),
+    [editor, setInitialContent]
+  );
 
   const setEditorContent = useCallback(
     (content: string) => {
-      editor?.commands.setContent(content);
+      editor.setContent(content);
       setInitialContent(content);
     },
     [editor, setInitialContent]
@@ -259,7 +244,7 @@ const Writer = () => {
     const formData = new FormData();
 
     const html =
-      processHtmlToSendMail(editor?.getHTML() || "") +
+      processHtmlToSendMail(editor.getHTML()) +
       "\n\n\n" +
       getReplyContainerHtml(originalMessage);
 
@@ -315,7 +300,7 @@ const Writer = () => {
     const targetIsPadding = !!targetClassList.find(
       (f) => f === "editor_container_bottom_padding"
     );
-    if (targetIsPadding) editor?.commands.focus();
+    if (targetIsPadding) editor.focus();
   };
 
   return (
@@ -415,7 +400,7 @@ const Writer = () => {
               className="editor_container_bottom_padding"
               onClick={onClickPadding}
             >
-              <EditorContent editor={editor} />
+              <RichTextEditor editor={editor} />
               {originalMessage.id ? (
                 <div
                   className="original_message cursor"

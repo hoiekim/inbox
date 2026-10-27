@@ -1,6 +1,6 @@
 import fs from "fs";
-import { htmlToText } from "html-to-text";
 import { logger } from "../logger";
+import { htmlToPlainText } from "./plain-text";
 
 export const TO_ADDRESS_FIELD = "mail.envelopeTo.address";
 export const FROM_ADDRESS_FIELD = "mail.from.value.address";
@@ -34,12 +34,7 @@ export const getAttachment = (id: string) => {
 };
 
 export const getText = (html: string) => {
-  const text = htmlToText(html, {
-    selectors: [
-      { selector: "img", format: "skip" },
-      { selector: "a", options: { ignoreHref: true } }
-    ]
-  });
+  const text = htmlToPlainText(html);
 
   const urlEliminated = text.replace(
     /(?:https?|ftp):\/\/[^\s/$.?#].[^\s]*\b/g,
