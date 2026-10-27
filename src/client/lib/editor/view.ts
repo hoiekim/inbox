@@ -56,6 +56,7 @@ export class EditorView {
   private composedBlocks = new Set<Desc>();
   private composedRange: { from: number; to: number } | null = null;
   private compositionTimer: ReturnType<typeof setTimeout> | null = null;
+  private nativeEditTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionWriting = false;
   private appliedAttrs: { el: HTMLElement; names: string[] }[] = [];
   private selectedDesc: Desc | null = null;
@@ -82,6 +83,8 @@ export class EditorView {
   updateState(state: EditorState) {
     const prev = this.state;
     this.state = state;
+    // Drawn once the browser's own edit has landed.
+    if (this.nativeEditTimer !== null) return;
     if (prev.doc !== state.doc) {
       this.stopObserving();
       this.renderChildren(this.root, state.doc);
@@ -101,6 +104,8 @@ export class EditorView {
     this.destroyed = true;
     if (this.compositionTimer !== null) clearTimeout(this.compositionTimer);
     this.compositionTimer = null;
+    if (this.nativeEditTimer !== null) clearTimeout(this.nativeEditTimer);
+    this.nativeEditTimer = null;
     this.observer.disconnect();
     for (const [target, type, fn] of this.listeners) target.removeEventListener(type, fn);
     this.listeners = [];
@@ -489,6 +494,7 @@ export class EditorView {
 
   private onSelectionChange = () => {
     if (this.selectionWriting || this.composing || !this.focused) return;
+    if (this.nativeEditTimer !== null) return;
     const sel = this.readSelection();
     if (!sel) return;
     const current = this.state.selection;
@@ -533,7 +539,80 @@ export class EditorView {
     this.observer.disconnect();
   }
 
+  /**
+   * For an input the browser applies itself because it cannot be cancelled.
+   * The caller applies the same edit to the model; the DOM is redrawn from
+   * the model once the browser's edit lands, instead of being read back.
+   */
+  expectNativeEdit() {
+    this.flushNativeEdit();
+    this.nativeEditTimer = setTimeout(() => this.flushNativeEdit(), 0);
+  }
+
+  private flushNativeEdit() {
+    if (this.nativeEditTimer !== null) this.syncAfterNativeEdit(this.observer.takeRecords());
+  }
+
+  private syncAfterNativeEdit(records: MutationRecord[]) {
+    clearTimeout(this.nativeEditTimer!);
+    this.nativeEditTimer = null;
+    const blocks = new Set<Desc>();
+    const containers = new Set<Desc>();
+    for (const record of [...records, ...this.observer.takeRecords()]) {
+      const desc = this.nearestDesc(record.target);
+      const block = this.textblockOf(desc);
+      if (block) blocks.add(block);
+      else if (desc?.contentDOM) containers.add(desc);
+      for (const n of record.removedNodes) {
+        const removed = this.domDescs.get(n);
+        if (removed && this.schema.isTextblock(removed.node.type)) blocks.add(removed);
+      }
+    }
+    this.observer.disconnect();
+    this.renderChildren(this.root, this.state.doc);
+    for (const c of containers) if (this.inTree(c)) this.renderChildren(c, c.node);
+    for (const b of blocks) {
+      if (!this.inTree(b) || this.inSync(b)) continue;
+      b.children = [];
+      b.contentDOM!.textContent = "";
+      this.renderChildren(b, b.node);
+    }
+    this.startObserving();
+    this.applyNodeAttrs();
+    this.syncNodeSelection(this.state.selection);
+    if (this.focused && !this.composing) this.writeSelection();
+  }
+
+  private inTree(desc: Desc) {
+    let d = desc;
+    for (; d.parent; d = d.parent) if (!d.parent.children.includes(d)) return false;
+    return d === this.root;
+  }
+
+  /** Whether a textblock's DOM is exactly what rendering its node produces. */
+  private inSync(block: Desc) {
+    const nodes = Array.from(block.contentDOM!.childNodes);
+    const kids = nodes.filter((n) => !isFiller(n));
+    const last = block.children[block.children.length - 1];
+    const needsFiller = !last || last.node.type === "hardBreak";
+    if (kids.length !== block.children.length || needsFiller !== kids.length < nodes.length) {
+      return false;
+    }
+    return block.children.every((d, i) => {
+      if (kids[i] !== d.dom) return false;
+      if (!d.textDOM) return d.dom.textContent === "";
+      for (let n: globalThis.Node = d.dom; n !== d.textDOM; n = n.firstChild!) {
+        if (n.childNodes.length !== 1) return false;
+      }
+      return d.textDOM.data === d.node.text;
+    });
+  }
+
   private onMutations(records: MutationRecord[]) {
+    if (this.nativeEditTimer !== null && !this.composing) {
+      this.syncAfterNativeEdit(records);
+      return;
+    }
     if (this.composing) {
       // Read back once the composition ends.
       for (const record of records) {
@@ -638,13 +717,13 @@ export class EditorView {
    * as the browser did in the DOM (merging blocks when it spanned several),
    * then reads the composed text back from the block it landed in.
    */
-  private reconcileReplacedRange(range: { from: number; to: number }, block: Desc | null) {
+  private reconcileReplacedRange(range: { from: number; to: number }, inline: Node[] | null) {
     const tr = new Transaction(this.state);
     const at = deleteRangeInto(tr, range.from, range.to);
     const $at = $(tr.doc, at, this.schema);
     let caret = at;
-    if (block?.contentDOM && this.dom.contains(block.contentDOM)) {
-      const diff = diffInline($at.parent.content ?? [], this.readInline(block));
+    if (inline) {
+      const diff = diffInline($at.parent.content ?? [], inline);
       if (diff && tr.maybeStep({
         stepType: "replace",
         from: $at.start() + diff.from,
@@ -660,6 +739,11 @@ export class EditorView {
   }
 
   private readInline(block: Desc): Node[] {
+    return this.readInlineFrom([block.contentDOM!], block);
+  }
+
+  /** Inline content of DOM nodes; descriptors count only when they belong to `block`. */
+  private readInlineFrom(nodes: globalThis.Node[], block: Desc | null): Node[] {
     const result: Node[] = [];
     let lastMarks: Mark[] | undefined;
     const walk = (parent: globalThis.Node) => {
@@ -693,7 +777,14 @@ export class EditorView {
         }
       }
     };
-    walk(block.contentDOM!);
+    for (const node of nodes) {
+      if (node.nodeType === 3) {
+        const text = (node as Text).data;
+        if (text) result.push({ type: "text", text });
+      } else {
+        walk(node);
+      }
+    }
     return mergeTexts(result);
   }
 
@@ -717,12 +808,14 @@ export class EditorView {
     this.on(this.dom, "beforeinput", (e) => {
       // selectionchange fires asynchronously; make sure the model has the
       // caret the user just placed before acting on input.
+      this.flushNativeEdit();
       if (!this.composing) this.onSelectionChange();
       this.props.handleBeforeInput?.(e as InputEvent);
     });
     this.on(this.dom, "keydown", (e) => {
       const event = e as KeyboardEvent;
       if (event.isComposing || event.keyCode === 229) return;
+      this.flushNativeEdit();
       this.onSelectionChange();
       if (this.props.handleKeyDown?.(event)) event.preventDefault();
     });
@@ -733,6 +826,7 @@ export class EditorView {
         clearTimeout(this.compositionTimer);
         this.finishComposition();
       }
+      this.flushNativeEdit();
       this.onSelectionChange();
       this.composing = true;
       const { selection } = this.state;
@@ -742,6 +836,12 @@ export class EditorView {
       const sel = replaces ? null : this.readSelection();
       const caret = replaces ? selFrom(selection) : sel?.head;
       this.composingDesc = caret === undefined ? null : this.textblockOf(this.descAround(caret));
+      if (replaces && !this.composingDesc) {
+        // The selection starts outside any textblock (it covers the whole
+        // document); the browser composes into the first one it covers.
+        const first = textblockStartAfter(this.state.doc, caret!, this.schema);
+        if (first !== null) this.composingDesc = this.textblockOf(this.descAround(first));
+      }
     });
     this.on(this.dom, "compositionend", () => {
       // Some browsers fire compositionend before the final input event; let
@@ -775,11 +875,13 @@ export class EditorView {
     this.composedRange = null;
     if (range) {
       const block = this.composingDesc;
+      const fallback = block?.contentDOM && this.dom.contains(block.contentDOM);
+      const inline = this.composedInline() ?? (fallback ? this.readInline(block!) : null);
       this.composing = false;
       this.composingDesc = null;
       this.composedBlocks = new Set();
       this.observer.takeRecords();
-      this.reconcileReplacedRange(range, block);
+      this.reconcileReplacedRange(range, inline);
       this.props.onCompositionEnd?.();
       return;
     }
@@ -796,11 +898,39 @@ export class EditorView {
     this.props.onCompositionEnd?.();
   }
 
+  /**
+   * Inline content of the block the DOM caret is in once a composition over
+   * a selection ends. Over a whole document the browser can leave the text
+   * in an element of its own, or directly in the editor.
+   */
+  private composedInline(): Node[] | null {
+    const focus = document.getSelection()?.focusNode;
+    if (!focus || focus === this.dom || !this.dom.contains(focus)) return null;
+    const block = this.textblockOf(this.nearestDesc(focus));
+    if (block?.contentDOM?.contains(focus)) return this.readInline(block);
+    let top: globalThis.Node = focus;
+    for (;;) {
+      if (isBlockElement(top)) return this.readInlineFrom([top], null);
+      if (top.parentNode === this.dom) break;
+      top = top.parentNode!;
+    }
+    const run = [top];
+    for (let n = top.previousSibling; n && !isBlockElement(n); n = n.previousSibling) run.unshift(n);
+    for (let n = top.nextSibling; n && !isBlockElement(n); n = n.nextSibling) run.push(n);
+    return this.readInlineFrom(run, null);
+  }
+
   /** Descriptor of the text or node around a position. */
   private descAround(pos: number): Desc | null {
     return this.nearestDesc(this.domFromPos(pos).node);
   }
 }
+
+const BLOCK_ELEMENTS = new Set([
+  "P", "DIV", "PRE", "BLOCKQUOTE", "UL", "OL", "LI", "H1", "H2", "H3", "H4", "H5", "H6", "HR"
+]);
+
+const isBlockElement = (node: globalThis.Node) => BLOCK_ELEMENTS.has(node.nodeName);
 
 const isAncestor = (ancestor: Desc, desc: Desc) => {
   for (let d: Desc | null = desc; d; d = d.parent) if (d === ancestor) return true;

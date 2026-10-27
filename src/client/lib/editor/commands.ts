@@ -353,13 +353,8 @@ export const isList = (type: string) => type === "bulletList" || type === "order
 /** Enter. */
 export const splitBlock: Command = (state, dispatch) => {
   const { schema } = state;
-  if (coversDoc(state)) {
-    return run(state, dispatch, (tr) => {
-      const at = deleteRangeInto(tr, 0, selTo(state.selection));
-      tr.replace(at, at, [{ c: 1 }, { o: "paragraph" }]);
-      cursor(tr, at + 2);
-    });
-  }
+  // Enter over the whole document clears it, leaving no line before the caret.
+  if (coversDoc(state)) return deleteSelection(state, dispatch);
   const from = selFrom(state.selection);
   const $from = $(state.doc, from, schema);
   const parent = $from.parent;

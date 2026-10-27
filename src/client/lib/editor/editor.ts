@@ -333,8 +333,13 @@ export class Editor {
   }
 
   private handleBeforeInput(event: InputEvent) {
-    // An input the browser will apply anyway is read back from the DOM once it lands.
-    if (!event.cancelable) return;
+    if (!event.cancelable) {
+      // Composition input is read back from the DOM.
+      if (this.view.composing || event.isComposing || event.inputType.includes("Composition")) {
+        return;
+      }
+      this.view.expectNativeEdit();
+    }
     const prevent = () => event.preventDefault();
     switch (event.inputType) {
       case "insertText":

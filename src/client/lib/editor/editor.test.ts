@@ -7,7 +7,7 @@ afterAll(() => GlobalRegistrator.unregister());
 const { Editor } = await import("./editor");
 const { handleCopy, handleDragStart, handleDrop, handlePaste } = await import("./clipboard");
 const { Transaction } = await import("./state");
-const { deleteSelection, selectAll } = await import("./commands");
+const { deleteSelection, selectAll, splitBlock } = await import("./commands");
 
 const at = (editor: InstanceType<typeof Editor>, pos: number) => {
   const tr = new Transaction(editor.state);
@@ -114,31 +114,284 @@ describe("input events", () => {
     editor.dom.remove();
   });
 
-  test("an input the browser applies anyway is not also applied to the model", async () => {
-    for (const cancelable of [true, false]) {
-      const editor = new Editor({ content: "<p>abcd</p>" });
-      document.body.appendChild(editor.dom);
-      const text = editor.dom.querySelector("p")!.firstChild as Text;
-      editor.focus();
-      document.getSelection()!.setBaseAndExtent(text, 4, text, 4);
-      const input = new InputEvent("beforeinput", {
-        inputType: "deleteContentBackward",
-        cancelable,
-        bubbles: true
-      });
-      editor.dom.dispatchEvent(input);
-      expect(input.defaultPrevented).toBe(cancelable);
-      if (!input.defaultPrevented) {
-        // The browser's own edit: one character off whatever the DOM holds now.
-        expect(editor.getHTML()).toBe("<p>abcd</p>");
-        const node = editor.dom.querySelector("p")!.firstChild as Text;
-        node.data = node.data.slice(0, -1);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(editor.getHTML()).toBe("<p>abc</p>");
-      editor.destroy();
-      editor.dom.remove();
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+  const mount = (content: string) => {
+    const editor = new Editor({ content });
+    document.body.appendChild(editor.dom);
+    editor.focus();
+    return editor;
+  };
+  const unmount = (editor: InstanceType<typeof Editor>) => {
+    editor.destroy();
+    editor.dom.remove();
+  };
+  const texts = (editor: InstanceType<typeof Editor>) => {
+    const walker = document.createTreeWalker(editor.dom, 4);
+    const out: Text[] = [];
+    while (walker.nextNode()) out.push(walker.currentNode as Text);
+    return out;
+  };
+
+  interface NativeCase {
+    name: string;
+    content: string;
+    select: (t: Text[]) => [Text, number, Text, number];
+    inputType: string;
+    data?: string;
+    /** What the browser does to the DOM when it applies the input itself. */
+    native: (dom: HTMLElement, t: Text[]) => void;
+    expected: string;
+  }
+  const join = (dom: HTMLElement, t: Text[], text: string) => {
+    t[0]!.data = text;
+    dom.children[1]!.remove();
+  };
+  const nativeCases: NativeCase[] = [
+    {
+      name: "insertText",
+      content: "<p>ab</p>",
+      select: (t) => [t[0]!, 2, t[0]!, 2],
+      inputType: "insertText",
+      data: "c",
+      native: (_, t) => (t[0]!.data = "abc"),
+      expected: "<p>abc</p>"
+    },
+    {
+      name: "deleteContentBackward inside a line",
+      content: "<p>abcd</p>",
+      select: (t) => [t[0]!, 4, t[0]!, 4],
+      inputType: "deleteContentBackward",
+      native: (_, t) => (t[0]!.data = "abc"),
+      expected: "<p>abc</p>"
+    },
+    {
+      name: "insertParagraph",
+      content: "<p>abcd</p>",
+      select: (t) => [t[0]!, 2, t[0]!, 2],
+      inputType: "insertParagraph",
+      native: (dom, t) => {
+        t[0]!.data = "ab";
+        const p = document.createElement("p");
+        p.textContent = "cd";
+        dom.appendChild(p);
+      },
+      expected: "<p>ab</p><p>cd</p>"
+    },
+    {
+      name: "insertLineBreak",
+      content: "<p>abcd</p>",
+      select: (t) => [t[0]!, 2, t[0]!, 2],
+      inputType: "insertLineBreak",
+      native: (_, t) => {
+        t[0]!.data = "ab";
+        t[0]!.after(document.createElement("br"), document.createTextNode("cd"));
+      },
+      expected: "<p>ab<br>cd</p>"
+    },
+    {
+      name: "deleteContentBackward at the start of a paragraph",
+      content: "<p>ab</p><p>cd</p>",
+      select: (t) => [t[1]!, 0, t[1]!, 0],
+      inputType: "deleteContentBackward",
+      native: (dom, t) => join(dom, t, "abcd"),
+      expected: "<p>abcd</p>"
+    },
+    {
+      name: "deleteContentForward at the end of a paragraph",
+      content: "<p>ab</p><p>cd</p>",
+      select: (t) => [t[0]!, 2, t[0]!, 2],
+      inputType: "deleteContentForward",
+      native: (dom, t) => join(dom, t, "abcd"),
+      expected: "<p>abcd</p>"
+    },
+    {
+      name: "deleteWordBackward over two paragraphs",
+      content: "<p>ab</p><p>cd</p>",
+      select: (t) => [t[0]!, 1, t[1]!, 1],
+      inputType: "deleteWordBackward",
+      native: (dom, t) => join(dom, t, "ad"),
+      expected: "<p>ad</p>"
+    },
+    {
+      name: "deleteByCut over two paragraphs",
+      content: "<p>ab</p><p>cd</p>",
+      select: (t) => [t[0]!, 1, t[1]!, 1],
+      inputType: "deleteByCut",
+      native: (dom, t) => join(dom, t, "ad"),
+      expected: "<p>ad</p>"
+    },
+    {
+      name: "formatUnderline, which the schema has no mark for",
+      content: "<p>ab</p>",
+      select: (t) => [t[0]!, 0, t[0]!, 2],
+      inputType: "formatUnderline",
+      native: (dom, t) => {
+        const u = document.createElement("u");
+        dom.firstElementChild!.replaceChild(u, t[0]!);
+        u.appendChild(t[0]!);
+      },
+      expected: "<p>ab</p>"
+    },
+    {
+      name: "insertOrderedList, which is not handled",
+      content: "<blockquote><p>ab</p></blockquote>",
+      select: (t) => [t[0]!, 1, t[0]!, 1],
+      inputType: "insertOrderedList",
+      native: (dom) => {
+        const quote = dom.firstElementChild!;
+        const list = document.createElement("ol");
+        const item = document.createElement("li");
+        list.appendChild(item);
+        item.appendChild(quote.replaceChild(list, quote.firstElementChild!));
+      },
+      expected: "<blockquote><p>ab</p></blockquote>"
+    },
+    {
+      name: "deleteContentBackward the browser makes no change for",
+      content: "<ul><li><p>a</p></li></ul>",
+      select: (t) => [t[0]!, 0, t[0]!, 0],
+      inputType: "deleteContentBackward",
+      native: () => {},
+      expected: "<p>a</p>"
     }
+  ];
+
+  for (const c of nativeCases) {
+    test(`${c.name} the browser applies itself lands once`, async () => {
+      for (const cancelable of [true, false]) {
+        const editor = mount(c.content);
+        const before = editor.dom.innerHTML;
+        const [a, ao, h, ho] = c.select(texts(editor));
+        document.getSelection()!.setBaseAndExtent(a, ao, h, ho);
+        const input = new InputEvent("beforeinput", {
+          inputType: c.inputType,
+          data: c.data ?? null,
+          cancelable,
+          bubbles: true
+        });
+        editor.dom.dispatchEvent(input);
+        expect(input.defaultPrevented).toBe(cancelable);
+        expect(editor.getHTML()).toBe(c.expected);
+        if (!cancelable) {
+          // The browser edits the DOM as it was before the input.
+          expect(editor.dom.innerHTML).toBe(before);
+          c.native(editor.dom, texts(editor));
+        }
+        await settle();
+        expect(editor.getHTML()).toBe(c.expected);
+        const rendered = new Editor({ content: c.expected });
+        expect(editor.dom.innerHTML).toBe(rendered.dom.innerHTML);
+        rendered.destroy();
+        unmount(editor);
+      }
+    });
+  }
+
+  test("a block the browser adds outside any input is taken out again", async () => {
+    const editor = mount("<blockquote><p>a</p></blockquote>");
+    const stray = document.createElement("p");
+    stray.textContent = "x";
+    editor.dom.firstElementChild!.appendChild(stray);
+    await settle();
+    expect(editor.getHTML()).toBe("<blockquote><p>a</p></blockquote>");
+    expect(editor.dom.innerHTML).toBe("<blockquote><p>a</p></blockquote>");
+    unmount(editor);
+  });
+
+  const wholeDocShapes = [
+    "<p>abc</p><p>def</p>",
+    "<ul><li><p>a</p></li></ul><p>b</p>",
+    "<blockquote><p>q</p></blockquote><p>r</p>",
+    "<pre><code>c</code></pre><p>d</p>",
+    "<hr><p>x</p>",
+    "<p>a</p><hr>"
+  ];
+  for (const content of wholeDocShapes) {
+    for (const lift of [false, true]) {
+      test(`a composition over all of ${content} keeps the composed text${lift ? " (block moved to the top)" : ""}`, async () => {
+        const editor = mount(content);
+        editor.run(selectAll);
+        editor.dom.dispatchEvent(new Event("compositionstart"));
+        // The browser deletes everything but the first block it can type in.
+        const text = texts(editor)[0]!;
+        let top: Element = text.parentElement!;
+        while (top.parentElement !== editor.dom) top = top.parentElement!;
+        for (const el of Array.from(editor.dom.children)) if (el !== top) el.remove();
+        if (lift && top !== text.parentElement) top.replaceWith(text.parentElement!);
+        text.data = "한";
+        document.getSelection()!.setBaseAndExtent(text, 1, text, 1);
+        editor.dom.dispatchEvent(new Event("compositionend"));
+        await settle();
+        expect(editor.getHTML()).toBe("<p>한</p>");
+        expect(editor.dom.innerHTML).toBe("<p>한</p>");
+        unmount(editor);
+      });
+    }
+  }
+
+  const chromeLeftovers: [string, (dom: HTMLElement) => Text][] = [
+    [
+      "<pre><code>c</code></pre><p>d</p>",
+      (dom) => {
+        const pre = dom.querySelector("pre")!;
+        const font = document.createElement("font");
+        font.textContent = "한";
+        pre.replaceChildren(font);
+        dom.replaceChildren(pre);
+        return font.firstChild as Text;
+      }
+    ],
+    [
+      "<hr><p>x</p>",
+      (dom) => {
+        const text = document.createTextNode("한");
+        dom.replaceChildren(text);
+        return text;
+      }
+    ]
+  ];
+  for (const [content, leave] of chromeLeftovers) {
+    test(`a composition over all of ${content} reads back text the browser left outside any block`, async () => {
+      const editor = mount(content);
+      editor.run(selectAll);
+      editor.dom.dispatchEvent(new Event("compositionstart"));
+      const text = leave(editor.dom);
+      document.getSelection()!.setBaseAndExtent(text, 1, text, 1);
+      editor.dom.dispatchEvent(new Event("compositionend"));
+      await settle();
+      expect(editor.getHTML()).toBe("<p>한</p>");
+      expect(editor.dom.innerHTML).toBe("<p>한</p>");
+      unmount(editor);
+    });
+  }
+
+  test("a composition over all of the document reads back the block the caret ends in", async () => {
+    const editor = mount("<p>abc</p><blockquote><p>def</p></blockquote>");
+    editor.run(selectAll);
+    editor.dom.dispatchEvent(new Event("compositionstart"));
+    const last = editor.dom.lastElementChild!;
+    editor.dom.firstElementChild!.remove();
+    const text = last.querySelector("p")!.firstChild as Text;
+    text.data = "한";
+    document.getSelection()!.setBaseAndExtent(text, 1, text, 1);
+    editor.dom.dispatchEvent(new Event("compositionend"));
+    await settle();
+    expect(editor.getHTML()).toBe("<p>한</p>");
+    unmount(editor);
+  });
+
+  test("a composition over all of the document is read back when the caret is not in a block", async () => {
+    const editor = mount("<blockquote><p>abc</p></blockquote><p>def</p>");
+    editor.run(selectAll);
+    editor.dom.dispatchEvent(new Event("compositionstart"));
+    editor.dom.lastElementChild!.remove();
+    const text = editor.dom.querySelector("p")!.firstChild as Text;
+    text.data = "한";
+    document.getSelection()!.setBaseAndExtent(editor.dom, 1, editor.dom, 1);
+    editor.dom.dispatchEvent(new Event("compositionend"));
+    await settle();
+    expect(editor.getHTML()).toBe("<p>한</p>");
+    unmount(editor);
   });
 
   test("a composition over a selection spanning blocks merges them", async () => {
@@ -179,9 +432,31 @@ describe("select all", () => {
       editor.run(selectAll);
       editor.run(deleteSelection);
       expect(editor.getHTML()).toBe("<p></p>");
+      editor.setContent(content);
+      editor.run(selectAll);
+      editor.run(splitBlock);
+      editor.insertText("Y");
+      expect(editor.getHTML()).toBe("<p>Y</p>");
       editor.destroy();
     });
   }
+
+  test("keeps the whole document selected when the browser reports it as text positions", async () => {
+    const editor = new Editor({ content: "<blockquote><p>q</p></blockquote><p>r</p>" });
+    document.body.appendChild(editor.dom);
+    editor.focus();
+    editor.run(selectAll);
+    const [first, last] = Array.from(editor.dom.querySelectorAll("p")).map((p) => p.firstChild as Text);
+    document.getSelection()!.setBaseAndExtent(first!, 0, last!, 1);
+    document.dispatchEvent(new Event("selectionchange"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    editor.dom.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "insertText", data: "Z", cancelable: true, bubbles: true })
+    );
+    expect(editor.getHTML()).toBe("<p>Z</p>");
+    editor.destroy();
+    editor.dom.remove();
+  });
 });
 
 describe("paste", () => {
