@@ -1,15 +1,16 @@
-import { Request, Response, NextFunction } from "express";
 import { logger } from "../logger";
+import type { HttpRequest } from "./request";
+import { json } from "./respond";
 
 /**
  * Identity that every rate-limit bucket is keyed on.
  *
- * Reads `req.ip` only. Express resolves it against the app's `trust proxy`
- * setting, so a forwarded address is honoured only when the connection itself
- * arrives from an address configured as a proxy. Reading the forwarding headers
- * here instead would let any caller name its own bucket and rotate out of it.
+ * Reads `req.ip` only. It is resolved against the trusted-proxy list, so a
+ * forwarded address is honoured only when the connection itself arrives from
+ * an address configured as a proxy. Reading the forwarding headers here
+ * instead would let any caller name its own bucket and rotate out of it.
  */
-export const getClientIp = (req: Request): string => req.ip ?? "unknown";
+export const getClientIp = (req: HttpRequest): string => req.ip || "unknown";
 
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -23,7 +24,8 @@ interface AttemptRecord {
 const allAttemptMaps: Map<string, AttemptRecord>[] = [];
 
 export interface RateLimiter {
-  middleware: (req: Request, res: Response, next: NextFunction) => void;
+  /** A 429 when the request's IP or attempted identity is over the limit, else undefined. */
+  check: (req: HttpRequest) => Response | undefined;
   /**
    * Record a failure against the IP's aggregate bucket, and — when an
    * account is given — against that account's own bucket under the IP.
@@ -44,7 +46,7 @@ export interface RateLimiter {
  * of the identity does not buy a fresh bucket. Returns undefined when the body
  * names no identity; the per-IP aggregate still applies in that case.
  */
-export const loginIdentityOf = (req: Request): string | undefined => {
+export const loginIdentityOf = (req: HttpRequest): string | undefined => {
   const body = req.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return undefined;
@@ -59,9 +61,9 @@ export const loginIdentityOf = (req: Request): string | undefined => {
 };
 
 /**
- * Create a rate limiter with read-only middleware + explicit record/reset hooks.
+ * Create a rate limiter with a read-only check + explicit record/reset hooks.
  *
- * The middleware only checks the limit; route handlers decide which outcomes
+ * The check only reads the limit; route handlers decide which outcomes
  * count by calling `recordFailure(ip, account)` on real failures or
  * `reset(ip, account)` on success. Mirrors the `auth-rate-limit.ts` shape used
  * by IMAP/SMTP so that successful logins don't pin the counter and transient
@@ -70,7 +72,7 @@ export const loginIdentityOf = (req: Request): string | undefined => {
  * When `options.identityOf` is given (as for the login limiter), failures are
  * tracked at two granularities: a per-IP aggregate bucket that every failure
  * from the IP feeds, plus one bucket per attempted identity under that IP.
- * The middleware refuses when either trips, and a success clears only the
+ * The check refuses when either trips, and a success clears only the
  * authenticating account's own bucket — the aggregate keeps accumulating, so
  * one account's success can no longer forgive another account's failures from
  * the same IP.
@@ -82,12 +84,12 @@ export const loginIdentityOf = (req: Request): string | undefined => {
  * @param maxAttempts Maximum attempts allowed within the window
  * @param message Error message to return when limit is exceeded
  * @param options.identityOf Extracts the attempted identity from a request so
- *   the middleware can check that account's bucket in addition to the IP's
+ *   the check can read that account's bucket in addition to the IP's
  */
 export const createLimiter = (
   maxAttempts: number,
   message: string,
-  options?: { identityOf?: (req: Request) => string | undefined }
+  options?: { identityOf?: (req: HttpRequest) => string | undefined }
 ): RateLimiter => {
   const attempts = new Map<string, AttemptRecord>();
   const accountAttempts = new Map<string, AttemptRecord>();
@@ -117,7 +119,7 @@ export const createLimiter = (
   };
 
   return {
-    middleware: (req: Request, res: Response, next: NextFunction) => {
+    check: (req: HttpRequest) => {
       const ip = getClientIp(req);
       const account = identityOf?.(req);
       if (
@@ -125,10 +127,9 @@ export const createLimiter = (
         (account !== undefined &&
           isLimited(accountAttempts, accountKey(ip, account)))
       ) {
-        res.status(429).json({ status: "failed", message });
-        return;
+        return json({ status: "failed", message }, 429);
       }
-      next();
+      return undefined;
     },
     recordFailure: (ip: string, account?: string) => {
       bump(attempts, ip);
@@ -200,8 +201,8 @@ export const stopCleanupScheduler = () => {
   }
 };
 
-// Pre-configured limiters, shared by a router mount and the handler that
-// records against them.
+// Pre-configured limiters, shared by a router and the handler that records
+// against them.
 export const loginLimiter = createLimiter(
   5,
   "Too many login attempts, try again later",

@@ -1,4 +1,4 @@
-import { Pool, PoolConfig, types } from "pg";
+import { Pool, PoolOptions } from "./pool";
 
 const {
   POSTGRES_HOST: host = "localhost",
@@ -8,59 +8,26 @@ const {
   POSTGRES_DATABASE: database = "inbox",
 } = process.env;
 
-const timestampToIso = (s: string) => {
-  return s.replace(
-    /(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2})(:\d{2})?$/,
-    (_, d, t, m) => `${d}T${t}${m || ":00"}`,
-  );
-};
-
-const config: PoolConfig = {
+const config: PoolOptions = {
   host,
   port: parseInt(port, 10),
   user,
   password,
   database,
-  max: 20,
+  // The driver opens every connection on the first query rather than on
+  // demand, so this is a standing connection count, not a ceiling.
+  max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
-  statement_timeout: 30_000,
+  statementTimeoutMillis: 30_000,
   // Client-side backstop: fires if statement_timeout can't — e.g. the TCP
   // connection is silently wedged and the server never delivers the abort.
-  query_timeout: 30_000,
-  types: {
-    getTypeParser(id, format) {
-      if (id === types.builtins.NUMERIC) return parseFloat;
-      if (id === types.builtins.INT8) return parseFloat;
-      if (id === types.builtins.DATE) return (s: string) => s;
-      if (id === types.builtins.TIMESTAMPTZ) return timestampToIso;
-      return types.getTypeParser(id, format);
-    },
-  },
-};
-
-/**
- * Keeps a dropped connection (e.g. Postgres restarting) from becoming an
- * uncaught exception. pg emits it on the client, and pg-pool detaches its own
- * listener while a client is checked out, so every client gets one here. The
- * dead client's next query rejects and the pool replaces it.
- */
-const logDroppedConnections = (target: Pool): void => {
-  target.on("connect", (client) => {
-    client.on("error", (err) => {
-      console.error("Database connection lost:", err);
-    });
-  });
-  // pg-pool re-emits an idle client's error here, after the client listener logged it.
-  target.on("error", () => {});
+  queryTimeoutMillis: 30_000,
 };
 
 let _pool: Pool | null = null;
 const getPool = (): Pool => {
-  if (!_pool) {
-    _pool = new Pool(config);
-    logDroppedConnections(_pool);
-  }
+  if (!_pool) _pool = new Pool(config);
   return _pool;
 };
 export const resetPool = (): void => {

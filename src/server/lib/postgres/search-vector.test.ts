@@ -77,14 +77,26 @@ const SCHEMA = "search_vector_probe";
 
 // A plain `if` rather than `describe.skipIf`: the describe body still runs
 // under skipIf, so a Pool would be constructed and `afterAll` would fire a
-// DROP against whatever database `pg` defaults to from the environment.
+// DROP against whatever database the driver defaults to from the environment.
 if (PG_URL) describe("search_vector DDL against a real Postgres", () => {
-  // `pg` is imported through the same specifier other suites mock; take the
-  // preload's real snapshot when it exists so a leaked FakePool can't turn
+  // The driver is imported through the same specifier other suites mock; take
+  // the preload's real snapshot when it exists so a leaked FakePool can't turn
   // this into a silent no-op.
-  const pgModule = ((globalThis as Record<string, unknown>).__REAL_PG ??
-    require("pg")) as typeof import("pg");
-  const pool = new pgModule.Pool({ connectionString: PG_URL });
+  const poolModule = ((globalThis as Record<string, unknown>).__REAL_POOL ??
+    require("./pool")) as typeof import("./pool");
+  const url = new URL(PG_URL);
+  const pool = new poolModule.Pool({
+    host: url.hostname,
+    port: Number(url.port || 5432),
+    user: decodeURIComponent(url.username),
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    database: url.pathname.slice(1),
+    max: 2,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    statementTimeoutMillis: 0,
+    queryTimeoutMillis: 0,
+  });
 
   const q = async (sql: string, params?: unknown[]) => {
     const client = await pool.connect();

@@ -65,13 +65,13 @@ const pgMock = () => ({
 // Bun's process-global mock.module. The control-flow tests below never reach
 // the per-mail loop, so the mocked pool is harmless to them; the happy-path
 // tests exercise it. `afterAll(restoreLeaves)` + resetPool re-mocks pg to real.
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { copyMessageTyped } = await import("./message-ops");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

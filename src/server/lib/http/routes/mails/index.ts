@@ -1,6 +1,6 @@
-import { Router } from "express";
-import { authRequired } from "../route";
-import { uploadHandlers } from "../../upload";
+import type { HttpRequest } from "../../request";
+import { authRequired, dispatch, mountedPath } from "../route";
+import { parseUploads, removeTempFiles } from "../../upload";
 import { getDomainRoute } from "./get-domain";
 import { getAccountsRoute } from "./get-accounts";
 import { getHeadersRoute } from "./get-headers";
@@ -15,18 +15,6 @@ import { postMarkSpamMailRoute } from "./post-spam-mark";
 import { getSpamAllowlistRoute } from "./get-allowlist";
 import { postSpamAllowlistRoute } from "./post-allowlist";
 import { deleteSpamAllowlistRoute } from "./delete-allowlist";
-
-const mailsRouter = Router();
-
-// All mails routes require authentication, except /domain (public info).
-mailsRouter.use((req, res, next) => {
-  if (req.path === "/domain") return next();
-  return authRequired(req, res, next);
-});
-
-// Behind the auth gate above, so an unauthenticated multipart body is never
-// parsed to disk. /send is the only route that reads req.files.
-mailsRouter.use("/send", ...uploadHandlers);
 
 const routes = [
   getDomainRoute,
@@ -45,9 +33,26 @@ const routes = [
   deleteSpamAllowlistRoute
 ];
 
-routes.forEach((r) => r.register(mailsRouter));
+/** `/api/mails/*`, with `path` relative to that mount. */
+const handleMails = async (req: HttpRequest, path: string): Promise<Response | undefined> => {
+  // All mails routes require authentication, except /domain (public info).
+  if (path !== "/domain") {
+    const denied = authRequired(req);
+    if (denied) return denied;
+  }
 
-export default mailsRouter;
+  // Behind the auth gate above, so an unauthenticated multipart body is never
+  // parsed to disk. /send is the only route that reads req.files.
+  if (mountedPath(path, "/send") === undefined) return dispatch(routes, req, path);
+  const { rejection, tempFiles } = await parseUploads(req, req.raw);
+  try {
+    return rejection ?? (await dispatch(routes, req, path));
+  } finally {
+    removeTempFiles(tempFiles);
+  }
+};
+
+export default handleMails;
 
 export * from "./get-domain";
 export * from "./get-accounts";

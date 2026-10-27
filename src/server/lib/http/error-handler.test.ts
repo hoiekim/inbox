@@ -1,42 +1,20 @@
-import { describe, it, expect, mock, afterAll, afterEach, beforeEach } from "bun:test";
-import express from "express";
-import session from "express-session";
-import { createHmac } from "crypto";
-import type { Request, Response } from "express";
-import type { Server } from "http";
+import { describe, it, expect, afterAll, afterEach, beforeEach } from "bun:test";
+import type { RuntimeSessionType } from "common";
 
 import { resetAlarmState } from "../alarm";
+import { signSessionCookie, type SessionStore } from "./session";
 
-const makeReq = (path: string) =>
-  ({
-    method: "GET",
-    path,
-    sessionID: "sid-abc",
-  }) as unknown as Request;
+const makeReq = (path: string) => ({ method: "GET", path, sessionId: "sid-abc" });
 
-const makeRes = (init?: { headersSent?: boolean; writableEnded?: boolean }) => {
-  const res: Record<string, unknown> = {
-    headersSent: init?.headersSent ?? false,
-    writableEnded: init?.writableEnded ?? false,
+/** A handler response read back as status, content type and parsed body. */
+const read = async (response: Response) => {
+  const text = await response.text();
+  const type = response.headers.get("content-type") ?? "";
+  return {
+    status: response.status,
+    type,
+    body: type.includes("application/json") ? (JSON.parse(text) as unknown) : text,
   };
-  res.status = mock((code: number) => {
-    res._code = code;
-    return res;
-  });
-  res.json = mock((body: unknown) => {
-    res._body = body;
-    return res;
-  });
-  res.type = mock((value: string) => {
-    res._type = value;
-    return res;
-  });
-  res.send = mock((body: unknown) => {
-    res._body = body;
-    return res;
-  });
-  res.end = mock(() => res);
-  return res as unknown as Response & Record<string, unknown>;
 };
 
 const originalConsoleError = console.error;
@@ -74,14 +52,11 @@ const badRequest = (message: string) => Object.assign(new Error(message), { stat
 describe("errorHandler", () => {
   it("answers /api/* with a 500 JSON error body", async () => {
     const { errorHandler } = await import("./error-handler");
-    const res = makeRes();
-    const next = mock(() => {});
 
-    errorHandler(new Error("connection terminated unexpectedly"), makeReq("/api/mails"), res, next);
+    const res = await read(errorHandler(new Error("connection terminated unexpectedly"), makeReq("/api/mails")));
 
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res._body).toEqual({ status: "error", message: "Internal server error" });
-    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ status: "error", message: "Internal server error" });
   });
 
   // The driver message names the table and column it failed on, and the
@@ -89,23 +64,12 @@ describe("errorHandler", () => {
   // it by default rather than withhold it by default.
   it("keeps the underlying driver message out of the response body", async () => {
     const { errorHandler } = await import("./error-handler");
-    const apiRes = makeRes();
-    const pageRes = makeRes();
+    const fault = new Error('relation "sessions" does not exist');
 
-    errorHandler(
-      new Error('relation "sessions" does not exist'),
-      makeReq("/api/mails"),
-      apiRes,
-      mock(() => {})
-    );
-    errorHandler(
-      new Error('relation "sessions" does not exist'),
-      makeReq("/"),
-      pageRes,
-      mock(() => {})
-    );
+    const api = await read(errorHandler(fault, makeReq("/api/mails")));
+    const page = await read(errorHandler(fault, makeReq("/")));
 
-    expect([JSON.stringify(apiRes._body), String(pageRes._body)]).toEqual([
+    expect([JSON.stringify(api.body), page.body]).toEqual([
       JSON.stringify({ status: "error", message: "Internal server error" }),
       "Internal server error",
     ]);
@@ -113,31 +77,22 @@ describe("errorHandler", () => {
 
   it("answers a non-API path with a plain-text 500 rather than JSON", async () => {
     const { errorHandler } = await import("./error-handler");
-    const res = makeRes();
-    const next = mock(() => {});
 
-    errorHandler(new Error("connection terminated unexpectedly"), makeReq("/"), res, next);
+    const res = await read(errorHandler(new Error("connection terminated unexpectedly"), makeReq("/")));
 
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res._type).toBe("text/plain");
-    expect(res.json).not.toHaveBeenCalled();
-    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(res.type).toBe("text/plain; charset=utf-8");
   });
 
-  it("passes through the status an upstream middleware asked for", async () => {
+  it("passes through the status a body parser asked for", async () => {
     const { errorHandler } = await import("./error-handler");
-    const malformed = makeRes();
-    const tooLarge = makeRes();
 
-    errorHandler(badRequest("Unexpected end of JSON input"), makeReq("/api/mails"), malformed, mock(() => {}));
-    errorHandler(
-      Object.assign(new Error("request entity too large"), { statusCode: 413 }),
-      makeReq("/api/mails"),
-      tooLarge,
-      mock(() => {})
+    const malformed = await read(errorHandler(badRequest("Unexpected end of JSON input"), makeReq("/api/mails")));
+    const tooLarge = await read(
+      errorHandler(Object.assign(new Error("request entity too large"), { statusCode: 413 }), makeReq("/api/mails"))
     );
 
-    expect([malformed._code, malformed._body, tooLarge._code, tooLarge._body]).toEqual([
+    expect([malformed.status, malformed.body, tooLarge.status, tooLarge.body]).toEqual([
       400,
       { status: "error", message: "Bad Request" },
       413,
@@ -147,48 +102,17 @@ describe("errorHandler", () => {
 
   it("treats a 5xx carried on the error as ours, not as a passthrough", async () => {
     const { errorHandler } = await import("./error-handler");
-    const res = makeRes();
 
-    errorHandler(
-      Object.assign(new Error("bad gateway"), { status: 502 }),
-      makeReq("/api/mails"),
-      res,
-      mock(() => {})
-    );
+    const res = await read(errorHandler(Object.assign(new Error("bad gateway"), { status: 502 }), makeReq("/api/mails")));
 
-    expect([res._code, res._body]).toEqual([500, { status: "error", message: "Internal server error" }]);
-  });
-
-  it("ends a headers-sent response instead of forwarding to finalhandler", async () => {
-    const { errorHandler } = await import("./error-handler");
-    const res = makeRes({ headersSent: true });
-    const next = mock(() => {});
-
-    errorHandler(new Error("could not serialize session write"), makeReq("/api/mails"), res, next);
-
-    // finalhandler answers a headers-sent error by destroying the socket,
-    // which truncates a body that has already begun streaming.
-    expect(next).not.toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-    expect(res.end).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves an already-ended response alone", async () => {
-    const { errorHandler } = await import("./error-handler");
-    const res = makeRes({ headersSent: true, writableEnded: true });
-    const next = mock(() => {});
-
-    errorHandler(new Error("could not serialize session write"), makeReq("/api/mails"), res, next);
-
-    expect(res.end).not.toHaveBeenCalled();
-    expect(next).not.toHaveBeenCalled();
+    expect([res.status, res.body]).toEqual([500, { status: "error", message: "Internal server error" }]);
   });
 
   it("logs the failing request and its session id", async () => {
     const { errorHandler } = await import("./error-handler");
     const lines = captureErrorLogs();
 
-    errorHandler(new Error("connection terminated unexpectedly"), makeReq("/api/mails"), makeRes(), mock(() => {}));
+    errorHandler(new Error("connection terminated unexpectedly"), makeReq("/api/mails"));
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("Unhandled middleware error");
@@ -200,7 +124,7 @@ describe("errorHandler", () => {
     const { errorHandler } = await import("./error-handler");
     const lines = captureErrorLogs();
 
-    errorHandler(badRequest("Unexpected end of JSON input"), makeReq("/api/mails"), makeRes(), mock(() => {}));
+    errorHandler(badRequest("Unexpected end of JSON input"), makeReq("/api/mails"));
 
     expect(lines).toEqual([]);
   });
@@ -208,52 +132,51 @@ describe("errorHandler", () => {
 
 /**
  * The properties below cannot be observed on the exported function: that the
- * handler is *registered* in the app the server actually runs, that an error
- * raised upstream of `app.use("/api", apiRouter)` skips that layer and reaches
- * it, and that it alarms. Each one is asserted against the real chain, with
- * only the session store swapped out.
+ * handler is wired into the pipeline the server actually runs, that a fault
+ * raised before any route runs reaches it, and that it alarms. Each one is
+ * asserted against the real pipeline, with only the session store swapped out.
  */
 const SECRET = "error-handler-test-secret-not-published-0123456789";
 
-const signCookie = (value: string) =>
-  `s:${value}.${createHmac("sha256", SECRET).update(value).digest("base64").replace(/=+$/, "")}`;
+const STORED_SESSION = {
+  user: { id: "u1", username: "alice", email: "alice@example.com" },
+  cookie: {
+    originalMaxAge: 604800000,
+    _expires: new Date(Date.now() + 604800000),
+    httpOnly: true,
+    path: "/",
+    secure: false,
+    sameSite: "strict",
+  },
+} as unknown as RuntimeSessionType;
 
-class FaultingStore extends session.Store {
-  get(_id: string, callback: (err?: unknown, data?: session.SessionData | null) => void) {
-    callback(new Error("connection terminated unexpectedly"));
-  }
-  set(_id: string, _data: session.SessionData, callback?: (err?: unknown) => void) {
-    callback?.();
-  }
-  destroy(_id: string, callback?: (err?: unknown) => void) {
-    callback?.();
-  }
+/** A store whose reads fail, or — with `failWrites` — whose reads succeed and writes fail. */
+class FaultingStore implements SessionStore {
+  constructor(private readonly failWrites = false) {}
+  get = async () => {
+    if (this.failWrites) return STORED_SESSION;
+    throw new Error("connection terminated unexpectedly");
+  };
+  set = async () => {
+    if (this.failWrites) throw new Error("could not serialize session write");
+  };
+  destroy = async () => {};
 }
-
-const listen = async (app: express.Application) => {
-  const server: Server = await new Promise((resolve) => {
-    const s = app.listen(0, () => resolve(s));
-  });
-  const { port } = server.address() as { port: number };
-  return { server, baseUrl: `http://127.0.0.1:${port}` };
-};
-
-const close = (server: Server) => new Promise<void>((resolve) => server.close(() => resolve()));
 
 /** Stands in for the Discord webhook so a real `sendAlarm` is observable. */
 const startAlarmSink = async () => {
   const received: Array<Record<string, unknown>> = [];
   let announce: (() => void) | undefined;
-  const app = express();
-  app.use(express.json());
-  app.post("/hook", (req, res) => {
-    received.push(req.body as Record<string, unknown>);
-    res.status(204).end();
-    announce?.();
+  const server = Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      received.push((await request.json()) as Record<string, unknown>);
+      announce?.();
+      return new Response(null, { status: 204 });
+    },
   });
-  const { server, baseUrl } = await listen(app);
   return {
-    url: `${baseUrl}/hook`,
+    url: `http://127.0.0.1:${server.port}/hook`,
     received,
     firstPayload: () =>
       new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -266,7 +189,7 @@ const startAlarmSink = async () => {
         announce = settle;
         settle();
       }),
-    close: () => close(server),
+    close: () => server.stop(true),
   };
 };
 
@@ -289,55 +212,57 @@ describe("errorHandler in the assembled app", () => {
     else delete process.env.SECRET;
   });
 
-  const withApp = async (run: (baseUrl: string) => Promise<void>) => {
+  const call = async (path: string, init?: RequestInit, store = new FaultingStore()) => {
     const { createHttpApp } = await import("./index");
-    const { server, baseUrl } = await listen(createHttpApp(new FaultingStore()));
-    try {
-      await run(baseUrl);
-    } finally {
-      await close(server);
-    }
+    return createHttpApp(store)(new Request(`http://localhost${path}`, init), "127.0.0.1");
   };
 
-  const faultingCookie = { Cookie: `connect.sid=${encodeURIComponent(signCookie("fault-sid"))}` };
+  const faultingCookie = { Cookie: `connect.sid=${encodeURIComponent(signSessionCookie("fault-sid", SECRET))}` };
 
   it("answers a store fault on /api/* with JSON on the wire", async () => {
-    await withApp(async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/api/mails`, { headers: faultingCookie });
-      const body = await res.text();
+    const res = await call("/api/mails", { headers: faultingCookie });
 
-      expect(res.status).toBe(500);
-      expect(res.headers.get("content-type")).toContain("application/json");
-      expect(JSON.parse(body)).toEqual({ status: "error", message: "Internal server error" });
-    });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({ status: "error", message: "Internal server error" });
   });
 
-  // finalhandler's answer is text/html; the router's own handler never runs,
-  // because express skips a non-arity-4 layer while an error is in flight.
-  it("answers a store fault outside /api with plain text, not express's HTML", async () => {
-    await withApp(async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/`, { headers: faultingCookie });
-      const body = await res.text();
+  it("answers a store fault outside /api with plain text", async () => {
+    const res = await call("/", { headers: faultingCookie });
 
-      expect(res.status).toBe(500);
-      expect(res.headers.get("content-type")).toContain("text/plain");
-      expect(body).toBe("Internal server error");
-    });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    expect(await res.text()).toBe("Internal server error");
   });
 
   it("raises the alarm for the store fault", async () => {
     const sink = await startAlarmSink();
     process.env.DISCORD_ALARM_WEBHOOK = sink.url;
     try {
-      await withApp(async (baseUrl) => {
-        await fetch(`${baseUrl}/api/mails`, { headers: faultingCookie });
-        const payload = await sink.firstPayload();
+      await call("/api/mails", { headers: faultingCookie });
+      const payload = await sink.firstPayload();
 
-        expect(alarmTitle(payload)).toContain("Unhandled Middleware Error");
-        expect(alarmDetail(payload)).toContain("connection terminated unexpectedly");
-      });
+      expect(alarmTitle(payload)).toContain("Unhandled Middleware Error");
+      expect(alarmDetail(payload)).toContain("connection terminated unexpectedly");
     } finally {
-      await sink.close();
+      sink.close();
+    }
+  });
+
+  // The route's answer is already decided when the session is written back,
+  // so a failed write is reported without rewriting a complete response.
+  it("keeps the route's answer and alarms when the session write fails", async () => {
+    const sink = await startAlarmSink();
+    process.env.DISCORD_ALARM_WEBHOOK = sink.url;
+    try {
+      const res = await call("/api/ping", { headers: faultingCookie }, new FaultingStore(true));
+      expect([res.status, await res.json()]).toEqual([200, { status: "success" }]);
+
+      const payload = await sink.firstPayload();
+      expect(alarmTitle(payload)).toContain("Unhandled Middleware Error");
+      expect(alarmDetail(payload)).toContain("could not serialize session write");
+    } finally {
+      sink.close();
     }
   });
 
@@ -347,22 +272,43 @@ describe("errorHandler in the assembled app", () => {
     const sink = await startAlarmSink();
     process.env.DISCORD_ALARM_WEBHOOK = sink.url;
     try {
-      await withApp(async (baseUrl) => {
-        const malformed = await fetch(`${baseUrl}/api/probe`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{ not json",
-        });
-        expect(malformed.status).toBe(400);
-
-        await fetch(`${baseUrl}/api/mails`, { headers: faultingCookie });
-        const payload = await sink.firstPayload();
-
-        expect(alarmDetail(payload)).toContain("connection terminated unexpectedly");
-        expect(sink.received).toHaveLength(1);
+      const malformed = await call("/api/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{ not json",
       });
+      expect(malformed.status).toBe(400);
+
+      await call("/api/mails", { headers: faultingCookie });
+      const payload = await sink.firstPayload();
+
+      expect(alarmDetail(payload)).toContain("connection terminated unexpectedly");
+      expect(sink.received).toHaveLength(1);
     } finally {
-      await sink.close();
+      sink.close();
+    }
+  });
+
+  it("does not disclose a stack trace on a malformed body in production", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const res = await call("/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{ not json",
+      });
+      const body = await res.text();
+
+      expect(res.status).toBe(400);
+      expect([body.includes("SyntaxError"), body.includes("at "), body.includes(".js:")]).toEqual([
+        false,
+        false,
+        false,
+      ]);
+    } finally {
+      if (originalNodeEnv !== undefined) process.env.NODE_ENV = originalNodeEnv;
+      else delete process.env.NODE_ENV;
     }
   });
 });

@@ -1,5 +1,5 @@
-import bcrypt from "bcryptjs";
 import { pool } from "../client";
+import { hashPassword } from "../../verify-password";
 import {
   MaskedUser,
   User,
@@ -36,7 +36,7 @@ export const writeUser = async (
   user: IndexUserInput
 ): Promise<{ _id: string } | undefined> => {
   const { user_id, username, password, email, password_version } = user;
-  const hashedPassword = password ? await bcrypt.hash(password, 10) : undefined;
+  const hashedPassword = password ? await hashPassword(password) : undefined;
 
   const row: Record<string, unknown> = { username, password: hashedPassword };
   if (user_id) row.user_id = user_id;
@@ -110,7 +110,7 @@ export const updateUser = async (user: PartialUser): Promise<boolean> => {
   const updates: Record<string, unknown> = {};
   if (username !== undefined) updates.username = username;
   if (password !== undefined)
-    updates.password = await bcrypt.hash(password, 10);
+    updates.password = await hashPassword(password);
   if (email !== undefined) updates.email = email;
 
   if (Object.keys(updates).length === 0) return false;

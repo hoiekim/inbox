@@ -9,7 +9,6 @@ import {
   afterAll,
 } from "bun:test";
 import { restoreLeaves } from "test-helpers";
-import bcrypt from "bcryptjs";
 import type { ImapSession } from "./session";
 import {
   registerAuthenticatedSession,
@@ -23,7 +22,7 @@ import {
 // process scope so the lazy pool in postgres/client.ts points at a fake, then
 // exercise the real ImapSession.
 const PASSWORD = "correct-horse-battery";
-const PASSWORD_HASH = bcrypt.hashSync(PASSWORD, 4);
+const PASSWORD_HASH = Bun.password.hashSync(PASSWORD, { algorithm: "bcrypt", cost: 4 });
 
 const makeUserRow = (username: string) => ({
   user_id: `user-${username}`,
@@ -56,13 +55,13 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { ImapSession } = await import("./session");
 const { resetPool } = await import("../postgres/client");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

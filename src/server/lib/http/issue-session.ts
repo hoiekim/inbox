@@ -1,5 +1,5 @@
-import { Request } from "express";
 import { SignedUser } from "common";
+import type { HttpRequest } from "./request";
 
 /**
  * Attaches `user` to a freshly generated session id. Every route that turns an
@@ -13,9 +13,7 @@ import { SignedUser } from "common";
  * The assignment waits for the reissue, so a session that could not be reissued
  * is left anonymous rather than handed the identity on its existing id.
  */
-export const issueAuthenticatedSession = async (req: Request, user: SignedUser) => {
-  await new Promise<void>((resolve, reject) => {
-    req.session.regenerate((err) => (err ? reject(err) : resolve()));
-  });
+export const issueAuthenticatedSession = async (req: HttpRequest, user: SignedUser) => {
+  await req.session.regenerate();
   req.session.user = user;
 };

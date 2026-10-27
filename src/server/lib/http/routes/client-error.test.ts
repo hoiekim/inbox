@@ -1,6 +1,5 @@
-import { describe, it, expect, mock, beforeAll, afterAll, beforeEach } from "bun:test";
-import express from "express";
-import type { Server } from "http";
+import { describe, it, expect, mock, afterAll, beforeEach } from "bun:test";
+import type { HttpRequest } from "../request";
 
 // Mock the alarm module so we can observe calls without touching Discord.
 const mockSendAlarm = mock(async () => {});
@@ -8,39 +7,10 @@ mock.module("../../alarm", () => ({
   sendAlarm: mockSendAlarm,
 }));
 
-let server: Server;
-let baseUrl: string;
-// alarm.test.ts (and possibly others) overrides global.fetch. We need the
-// real fetch to drive HTTP into our listening server.
-const realFetch = globalThis.fetch;
+// Imported after the mock is in place so the handler picks up mockSendAlarm.
+const handleClientError = (await import("./client-error")).default;
 
-beforeAll(async () => {
-  // Re-import after mocks are in place so the router picks up mockSendAlarm.
-  const clientErrorRouter = (await import("./client-error")).default;
-
-  const app = express();
-  // Adopt production's trust-proxy posture so a forwarded address selects the
-  // bucket, the way it does behind the real proxy. Without it express ignores
-  // the header and every case in this file shares one bucket.
-  app.set("trust proxy", ["loopback", "uniquelocal"]);
-  app.use(express.json());
-  app.use("/api/client-error", clientErrorRouter);
-
-  await new Promise<void>((resolve) => {
-    server = app.listen(0, () => {
-      const addr = server.address();
-      if (addr && typeof addr === "object") {
-        baseUrl = `http://127.0.0.1:${addr.port}`;
-      }
-      resolve();
-    });
-  });
-});
-
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((err) => (err ? reject(err) : resolve()));
-  });
+afterAll(() => {
   // `mock.module` is process-global with no unmock API — hand the real alarm
   // back so the next file in the same run does not inherit the stub.
   const realAlarm = (globalThis as Record<string, unknown>).__REAL_ALARM;
@@ -51,16 +21,11 @@ beforeEach(() => {
   mockSendAlarm.mockClear();
 });
 
+/** A report as it reaches the handler, attributed to `ip`. */
 const postClientError = async (ip: string, body: object = { message: "x" }) => {
-  if (!baseUrl) throw new Error(`baseUrl not set (server start failed)`);
-  return realFetch(`${baseUrl}/api/client-error`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-forwarded-for": ip,
-    },
-    body: JSON.stringify(body),
-  });
+  const res = await handleClientError({ method: "POST", ip, body } as unknown as HttpRequest, "/");
+  if (!res) throw new Error("client-error handler did not answer POST /");
+  return res;
 };
 
 describe("POST /api/client-error rate limiting (issue #517)", () => {

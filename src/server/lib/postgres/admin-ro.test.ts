@@ -3,7 +3,6 @@
  * `ADMIN_RO_PASSWORD` — seeding when it is set, revoking when it is not.
  */
 import { describe, it, expect, mock, spyOn, beforeEach, afterAll } from "bun:test";
-import bcrypt from "bcryptjs";
 import * as realRepositories from "./repositories";
 import { ADMIN_RO_USERNAME } from "../read-only";
 import { logger } from "../logger";
@@ -54,12 +53,12 @@ const SEEDED_ROW = {
   user_id: "ro-user-id",
   username: ADMIN_RO_USERNAME,
   email: `${ADMIN_RO_USERNAME}@mydomain`,
-  password: bcrypt.hashSync(CONFIGURED_PASSWORD, 10),
+  password: Bun.password.hashSync(CONFIGURED_PASSWORD, { algorithm: "bcrypt", cost: 10 }),
 };
 
 const ROW_WITH_PREVIOUS_PASSWORD = {
   ...SEEDED_ROW,
-  password: bcrypt.hashSync("the-leaked-password", 10),
+  password: Bun.password.hashSync("the-leaked-password", { algorithm: "bcrypt", cost: 10 }),
 };
 
 const originalPassword = process.env.ADMIN_RO_PASSWORD;

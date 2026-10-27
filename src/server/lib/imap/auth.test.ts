@@ -15,7 +15,7 @@
  *    comparison when the user does not exist answers in a few microseconds
  *    instead of a few dozen milliseconds, which turns the auth endpoint into
  *    a username oracle. Asserting the refusal cannot see that difference —
- *    both implementations refuse — so the assertion is that `bcrypt.compare`
+ *    both implementations refuse — so the assertion is that `Bun.password.verify`
  *    ran, on a real hash, the same number of times as it does for a user that
  *    exists.
  *  - **A refusal past the threshold closes the socket.** The rate limiter
@@ -32,28 +32,20 @@ import { ADMIN_RO_USERNAME, ADMIN_USERNAME } from "../read-only";
 import { encryptPassword } from "../users";
 import * as authRateLimit from "../auth-rate-limit";
 
-const realBcrypt = (globalThis as Record<string, unknown>).__REAL_BCRYPT as {
-  compare: (password: string, hash: string) => Promise<boolean>;
-  hash: (password: string, rounds: number) => Promise<string>;
-  default: Record<string, unknown>;
-};
+const realVerify = Bun.password.verify.bind(Bun.password);
 
 /**
- * Every `bcrypt.compare` the subject makes, as `[password, hash]`. The real
- * implementation still runs — a stub that returned a constant would make the
- * success cases pass without a working comparison.
+ * Every `Bun.password.verify` the subject makes, as `[password, hash]`. The
+ * real implementation still runs — a stub that returned a constant would make
+ * the success cases pass without a working comparison.
  */
 const compareCalls: [string, string][] = [];
-const trackedCompare = (password: string, hash: string) => {
-  compareCalls.push([password, hash]);
-  return realBcrypt.compare(password, hash);
-};
-
-mock.module("bcryptjs", () => ({
-  ...realBcrypt,
-  compare: trackedCompare,
-  default: { ...realBcrypt.default, compare: trackedCompare },
-}));
+const verifySpy = spyOn(Bun.password, "verify").mockImplementation(async (password, hash) => {
+  const text =
+    typeof password === "string" ? password : new TextDecoder().decode(password as Uint8Array);
+  compareCalls.push([text, hash]);
+  return realVerify(password, hash);
+});
 
 const realServer = (globalThis as Record<string, unknown>).__REAL_SERVER as Record<
   string,
@@ -92,6 +84,7 @@ const { handleAuthenticate, handleLogin } = await import("./auth");
 const { ImapRequestHandler } = await import("./handler");
 
 afterAll(() => {
+  verifySpy.mockRestore();
   mockIsAuthRateLimited.mockRestore();
   mockRecordAuthFailure.mockRestore();
   mockResetAuthFailures.mockRestore();
@@ -171,8 +164,11 @@ const plainResponse = (username: string, password: string) =>
 
 const signedUser = { id: "user-1", username: "admin", email: "admin@test.com" };
 
+/** A cost-4 digest of the empty string, which `Bun.password.hash` refuses to produce. */
+const EMPTY_PASSWORD_DIGEST = "$2b$04$1ZJlW09Oj.28Pc9tQVIVleBOo11ISY6Ra1sWrn.NHENatHa9CdAz6";
+
 /** Cost 4 keeps the fixture hashes real bcrypt digests without the 10-round wait. */
-const hashOf = (password: string) => realBcrypt.hash(password, 4);
+const hashOf = (password: string) => Bun.password.hash(password, { algorithm: "bcrypt", cost: 4 });
 
 beforeEach(() => {
   compareCalls.length = 0;
@@ -304,7 +300,7 @@ describe("handleAuthenticate", () => {
   it("refuses an empty password even when the stored hash would match it", async () => {
     const { socket, args } = makeHarness();
     mockGetUser.mockImplementation(async () => ({
-      password: await hashOf(""),
+      password: EMPTY_PASSWORD_DIGEST,
       getSigned: () => signedUser,
     }));
 
@@ -503,7 +499,7 @@ describe("handleLogin", () => {
   it("refuses an empty password even when the stored hash would match it", async () => {
     const harness = makeHarness();
     mockGetUser.mockImplementation(async () => ({
-      password: await hashOf(""),
+      password: EMPTY_PASSWORD_DIGEST,
       getSigned: () => signedUser,
     }));
 
@@ -656,7 +652,7 @@ describe("username enumeration resistance", () => {
     await handleLogin("C6", ["nobody", "hunter2"], unknown.args[0], unknown.args[1], unknown.args[3]);
 
     expect(compareCalls[0]![1]).not.toBe(realHash);
-    expect(await realBcrypt.compare("hunter2", compareCalls[0]![1])).toBe(false);
+    expect(await realVerify("hunter2", compareCalls[0]![1])).toBe(false);
   });
 });
 
@@ -846,8 +842,9 @@ describe("read-only credential session resolution", () => {
 });
 
 describe("SASL continuation line", () => {
+  // Long enough for a cost-10 bcrypt round, which runs off the event loop.
   const settle = async () => {
-    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
+    for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
   };
 
   it("cancels the exchange on a bare asterisk without reaching the user store", async () => {

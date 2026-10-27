@@ -80,7 +80,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const {
   buildMessageSegments,
@@ -101,7 +101,7 @@ const sessionUtils = await import("./session-utils");
 type MessageSegment = ReturnType<typeof buildMessageSegments>[number];
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

@@ -89,7 +89,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const {
   appendMessage,
@@ -105,7 +105,7 @@ const { resetPool } = await import("../postgres/client");
 const { getUserDomain } = await import("server");
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

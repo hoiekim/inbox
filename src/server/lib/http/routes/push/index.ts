@@ -1,20 +1,9 @@
-import { Router } from "express";
-import { authRequired } from "../route";
+import type { HttpRequest } from "../../request";
+import { authRequired, dispatch } from "../route";
 import { deleteSubscribeRoute } from "./delete-subscribe";
 import { getPublicKeyRoute } from "./get-public-key";
 import { getRefreshRoute } from "./get-refresh";
 import { postSubscribeRoute } from "./post-subscribe";
-
-const pushRouter = Router();
-
-// /public-key and /refresh/:id are intentionally unauthenticated.
-// /public-key returns the VAPID public key needed before subscription.
-// /refresh/:id is called by a service worker using a stored subscription ID.
-// Everything else (/subscribe) requires a logged-in session.
-pushRouter.use((req, res, next) => {
-  if (req.path === "/public-key" || req.path.startsWith("/refresh")) return next();
-  return authRequired(req, res, next);
-});
 
 const routes = [
   getPublicKeyRoute,
@@ -23,9 +12,20 @@ const routes = [
   deleteSubscribeRoute,
 ];
 
-routes.forEach((r) => r.register(pushRouter));
+/** `/api/push/*`, with `path` relative to that mount. */
+const handlePush = async (req: HttpRequest, path: string): Promise<Response | undefined> => {
+  // /public-key and /refresh/:id are intentionally unauthenticated.
+  // /public-key returns the VAPID public key needed before subscription.
+  // /refresh/:id is called by a service worker using a stored subscription ID.
+  // Everything else (/subscribe) requires a logged-in session.
+  if (path !== "/public-key" && !path.startsWith("/refresh")) {
+    const denied = authRequired(req);
+    if (denied) return denied;
+  }
+  return dispatch(routes, req, path);
+};
 
-export default pushRouter;
+export default handlePush;
 
 export * from "./delete-subscribe";
 export * from "./get-public-key";

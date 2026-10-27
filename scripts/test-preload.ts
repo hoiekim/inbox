@@ -1,13 +1,13 @@
 /**
  * Test preload — runs ONCE before any test file in `bun test`.
  *
- * Captures real exports of leaf node-modules that tests commonly mock
- * (`pg`, `web-push`, `bcryptjs`) onto `globalThis.__REAL_*` so test files can
+ * Captures real exports of leaf modules that tests commonly mock (the
+ * database pool driver and `web-push`) onto `globalThis.__REAL_*` so test files can
  * `afterAll`-restore via `scripts/test-helpers.ts#restoreLeaves` and
  * not leak per-file `mock.module(...)` overrides into the next file.
  *
  * `mock.module(...)` in Bun is process-wide and has no `unmock` API —
- * once test A mocks `"pg"` with a FakePool, every subsequent test file
+ * once test A mocks the pool driver with a FakePool, every subsequent test file
  * sees the mock unless explicitly re-mocked back to real. The snapshots
  * captured here are the "real" baseline.
  *
@@ -22,21 +22,13 @@
  * the next file's web-push call when an internal reference is missing.
  */
 
-const realPg = require("pg");
+const realPool = require("server/lib/postgres/pool");
 const realWebPush = require("web-push");
-const realBcrypt = require("bcryptjs");
 
-(globalThis as Record<string, unknown>).__REAL_PG = {
-  ...realPg,
-  default: realPg.default ?? realPg,
-};
+(globalThis as Record<string, unknown>).__REAL_POOL = { ...realPool };
 (globalThis as Record<string, unknown>).__REAL_WEB_PUSH = {
   ...realWebPush,
   default: realWebPush.default ?? realWebPush,
-};
-(globalThis as Record<string, unknown>).__REAL_BCRYPT = {
-  ...realBcrypt,
-  default: realBcrypt.default ?? realBcrypt,
 };
 
 // The `server` barrel is captured here too so files that

@@ -232,12 +232,11 @@ describe("sendMailgunMail", () => {
       mimetype: "application/pdf",
       size: 1024,
       tempFilePath: "/tmp/uploaded-file.pdf",
-      data: Buffer.alloc(0),
     };
     await sendMailgunMail(
       "admin",
       mail,
-      mockFile as import("express-fileupload").UploadedFile
+      mockFile as import("../http/upload").UploadedFile
     );
     expect(mockMessagesCreate).toHaveBeenCalledTimes(3);
     expect(mockReadFileSync).toHaveBeenCalledTimes(1);
@@ -340,36 +339,20 @@ describe("sendMailgunMail", () => {
       mimetype: "application/pdf",
       size: 1024,
       tempFilePath: "/tmp/uploaded-file.pdf",
-      data: Buffer.alloc(0),
     };
-    await sendMailgunMail("admin", baseMail, mockFile as import("express-fileupload").UploadedFile);
+    await sendMailgunMail("admin", baseMail, mockFile as import("../http/upload").UploadedFile);
     expect(mockReadFileSync).toHaveBeenCalledWith("/tmp/uploaded-file.pdf");
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.attachment).toHaveLength(1);
     expect(msgData.attachment[0].filename).toBe("test.pdf");
   });
 
-  it("should handle file attachment from data buffer", async () => {
-    const fileData = Buffer.from("file-content");
-    const mockFile = {
-      name: "image.jpg",
-      mimetype: "image/jpeg",
-      size: 512,
-      tempFilePath: "",
-      data: fileData,
-    };
-    await sendMailgunMail("admin", baseMail, mockFile as import("express-fileupload").UploadedFile);
-    const msgData = mockMessagesCreate.mock.calls[0][1];
-    expect(msgData.attachment).toHaveLength(1);
-    expect(msgData.attachment[0].filename).toBe("image.jpg");
-  });
-
   it("should handle array of file attachments", async () => {
     const mockFiles = [
-      { name: "a.pdf", mimetype: "application/pdf", size: 100, tempFilePath: "", data: Buffer.from("a") },
-      { name: "b.pdf", mimetype: "application/pdf", size: 200, tempFilePath: "", data: Buffer.from("b") },
+      { name: "a.pdf", mimetype: "application/pdf", size: 100, tempFilePath: "/tmp/a.pdf" },
+      { name: "b.pdf", mimetype: "application/pdf", size: 200, tempFilePath: "/tmp/b.pdf" },
     ];
-    await sendMailgunMail("admin", baseMail, mockFiles as import("express-fileupload").UploadedFile[]);
+    await sendMailgunMail("admin", baseMail, mockFiles as import("../http/upload").UploadedFile[]);
     const msgData = mockMessagesCreate.mock.calls[0][1];
     expect(msgData.attachment).toHaveLength(2);
   });

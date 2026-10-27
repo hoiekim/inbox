@@ -74,11 +74,10 @@ export const postLoginRoute = new Route<LoginPostResponse>(
     await issueAuthenticatedSession(req, sessionUser);
 
     // The store write is what makes the issued cookie mean anything, so it has
-    // to land before the response claims the login succeeded. express-session
-    // otherwise saves at `res.end`, after the success body is already written.
-    await new Promise<void>((resolve, reject) => {
-      req.session.save((err) => (err ? reject(err) : resolve()));
-    });
+    // to land before the response claims the login succeeded. The save made as
+    // the response completes comes after the success body is decided, and can
+    // only report a failure, not refuse the login.
+    await req.session.save();
 
     // Scoped reset: forgive only the authenticating account's own bucket. The
     // per-IP aggregate keeps its count, so a success here cannot wipe another

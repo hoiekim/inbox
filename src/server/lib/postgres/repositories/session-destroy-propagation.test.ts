@@ -5,9 +5,9 @@
  * as a logout that answers success while the session row survives.
  *
  * The stub is installed through the pool Proxy's set trap instead of
- * `mock.module("pg", ...)` — the pg module registry is process-global and
- * which `Pool` binding is live depends on test-file order, which differs
- * between platforms.
+ * `mock.module("server/lib/postgres/pool", ...)` — the module registry is
+ * process-global and which `Pool` binding is live depends on test-file order,
+ * which differs between platforms.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from "bun:test";
 import { pool, resetPool } from "../client";
@@ -15,6 +15,7 @@ import { PostgresSessionStore } from "./sessions";
 
 type DeleteMode = "ok" | "nomatch" | "throw";
 let deleteMode: DeleteMode = "ok";
+let rowExpired = false;
 
 const SESSION_ID = "test-session-id";
 const WEEK_MS = 1000 * 60 * 60 * 24 * 7;
@@ -30,7 +31,7 @@ const liveSessionRow = () => ({
   cookie_original_max_age: WEEK_MS,
   cookie_max_age: WEEK_MS,
   cookie_signed: null,
-  cookie_expires: new Date(Date.now() + WEEK_MS).toISOString(),
+  cookie_expires: new Date(Date.now() + (rowExpired ? -1 : 1) * WEEK_MS).toISOString(),
   cookie_http_only: true,
   cookie_path: "/",
   cookie_domain: null,
@@ -74,25 +75,23 @@ afterAll(() => {
 
 beforeEach(() => {
   deleteMode = "ok";
+  rowExpired = false;
   issuedSql.length = 0;
   installQueryStub();
 });
 
+/** Resolves with the error `destroy` rejected with, or null when it resolved. */
 const destroyResult = (session_id: string) =>
-  new Promise<unknown>((resolve) => {
-    store.destroy(session_id, (err) => resolve(err ?? null));
-  });
+  store.destroy(session_id).then(
+    () => null,
+    (err: unknown) => err
+  );
 
 const getSession = (session_id: string) =>
-  new Promise<{ user: { id: string } } | null>((resolve, reject) => {
-    store.get(session_id, (err, session) => {
-      if (err) reject(err);
-      else resolve((session as { user: { id: string } }) ?? null);
-    });
-  });
+  store.get(session_id) as Promise<{ user: { id: string } } | null>;
 
 describe("PostgresSessionStore.destroy", () => {
-  it("calls back with the error when the session DELETE raises, and the session stays live", async () => {
+  it("rejects when the session DELETE raises, and the session stays live", async () => {
     deleteMode = "throw";
 
     const err = await destroyResult(SESSION_ID);
@@ -106,7 +105,7 @@ describe("PostgresSessionStore.destroy", () => {
     expect(session?.user.id).toBe("u1");
   });
 
-  it("calls back null when the row is deleted", async () => {
+  it("resolves when the row is deleted", async () => {
     const err = await destroyResult(SESSION_ID);
     expect(err).toBeNull();
   });
@@ -117,9 +116,10 @@ describe("PostgresSessionStore.destroy", () => {
     expect(err).toBeNull();
   });
 
-  it("still issues the DELETE without a callback and does not reject", async () => {
+  it("reads an expired row as no session even when deleting it raises", async () => {
+    rowExpired = true;
     deleteMode = "throw";
-    await store.destroy(SESSION_ID);
+    expect(await getSession(SESSION_ID)).toBeNull();
     expect(issuedSql.filter(isSessionDelete).length).toBe(1);
   });
 });

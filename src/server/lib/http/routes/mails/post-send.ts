@@ -23,7 +23,7 @@ export const postSendMailRoute = new Route<SendMailPostResponse>(
     const guard = refuseReadOnly(user, "Sending mail");
     if (!guard.ok) return { status: "failed", message: guard.message };
 
-    const body: SendMailPostBody = req.body;
+    const body = req.body as SendMailPostBody;
     const attachments = req.files?.attachments;
 
     if (toUploadList(attachments).length > MAX_ATTACHMENTS_PER_MAIL) {

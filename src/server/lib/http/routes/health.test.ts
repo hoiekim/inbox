@@ -77,13 +77,13 @@ mock.module("fs", () => ({
 }));
 
 const mockPoolQuery = mock(async () => [{ "?column?": 1 }]);
-// Mock the pg LEAF, not the postgres client module: mock.module is
+// Mock the driver LEAF, not the postgres client module: mock.module is
 // process-global, and mocking the client module leaked its stub pool into
 // every file that imported the client afterwards — it broke
 // mailgun-events.test.ts's store assertions (the insert went to this stub
-// instead of that file's pg mock, so its mockQuery saw zero calls).
-// Mocking pg instead lets client.ts bind the fake Pool class when the health
-// router is first imported, and afterAll restores pg via restoreLeaves.
+// instead of that file's driver mock, so its mockQuery saw zero calls).
+// Mocking the driver instead lets client.ts bind the fake Pool class when the
+// health handler is first imported, and afterAll restores it via restoreLeaves.
 class FakePool {
   query = mockPoolQuery;
   end = async () => {};
@@ -95,52 +95,25 @@ const pgMock = () => ({
   types: { setTypeParser: () => {}, builtins: {}, getTypeParser: () => null },
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 // The client module is already loaded (preload imports the server barrel),
-// and its pool Proxy caches the real Pool instance at load — so the pg mock
+// and its pool Proxy caches the real Pool instance at load — so the driver mock
 // above alone does not rebind it. Re-registering the mock plus resetPool()
 // (the mailgun-events.test.ts pattern) drops the cached pool and makes the
 // next query construct the fake Pool instead.
 import { resetPool } from "../../postgres/client";
 
-// ── Helper to call the health router GET "/" directly ─────────────────────────
+// ── Helper to call the health handler GET "/" directly ────────────────────────
 
-import type { Request, Response, NextFunction } from "express";
-import { Router } from "express";
+import type { HttpRequest } from "../request";
 
-const makeRes = () => {
-  const res: Record<string, unknown> = { _code: 200, _body: undefined };
-  res.status = mock((code: number) => { res._code = code; return res; });
-  res.json = mock((body: unknown) => { res._body = body; return res; });
-  return res as unknown as Response & { _code: number; _body: unknown };
-};
-
-const makeReq = () => ({
-  method: "GET",
-  path: "/",
-} as unknown as Request);
-
-/** Invoke the first matching GET "/" layer in the health router. */
-const invokeHealthGet = async (router: Router): Promise<Response & { _code: number; _body: unknown }> => {
-  const res = makeRes();
-  const req = makeReq();
-  const next = mock(() => {});
-
-  // Find all layers with route path "/"
-  const layers = (router as unknown as { stack: unknown[] }).stack as Array<{
-    route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: (req: Request, res: Response, next: NextFunction) => void }> };
-  }>;
-
-  for (const layer of layers) {
-    if (layer.route?.path === "/" && layer.route.methods["get"]) {
-      for (const handler of layer.route.stack) {
-        await handler.handle(req, res, next);
-      }
-      break;
-    }
-  }
-
-  return res;
+/** Invoke the health handler for GET /api/health and read its response back. */
+const invokeHealthGet = async (
+  handleHealth: (req: HttpRequest, path: string) => Promise<Response | undefined>
+): Promise<{ _code: number; _body: unknown }> => {
+  const res = await handleHealth({ method: "GET", path: "/api/health" } as HttpRequest, "/");
+  if (!res) throw new Error("health handler did not answer GET /");
+  return { _code: res.status, _body: await res.json() };
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -162,9 +135,9 @@ const restoreEnv = () => {
   }
 };
 
-describe("healthRouter GET /", () => {
+describe("health GET /", () => {
   beforeEach(() => {
-    mock.module("pg", pgMock);
+    mock.module("server/lib/postgres/pool", pgMock);
     resetPool();
     mockPoolQuery.mockClear();
     mockCreateConnection.mockClear();
@@ -194,8 +167,8 @@ describe("healthRouter GET /", () => {
   });
 
   it("returns 200 with status:'success' when everything is healthy (SSL configured)", async () => {
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(200);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -210,8 +183,8 @@ describe("healthRouter GET /", () => {
   it("returns 503 when DB is unhealthy", async () => {
     mockPoolQuery.mockImplementationOnce(async () => { throw new Error("DB down"); });
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(503);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -223,8 +196,8 @@ describe("healthRouter GET /", () => {
   it("returns 503 when a TCP port fails (error event)", async () => {
     netBehavior = "error";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(503);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -234,23 +207,23 @@ describe("healthRouter GET /", () => {
   it("returns 503 when a TLS port fails (SSL configured)", async () => {
     tlsBehavior = "error";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(503);
   });
 
   it("always marks HTTP check as ok", async () => {
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.body.checks.http).toBe("ok");
   });
 
   it("includes a numeric timestamp", async () => {
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(typeof body.body.timestamp).toBe("number");
@@ -261,8 +234,8 @@ describe("healthRouter GET /", () => {
     delete process.env.SSL_CERTIFICATE;
     delete process.env.SSL_CERTIFICATE_KEY;
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(200);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -282,8 +255,8 @@ describe("healthRouter GET /", () => {
     process.env.SSL_CERTIFICATE_KEY = "/fake/key.pem";
     sslFilesReadable = false;
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(200);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -295,8 +268,8 @@ describe("healthRouter GET /", () => {
   it("returns 503 when SSL configured but TLS port fails (regression)", async () => {
     tlsBehavior = "error";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(503);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -307,8 +280,8 @@ describe("healthRouter GET /", () => {
   it("uses IMAP_PORT env when set", async () => {
     process.env.IMAP_PORT = "21001";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
     expect(body.body.checks["imap:21001"]).toBe("ok");
@@ -320,8 +293,8 @@ describe("healthRouter GET /", () => {
     process.env.SMTP_SUBMISSION_PORT = "9587";
     process.env.IMAP_TLS_PORT = "9993";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(200);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };
@@ -340,8 +313,8 @@ describe("healthRouter GET /", () => {
     process.env.SMTPS_PORT = "9465";
     process.env.IMAP_TLS_PORT = "9993";
 
-    const { default: healthRouter } = await import("./health");
-    const res = await invokeHealthGet(healthRouter);
+    const { default: handleHealth } = await import("./health");
+    const res = await invokeHealthGet(handleHealth);
 
     expect(res._code).toBe(200);
     const body = res._body as { status: string; body: { healthy: boolean; checks: Record<string, string>; timestamp: number } };

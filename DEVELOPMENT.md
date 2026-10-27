@@ -161,7 +161,7 @@ Security-critical parsers have dedicated test coverage:
 1. **Mock only what the module under test actually imports.** Don't mock extra exports "just in case" — they leak into other test files.
 2. **Never mock utility functions** (`getDomain`, `getUserDomain`, `isValidEmail`) unless the code under test directly calls them.
 3. **If a mock must override a barrel** (`'server'`), re-export everything the barrel normally exports to avoid breaking downstream tests.
-4. **Restore what you mock in `afterAll`**, from the snapshot `scripts/test-preload.ts` took before any file ran (`__REAL_SERVER`, `__REAL_ALARM`, `__REAL_FS`, …; `restoreLeaves()` for `pg` / `web-push` / `bcryptjs`). Mocking `"server"` writes through the barrel's re-exports into the source module, so a stub `logger` on the barrel replaces `lib/logger.ts`'s export for every importer. A snapshot taken inside the test file is not enough: it can capture an earlier file's leaked stub.
+4. **Restore what you mock in `afterAll`**, from the snapshot `scripts/test-preload.ts` took before any file ran (`__REAL_SERVER`, `__REAL_ALARM`, `__REAL_FS`, …; `restoreLeaves()` for the pool driver / `web-push`). Mocking `"server"` writes through the barrel's re-exports into the source module, so a stub `logger` on the barrel replaces `lib/logger.ts`'s export for every importer. A snapshot taken inside the test file is not enough: it can capture an earlier file's leaked stub.
 
 **Example of the bug pattern:**
 ```typescript

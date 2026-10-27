@@ -6,20 +6,15 @@
  * tells a remote prober which usernames exist.
  *
  * An assertion on the returned boolean cannot see that: false is false under
- * both implementations. So every case here asserts on the `bcrypt.compare`
+ * both implementations. So every case here asserts on the `Bun.password.verify`
  * calls the subject made, not on what it answered.
  */
 
-import { describe, it, expect, mock, afterAll, beforeEach } from "bun:test";
-import { restoreLeaves } from "test-helpers";
+import { describe, it, expect, afterAll, beforeEach, spyOn } from "bun:test";
 
-const realBcrypt = (globalThis as Record<string, unknown>).__REAL_BCRYPT as {
-  compare: (password: string, hash: string) => Promise<boolean>;
-  hash: (password: string, rounds: number) => Promise<string>;
-  default: Record<string, unknown>;
-};
+const realVerify = Bun.password.verify.bind(Bun.password);
 
-/** Every `bcrypt.compare` the subject makes, as `[password, hash]`. */
+/** Every `Bun.password.verify` the subject makes, as `[password, hash]`. */
 const compareCalls: [string, string][] = [];
 
 /**
@@ -29,22 +24,17 @@ const compareCalls: [string, string][] = [];
  */
 let forcedVerdict: boolean | null = null;
 
-const trackedCompare = async (password: string, hash: string) => {
-  compareCalls.push([password, hash]);
-  const real = await realBcrypt.compare(password, hash);
+const verifySpy = spyOn(Bun.password, "verify").mockImplementation(async (password, hash) => {
+  const text = typeof password === "string" ? password : new TextDecoder().decode(password as Uint8Array);
+  compareCalls.push([text, hash]);
+  const real = await realVerify(password, hash);
   return forcedVerdict ?? real;
-};
+});
 
-mock.module("bcryptjs", () => ({
-  ...realBcrypt,
-  compare: trackedCompare,
-  default: { ...realBcrypt.default, compare: trackedCompare },
-}));
-
-const { verifyPassword } = await import("./verify-password");
+const { verifyPassword, hashPassword } = await import("./verify-password");
 const { encryptPassword } = await import("./users");
 
-afterAll(restoreLeaves);
+afterAll(() => verifySpy.mockRestore());
 
 /** A complete bcrypt digest — 22 salt chars plus 31 of hash, base64-ish alphabet. */
 const BCRYPT_DIGEST = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -53,7 +43,24 @@ const BCRYPT_DIGEST = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 const costOf = (hash: string) => hash.split("$")[2];
 
 /** Cost 4 keeps fixture digests real without paying the production round. */
-const digestOf = (password: string) => realBcrypt.hash(password, 4);
+const digestOf = (password: string) =>
+  Bun.password.hash(password, { algorithm: "bcrypt", cost: 4 });
+
+/** A cost-4 digest of the empty string, which `Bun.password.hash` refuses to produce. */
+const EMPTY_PASSWORD_DIGEST = "$2b$04$1ZJlW09Oj.28Pc9tQVIVleBOo11ISY6Ra1sWrn.NHENatHa9CdAz6";
+
+/** A 91-byte password: bcrypt reads only its first 72 bytes. */
+const OVER_72_BYTES = "pässwörd-longer-than-seventy-two-bytes-" + "x".repeat(50);
+
+/**
+ * Digests written by the JavaScript bcrypt implementation the stored
+ * passwords were hashed with, before verification moved to `Bun.password`.
+ */
+const STORED_DIGESTS = {
+  "correct-horse": "$2b$10$39XnZ0siZCL6PF2Tyd9hQOUpJZ0UXyjcT.i8Bux3S7ZCsJLH7aKRK",
+  "legacy-2a": "$2a$10$4u/C0mkCyaoAyjIhZsQJi.Tq.OKFOwJ9VRgVYpqKoy4Y/Xd9Suw2S",
+  [OVER_72_BYTES]: "$2b$10$fmlDOB6PWM2KHYQAIiyoteRVvXG3fvj38TNw.u30ERUtBiIpIvJA.",
+};
 
 beforeEach(() => {
   compareCalls.length = 0;
@@ -75,9 +82,8 @@ describe("verifyPassword verdict", () => {
   });
 
   it("rejects an empty or absent password against a real digest", async () => {
-    const digest = await digestOf("");
-    expect(await verifyPassword("", digest)).toBe(false);
-    expect(await verifyPassword(undefined, digest)).toBe(false);
+    expect(await verifyPassword("", EMPTY_PASSWORD_DIGEST)).toBe(false);
+    expect(await verifyPassword(undefined, EMPTY_PASSWORD_DIGEST)).toBe(false);
   });
 
   it("refuses a matching comparison when the digest it matched was the stand-in", async () => {
@@ -103,8 +109,8 @@ describe("verifyPassword cost is independent of whether the account exists", () 
   });
 
   it("spends a bcrypt round when the stored digest is empty", async () => {
-    // bcryptjs answers false for an empty digest without hashing at all —
-    // microseconds, not milliseconds — so an empty stored value has to be
+    // An empty digest is answered without hashing at all — microseconds, not
+    // milliseconds — so an empty stored value has to be
     // swapped for the stand-in rather than handed through. `writeUser` hashes
     // every password it stores, so empty and null are the only non-digest
     // values the column can carry.
@@ -151,6 +157,43 @@ describe("verifyPassword cost is independent of whether the account exists", () 
     await verifyPassword("hunter2", undefined);
 
     expect(compareCalls[0]![1]).not.toBe(realDigest);
-    expect(await realBcrypt.compare("hunter2", compareCalls[0]![1])).toBe(false);
+    expect(await realVerify("hunter2", compareCalls[0]![1])).toBe(false);
+  });
+});
+
+describe("verifyPassword keeps accepting digests stored before the switch", () => {
+  for (const [password, digest] of Object.entries(STORED_DIGESTS)) {
+    it(`accepts ${digest.slice(0, 7)} digest of a ${new TextEncoder().encode(password).length}-byte password`, async () => {
+      expect(await verifyPassword(password, digest)).toBe(true);
+      expect(await verifyPassword(`${password}-wrong`.slice(1), digest)).toBe(false);
+    });
+  }
+
+  it("reads only the first 72 bytes of a long password, as the stored digests were made", async () => {
+    const digest = STORED_DIGESTS[OVER_72_BYTES];
+    const samePrefix = new TextDecoder().decode(new TextEncoder().encode(OVER_72_BYTES).slice(0, 72));
+    expect(await verifyPassword(samePrefix, digest)).toBe(true);
+    expect(await verifyPassword(`${samePrefix}different tail`, digest)).toBe(true);
+    expect(await verifyPassword(samePrefix.slice(0, -1), digest)).toBe(false);
+  });
+
+  it("answers false rather than throwing for a stored value that is not a digest", async () => {
+    expect(await verifyPassword("hunter2", "not-a-digest")).toBe(false);
+  });
+});
+
+describe("hashPassword", () => {
+  it("writes a $2b$ bcrypt digest at cost 10, so an older build can still verify it", async () => {
+    const digest = await hashPassword("correct-horse");
+    expect(digest).toMatch(BCRYPT_DIGEST);
+    expect(digest.slice(0, 7)).toBe("$2b$10$");
+    expect(await verifyPassword("correct-horse", digest)).toBe(true);
+  });
+
+  it("hashes only the first 72 bytes of a long password", async () => {
+    const digest = await hashPassword(OVER_72_BYTES);
+    const prefix = new TextEncoder().encode(OVER_72_BYTES).slice(0, 72);
+    expect(await realVerify(prefix, digest)).toBe(true);
+    expect(await verifyPassword(OVER_72_BYTES, digest)).toBe(true);
   });
 });

@@ -1,26 +1,11 @@
-import { Router, Request, Response, NextFunction } from "express";
+import type { HttpRequest } from "../../request";
+import { dispatch, mountedPath } from "../route";
 import { getLoginRoute } from "./get-login";
 import { postLoginRoute } from "./post-login";
 import { deleteLoginRoute } from "./delete-login";
 import { postTokenRoute } from "./post-token";
 import { postSetInfoRoute } from "./post-set-info";
-import { loginLimiter, tokenLimiter } from "../../rate-limit";
-
-const usersRouter = Router();
-
-// Helper to apply limiter only to POST requests
-const postOnly =
-  (limiter: (req: Request, res: Response, next: NextFunction) => void) =>
-  (req: Request, res: Response, next: NextFunction) => {
-    if (req.method === "POST") {
-      return limiter(req, res, next);
-    }
-    next();
-  };
-
-// Apply rate limiters only to POST requests (not GET/DELETE)
-usersRouter.use(postLoginRoute.path, postOnly(loginLimiter.middleware));
-usersRouter.use(postTokenRoute.path, postOnly(tokenLimiter.middleware));
+import { loginLimiter, tokenLimiter, type RateLimiter } from "../../rate-limit";
 
 const routes = [
   getLoginRoute,
@@ -30,9 +15,24 @@ const routes = [
   postSetInfoRoute
 ];
 
-routes.forEach((r) => r.register(usersRouter));
+// Rate limiters apply only to POST requests (not GET/DELETE).
+const postLimiters: [string, RateLimiter][] = [
+  [postLoginRoute.path, loginLimiter],
+  [postTokenRoute.path, tokenLimiter],
+];
 
-export default usersRouter;
+/** `/api/users/*`, with `path` relative to that mount. */
+const handleUsers = async (req: HttpRequest, path: string): Promise<Response | undefined> => {
+  if (req.method === "POST") {
+    for (const [prefix, limiter] of postLimiters) {
+      const refused = mountedPath(path, prefix) !== undefined ? limiter.check(req) : undefined;
+      if (refused) return refused;
+    }
+  }
+  return dispatch(routes, req, path);
+};
+
+export default handleUsers;
 
 export * from "./get-login";
 export * from "./post-login";

@@ -1,4 +1,3 @@
-import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { User, SignedUser } from "common";
 import {
@@ -10,6 +9,7 @@ import { evictImapSessions } from "./imap/session-registry";
 import { evictSmtpConnections } from "./smtp-registry";
 import { usersTable, USER_ID, TOKEN, EXPIRY } from "./postgres/models";
 import { logger } from "./logger";
+import { hashPassword } from "./verify-password";
 
 const { APP_HOSTNAME } = process.env;
 
@@ -164,10 +164,7 @@ export const startTimer = (userId: string) => {
   }, TOKEN_DURATION);
 };
 
-export const encryptPassword = (password: string) => {
-  const salt = 10;
-  return bcrypt.hash(password, salt);
-};
+export const encryptPassword = (password: string) => hashPassword(password);
 
 export const setUserInfo = async (
   userInfo: Partial<User>

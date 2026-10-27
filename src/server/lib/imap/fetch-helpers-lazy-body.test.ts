@@ -93,7 +93,7 @@ const pgMock = () => ({
   default: { Pool: FakePool, types: { setTypeParser: () => {} } },
 });
 
-mock.module("pg", pgMock);
+mock.module("server/lib/postgres/pool", pgMock);
 
 const { buildFetchResponsePart } = await import("./fetch-helpers");
 const { resetPool } = await import("../postgres/client");
@@ -102,7 +102,7 @@ const { PG_TEXT_CHUNK_CHARS, PG_TEXT_CHUNK_BYTES } = await import(
 );
 
 beforeAll(() => {
-  mock.module("pg", pgMock);
+  mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 

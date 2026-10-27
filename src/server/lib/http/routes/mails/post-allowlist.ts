@@ -26,7 +26,7 @@ export const postSpamAllowlistRoute = new Route<AllowlistAddResponse>(
     const guard = refuseReadOnly(user, "Adding to the spam allowlist");
     if (!guard.ok) return { status: "failed", message: guard.message };
 
-    const body: AllowlistAddBody = req.body;
+    const body = req.body as AllowlistAddBody;
     const { pattern } = body;
 
     if (!pattern || typeof pattern !== "string") {

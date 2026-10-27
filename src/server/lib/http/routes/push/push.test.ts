@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeEach, afterAll } from "bun:test";
 import type { ApiResponse } from "../route";
+import type { HttpRequest } from "../../request";
 import { SignedUser } from "common";
 import {
   ADMIN_RO_USERNAME,
@@ -74,17 +75,7 @@ const makeReq = (overrides: Record<string, unknown> = {}) =>
     params: {},
     body: {},
     ...overrides,
-  }) as unknown as import("express").Request;
-
-const makeRes = () => {
-  const res: Record<string, unknown> = { _code: 200, _body: undefined };
-  res.status = mock((code: number) => { res._code = code; return res; });
-  res.json = mock((body: unknown) => { res._body = body; return res; });
-  res.end = mock(() => res);
-  return res as unknown as import("express").Response & { _code: number; _body: unknown };
-};
-
-const noopStream = mock(() => {}) as unknown as import("../route").Stream<unknown>;
+  }) as unknown as HttpRequest;
 
 // ── get-public-key ────────────────────────────────────────────────────────────
 
@@ -93,7 +84,7 @@ describe("getPublicKeyRoute", () => {
 
   it("returns the VAPID public key", async () => {
     const { getPublicKeyRoute } = await import("./get-public-key");
-    const result = await getPublicKeyRoute.callback(makeReq(), makeRes(), noopStream);
+    const result = await getPublicKeyRoute.callback(makeReq());
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect((result as ApiResponse<unknown>).body).toBe("test-vapid-public-key");
     expect(mockGetPushPublicKey).toHaveBeenCalledTimes(1);
@@ -109,7 +100,7 @@ describe("getRefreshRoute", () => {
     const { getRefreshRoute } = await import("./get-refresh");
     mockRefreshSubscription.mockResolvedValueOnce({ _id: "sub1" });
     const req = makeReq({ params: { id: "sub1" } });
-    const result = await getRefreshRoute.callback(req, makeRes(), noopStream);
+    const result = await getRefreshRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("success");
   });
 
@@ -117,7 +108,7 @@ describe("getRefreshRoute", () => {
     const { getRefreshRoute } = await import("./get-refresh");
     mockRefreshSubscription.mockResolvedValueOnce(null);
     const req = makeReq({ params: { id: "nonexistent" } });
-    const result = await getRefreshRoute.callback(req, makeRes(), noopStream);
+    const result = await getRefreshRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/No subscription found/i);
   });
@@ -133,7 +124,7 @@ describe("postSubscribeRoute", () => {
     const fakeSub = { endpoint: "https://fcm.example.com", keys: { p256dh: "abc", auth: "xyz" } };
     mockStoreSubscription.mockResolvedValueOnce({ _id: "sub42" });
     const req = makeReq({ body: { subscription: fakeSub } });
-    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await postSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("success");
     expect((result as ApiResponse<unknown>).body).toBe("sub42");
     expect(mockStoreSubscription).toHaveBeenCalledWith("u1", fakeSub);
@@ -142,7 +133,7 @@ describe("postSubscribeRoute", () => {
   const expectNoStore = async (subscription: unknown, reason: RegExp) => {
     const { postSubscribeRoute } = await import("./post-subscribe");
     const req = makeReq({ body: { subscription } });
-    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await postSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(reason);
     expect(mockStoreSubscription).not.toHaveBeenCalled();
@@ -180,7 +171,7 @@ describe("postSubscribeRoute", () => {
   it("rejects a non-object body without writing", async () => {
     const { postSubscribeRoute } = await import("./post-subscribe");
     const req = makeReq({ body: "subscription=1" });
-    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await postSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect(mockStoreSubscription).not.toHaveBeenCalled();
   });
@@ -190,7 +181,7 @@ describe("postSubscribeRoute", () => {
     const fakeSub = { endpoint: "https://fcm.example.com", keys: { p256dh: "abc", auth: "xyz" } };
     mockStoreSubscription.mockResolvedValueOnce(null);
     const req = makeReq({ body: { subscription: fakeSub } });
-    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await postSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/Failed to store subscription/i);
   });
@@ -205,7 +196,7 @@ describe("deleteSubscribeRoute", () => {
     const { deleteSubscribeRoute } = await import("./delete-subscribe");
     mockDeleteSubscriptionForUser.mockResolvedValueOnce(true);
     const req = makeReq({ params: { id: "sub1" } });
-    const result = await deleteSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await deleteSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("success");
     // Scoped to the session user id ("u1" from makeReq), not just the row id.
     expect(mockDeleteSubscriptionForUser).toHaveBeenCalledWith("sub1", "u1");
@@ -215,7 +206,7 @@ describe("deleteSubscribeRoute", () => {
     const { deleteSubscribeRoute } = await import("./delete-subscribe");
     mockDeleteSubscriptionForUser.mockResolvedValueOnce(false);
     const req = makeReq({ params: { id: "nonexistent" } });
-    const result = await deleteSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await deleteSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toMatch(/No subscription found/i);
   });
@@ -239,7 +230,7 @@ describe("read-only guard on push routes", () => {
       params: {},
       body: {},
       ...overrides,
-    }) as unknown as import("express").Request;
+    }) as unknown as HttpRequest;
 
   beforeEach(() => {
     mockStoreSubscription.mockClear();
@@ -256,7 +247,7 @@ describe("read-only guard on push routes", () => {
         },
       },
     });
-    const result = await postSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await postSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toContain("read-only");
     expect((result as ApiResponse<unknown>).message).toContain(ADMIN_RO_USERNAME);
@@ -266,7 +257,7 @@ describe("read-only guard on push routes", () => {
   it("delete-subscribe refuses a read-only session BEFORE deleteSubscriptionForUser", async () => {
     const { deleteSubscribeRoute } = await import("./delete-subscribe");
     const req = readOnlyReq({ params: { id: "sub1" } });
-    const result = await deleteSubscribeRoute.callback(req, makeRes(), noopStream);
+    const result = await deleteSubscribeRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
     expect((result as ApiResponse<unknown>).message).toContain("read-only");
     expect(mockDeleteSubscriptionForUser).not.toHaveBeenCalled();
