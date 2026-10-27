@@ -848,7 +848,7 @@ export class ImapRequestHandler {
       }
     };
 
-    socket.on("data", (data) => {
+    socket.on("data", (data: Buffer) => {
       // Sync-only: append to the shared buffer, then wake the drain.
       // The `data` event fires synchronously per TCP segment; any await
       // here would let a second segment race the buffer append. Keep this
