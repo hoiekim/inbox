@@ -53,6 +53,23 @@ const isTlsLayerError = (err: Error): boolean => {
   return library === "SSL routines" || (typeof code === "string" && code.startsWith("ERR_SSL_"));
 };
 
+// A peer rejecting our certificate (expired, wrong hostname, unknown CA) is a
+// server-side defect even though it surfaces as a TLS-layer error, so it pages.
+const PEER_CERT_REJECTION_ALERTS = [
+  "SSLV3_ALERT_BAD_CERTIFICATE",
+  "SSLV3_ALERT_UNSUPPORTED_CERTIFICATE",
+  "SSLV3_ALERT_CERTIFICATE_REVOKED",
+  "SSLV3_ALERT_CERTIFICATE_EXPIRED",
+  "SSLV3_ALERT_CERTIFICATE_UNKNOWN",
+  "TLSV1_ALERT_UNKNOWN_CA"
+];
+
+const isPeerCertRejection = (err: Error): boolean => {
+  const { reason } = err as Error & { reason?: string };
+  const text = `${reason ?? ""} ${err.message ?? ""}`.toUpperCase().replace(/ /g, "_");
+  return PEER_CERT_REJECTION_ALERTS.some((alert) => text.includes(alert));
+};
+
 const registerListeners = (
   server: SMTPServer,
   port: number,
@@ -73,7 +90,8 @@ const registerListeners = (
     // - Plus a few smtp-server-level strings for connection-drop cases.
     const msg = err.message ?? "";
     if (
-      isImplicitTlsHandshakeFailure(server, err) ||
+      !isPeerCertRejection(err) &&
+      (isImplicitTlsHandshakeFailure(server, err) ||
       isTlsLayerError(err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
@@ -103,7 +121,7 @@ const registerListeners = (
       // dependent, not semantically different — both need suppressing.
       msg.includes("write ECONNRESET") ||
       msg.includes("write EPIPE") ||
-      msg.includes("TLS handshake timeout")                   // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
+      msg.includes("TLS handshake timeout"))                  // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
       // bucket leaves a trace — only the page to Discord is suppressed.
