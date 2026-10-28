@@ -1,18 +1,7 @@
-import type { SMTPServer } from "smtp-server";
+import type { SmtpServer } from "./smtp/server";
 import { logger } from "./logger";
 
-/**
- * A live connection as held in `SMTPServer.connections`, whose element type the
- * package's typings leave as `any`. Declares only the members this module
- * touches; `send` then `close` is the library's own termination sequence.
- */
-interface SmtpConnection {
-  session?: { user?: string };
-  send: (code: number, data: string) => void;
-  close: () => void;
-}
-
-const liveServers = new Set<SMTPServer>();
+const liveServers = new Set<SmtpServer>();
 
 /**
  * Track a listening server so {@link evictSmtpConnections} can reach its
@@ -20,12 +9,12 @@ const liveServers = new Set<SMTPServer>();
  * authenticated with a since-rotated password keeps its grant until the socket
  * closes.
  */
-export const registerSmtpServer = (server: SMTPServer) => {
+export const registerSmtpServer = (server: SmtpServer) => {
   liveServers.add(server);
 };
 
 /** Drop a server from the registry. Runs when the server closes. */
-export const unregisterSmtpServer = (server: SMTPServer) => {
+export const unregisterSmtpServer = (server: SmtpServer) => {
   liveServers.delete(server);
 };
 
@@ -42,9 +31,7 @@ export const unregisterSmtpServer = (server: SMTPServer) => {
 export const evictSmtpConnections = (username: string) => {
   let evicted = 0;
   for (const server of liveServers) {
-    const connections: Set<SmtpConnection> | undefined = server.connections;
-    if (!connections) continue;
-    for (const connection of connections) {
+    for (const connection of server.connections) {
       if (connection.session?.user !== username) continue;
       // One connection that refuses teardown must not strand the sweep.
       try {

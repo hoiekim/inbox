@@ -1,13 +1,10 @@
-import { readFileSync } from "fs";
+import fs, { readFileSync } from "fs";
+import path from "path";
 import { PassThrough, Readable } from "stream";
-import {
-  SMTPServer,
-  SMTPServerAddress,
-  SMTPServerOptions,
-  SMTPServerSession,
-  SMTPServerDataStream
-} from "smtp-server";
-import { simpleParser, AddressObject, EmailAddress } from "mailparser";
+import { createSmtpServer, SmtpServer } from "./smtp/server";
+import type { SmtpAddress, SmtpServerOptions, SmtpSession } from "./smtp/types";
+import { parseMessage } from "./mime/parser";
+import type { ParsedAddress, ParsedAddressValue } from "./mime/address";
 import {
   saveMailHandler,
   sendMail,
@@ -30,17 +27,18 @@ import { logger } from "./logger";
 import { getTlsCredentials } from "./tls";
 import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
 import { MAX_MESSAGE_BYTES } from "./message-size";
+import { ATTACHMENT_FOLDER } from "./mails/util";
 import {
   DataBudgetUnavailableError,
   withSmtpDataBudget
 } from "./smtp-data-budget";
 
-// On an implicit-TLS server, smtp-server tags handshake errors with meta.stage
-// "connect" and detaches that handler once the handshake succeeds, so the tag
-// means "before any SMTP command". Its STARTTLS handler is never detached, so
-// the tag can mark a mid-transaction error there. The message under the tag
-// differs by runtime ("Socket closed while initiating TLS" on Node, "socket hang up" on Bun).
-const isImplicitTlsHandshakeFailure = (server: SMTPServer, err: Error): boolean =>
+// On an implicit-TLS server, handshake errors are tagged with meta.stage
+// "connect" before the connection exists, so the tag means "before any SMTP
+// command". A STARTTLS handshake carries the same tag but happens inside a
+// session, so only the implicit-TLS listener treats it as scanner noise. The
+// message under the tag is the runtime's own ("socket hang up" on Bun).
+const isImplicitTlsHandshakeFailure = (server: SmtpServer, err: Error): boolean =>
   server.options.secure === true &&
   (err as Error & { meta?: { stage?: string } }).meta?.stage === "connect";
 
@@ -70,8 +68,23 @@ const isPeerCertRejection = (err: Error): boolean => {
   return PEER_CERT_REJECTION_ALERTS.some((alert) => text.includes(alert));
 };
 
+// A remote client dropping or stalling its connection. Matched by syscall and
+// errno code because the message differs by runtime ("read ETIMEDOUT" on Node,
+// "ETIMEDOUT: connection timed out, read" on Bun).
+const PEER_DROP_SYSCALL_ERRORS = new Set([
+  "read ECONNRESET",
+  "read ETIMEDOUT",
+  "write ECONNRESET",
+  "write EPIPE",
+  "write EPROTO"
+]);
+const isPeerDropError = (err: Error): boolean => {
+  const { syscall, code } = err as Error & { syscall?: string; code?: string };
+  return PEER_DROP_SYSCALL_ERRORS.has(`${syscall} ${code}`);
+};
+
 const registerListeners = (
-  server: SMTPServer,
+  server: SmtpServer,
   port: number,
   callback: () => void
 ) => {
@@ -87,12 +100,13 @@ const registerListeners = (
     //   (unsupported protocol, version too low, no suitable signature algorithm, etc.)
     //   These all mean the client's TLS capabilities are incompatible with the server.
     // - extract_keyshares: TLS 1.3 key exchange failures (bad key share, etc.)
-    // - Plus a few smtp-server-level strings for connection-drop cases.
+    // - Plus a few connection-level strings for connection-drop cases.
     const msg = err.message ?? "";
     if (
       !isPeerCertRejection(err) &&
       (isImplicitTlsHandshakeFailure(server, err) ||
       isTlsLayerError(err) ||
+      isPeerDropError(err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
       // covers all variants (unsupported protocol, version too low, no shared cipher,
@@ -106,14 +120,14 @@ const registerListeners = (
       msg.includes("final_key_share") ||                     // TLS 1.3 key exchange failure (no suitable key share)
       msg.includes("tls_choose_sigalg") ||                   // signature algorithm negotiation failure
       msg.includes("tls_get_more_records") ||                // oversized/malformed TLS record
-      // smtp-server-level strings for connection-drop cases
+      // connection-level strings for connection-drop cases
       msg.includes("Socket closed") ||                       // client disconnected before TLS handshake
-      msg.includes("Failed to establish TLS session") ||     // smtp-server generic TLS failure wrapper
+      msg.includes("Failed to establish TLS session") ||     // generic TLS failure wrapper
       msg.includes("read ECONNRESET") ||                      // client dropped connection mid-handshake
       msg.includes("read ETIMEDOUT") ||                       // client connected but stopped responding (scanner idle timeout)
       msg.includes("write EPROTO") ||                         // protocol error writing to socket — client aborted during TLS
-      // smtp-server itself swallows a write ECONNRESET/EPIPE silently once a transaction
-      // is complete (no open envelope) — see its own error gate in smtp-connection.js.
+      // The connection itself swallows a write ECONNRESET/EPIPE silently once a transaction
+      // is complete (no open envelope) — see `SmtpConnection.onError`.
       // So by the time either string reaches here, the client abandoned an in-flight
       // transaction (e.g. sent MAIL FROM but never completed DATA/RSET) and reset the
       // socket before a pending write (often the QUIT reply) landed. No mail content
@@ -121,7 +135,7 @@ const registerListeners = (
       // dependent, not semantically different — both need suppressing.
       msg.includes("write ECONNRESET") ||
       msg.includes("write EPIPE") ||
-      msg.includes("TLS handshake timeout"))                  // Node's own implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
+      msg.includes("TLS handshake timeout"))                  // implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
       // bucket leaves a trace — only the page to Discord is suppressed.
@@ -144,12 +158,12 @@ const registerListeners = (
 };
 
 /**
- * `smtp-server` discards the promise an async handler returns and hands the
+ * The SMTP server discards the promise an async handler returns and hands the
  * command-loop continuation to `cb`, so a rejection that escapes leaves the
  * whole session unanswered rather than the one command. Every path here ends
  * in `cb`, including the failure ones.
  */
-export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => {
+export const onAuth: SmtpServerOptions["onAuth"] = async (auth, session, cb) => {
   if (session.user) return cb(null, { user: session.user });
 
   const ip = session.remoteAddress ?? "unknown";
@@ -186,7 +200,7 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
   // account's failures from the same IP.
   resetAuthFailures(ip, account);
   // Credential-revocation fence: stamp the credential row's
-  // current generation onto the connection. smtp-server only copies
+  // current generation onto the connection. The server only copies
   // `response.user` onto the session, so the stamp goes on the session
   // object directly; the per-command gates below re-check it.
   (session as VersionStampedSmtpSession).passwordVersion =
@@ -208,9 +222,9 @@ export const onAuth: SMTPServerOptions["onAuth"] = async (auth, session, cb) => 
  * denied" family rather than the "server error" family that would train
  * clients to retry.
  */
-export const onMailFrom: SMTPServerOptions["onMailFrom"] = async (
-  _address: SMTPServerAddress,
-  session: SMTPServerSession,
+export const onMailFrom: SmtpServerOptions["onMailFrom"] = async (
+  _address: SmtpAddress,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ) => {
   if (session.user === ADMIN_RO_USERNAME) {
@@ -222,7 +236,7 @@ export const onMailFrom: SMTPServerOptions["onMailFrom"] = async (
   }
   // Credential-revocation fence: an authenticated connection
   // whose credential rotated after AUTH loses its grant at this command.
-  // smtp-server discards the returned promise, so every path ends in `cb`.
+  // The server discards the returned promise, so every path ends in `cb`.
   try {
     await checkSmtpCredentialVersion(session);
   } catch (err) {
@@ -303,10 +317,10 @@ class CredentialChangedError extends Error {
 }
 
 /**
- * The session object as this module sees it: smtp-server's own session plus
+ * The session object as this module sees it: the server's own session plus
  * the credential-generation stamp `onAuth` writes.
  */
-interface VersionStampedSmtpSession extends SMTPServerSession {
+interface VersionStampedSmtpSession extends SmtpSession {
   passwordVersion?: number;
 }
 
@@ -321,7 +335,7 @@ interface VersionStampedSmtpSession extends SMTPServerSession {
  * proven current is not exercised.
  */
 const checkSmtpCredentialVersion = async (
-  session: SMTPServerSession
+  session: SmtpSession
 ): Promise<void> => {
   const username = session.user;
   if (!username) return;
@@ -371,13 +385,11 @@ class MessageTooLargeError extends Error {
 }
 
 /**
- * `smtp-server` unpipes and nulls its own stream reference when the
- * connection drops mid-DATA — an abrupt RST, or its own idle-socket
- * timeout — but it never ends or errors the stream handed to this module,
- * so nothing here naturally wakes up on that path. RFC 5321 §3.8's 421
- * never reaches the peer in practice (the connection is already gone); it
- * exists so this answers through the same machinery every other refusal
- * does.
+ * The connection dropped mid-DATA — an abrupt RST, the idle-socket timeout, or
+ * a sender that went silent. The DATA stream then closes without ever ending.
+ * RFC 5321 §3.8's 421 never reaches the peer in practice (the connection is
+ * already gone); it exists so this answers through the same machinery every
+ * other refusal does.
  */
 class AbandonedTransactionError extends Error {
   responseCode = 421;
@@ -410,9 +422,9 @@ class AbandonedTransactionError extends Error {
  * answer is a uniform transient refusal and no lookup runs, which is what
  * bounds the connection-pool draw an unauthenticated peer can cause.
  */
-export const onRcptTo: SMTPServerOptions["onRcptTo"] = async (
-  address: SMTPServerAddress,
-  session: SMTPServerSession,
+export const onRcptTo: SmtpServerOptions["onRcptTo"] = async (
+  address: SmtpAddress,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ) => {
   const ip = session.remoteAddress ?? "unknown";
@@ -457,9 +469,8 @@ interface BoundedMessage {
   /**
    * Disarms the ceiling watcher and reads the rest of DATA out without
    * holding it. Every path that answers the transaction calls this first: the
-   * watcher answers through the same `cb`, and `smtp-server` registers one
-   * end-of-data listener per `cb` it hands out, so a second answer puts a
-   * second reply on the wire and resumes command parsing a transaction early.
+   * watcher answers through the same `cb`, and a transaction is answered only
+   * once, so a refusal must be the first answer to reach it.
    */
   drain: () => void;
 }
@@ -467,40 +478,37 @@ interface BoundedMessage {
 /**
  * Bounds what one DATA transaction can make the process hold.
  *
- * `smtp-server` offers no enforcement to lean on. Its `size` option makes
- * `EHLO` advertise `SIZE` and refuses a `MAIL FROM` that declares more, but a
- * sender that declares nothing still streams whatever it likes: the library
- * computes `stream.sizeExceeded` in `_endDataMode`, once the final octet has
- * already been written, and never acts on it. So the count is kept here, where
- * the octets arrive, and the parser is cut off at the ceiling rather than told
- * about it afterwards.
+ * The listener's `size` option makes `EHLO` advertise `SIZE` and refuses a
+ * `MAIL FROM` that declares more, but a sender that declares nothing still
+ * streams whatever it likes. So the count is kept here, where the octets
+ * arrive, and the parser is cut off at the ceiling rather than told about it
+ * afterwards.
  *
  * Two shapes this deliberately avoids. The source keeps flowing past the cut,
  * because the reply is only sent once DATA ends and a source nobody reads
- * never ends. And no cut is silent: `mailparser` settles on an `error` but not
- * on the `close` that a bare `destroy()` emits, so a silent cut leaves its
- * promise pending and everything it accumulated reachable until the connection
- * goes away. Refusals are still answered through `cb`, which is in hand the
- * whole time, and never through that error.
+ * never ends. And no cut is silent: the parser is handed an `error`, so it
+ * settles and closes the attachment file it was writing instead of waiting on
+ * a stream that will never end. Refusals are still answered through `cb`,
+ * which is in hand the whole time, and never through that error.
  *
- * A third shape it has to answer on its own: the connection dying before any
- * of `data`/`end`/`error` fires at all (see {@link AbandonedTransactionError}).
- * Left unanswered, `cb` never runs, so the concurrency-budget slot this
- * transaction holds (`withSmtpDataBudget` in {@link onData}) never releases —
- * at the default capacity of 2, two abandoned connections permanently refuse
- * every later inbound message. The idle ceiling is armed up front and on
- * every chunk, so a slow-but-live sender is never cut off; only a source that
- * goes fully silent trips it.
+ * A third shape it has to answer on its own: the connection dying mid-DATA
+ * (see {@link AbandonedTransactionError}). Left unanswered, `cb` never runs,
+ * so the concurrency-budget slot this transaction holds (`withSmtpDataBudget`
+ * in {@link onData}) never releases — at the default capacity of 2, two
+ * abandoned connections permanently refuse every later inbound message. A
+ * source that closes without ending is answered at once; the idle ceiling,
+ * armed up front and on every chunk, catches one that goes silent without
+ * closing, while a slow-but-live sender is never cut off.
  */
 export const DATA_IDLE_TIMEOUT_MS = 65 * 1000;
 
 const boundMessageSize = (
-  source: SMTPServerDataStream,
-  session: SMTPServerSession,
+  source: Readable,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ): BoundedMessage => {
   const bounded = new PassThrough();
-  // The outgoing handler reaches `simpleParser` only after a user lookup, so a
+  // The outgoing handler reaches the parser only after a user lookup, so a
   // refusal can destroy this before anything is listening.
   bounded.on("error", () => {});
   const message: BoundedMessage = {
@@ -520,15 +528,17 @@ const boundMessageSize = (
     cb(err);
   };
 
+  const abandon = () => {
+    logger.warn("SMTP: DATA transaction abandoned mid-transfer, releasing its budget slot", {
+      remoteAddress: session.remoteAddress
+    });
+    refuse(new AbandonedTransactionError());
+  };
+
   let idleTimer: ReturnType<typeof setTimeout>;
   const armIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => {
-      logger.warn("SMTP: DATA transaction abandoned mid-transfer, releasing its budget slot", {
-        remoteAddress: session.remoteAddress
-      });
-      refuse(new AbandonedTransactionError());
-    }, DATA_IDLE_TIMEOUT_MS);
+    idleTimer = setTimeout(abandon, DATA_IDLE_TIMEOUT_MS);
   };
   armIdleTimer();
 
@@ -552,9 +562,17 @@ const boundMessageSize = (
     }
   });
 
+  let ended = false;
   source.once("end", () => {
+    ended = true;
     clearTimeout(idleTimer);
     if (!message.refused) bounded.end();
+  });
+
+  source.once("close", () => {
+    if (ended || message.refused) return;
+    clearTimeout(idleTimer);
+    abandon();
   });
 
   source.once("error", (err) => {
@@ -564,24 +582,45 @@ const boundMessageSize = (
     refuse(err);
   });
 
+  // A connection that dropped while queued for its slot destroyed the source
+  // before these listeners existed, and a destroyed stream fires none of them.
+  if (source.destroyed && !source.readableEnded) abandon();
+
   return message;
 };
 
 /**
  * Discards the rest of a DATA stream that was refused before anything read it.
  *
- * `smtp-server` holds the reply until the stream emits `end`, and a
- * `PassThrough` nobody reads never will — so refusing without this leaves the
- * peer waiting on its own socket timeout instead of reading the code. Flowing
- * mode drops each chunk as it arrives, which keeps the drain off the heap.
+ * The server holds the reply until the stream emits `end`, and a stream nobody
+ * reads never will — so refusing without this leaves the peer waiting on its
+ * own socket timeout instead of reading the code. Flowing mode drops each
+ * chunk as it arrives, which keeps the drain off the heap.
  */
-const drainDataStream = (stream: SMTPServerDataStream) => {
+const drainDataStream = (stream: Readable) => {
   stream.resume();
 };
 
+/** Per-transaction attachment working directories, beside the attachments they become. */
+export const INCOMING_ATTACHMENT_FOLDER = path.join(ATTACHMENT_FOLDER, ".incoming");
+
+const newTransactionDir = () => path.join(INCOMING_ATTACHMENT_FOLDER, crypto.randomUUID());
+
+const removeTransactionDir = (dir: string) =>
+  fs.promises.rm(dir, { recursive: true, force: true }).catch((err) => {
+    logger.warn("SMTP: could not remove a transaction's attachment files", { dir }, err);
+  });
+
+/**
+ * Removes the transaction directories a previous process left behind, crashed
+ * mid-DATA. Runs before any listener opens, so none can belong to a live
+ * transaction of this one.
+ */
+const sweepLeftoverTransactionDirs = () => removeTransactionDir(INCOMING_ATTACHMENT_FOLDER);
+
 export const onData = (
-  stream: SMTPServerDataStream,
-  session: SMTPServerSession,
+  stream: Readable,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ) => {
   const { EMAIL_DOMAIN } = process.env;
@@ -646,10 +685,11 @@ export const onData = (
 
 const onDataIncoming = (
   message: BoundedMessage,
-  session: SMTPServerSession,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ) => {
-  simpleParser(message.stream)
+  const attachmentDir = newTransactionDir();
+  parseMessage(message.stream, { attachmentDir })
     .then(async (parsed) => {
       if (message.refused) return;
 
@@ -671,7 +711,7 @@ const onDataIncoming = (
         attachments: parsed.attachments?.map((att) => ({
           filename: att.filename || "attachment",
           contentType: att.contentType,
-          content: att.content,
+          path: att.path,
           size: att.size
         }))
       };
@@ -700,7 +740,8 @@ const onDataIncoming = (
       logger.error("Error parsing email", {}, err);
       message.drain();
       cb(err);
-    });
+    })
+    .finally(() => removeTransactionDir(attachmentDir));
 };
 
 const splitAddress = (address: string) => {
@@ -713,9 +754,9 @@ const splitAddress = (address: string) => {
 };
 
 const addressList = (
-  header: AddressObject | AddressObject[] | undefined
+  header: ParsedAddress | ParsedAddress[] | undefined
 ): string[] => {
-  const flatten = (entries: EmailAddress[]): string[] =>
+  const flatten = (entries: ParsedAddressValue[]): string[] =>
     entries.flatMap((entry) =>
       entry.group ? flatten(entry.group) : [entry.address ?? ""]
     );
@@ -817,9 +858,10 @@ export const splitEnvelopeRecipients = (
 
 const onDataOutgoing = async (
   message: BoundedMessage,
-  session: SMTPServerSession,
+  session: SmtpSession,
   cb: (err?: Error | null) => void
 ) => {
+  const attachmentDir = newTransactionDir();
   try {
     const username = session.user;
     const user = username && (await getUser({ username }));
@@ -849,7 +891,7 @@ const onDataOutgoing = async (
       return cb(new CredentialChangedError());
     }
 
-    const parsed = await simpleParser(message.stream);
+    const parsed = await parseMessage(message.stream, { attachmentDir });
     if (message.refused) return;
 
     const mailFrom = session.envelope.mailFrom;
@@ -886,16 +928,18 @@ const onDataOutgoing = async (
     if (message.refused) return;
     message.drain();
     cb(err instanceof Error ? err : new Error(String(err)));
+  } finally {
+    await removeTransactionDir(attachmentDir);
   }
 };
 
 const SMTP_MAX_CLIENTS = 100;
 
 /**
- * How long `SMTPServer.close` waits on open connections before it answers the
- * rest `421 Server shutting down` and returns. The library's own default is
- * 30s, three times compose's 10s stop grace, and an idle client holds it for
- * all of it — long enough for the SIGKILL to land before the pool drains.
+ * How long `SmtpServer.close` waits on open connections before it answers the
+ * rest `421 Server shutting down` and returns. It has to fit inside compose's
+ * 10s stop grace, which an idle client would otherwise hold for all of it —
+ * long enough for the SIGKILL to land before the pool drains.
  *
  * The window is for a transaction already in DATA: once `close` runs, any new
  * command is answered 421 on arrival, so only a message still streaming in
@@ -905,10 +949,10 @@ const SMTP_MAX_CLIENTS = 100;
 export const SMTP_CLOSE_TIMEOUT_MS = 5 * 1000;
 
 export const initializeSmtp = async () => {
-  const servers: SMTPServer[] = [];
+  const servers: SmtpServer[] = [];
+  await sweepLeftoverTransactionDirs();
 
-  const options: SMTPServerOptions = {
-    authOptional: true,
+  const options: Omit<SmtpServerOptions, "secure"> = {
     onAuth,
     onMailFrom,
     onRcptTo,
@@ -948,9 +992,9 @@ export const initializeSmtp = async () => {
     logger.warn("SMTP: SSL certificate not configured.");
   }
 
-  const smtpServer = await new Promise<SMTPServer>((res) => {
+  const smtpServer = await new Promise<SmtpServer>((res) => {
     const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 25;
-    const server = new SMTPServer({ ...options, secure: false });
+    const server = createSmtpServer({ ...options, secure: false });
     registerListeners(server, port, () => {
       logger.info(`SMTP server listening on port ${port}`);
       res(server);
@@ -959,9 +1003,9 @@ export const initializeSmtp = async () => {
   servers.push(smtpServer);
 
   if (isSslAvailable) {
-    const smtpsServer = await new Promise<SMTPServer>((res) => {
+    const smtpsServer = await new Promise<SmtpServer>((res) => {
       const port = process.env.SMTPS_PORT ? parseInt(process.env.SMTPS_PORT, 10) : 465;
-      const server = new SMTPServer({ ...options, secure: true });
+      const server = createSmtpServer({ ...options, secure: true });
       registerListeners(server, port, () => {
         logger.info(`SMTP server listening on port ${port}`);
         res(server);
@@ -969,9 +1013,9 @@ export const initializeSmtp = async () => {
     });
     servers.push(smtpsServer);
 
-    const submissionServer = await new Promise<SMTPServer>((res) => {
+    const submissionServer = await new Promise<SmtpServer>((res) => {
       const port = process.env.SMTP_SUBMISSION_PORT ? parseInt(process.env.SMTP_SUBMISSION_PORT, 10) : 587;
-      const server = new SMTPServer({
+      const server = createSmtpServer({
         ...options,
         secure: false,
         allowInsecureAuth: true

@@ -92,6 +92,32 @@ describe("htmlToPlainText", () => {
     });
   }
 
+  it("drops link targets and images unless asked for URLs", () => {
+    const html = '<p>Verify: <a href="https://bit.ly/3abc">now</a><img src="a.png" alt="A"></p>';
+    expect(htmlToPlainText(html)).toBe("Verify: now");
+    expect(htmlToPlainText(html, { urls: true })).toBe(
+      "Verify: now [https://bit.ly/3abc]A [a.png]"
+    );
+  });
+
+  it("shows link targets and image sources with urls", () => {
+    const cases: [string, string][] = [
+      ['<a href="https://x.org">https://x.org</a>', "https://x.org [https://x.org]"],
+      ['<a href="mailto:a@b.c">write</a> <a href="mailto:a@b.c"></a>', "write [a@b.c] a@b.c"],
+      ['<a href="#top">top</a> <a href="">empty</a> <a>none</a>', "top empty none"],
+      [
+        '<a href="https://x.org/?a=1&amp;b=2&copy=3&#38;c">q</a>',
+        "q [https://x.org/?a=1&b=2&copy=3&c]"
+      ],
+      [
+        '<img src="cid:logo@x" alt="Logo"> <img src="y.png"> <img alt="alt">',
+        "Logo [cid:logo@x] [y.png] alt"
+      ],
+      ['<h1><a href="https://x.org/h">link</a></h1>', "LINK [https://x.org/h]"]
+    ];
+    for (const [html, text] of cases) expect(htmlToPlainText(html, { urls: true })).toBe(text);
+  });
+
   it("handles unterminated markup at the end of input", () => {
     expect(htmlToPlainText("text <")).toBe("text <");
     expect(htmlToPlainText("<p>a<!-- open")).toBe("a");
@@ -115,6 +141,15 @@ describe("htmlToPlainText", () => {
       expect(performance.now() - started).toBeLessThan(3000);
       expect(text.startsWith("> ")).toBe(true);
     }
+  });
+
+  it("stays linear on deeply nested links with urls", () => {
+    const html = '<a href="x">w '.repeat(6000);
+    const started = performance.now();
+    const text = htmlToPlainText(html, { urls: true });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(text.startsWith("w w")).toBe(true);
+    expect(text.endsWith("[x]")).toBe(true);
   });
 
   it("converts large input", () => {

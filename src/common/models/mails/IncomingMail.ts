@@ -20,7 +20,8 @@ export interface IncomingMail {
 }
 
 export interface IncomingAttachment {
-  content: { data: Buffer } | Buffer | string;
+  /** A file holding the decoded content. It belongs to the caller, so saving copies it. */
+  path: string;
   contentType: string;
   filename: string;
   size: number;

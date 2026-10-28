@@ -1272,7 +1272,7 @@ describe("IMAP util", () => {
     });
 
     describe("address local part and domain", () => {
-      // Both halves come from the stored address, which mailparser fills from
+      // Both halves come from the stored address, which the MIME parser fills from
       // the inbound header — a quoted local part is legal RFC 5322 and reaches
       // the wire as a quoted string like every other stored value.
       it("round-trips a local part containing a quote and a backslash", () => {

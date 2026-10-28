@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { decodeEntities } from "./entities";
+import { decodeAttributeEntities, decodeEntities } from "./entities";
 
 describe("decodeEntities", () => {
   it("decodes named references", () => {
@@ -24,5 +24,13 @@ describe("decodeEntities", () => {
     expect(decodeEntities("&; & &#; &#x; AT&T &unknown; &check;")).toBe(
       "&; & &#; &#x; AT&T &unknown; &check;"
     );
+  });
+});
+
+describe("decodeAttributeEntities", () => {
+  it("decodes only references closed by a semicolon", () => {
+    expect(decodeAttributeEntities("?a=1&amp;b=2&#38;c&#x26;d")).toBe("?a=1&b=2&c&d");
+    expect(decodeAttributeEntities("?a=1&copy=2&amp=3&#38x")).toBe("?a=1&copy=2&amp=3&#38x");
+    expect(decodeAttributeEntities("&notaname;")).toBe("&notaname;");
   });
 });

@@ -1,11 +1,16 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 import type { IncomingMail, IncomingMailAddress } from "common";
 import {
   validateIncomingMail,
   convertMailAddress,
   convertAddressValue,
+  saveFile,
 } from "./receive";
+import { getAttachmentFilePath } from "./util";
 import { addressToUsername } from "../util";
 
 const makeMail = (envelopeTo: { address: string }[]): IncomingMail =>
@@ -228,5 +233,33 @@ describe("convertAddressValue", () => {
       { address: "a@x.com", name: undefined },
       { address: "b@x.com", name: undefined },
     ]);
+  });
+});
+
+describe("saveFile", () => {
+  let sourceDir: string;
+  const saved: string[] = [];
+
+  beforeAll(() => {
+    sourceDir = fs.mkdtempSync(path.join(os.tmpdir(), "receive-save-file-"));
+  });
+
+  afterAll(() => {
+    fs.rmSync(sourceDir, { recursive: true, force: true });
+    saved.forEach((id) => fs.rmSync(getAttachmentFilePath(id), { force: true }));
+  });
+
+  it("stores a copy that outlives the source file", async () => {
+    const source = path.join(sourceDir, "0");
+    fs.writeFileSync(source, "attachment bytes");
+
+    const first = await saveFile(source);
+    const second = await saveFile(source);
+    saved.push(first, second);
+    fs.rmSync(source);
+
+    expect(first).not.toBe(second);
+    expect(fs.readFileSync(getAttachmentFilePath(first), "utf8")).toBe("attachment bytes");
+    expect(fs.readFileSync(getAttachmentFilePath(second), "utf8")).toBe("attachment bytes");
   });
 });
