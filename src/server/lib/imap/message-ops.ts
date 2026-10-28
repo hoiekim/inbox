@@ -1161,8 +1161,7 @@ const parseAppendedMessage = async (path: string): Promise<Mail> => {
   try {
     const parsed = await parseMessage(fs.createReadStream(path), { attachmentDir });
     const incoming = incomingMailFromParsed(parsed);
-    // Only a real html part: a plain-text copy stays single-part in BODYSTRUCTURE.
-    const html = parsed.html ?? "";
+    const html = incoming.html ?? "";
     return new Mail({
       // Bare, like the ids appended rows already carry: a re-append meets them on
       // `(user_id, message_id)`.

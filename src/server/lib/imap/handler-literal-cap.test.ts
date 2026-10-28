@@ -624,6 +624,22 @@ describe("IMAP literal ceiling", () => {
     expect(dispatched).toEqual([]);
   });
 
+  it("gives the message after a mailbox-name literal the message-sized ceiling", async () => {
+    const { socket, dispatched } = makeHarness(undefined, true);
+
+    const message = "x".repeat(SMALL_CAP + 4096);
+    socket.emit("data", Buffer.from(`a1 APPEND {6+}\r\nDrafts {${message.length}+}\r\n`));
+    await settle();
+    socket.emit("data", Buffer.from(message + "\r\n"));
+    await settle();
+
+    expect(socket.writes).toEqual([]);
+    expect(dispatched).toHaveLength(1);
+    if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
+    expect(dispatched[0].request.data.mailbox).toBe("Drafts");
+    expect(dispatched[0].message).toBe(message);
+  });
+
   it("caps the second literal of a chain on the command's own verb and tag", async () => {
     const { socket, dispatched } = makeHarness();
 
