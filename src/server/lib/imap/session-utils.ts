@@ -698,9 +698,10 @@ export const _emitBase64FromBytesForTests = emitBase64FromBytes;
  * `startBase64` (a multiple of 4) starts the output that far in by seeking the
  * file, so a partial FETCH deep into a large attachment reads only its window.
  *
- * Emits EXACTLY `base64ByteLen(rawSize)` octets — the count already advertised
- * in `{N}`. If the file disagrees with the size resolved at measure time (it
- * changed, vanished, or became unreadable in between), the shortfall is padded
+ * Emits EXACTLY `base64ByteLen(rawSize) - startBase64` octets, the part of the
+ * count already advertised in `{N}` that lies past `startBase64`. If the file
+ * disagrees with the size resolved at measure time (it changed, vanished, or
+ * became unreadable in between), the shortfall is padded
  * with newlines, which are legal inside a base64 body and ignored by decoders.
  * The client then sees one damaged attachment; emitting the true length instead
  * would desync the literal and corrupt every later response on the connection.
