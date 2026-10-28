@@ -538,6 +538,10 @@ const boundMessageSize = (
     refuse(err);
   });
 
+  // A connection that dropped while queued for its slot destroyed the source
+  // before these listeners existed, and a destroyed stream fires none of them.
+  if (source.destroyed && !source.readableEnded) abandon();
+
   return message;
 };
 

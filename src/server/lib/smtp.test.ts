@@ -2891,6 +2891,31 @@ describe("onData DATA budget wiring", () => {
     expect(second).toBeFalsy();
   });
 
+  it("releases the slot at once for a connection that dropped while queued for it", async () => {
+    mockParseMessage.mockImplementation(() => new Promise(() => {}));
+    const holders = Array.from({ length: CAP }, () => defer());
+    const held = holders.map((gate) => withSmtpDataBudget(() => gate.promise));
+    await nextTick();
+
+    const dropped = new PassThrough();
+    dropped.write("Subject: half a message\r\n");
+    const settled = new Promise<Error | null | undefined>((resolve) => {
+      onData(dropped as unknown as Readable, incomingSession(), resolve);
+    });
+    await nextTick();
+    dropped.destroy();
+    await nextTick();
+
+    holders[0].resolve();
+    const err = await Promise.race([settled, Bun.sleep(1000).then(() => "still holding")]);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    expect(smtpDataBudgetInFlight()).toBe(CAP - 1);
+
+    holders.forEach((gate) => gate.resolve());
+    await Promise.all(held);
+  });
+
   it("re-arms the idle watchdog on every chunk, so a slow-but-live sender past the ceiling still completes", async () => {
     // Gated, not immediately-resolved: an unconditional mock would settle
     // `onDataIncoming`'s lane the instant `boundMessageSize` returns, before
