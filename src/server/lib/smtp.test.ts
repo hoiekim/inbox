@@ -2142,6 +2142,39 @@ describe("registerListeners error handler", () => {
     expect(smtpServerLines(mockLogger.warn)).toEqual([]);
   });
 
+  const boringSslError = (reason: string) =>
+    Object.assign(new Error(`error:100000b8:SSL routines:OPENSSL_internal:${reason}`), {
+      library: "SSL routines",
+      reason,
+      code: `ERR_SSL_${reason}`,
+      meta: { protocol: "smtp", stage: "connect", tlsProtocol: "TLSv1.2" }
+    });
+
+  it("suppresses BoringSSL TLS-layer errors on the STARTTLS servers", async () => {
+    const { startTls } = await bootWithTls();
+    startTls.emit("error", boringSslError("NO_SHARED_CIPHER"));
+    startTls.emit("error", boringSslError("UNSUPPORTED_PROTOCOL"));
+    startTls.emit("error", Object.assign(new Error("OPENSSL_internal:WRONG_VERSION_NUMBER"), { code: "ERR_SSL_WRONG_VERSION_NUMBER" }));
+
+    expect(smtpServerLines(mockLogger.error)).toEqual([]);
+    expect(smtpServerLines(mockLogger.warn).length).toBe(3);
+  });
+
+  it("still pages for a socket error tagged by the STARTTLS upgrade handler", async () => {
+    const { startTls } = await bootWithTls();
+    startTls.emit(
+      "error",
+      Object.assign(new Error("connect ECONNREFUSED"), {
+        code: "ECONNREFUSED",
+        meta: { protocol: "smtp", stage: "connect", tlsProtocol: null }
+      })
+    );
+    startTls.emit("error", Object.assign(new Error("SSL is not a library"), { library: "SSL", code: "ERR_SSLX" }));
+
+    expect(smtpServerLines(mockLogger.error).length).toBe(2);
+    expect(smtpServerLines(mockLogger.warn)).toEqual([]);
+  });
+
   it("logs error on non-suppressible failures", async () => {
     const server = await bootSingleServer();
     server.emit("error", new Error("unexpected internal failure"));

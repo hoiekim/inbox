@@ -44,6 +44,15 @@ const isImplicitTlsHandshakeFailure = (server: SMTPServer, err: Error): boolean 
   server.options.secure === true &&
   (err as Error & { meta?: { stage?: string } }).meta?.stage === "connect";
 
+// Errors from the TLS layer carry library "SSL routines" and an ERR_SSL_* code
+// on both Node (OpenSSL) and Bun (BoringSSL). BoringSSL messages name no OpenSSL
+// function ("SSL routines:OPENSSL_internal:NO_SHARED_CIPHER"), so the function
+// names below never match there.
+const isTlsLayerError = (err: Error): boolean => {
+  const { library, code } = err as Error & { library?: string; code?: string };
+  return library === "SSL routines" || (typeof code === "string" && code.startsWith("ERR_SSL_"));
+};
+
 const registerListeners = (
   server: SMTPServer,
   port: number,
@@ -65,6 +74,7 @@ const registerListeners = (
     const msg = err.message ?? "";
     if (
       isImplicitTlsHandshakeFailure(server, err) ||
+      isTlsLayerError(err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
       // covers all variants (unsupported protocol, version too low, no shared cipher,
