@@ -56,12 +56,12 @@ const isTlsLayerError = (err: Error): boolean => {
 // A peer rejecting our certificate (expired, wrong hostname, unknown CA) is a
 // server-side defect even though it surfaces as a TLS-layer error, so it pages.
 const PEER_CERT_REJECTION_ALERTS = [
-  "SSLV3_ALERT_BAD_CERTIFICATE",
-  "SSLV3_ALERT_UNSUPPORTED_CERTIFICATE",
-  "SSLV3_ALERT_CERTIFICATE_REVOKED",
-  "SSLV3_ALERT_CERTIFICATE_EXPIRED",
-  "SSLV3_ALERT_CERTIFICATE_UNKNOWN",
-  "TLSV1_ALERT_UNKNOWN_CA"
+  "ALERT_BAD_CERTIFICATE",
+  "ALERT_UNSUPPORTED_CERTIFICATE",
+  "ALERT_CERTIFICATE_REVOKED",
+  "ALERT_CERTIFICATE_EXPIRED",
+  "ALERT_CERTIFICATE_UNKNOWN",
+  "ALERT_UNKNOWN_CA"
 ];
 
 const isPeerCertRejection = (err: Error): boolean => {

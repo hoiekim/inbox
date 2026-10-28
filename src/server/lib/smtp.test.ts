@@ -2187,9 +2187,17 @@ describe("registerListeners error handler", () => {
         code: "ERR_SSL_SSLV3_ALERT_BAD_CERTIFICATE"
       })
     );
+    startTls.emit(
+      "error",
+      Object.assign(new Error("error:0A000412:SSL routines::ssl/tls alert bad certificate"), {
+        library: "SSL routines",
+        reason: "ssl/tls alert bad certificate",
+        code: "ERR_SSL_SSL/TLS_ALERT_BAD_CERTIFICATE"
+      })
+    );
     startTls.emit("error", boringSslError("NO_SHARED_CIPHER"));
 
-    expect(smtpServerLines(mockLogger.error).length).toBe(3);
+    expect(smtpServerLines(mockLogger.error).length).toBe(4);
     expect(smtpServerLines(mockLogger.warn).length).toBe(1);
   });
 
