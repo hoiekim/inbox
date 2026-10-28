@@ -11,8 +11,7 @@ const LABEL_ALIASES: Record<string, string> = {
   "shift-jis": "shift_jis",
   "euc-cn": "gbk",
   "x-gbk": "gbk",
-  "big5-hkscs": "big5",
-  "utf-16": "utf-16le"
+  "big5-hkscs": "big5"
 };
 
 const decoderCache = new Map<string, TextDecoder | null>();
@@ -54,6 +53,14 @@ const decoderFor = (charset: string): TextDecoder | null => {
 
 const UTF8_LABEL = /^(?:utf-?8|7bit)$/i;
 
+const UTF16_LABEL = /^utf[-_]?16$/i;
+const UTF16BE = new TextDecoder("utf-16be");
+const UTF16LE = new TextDecoder("utf-16le");
+
+/** RFC 2781 §4.3: unmarked `utf-16` takes its byte order from a BOM, else big-endian. */
+const decodeUtf16 = (bytes: Uint8Array): string =>
+  (bytes[0] === 0xff && bytes[1] === 0xfe ? UTF16LE : UTF16BE).decode(bytes);
+
 /**
  * Decodes header bytes (an RFC 2047 encoded word) in `charset`. Unknown labels
  * fall back to UTF-8 rather than failing the whole header; `us-ascii` follows
@@ -61,6 +68,7 @@ const UTF8_LABEL = /^(?:utf-?8|7bit)$/i;
  */
 export const decodeHeaderBytes = (bytes: Uint8Array, charset: string): string => {
   if (UTF8_LABEL.test(charset.trim())) return Buffer.from(bytes).toString("utf8");
+  if (UTF16_LABEL.test(charset.trim())) return decodeUtf16(bytes);
   const decoder = decoderFor(charset);
   if (!decoder) return Buffer.from(bytes).toString("utf8");
   return decoder.decode(bytes);
@@ -79,6 +87,7 @@ export const decodeBodyBytes = (bytes: Uint8Array, charset: string | undefined):
   if (label === "ascii" || label === "usascii" || label === "utf8") {
     return Buffer.from(bytes).toString("utf8");
   }
+  if (label === "utf16") return decodeUtf16(bytes);
   const decoder = decoderFor(charset ?? "utf-8");
   if (!decoder) return Buffer.from(bytes).toString("utf8");
   return decoder.decode(bytes);
