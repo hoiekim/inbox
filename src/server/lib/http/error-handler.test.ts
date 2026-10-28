@@ -312,3 +312,36 @@ describe("errorHandler in the assembled app", () => {
     }
   });
 });
+
+describe("serverErrorHandler", () => {
+  beforeEach(() => resetAlarmState());
+
+  it("raises the alarm when a file body fails to open after the response was returned", async () => {
+    const sink = await startAlarmSink();
+    process.env.DISCORD_ALARM_WEBHOOK = sink.url;
+    const logs = captureErrorLogs();
+    const { serverErrorHandler } = await import("./error-handler");
+    const { sendFile } = await import("./respond");
+    const server = Bun.serve({
+      port: 0,
+      fetch: () =>
+        sendFile(Bun.file("./attachments/server-error-handler-never-written"), {
+          contentType: "application/octet-stream",
+        }),
+      error: serverErrorHandler,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/`);
+
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("Internal server error");
+      const payload = await sink.firstPayload();
+      expect(alarmTitle(payload)).toContain("Unhandled HTTP Server Error");
+      expect(alarmDetail(payload)).toContain("ENOENT");
+      expect(logs.some((line) => line.includes("Unhandled HTTP server error"))).toBe(true);
+    } finally {
+      server.stop(true);
+      sink.close();
+    }
+  });
+});

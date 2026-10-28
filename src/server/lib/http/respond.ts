@@ -1,16 +1,16 @@
 /** A weak validator over the exact bytes of a body. */
-const bodyEtag = (body: string | Uint8Array) => {
-  const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+const bodyEtag = (body: string) => {
+  const bytes = new TextEncoder().encode(body);
   const hash = new Bun.CryptoHasher("sha1").update(bytes).digest("base64").slice(0, 27);
   return `W/"${bytes.byteLength.toString(16)}-${hash}"`;
 };
 
 /** A body sent whole, tagged with an `ETag` so a revalidating client can get a 304. */
 export const send = (
-  body: string | Uint8Array,
+  body: string,
   init: { status?: number; contentType: string }
 ): Response =>
-  new Response(body as BodyInit, {
+  new Response(body, {
     status: init.status ?? 200,
     headers: { "Content-Type": init.contentType, ETag: bodyEtag(body) },
   });

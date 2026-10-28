@@ -94,6 +94,14 @@ describe("Route.handler", () => {
     fs.writeFileSync(filePath, "binary data");
     try {
       const file = Bun.file(filePath);
+      // A handler that read the file into memory first would hit one of these.
+      for (const read of ["arrayBuffer", "bytes", "text", "json", "stream"]) {
+        Object.defineProperty(file, read, {
+          value: () => {
+            throw new Error(`file was read through ${read}()`);
+          },
+        });
+      }
       const route = new Route<Bun.BunFile>("GET", "/bin", async () => file);
 
       const res = await route.handler(makeReq());
