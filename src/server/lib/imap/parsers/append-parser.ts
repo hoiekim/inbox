@@ -3,7 +3,7 @@
  */
 
 import { ParseContext, ParseResult, AppendRequest } from '../types';
-import { parseString, parseFlag, parseLiteral, skipWhitespace } from './primitive-parsers';
+import { parseString, parseFlag, parseMessageLiteral, skipWhitespace } from './primitive-parsers';
 
 /**
  * Parse APPEND command
@@ -53,11 +53,10 @@ export const parseAppend = (context: ParseContext): ParseResult<{ type: 'APPEND'
       }
     }
 
-    // Parse the message literal. Shared with every other literal-bearing
-    // command: `{N}` counts octets, so the payload arrives out-of-band on
-    // `context.literals` rather than being sliced out of the UTF-16 input by
-    // a byte count.
-    const literal = parseLiteral(context);
+    // Parse the message literal. `{N}` counts octets, so the payload arrives
+    // out-of-band on `context.literals` — already spooled to a file by the
+    // handler — rather than being sliced out of the UTF-16 input.
+    const literal = parseMessageLiteral(context);
     if (!literal.success) {
       return {
         success: false,

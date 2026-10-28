@@ -17,6 +17,7 @@
 
 import { describe, it, expect, spyOn } from "bun:test";
 import { EventEmitter } from "events";
+import fs from "fs";
 // See handler-idle.test.ts: import push first so the idle-manager ↔ push ↔
 // server-barrel import cycle initializes in production order.
 import "../push";
@@ -61,9 +62,18 @@ function makeMockSocket() {
 function makeHarness(authenticated = false) {
   const handler = new ImapRequestHandler();
   const socket = makeMockSocket();
-  const dispatched: { tag: string; request: ImapRequest }[] = [];
+  // `message` is the spooled APPEND payload, read before dispatch returns and the
+  // handler removes the file.
+  const dispatched: { tag: string; request: ImapRequest; message?: string }[] = [];
   handler.handleRequest = async (tag, request) => {
-    dispatched.push({ tag, request });
+    dispatched.push({
+      tag,
+      request,
+      message:
+        request.type === "APPEND"
+          ? fs.readFileSync(request.data.message.path, "utf8")
+          : undefined
+    });
   };
   handler.setSocket(socket as never);
   const session = (
@@ -163,7 +173,7 @@ describe("IMAP chained literal pacing", () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].request).toMatchObject({ type: "APPEND" });
     expect(
-      (dispatched[0].request as { data: { message: string } }).data.message.length
+      (dispatched[0].request as { data: { message: { size: number } } }).data.message.size
     ).toBe(declared);
   });
 });

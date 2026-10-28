@@ -8,10 +8,13 @@ import {
   beforeEach,
   afterAll,
 } from "bun:test";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { restoreLeaves } from "test-helpers";
 import type { MailType } from "common";
 import type { Store } from "./store";
-import type { StoreRequest, AppendRequest, SearchCriterion } from "./types";
+import type { StoreRequest, AppendRequest, MessageLiteral, SearchCriterion } from "./types";
 import type { SequenceState } from "./sequence-resolver";
 
 const STORED_UIDVALIDITY = 1716512400;
@@ -102,16 +105,25 @@ const {
 const { resetPool } = await import("../postgres/client");
 // Dynamic, like the imports above: a hoisted `import … from "server"` would
 // pull the barrel (and postgres/client) before the driver double is registered.
-const { getUserDomain } = await import("server");
+const { getUserDomain, getAttachmentFilePath, INCOMING_ATTACHMENT_FOLDER } = await import("server");
 
 beforeAll(() => {
   mock.module("server/lib/postgres/pool", pgMock);
   resetPool();
 });
 
+// Where the handler would have spooled each APPEND literal.
+const spoolRoot = fs.mkdtempSync(path.join(os.tmpdir(), "append-spool-"));
+const spool = (message: string | Buffer): MessageLiteral => {
+  const file = path.join(spoolRoot, crypto.randomUUID());
+  fs.writeFileSync(file, message);
+  return { path: file, size: Buffer.byteLength(message) };
+};
+
 afterAll(() => {
   restoreLeaves();
   resetPool();
+  fs.rmSync(spoolRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -162,7 +174,7 @@ const runAppend = async (
   const writes: string[] = [];
   await appendMessage(
     tag,
-    { mailbox, message: "Subject: test\r\n\r\nHello" },
+    { mailbox, message: spool("Subject: test\r\n\r\nHello") },
     store as never,
     selectedMailbox,
     (data: string) => {
@@ -583,8 +595,8 @@ async function appendAndCapture(flags?: string[]): Promise<MailType> {
   const request: AppendRequest = {
     mailbox: "INBOX",
     flags,
-    message: "Subject: hello\r\nFrom: a@b.com\r\n\r\nbody",
-  } as AppendRequest;
+    message: spool("Subject: hello\r\nFrom: a@b.com\r\n\r\nbody"),
+  };
 
   await appendMessage(
     "a1",
@@ -616,6 +628,153 @@ describe("appendMessage flag defaults (#548)", () => {
     expect(mail.saved).toBe(false);
     expect(mail.deleted).toBe(false);
     expect(mail.answered).toBe(false);
+  });
+});
+
+// ── appendMessage MIME parse ────────────────────────────────────────────────
+const base64Lines = (data: Buffer | string) =>
+  (Buffer.from(data).toString("base64").match(/.{1,76}/g) ?? []).join("\r\n");
+const encodedWord = (text: string) => `=?UTF-8?B?${Buffer.from(text).toString("base64")}?=`;
+
+const ATTACHMENT_BYTES = Buffer.from(Array.from({ length: 5000 }, (_, i) => (i * 7) % 256));
+
+const MULTIPART_MESSAGE = [
+  `From: ${encodedWord("홍길동")} <Sender@Example.com>`,
+  "To: Recipient <rcpt@example.com>",
+  "Cc: cc@example.com",
+  `Subject: ${encodedWord("안녕하세요 첨부")}`,
+  "Date: Tue, 27 Oct 2026 10:00:00 +0000",
+  "Message-ID: <multi@example.com>",
+  "MIME-Version: 1.0",
+  'Content-Type: multipart/mixed; boundary="outer"',
+  "",
+  "--outer",
+  'Content-Type: multipart/alternative; boundary="alt"',
+  "",
+  "--alt",
+  "Content-Type: text/plain; charset=UTF-8",
+  "Content-Transfer-Encoding: base64",
+  "",
+  base64Lines("본문입니다"),
+  "--alt",
+  "Content-Type: text/html; charset=UTF-8",
+  "Content-Transfer-Encoding: 8bit",
+  "",
+  "<p>본문입니다</p>",
+  "--alt--",
+  "--outer",
+  "Content-Type: application/octet-stream",
+  "Content-Disposition: attachment; filename*=UTF-8''%EB%B3%B4%EA%B3%A0%EC%84%9C.bin",
+  "Content-Transfer-Encoding: base64",
+  "",
+  base64Lines(ATTACHMENT_BYTES),
+  "--outer--",
+  "",
+].join("\r\n");
+
+const workingDirs = () =>
+  fs.existsSync(INCOMING_ATTACHMENT_FOLDER) ? fs.readdirSync(INCOMING_ATTACHMENT_FOLDER) : [];
+
+const removeStoredAttachments = (mail: MailType | undefined) =>
+  mail?.attachments?.forEach((attachment) =>
+    fs.rmSync(getAttachmentFilePath(attachment.content.data), { force: true })
+  );
+
+describe("appendMessage — MIME parse", () => {
+  const appendCapturing = async (
+    message: MessageLiteral,
+    { mailboxExists = true, stored = true }: { mailboxExists?: boolean; stored?: boolean } = {}
+  ) => {
+    let captured: MailType | undefined;
+    const store = {
+      getUser: () => ({ id: "user-123", username: "admin" }),
+      mailboxExists: async () => mailboxExists,
+      storeMail: async (mail: MailType) => {
+        captured = mail;
+        return stored;
+      },
+    } as unknown as Store;
+    const writes: string[] = [];
+    await appendMessage(
+      "a1",
+      { mailbox: "INBOX", flags: ["\\Seen"], message },
+      store,
+      null,
+      (data: string) => {
+        writes.push(data);
+        return true;
+      },
+      async () => {}
+    );
+    return { mail: captured, response: writes.join("") };
+  };
+
+  it("stores headers, bodies and attachments the parser decoded", async () => {
+    const { mail, response } = await appendCapturing(spool(MULTIPART_MESSAGE));
+    try {
+      expect(response).toContain("a1 OK [APPENDUID");
+      if (!mail) throw new Error("storeMail was never called");
+
+      expect(mail.subject).toBe("안녕하세요 첨부");
+      expect(mail.from?.value).toEqual([{ address: "sender@example.com", name: "홍길동" }]);
+      expect(mail.to?.value).toEqual([{ address: "rcpt@example.com", name: "Recipient" }]);
+      expect(mail.cc?.value).toEqual([{ address: "cc@example.com", name: "" }]);
+      expect(mail.messageId).toBe("multi@example.com");
+      expect(mail.date).toBe("2026-10-27T10:00:00.000Z");
+      expect(mail.read).toBe(true);
+      expect(mail.text.trim()).toBe("본문입니다");
+      expect(mail.html).toContain("<p>본문입니다</p>");
+      expect(mail.html).not.toContain("--outer");
+
+      expect(mail.attachments.map((a) => [a.filename, a.contentType, a.size])).toEqual([
+        ["보고서.bin", "application/octet-stream", ATTACHMENT_BYTES.length],
+      ]);
+      const stored = fs.readFileSync(getAttachmentFilePath(mail.attachments[0].content.data));
+      expect(Buffer.compare(stored, ATTACHMENT_BYTES)).toBe(0);
+    } finally {
+      removeStoredAttachments(mail);
+    }
+  });
+
+  it("leaves no parser working directory behind", async () => {
+    const before = new Set(workingDirs());
+    const { mail } = await appendCapturing(spool(MULTIPART_MESSAGE), { stored: false });
+    removeStoredAttachments(mail);
+
+    expect(mail?.attachments).toHaveLength(1);
+    expect(workingDirs().filter((dir) => !before.has(dir))).toEqual([]);
+  });
+
+  it("answers NO when the message is stored nowhere", async () => {
+    const { mail, response } = await appendCapturing(spool(MULTIPART_MESSAGE), { stored: false });
+    removeStoredAttachments(mail);
+
+    expect(response).toBe("a1 NO APPEND failed to store message\r\n");
+  });
+
+  it("answers NO [TRYCREATE] without reading the message", async () => {
+    // A path nothing can open: reading it would turn the answer into a failure.
+    const missing = { path: path.join(spoolRoot, "never-written"), size: 10 };
+    const { mail, response } = await appendCapturing(missing, { mailboxExists: false });
+
+    expect(response).toBe("a1 NO [TRYCREATE] Mailbox does not exist\r\n");
+    expect(mail).toBeUndefined();
+  });
+
+  it("answers NO when the spooled message cannot be read", async () => {
+    const missing = { path: path.join(spoolRoot, "never-written"), size: 10 };
+    const { mail, response } = await appendCapturing(missing);
+
+    expect(response).toBe("a1 NO APPEND failed\r\n");
+    expect(mail).toBeUndefined();
+  });
+
+  it("keeps a single-part message's body as its text", async () => {
+    const { mail } = await appendCapturing(spool("Subject: plain\r\n\r\nHello there\r\n"));
+
+    expect(mail?.subject).toBe("plain");
+    expect(mail?.text.trim()).toBe("Hello there");
+    expect(mail?.attachments).toEqual([]);
   });
 });
 

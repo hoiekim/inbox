@@ -218,8 +218,8 @@ describe("read-only IMAP user — guard refuses mutating commands", () => {
       run: (session) =>
         session.appendMessage("A1", {
           mailbox: "INBOX",
-          message: Buffer.from("From: a@b\r\n\r\nhi"),
-        } as never),
+          message: { path: "/spool/message", size: 14 },
+        }),
     },
     {
       name: "EXPUNGE",

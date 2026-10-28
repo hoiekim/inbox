@@ -36,6 +36,7 @@ import {
 import { push } from "../push";
 import { accountToBox, accountToSentBox } from "../imap/util";
 import { checkSpam, SpamCheckResult, EmailContext } from "../spam";
+import type { ParsedMessage } from "../mime/parser";
 import { sendAlarm } from "../alarm";
 import { logger } from "../logger";
 
@@ -273,6 +274,29 @@ export const convertMail = async (
   });
 };
 
+/**
+ * The fields of an incoming mail a parsed message carries on its own. The
+ * envelope is the receiving protocol's to add.
+ */
+export const incomingMailFromParsed = (parsed: ParsedMessage): IncomingMail => ({
+  messageId: parsed.messageId,
+  from: parsed.from,
+  to: parsed.to,
+  cc: parsed.cc,
+  bcc: parsed.bcc,
+  replyTo: parsed.replyTo,
+  subject: parsed.subject,
+  date: parsed.date?.toISOString(),
+  html: parsed.html || parsed.text,
+  text: parsed.text,
+  attachments: parsed.attachments?.map((att) => ({
+    filename: att.filename || "attachment",
+    contentType: att.contentType,
+    path: att.path,
+    size: att.size
+  }))
+});
+
 export const convertMailAddress = (
   incoming?: IncomingMailAddress | IncomingMailAddress[]
 ): MailAddressType | undefined => {
@@ -326,7 +350,7 @@ export const convertAddressValue = (
   return array.length ? array : undefined;
 };
 
-const convertAttachments = async (
+export const convertAttachments = async (
   incoming?: IncomingAttachment | IncomingAttachment[]
 ): Promise<Attachment[] | undefined> => {
   if (!incoming) return undefined;

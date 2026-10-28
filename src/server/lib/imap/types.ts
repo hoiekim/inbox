@@ -39,11 +39,23 @@ export interface MoveRequest {
   mailbox: string;
 }
 
+/**
+ * An APPEND message literal, written to `path` as its octets arrived rather
+ * than held in memory. `size` is the octet count the literal declared.
+ */
+export interface MessageLiteral {
+  path: string;
+  size: number;
+}
+
+/** A literal payload as the parsers receive it: decoded text, or a spooled message. */
+export type Literal = string | MessageLiteral;
+
 export interface AppendRequest {
   mailbox: string;
   flags?: string[];
   date?: string;
-  message: string;
+  message: MessageLiteral;
 }
 
 // Response data interfaces using existing models
@@ -530,13 +542,14 @@ export interface ParseContext {
   position: number;
   length: number;
   /**
-   * Decoded literal payloads (RFC 3501 §4.3), in wire order. A literal's `{N}`
-   * is a count of OCTETS, which no offset into a UTF-16 `input` can express —
-   * so the handler consumes each payload off the byte buffer, decodes it, and
-   * queues it here. `input` keeps only the `{N}` marker, and `parseLiteral`
-   * shifts the matching payload off the front.
+   * Literal payloads (RFC 3501 §4.3), in wire order. A literal's `{N}` is a
+   * count of OCTETS, which no offset into a UTF-16 `input` can express — so the
+   * handler consumes each payload off the byte buffer and queues it here:
+   * decoded, or spooled to a file when it is an APPEND message. `input` keeps
+   * only the `{N}` marker, and `parseLiteral` shifts the matching payload off
+   * the front.
    */
-  literals?: string[];
+  literals?: Literal[];
 }
 
 export interface ParseResult<T> {

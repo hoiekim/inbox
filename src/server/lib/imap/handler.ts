@@ -5,7 +5,7 @@
 import { Socket } from "net";
 import { ImapSession } from "./session";
 import { SessionBuffer } from "./session-buffer";
-import { ImapRequest } from "./types";
+import { ImapRequest, Literal, MessageLiteral } from "./types";
 import { parseCommand } from "./parsers";
 import { clip, imapTrace, redactCredentials } from "./trace";
 import { getBodyBudgetWaitMs, runInBodyBudgetContext } from "./body-budget";
@@ -16,6 +16,7 @@ import {
 } from "./command-budget-hold";
 import { SOCKET_TIMEOUT_MS } from "./idle-manager";
 import { registerConnection, unregisterConnection } from "./session-registry";
+import { LiteralSpool, removeMessageLiterals } from "./literal-spool";
 import { logger } from "server";
 import { MAX_MESSAGE_BYTES } from "../message-size";
 
@@ -214,6 +215,17 @@ const literalCapFor = (commandText: string, authenticated: boolean): number =>
     ? MAX_APPEND_LITERAL_BYTES
     : MAX_LITERAL_BYTES;
 
+// Stands in for the literal `commandText` has just declared, so the parser can
+// say whether it is an APPEND's message argument rather than, say, a mailbox
+// name sent as a literal. Only the message is spooled to disk.
+const MESSAGE_LITERAL_PROBE: MessageLiteral = { path: "", size: 0 };
+const declaresAppendMessage = (commandText: string, literals: readonly Literal[]): boolean => {
+  if (commandVerb(commandText) !== "APPEND") return false;
+  const probe = parseCommand(commandText, [...literals, MESSAGE_LITERAL_PROBE]);
+  const request = probe.success ? probe.value?.request : undefined;
+  return request?.type === "APPEND" && request.data.message === MESSAGE_LITERAL_PROBE;
+};
+
 // Short human-readable summary of a request for the per-command diagnostic
 // log. Never emits mail contents. Cap at ~200 chars so a runaway pipeline of
 // FETCH commands doesn't blow the log volume; the sequence range + item
@@ -254,7 +266,7 @@ export function describeImapCommand(request: ImapRequest): string {
     case "STATUS":
       return summary(`STATUS ${request.data.mailbox} (${request.data.items.join(" ")})`);
     case "APPEND":
-      return summary(`APPEND ${request.data.mailbox} ${request.data.message?.length ?? 0}B`);
+      return summary(`APPEND ${request.data.mailbox} ${request.data.message.size}B`);
     case "CREATE":
     case "DELETE":
     case "RENAME":
@@ -324,12 +336,17 @@ export class ImapRequestHandler {
 
     // Literal continuation state. `pendingCommand` is the command text
     // assembled so far, holding the `{N}` markers but NOT the payloads;
-    // `pendingLiterals` carries the decoded payloads in wire order, and the two
-    // travel together into `parseCommand`. `awaitingLiteral` means octets are
-    // still outstanding; cleared alongside a non-null `pendingCommand` it means
-    // the payload landed and the remainder of that line is still to come.
+    // `pendingLiterals` carries the payloads in wire order, and the two travel
+    // together into `parseCommand`. `awaitingLiteral` means octets are still
+    // outstanding; cleared alongside a non-null `pendingCommand` it means the
+    // payload landed and the remainder of that line is still to come.
+    //
+    // An APPEND message is the one payload not held in memory: `spool` writes
+    // its octets to disk as they arrive, and what lands on `pendingLiterals` is
+    // the file. Whatever dispatches the command owns that file from then on.
     let pendingCommand: string | null = null;
-    let pendingLiterals: string[] = [];
+    let pendingLiterals: Literal[] = [];
+    let spool: LiteralSpool | null = null;
     // Octets held on `pendingLiterals`, carried rather than recomputed: the
     // chain ceiling is checked once per link, and re-measuring every retained
     // payload each time makes the accounting itself quadratic in the chain.
@@ -349,6 +366,16 @@ export class ImapRequestHandler {
 
     // pendingSaslTag is stored on this (class property) so session can set it
 
+    // Once the socket has closed, whatever a drain pass leaves held is never
+    // completed, so each pass ends by discarding it.
+    let socketClosed = false;
+    // Removes every spooled message no command has taken yet. Safe to repeat.
+    const discardHeldLiterals = (): void => {
+      void spool?.discard();
+      spool = null;
+      void removeMessageLiterals(pendingLiterals);
+    };
+
     // Parse and dispatch one complete command. `input` is the assembled
     // command text — `{N}` markers, never payloads, which travel out of band
     // on `literals`. `redactCredentials` is anchored, so it scrubs a credential
@@ -358,7 +385,7 @@ export class ImapRequestHandler {
     // as a bare astring and is not.
     const executeCommand = async (
       input: string,
-      literals?: string[]
+      literals?: Literal[]
     ): Promise<void> => {
       try {
         const parseResult = parseCommand(input, literals);
@@ -387,6 +414,8 @@ export class ImapRequestHandler {
         session.write(
           `${commandTag(input) ?? UNTAGGED} BAD Internal server error\r\n`
         );
+      } finally {
+        if (literals) await removeMessageLiterals(literals);
       }
     };
 
@@ -445,6 +474,7 @@ export class ImapRequestHandler {
         `${commandTag(commandText) ?? UNTAGGED} NO [TOOBIG] Literal exceeds ${cap} octets\r\n`
       );
 
+      discardHeldLiterals();
       pendingCommand = null;
       pendingLiterals = [];
       pendingLiteralBytes = 0;
@@ -471,8 +501,12 @@ export class ImapRequestHandler {
     // what remains is command text nothing has read yet — terminated or not,
     // since a peer whose junk ends in CRLF every kilobyte keeps the unfinished
     // line at zero while `buffer` grows by every octet it writes.
+    //
+    // A spooled payload is not exempt: it is written out as it arrives, so
+    // pausing past the bound is what holds it to a segment or two while a
+    // write is pending.
     const unconsumedCommandBytes = (): number => {
-      const awaited = awaitingLiteral ? literalBytesNeeded : 0;
+      const awaited = awaitingLiteral && spool === null ? literalBytesNeeded : 0;
       return Math.max(0, buffer.length - awaited);
     };
 
@@ -537,6 +571,7 @@ export class ImapRequestHandler {
             // and hand the connection to the new generation's own loop.
             if (generation !== this.generation) {
               buffer.clear();
+              discardHeldLiterals();
               pendingCommand = null;
               pendingLiterals = [];
               pendingLiteralBytes = 0;
@@ -584,15 +619,39 @@ export class ImapRequestHandler {
             // its payload is the empty string, which a count-based guard would
             // skip — leaving the queue short by one and the parse failing.
             if (pendingCommand !== null && awaitingLiteral) {
-              if (buffer.length < literalBytesNeeded) return;
-              const payload = buffer.decode(0, literalBytesNeeded);
-              pendingLiterals.push(payload);
+              let payload: Literal;
               // The declared count, not a re-measure of the decoded string:
               // it is the exact number of octets just sliced out of the
               // buffer, and an invalid UTF-8 sequence decodes to U+FFFD and
               // re-encodes to three octets that were never on the wire.
-              pendingLiteralBytes += literalBytesNeeded;
-              buffer.consume(literalBytesNeeded);
+              let payloadBytes: number;
+              if (spool !== null) {
+                const active = spool;
+                const piece = buffer.head(literalBytesNeeded);
+                if (piece.length > 0) {
+                  await active.write(piece);
+                  // The socket closed while the write was pending.
+                  if (active.isDiscarded) return;
+                  buffer.consume(piece.length);
+                  literalBytesNeeded -= piece.length;
+                }
+                if (literalBytesNeeded > 0) {
+                  if (buffer.length === 0) return;
+                  continue;
+                }
+                const literal = await active.finish();
+                if (literal === null) return;
+                spool = null;
+                payload = literal;
+                payloadBytes = literal.size;
+              } else {
+                if (buffer.length < literalBytesNeeded) return;
+                payload = buffer.decode(0, literalBytesNeeded);
+                payloadBytes = literalBytesNeeded;
+                buffer.consume(literalBytesNeeded);
+              }
+              pendingLiterals.push(payload);
+              pendingLiteralBytes += payloadBytes;
               literalBytesNeeded = 0;
               awaitingLiteral = false;
               // A payload that consumed its own line terminator (the client
@@ -735,6 +794,9 @@ export class ImapRequestHandler {
                 pendingCommand += line.trimEnd();
                 literalBytesNeeded = declaredBytes;
                 awaitingLiteral = true;
+                if (declaresAppendMessage(pendingCommand, pendingLiterals)) {
+                  spool = new LiteralSpool();
+                }
                 if (isSynchronizing) session.write("+ go ahead\r\n");
                 continue;
               }
@@ -823,6 +885,9 @@ export class ImapRequestHandler {
               pendingLiteralBytes = 0;
               literalBytesNeeded = parseInt(literalMatch[1], 10);
               awaitingLiteral = true;
+              if (declaresAppendMessage(pendingCommand, pendingLiterals)) {
+                spool = new LiteralSpool();
+              }
               // Synchronizing literals {N} (without +) require a continuation
               // response before the client will send the literal data.
               // Non-synchronizing literals {N+} (LITERAL+) do not.
@@ -837,11 +902,13 @@ export class ImapRequestHandler {
         });
       } catch (error) {
         logger.error("Error processing data", { component: "imap" }, error);
+        discardHeldLiterals();
         if (!socket.destroyed) {
           socket.destroy();
         }
       } finally {
         draining = false;
+        if (socketClosed) discardHeldLiterals();
         // Consumption happens only in here, so this is where a paused socket
         // earns the right to be read again.
         applyBackpressure();
@@ -876,6 +943,8 @@ export class ImapRequestHandler {
 
     socket.on("close", () => {
       logger.debug("IMAP connection closed", { component: "imap" });
+      socketClosed = true;
+      discardHeldLiterals();
       session.cleanup();
     });
 

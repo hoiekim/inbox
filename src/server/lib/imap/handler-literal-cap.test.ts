@@ -27,6 +27,7 @@
 
 import { describe, it, expect, spyOn } from "bun:test";
 import { EventEmitter } from "events";
+import fs from "fs";
 import "../push";
 import { ImapRequestHandler } from "./handler";
 import { ImapRequest } from "./types";
@@ -84,10 +85,19 @@ function makeHarness(
 ) {
   const handler = new ImapRequestHandler();
   const socket = makeMockSocket();
-  const dispatched: { tag: string; request: ImapRequest }[] = [];
+  // `message` is the spooled APPEND payload, read before dispatch returns and the
+  // handler removes the file.
+  const dispatched: { tag: string; request: ImapRequest; message?: string }[] = [];
   const dispatch = handler.handleRequest.bind(handler);
   handler.handleRequest = async (tag, request) => {
-    dispatched.push({ tag, request });
+    dispatched.push({
+      tag,
+      request,
+      message:
+        request.type === "APPEND"
+          ? fs.readFileSync(request.data.message.path, "utf8")
+          : undefined
+    });
     if (realDispatch) await dispatch(tag, request);
     if (onRequest) await onRequest();
   };
@@ -514,7 +524,7 @@ describe("IMAP literal ceiling", () => {
 
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe(message);
+    expect(dispatched[0].message).toBe(message);
     expect(socket.writes).toEqual([]);
   });
 
@@ -784,7 +794,7 @@ describe("IMAP unread-command-text ceiling", () => {
     expect(socket.destroyed).toBe(false);
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe(message);
+    expect(dispatched[0].message).toBe(message);
   });
 
   it("delivers a fragmented APPEND whose declaration is queued behind a parked drain", async () => {
@@ -846,7 +856,7 @@ describe("IMAP unread-command-text ceiling", () => {
     expect(socket.writes).toEqual([]);
     expect(dispatched.map((d) => d.tag)).toEqual(["a1", "a2"]);
     if (dispatched[1].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[1].request.data.message).toBe(message);
+    expect(dispatched[1].message).toBe(message);
   });
 });
 

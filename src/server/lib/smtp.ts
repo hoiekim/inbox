@@ -28,6 +28,7 @@ import { getTlsCredentials } from "./tls";
 import { registerSmtpServer, unregisterSmtpServer } from "./smtp-registry";
 import { MAX_MESSAGE_BYTES } from "./message-size";
 import { ATTACHMENT_FOLDER } from "./mails/util";
+import { incomingMailFromParsed } from "./mails/receive";
 import {
   DataBudgetUnavailableError,
   withSmtpDataBudget
@@ -604,17 +605,17 @@ const drainDataStream = (stream: Readable) => {
 /** Per-transaction attachment working directories, beside the attachments they become. */
 export const INCOMING_ATTACHMENT_FOLDER = path.join(ATTACHMENT_FOLDER, ".incoming");
 
-const newTransactionDir = () => path.join(INCOMING_ATTACHMENT_FOLDER, crypto.randomUUID());
+export const newTransactionDir = () => path.join(INCOMING_ATTACHMENT_FOLDER, crypto.randomUUID());
 
-const removeTransactionDir = (dir: string) =>
+export const removeTransactionDir = (dir: string) =>
   fs.promises.rm(dir, { recursive: true, force: true }).catch((err) => {
-    logger.warn("SMTP: could not remove a transaction's attachment files", { dir }, err);
+    logger.warn("Could not remove a transaction's working files", { dir }, err);
   });
 
 /**
  * Removes the transaction directories a previous process left behind, crashed
- * mid-DATA. Runs before any listener opens, so none can belong to a live
- * transaction of this one.
+ * mid-DATA or mid-APPEND. Runs before the SMTP and IMAP listeners open, so none
+ * can belong to a live transaction of this one.
  */
 const sweepLeftoverTransactionDirs = () => removeTransactionDir(INCOMING_ATTACHMENT_FOLDER);
 
@@ -694,25 +695,10 @@ const onDataIncoming = (
       if (message.refused) return;
 
       const mail: IncomingMail = {
-        messageId: parsed.messageId,
-        from: parsed.from,
-        to: parsed.to,
-        cc: parsed.cc,
-        bcc: parsed.bcc,
-        replyTo: parsed.replyTo,
+        ...incomingMailFromParsed(parsed),
         envelopeFrom: session.envelope.mailFrom || undefined,
         envelopeTo: session.envelope.rcptTo.map((addr) => ({
           address: addr.address
-        })),
-        subject: parsed.subject,
-        date: parsed.date?.toISOString(),
-        html: parsed.html || parsed.text,
-        text: parsed.text,
-        attachments: parsed.attachments?.map((att) => ({
-          filename: att.filename || "attachment",
-          contentType: att.contentType,
-          path: att.path,
-          size: att.size
         }))
       };
 
