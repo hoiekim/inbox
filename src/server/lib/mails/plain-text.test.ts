@@ -143,6 +143,15 @@ describe("htmlToPlainText", () => {
     }
   });
 
+  it("stays linear on deeply nested links with urls", () => {
+    const html = '<a href="x">w '.repeat(6000);
+    const started = performance.now();
+    const text = htmlToPlainText(html, { urls: true });
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(text.startsWith("w w")).toBe(true);
+    expect(text.endsWith("[x]")).toBe(true);
+  });
+
   it("converts large input", () => {
     const row = "<tr><td>cell <b>bold</b> &amp; text</td></tr>";
     const text = htmlToPlainText(`<table>${row.repeat(50000)}</table>`);

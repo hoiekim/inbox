@@ -187,9 +187,11 @@ export class SmtpConnection {
     const socket = this.socket;
     socket.pause();
     const stalled = setTimeout(() => socket.destroy(), this.socketTimeout);
-    socket.once("close", () => clearTimeout(stalled));
+    const clearStall = () => clearTimeout(stalled);
+    socket.once("close", clearStall);
     socket.once("drain", () => {
       clearTimeout(stalled);
+      socket.off("close", clearStall);
       if (this.socket !== socket) return;
       this.replyBacklog = false;
       if (this.closed || this.upgrading || this.busy) return;

@@ -484,6 +484,29 @@ describe("SMTP reply backpressure", () => {
     expect(replies).toBe(commands + 1);
   }, 20000);
 
+  it("keeps a single close listener across repeated stalls", async () => {
+    const { server, port } = await startServer();
+    const socket = netConnect(port, "127.0.0.1");
+    sockets.push(socket);
+    socket.on("error", () => {});
+    let received = 0;
+    socket.on("data", (chunk: Buffer) => (received += chunk.length));
+    await sleep(300);
+    const [connection] = server.connections;
+    let expected = received;
+    for (let round = 0; round < 12; round++) {
+      socket.pause();
+      socket.write("NOOP\r\n".repeat(200_000));
+      expected += 200_000 * "250 OK\r\n".length;
+      await sleep(150);
+      socket.resume();
+      const deadline = Date.now() + 10000;
+      while (received < expected && Date.now() < deadline) await sleep(10);
+    }
+    expect(received).toBe(expected);
+    expect(connection["socket"].listenerCount("close")).toBeLessThanOrEqual(2);
+  }, 60000);
+
   it("drops a connection that stops reading once the socket timeout passes", async () => {
     const { server, port } = await startServer({ socketTimeout: 500 });
     const socket = netConnect(port, "127.0.0.1");

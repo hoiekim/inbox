@@ -606,6 +606,8 @@ type Transform = (word: string) => string;
 class TextBuilder {
   private block = new Block(null, 1, WORDWRAP);
   private transforms: Transform[] = [];
+  /** Lets a caller tell whether a subtree produced any words. */
+  wordsAdded = 0;
 
   constructor(readonly showUrls: boolean) {}
 
@@ -641,8 +643,11 @@ class TextBuilder {
 
   /** Collapses whitespace runs to single spaces while adding words. */
   private shrinkWrapAdd(text: string, lines: LineBuilder, noWordTransform: boolean) {
-    const transform = (word: string) =>
-      noWordTransform ? word : this.transforms.reduceRight((w, t) => t(w), word);
+    const transform = (word: string) => {
+      if (noWordTransform) return word;
+      this.wordsAdded++;
+      return this.transforms.reduceRight((w, t) => t(w), word);
+    };
     const stashed = lines.stashedSpace;
     let any = false;
     WORD.lastIndex = 0;
@@ -834,14 +839,10 @@ const formatAnchor = (el: Element, builder: TextBuilder) => {
     walk(el.children, builder);
     return;
   }
-  let text = "";
-  builder.pushTransform((word) => {
-    text += word;
-    return word;
-  });
+  const wordsBefore = builder.wordsAdded;
   walk(el.children, builder);
-  builder.popTransform();
-  builder.addInline(text ? ` [${href}]` : href, { noWordTransform: true });
+  const hasText = builder.wordsAdded > wordsBefore;
+  builder.addInline(hasText ? ` [${href}]` : href, { noWordTransform: true });
 };
 
 const formatList = (el: Element, builder: TextBuilder, nextPrefix: () => string) => {
