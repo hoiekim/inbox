@@ -94,8 +94,9 @@ class DotUnstuffer {
 /**
  * One client connection: the command loop, AUTH, STARTTLS and the DATA
  * transfer. Commands are handled strictly one at a time; the socket is paused
- * whenever a command is waiting on a hook or the DATA consumer is not keeping
- * up, so a pipelining client is held by TCP backpressure rather than buffered.
+ * whenever a command is waiting on a hook, the DATA consumer is not keeping
+ * up, or the client is not reading its replies, so a pipelining client is held
+ * by TCP backpressure rather than buffered.
  */
 export class SmtpConnection {
   readonly session: SmtpSession;
@@ -105,6 +106,8 @@ export class SmtpConnection {
   private closed = false;
   private upgrading = false;
   private busy = false;
+  /** Replies are queued past the socket's high-water mark; no command runs until `drain`. */
+  private replyBacklog = false;
   private pending: Buffer = Buffer.alloc(0);
   private nextHandler?: LineHandler;
   private unrecognized = 0;
@@ -154,9 +157,11 @@ export class SmtpConnection {
     socket.on("data", (chunk: Buffer) => this.onData(chunk));
     socket.on("close", () => this.onClose());
     socket.on("error", (err) => this.onError(err));
-    socket.setTimeout(this.server.options.socketTimeout ?? DEFAULT_SOCKET_TIMEOUT_MS, () =>
-      this.send(421, "Timeout - closing connection")
-    );
+    socket.setTimeout(this.socketTimeout, () => this.send(421, "Timeout - closing connection"));
+  }
+
+  private get socketTimeout(): number {
+    return this.server.options.socketTimeout ?? DEFAULT_SOCKET_TIMEOUT_MS;
   }
 
   /** Writes one reply; a multi-line reply is passed as an array of lines. */
@@ -166,8 +171,35 @@ export class SmtpConnection {
       : text
         ? `${code} ${text}`
         : `${code} `;
-    if (!this.socket.destroyed && this.socket.writable) this.socket.write(payload + "\r\n");
+    if (!this.socket.destroyed && this.socket.writable) {
+      if (!this.socket.write(payload + "\r\n") && !this.replyBacklog) this.holdForDrain();
+    }
     if (code === 421) this.close();
+  }
+
+  /**
+   * Stops reading commands until the client has read the replies already
+   * queued. A client that never reads again is dropped after the socket
+   * timeout, which does not fire on its own while writes are stuck.
+   */
+  private holdForDrain(): void {
+    this.replyBacklog = true;
+    const socket = this.socket;
+    socket.pause();
+    const stalled = setTimeout(() => socket.destroy(), this.socketTimeout);
+    socket.once("close", () => clearTimeout(stalled));
+    socket.once("drain", () => {
+      clearTimeout(stalled);
+      if (this.socket !== socket) return;
+      this.replyBacklog = false;
+      if (this.closed || this.upgrading || this.busy) return;
+      if (this.unstuffer) {
+        if (!this.dataStream?.writableNeedDrain) socket.resume();
+        return;
+      }
+      socket.resume();
+      this.pump();
+    });
   }
 
   close(): void {
@@ -188,7 +220,7 @@ export class SmtpConnection {
 
   /** Runs buffered command lines until one has to wait. */
   private pump(): void {
-    while (!this.busy && !this.closed && !this.upgrading && !this.unstuffer) {
+    while (!this.busy && !this.closed && !this.upgrading && !this.unstuffer && !this.replyBacklog) {
       const lf = this.pending.indexOf(LF);
       if (lf === -1) {
         if (this.pending.length > MAX_LINE_BYTES) {
@@ -212,7 +244,7 @@ export class SmtpConnection {
           .catch((err) => this.onError(err as Error))
           .finally(() => {
             this.busy = false;
-            if (!this.unstuffer && !this.upgrading) this.socket.resume();
+            if (!this.unstuffer && !this.upgrading && !this.replyBacklog) this.socket.resume();
             this.pump();
           });
       }
@@ -327,10 +359,7 @@ export class SmtpConnection {
     const onHandshakeTimeout = () => secureSocket.destroy();
     secureSocket.once("error", onHandshakeError);
     secureSocket.once("close", onHandshakeClose);
-    secureSocket.setTimeout(
-      this.server.options.socketTimeout ?? DEFAULT_SOCKET_TIMEOUT_MS,
-      onHandshakeTimeout
-    );
+    secureSocket.setTimeout(this.socketTimeout, onHandshakeTimeout);
     secureSocket.once("secure", () => {
       secureSocket.removeListener("error", onHandshakeError);
       secureSocket.removeListener("close", onHandshakeClose);
@@ -343,6 +372,7 @@ export class SmtpConnection {
       this.session.user = undefined;
       this.resetEnvelope();
       this.upgrading = false;
+      this.replyBacklog = false;
       this.attach(secureSocket);
     });
   }
@@ -502,7 +532,9 @@ export class SmtpConnection {
 
     const stream = new PassThrough();
     stream.on("drain", () => {
-      if (this.dataStream === stream && this.unstuffer && !this.closed) this.socket.resume();
+      if (this.dataStream === stream && this.unstuffer && !this.closed && !this.replyBacklog) {
+        this.socket.resume();
+      }
     });
     this.dataStream = stream;
     this.unstuffer = new DotUnstuffer();
@@ -564,7 +596,7 @@ export class SmtpConnection {
     this.unrecognized = 0;
     this.resetEnvelope();
     this.busy = false;
-    if (!this.closed) {
+    if (!this.closed && !this.replyBacklog) {
       this.socket.resume();
       this.pump();
     }

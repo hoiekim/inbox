@@ -439,6 +439,57 @@ describe("SMTP credential eviction", () => {
   });
 });
 
+describe("SMTP reply backpressure", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("stops reading commands while the client is not reading its replies", async () => {
+    const { server, port } = await startServer();
+    const socket = netConnect(port, "127.0.0.1");
+    sockets.push(socket);
+    socket.on("error", () => {});
+    let replies = 0;
+    let tail = "";
+    socket.on("data", (chunk: Buffer) => {
+      const text = tail + chunk.toString("latin1");
+      replies += text.split("\r\n").length - 1;
+      tail = text.slice(text.lastIndexOf("\r\n") + 2);
+    });
+    await sleep(300);
+    socket.pause();
+
+    const commands = 1_000_000;
+    socket.write("NOOP\r\n".repeat(commands));
+    await sleep(1000);
+    const [connection] = server.connections;
+    // Without backpressure every reply to the flood would be queued here: ~8 MB.
+    expect(connection["socket"].writableLength).toBeLessThan(256 * 1024);
+
+    socket.resume();
+    const deadline = Date.now() + 15000;
+    while (replies < commands + 1 && Date.now() < deadline) await sleep(50);
+    expect(replies).toBe(commands + 1);
+  }, 20000);
+
+  it("drops a connection that stops reading once the socket timeout passes", async () => {
+    const { server, port } = await startServer({ socketTimeout: 500 });
+    const socket = netConnect(port, "127.0.0.1");
+    sockets.push(socket);
+    socket.on("error", () => {});
+    let closed = false;
+    socket.on("close", () => (closed = true));
+    await sleep(300);
+    socket.pause();
+    socket.write("NOOP\r\n".repeat(1_000_000));
+    const deadline = Date.now() + 5000;
+    while (server.connections.size && Date.now() < deadline) await sleep(50);
+    expect(server.connections.size).toBe(0);
+    socket.resume();
+    socket.on("data", () => {});
+    while (!closed && Date.now() < deadline) await sleep(50);
+    expect(closed).toBe(true);
+  }, 10000);
+});
+
 describe("SMTP limits and shutdown", () => {
   it("answers new commands 421 once closing, and closes idle ones at the deadline", async () => {
     const { server, port } = await startServer();
