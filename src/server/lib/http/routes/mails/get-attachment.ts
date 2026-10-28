@@ -1,7 +1,7 @@
-import { AUTH_ERROR_MESSAGE, getAttachment, mailsTable } from "server";
+import { AUTH_ERROR_MESSAGE, getAttachmentFile, mailsTable } from "server";
 import { Route } from "../route";
 
-export const getAttachmentRoute = new Route<Buffer>(
+export const getAttachmentRoute = new Route<Bun.BunFile>(
   "GET",
   "/attachment/:id",
   async (req) => {
@@ -18,7 +18,7 @@ export const getAttachmentRoute = new Route<Buffer>(
     });
     if (!mail) return { status: "failed", message: "Not found" };
 
-    const attachment = getAttachment(attachmentId);
+    const attachment = await getAttachmentFile(attachmentId);
     if (attachment === undefined) return { status: "failed" };
     return attachment;
   }

@@ -5,7 +5,7 @@ import { resolveProxyTrust } from "./app";
 import { resolveSessionSecret } from "./session-secret";
 import handleApi from "./routes";
 import { mountedPath } from "./routes/route";
-import { errorHandler, reportMiddlewareError } from "./error-handler";
+import { errorHandler, reportMiddlewareError, serverErrorHandler } from "./error-handler";
 import { startCleanupScheduler } from "./rate-limit";
 import { HttpSession, type SessionStore } from "./session";
 import {
@@ -187,10 +187,7 @@ export const initializeHttp = async () => {
     idleTimeout: IDLE_TIMEOUT_SECONDS,
     maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
     fetch: (request, server) => app(request, server.requestIP(request)?.address ?? ""),
-    error: (error) => {
-      logger.error("Unhandled HTTP server error", {}, error);
-      return text("Internal server error", 500);
-    },
+    error: serverErrorHandler,
   });
   logger.info(`${domain} mail server is listening`);
 

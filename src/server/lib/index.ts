@@ -37,6 +37,7 @@ export {
   getAttachmentId,
   getAttachmentFilePath,
   getAttachment,
+  getAttachmentFile,
   sendMail,
   validateMailData,
   MailValidationError,

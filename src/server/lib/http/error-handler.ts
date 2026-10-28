@@ -62,3 +62,13 @@ export const errorHandler = (error: unknown, req: FailedRequest): Response => {
   if (isApiPath(req.path)) return json({ status: "error", message: detail }, status);
   return text(detail, status);
 };
+
+/**
+ * `Bun.serve`'s fallback for a fault raised after the app returned its
+ * response, such as a file body that cannot be opened while it is being sent.
+ */
+export const serverErrorHandler = (error: Error): Response => {
+  logger.error("Unhandled HTTP server error", {}, error);
+  sendAlarm("Unhandled HTTP Server Error", `**Error:** ${error.message}`).catch(() => undefined);
+  return text(DETAIL, 500);
+};

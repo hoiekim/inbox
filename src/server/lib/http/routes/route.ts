@@ -1,7 +1,7 @@
 import { logger } from "../../logger";
 import { sendAlarm } from "../../alarm";
 import { HttpError, type HttpRequest } from "../request";
-import { json, send } from "../respond";
+import { json, sendFile } from "../respond";
 
 export type Method = "GET" | "POST" | "DELETE";
 
@@ -28,7 +28,7 @@ export class StreamingStatus {
 
 export type GetResponse<T = unknown> = (
   req: HttpRequest
-) => Promise<T extends Buffer ? Buffer | ApiResponse : ApiResponse<T> | void>;
+) => Promise<T extends Bun.BunFile ? Bun.BunFile | ApiResponse : ApiResponse<T> | void>;
 
 const escapeRegExp = (literal: string) => literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -102,8 +102,8 @@ export class Route<T> {
   handler = async (req: HttpRequest): Promise<Response> => {
     try {
       const result = await this.callback(req);
-      if (Buffer.isBuffer(result)) {
-        return send(result as Uint8Array, { contentType: "application/octet-stream" });
+      if (result instanceof Blob) {
+        return sendFile(result as Bun.BunFile, { contentType: "application/octet-stream" });
       }
       if (result) return json(result);
       return new Response(null);

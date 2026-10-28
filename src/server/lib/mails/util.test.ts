@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import fs from "node:fs";
 import {
   TO_ADDRESS_FIELD,
   FROM_ADDRESS_FIELD,
   nestedPath,
   ATTACHMENT_FOLDER,
   getAttachmentFilePath,
+  getAttachmentFile,
   getText,
 } from "./util";
 import { getDomain, getUserDomain } from "../util";
@@ -91,6 +93,24 @@ describe("getAttachmentFilePath", () => {
   it("should return path with given id", () => {
     const path = getAttachmentFilePath("abc-123");
     expect(path).toBe("./attachments/abc-123");
+  });
+});
+
+describe("getAttachmentFile", () => {
+  const id = "util-test-attachment-file";
+  afterAll(() => fs.rmSync(getAttachmentFilePath(id), { force: true }));
+
+  it("returns the stored file, unread, when it exists", async () => {
+    fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
+    fs.writeFileSync(getAttachmentFilePath(id), "stored bytes");
+    const file = await getAttachmentFile(id);
+    expect(file).toBeInstanceOf(Blob);
+    expect(file!.size).toBe(12);
+    expect(await file!.text()).toBe("stored bytes");
+  });
+
+  it("returns undefined when the file is missing", async () => {
+    expect(await getAttachmentFile("util-test-attachment-never-written")).toBeUndefined();
   });
 });
 
