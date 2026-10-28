@@ -695,6 +695,8 @@ export const _emitBase64FromBytesForTests = emitBase64FromBytes;
 /**
  * Emit an attachment base64-encoded, reading the file in slices through a
  * single descriptor so a multi-MB attachment never materializes whole.
+ * `startBase64` (a multiple of 4) starts the output that far in by seeking the
+ * file, so a partial FETCH deep into a large attachment reads only its window.
  *
  * Emits EXACTLY `base64ByteLen(rawSize)` octets — the count already advertised
  * in `{N}`. If the file disagrees with the size resolved at measure time (it
@@ -706,10 +708,12 @@ export const _emitBase64FromBytesForTests = emitBase64FromBytes;
  * wire by the time it runs.
  */
 async function* emitAttachment(
-  segment: Extract<MessageSegment, { kind: "attachment" }>
+  segment: Extract<MessageSegment, { kind: "attachment" }>,
+  startBase64 = 0
 ): AsyncGenerator<Buffer, void, unknown> {
   const advertised = base64ByteLen(segment.rawSize);
-  let emitted = 0;
+  const startRaw = (startBase64 / 4) * 3;
+  let emitted = startBase64;
 
   const emit = function* (encoded: string): Generator<Buffer, void, unknown> {
     const remaining = advertised - emitted;
@@ -729,7 +733,7 @@ async function* emitAttachment(
     // more tightly than `Buffer.allocUnsafe`'s return; same idiom as
     // chunked-write.ts's `socket.write` call.
     const target = scratch as unknown as Uint8Array;
-    let position = 0;
+    let position = startRaw;
     for (;;) {
       const read = fs.readSync(fd, target, 0, SLICE_RAW_BYTES, position);
       if (read <= 0) break;
@@ -743,7 +747,8 @@ async function* emitAttachment(
       filename: segment.filename,
       err: error instanceof Error ? error.message : String(error)
     });
-    yield* emit(Buffer.from(MISSING_ATTACHMENT_NOTICE, "utf8").toString("base64"));
+    const notice = Buffer.from(MISSING_ATTACHMENT_NOTICE, "utf8").toString("base64");
+    yield* emit(emitted === startBase64 ? notice.slice(startBase64) : notice);
   } finally {
     if (fd !== undefined) {
       try {
@@ -841,6 +846,11 @@ export async function* streamPartialFromSegments(
     if (takeInSeg <= 0) continue;
     if (segment.kind === "lazy-text") {
       yield* streamLazyTextPartial(segment, skipInSeg, takeInSeg);
+      continue;
+    }
+    if (segment.kind === "attachment") {
+      const alignedSkip = Math.floor(skipInSeg / 4) * 4;
+      yield* sliceStream(emitAttachment(segment, alignedSkip), skipInSeg - alignedSkip, takeInSeg);
       continue;
     }
     yield* sliceStream(streamOneSegment(segment), skipInSeg, takeInSeg);
