@@ -5,6 +5,9 @@
  *   delete-allowlist, post-send, post-spam-mark, get-attachment
  */
 import { describe, it, expect, mock, afterAll, beforeEach } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { ApiResponse } from "../route";
 import {
   ADMIN_RO_USERNAME,
@@ -43,7 +46,7 @@ const mockAddAllowlistEntry = mock(async () => null as unknown);
 const mockRemoveAllowlistEntry = mock(async () => false as unknown);
 const mockSendMail = mock(async () => {});
 const mockMarkSpam = mock(async () => ({ found: false, changed: false }) as unknown);
-const mockGetAttachment = mock(() => undefined as unknown);
+const mockGetAttachmentFile = mock(async () => undefined as Bun.BunFile | undefined);
 const mockMailsTableQueryOne = mock(async () => null as unknown);
 const AUTH_ERROR_MESSAGE = "Authentication required";
 
@@ -82,7 +85,7 @@ mock.module("server", () => ({
   removeAllowlistEntry: mockRemoveAllowlistEntry,
   sendMail: mockSendMail,
   markSpam: mockMarkSpam,
-  getAttachment: mockGetAttachment,
+  getAttachmentFile: mockGetAttachmentFile,
   AUTH_ERROR_MESSAGE,
   MailValidationError: MockMailValidationError,
   MailSendingError: MockMailSendingError,
@@ -1167,7 +1170,7 @@ describe("postMarkSpamMailRoute", () => {
 describe("getAttachmentRoute", () => {
   beforeEach(() => {
     mockMailsTableQueryOne.mockClear();
-    mockGetAttachment.mockClear();
+    mockGetAttachmentFile.mockClear();
   });
 
   it("returns failed with auth error when no session user", async () => {
@@ -1190,20 +1193,38 @@ describe("getAttachmentRoute", () => {
   it("returns failed when attachment file missing from disk", async () => {
     const { getAttachmentRoute } = await import("./get-attachment");
     mockMailsTableQueryOne.mockResolvedValueOnce({ id: "m1" });
-    mockGetAttachment.mockReturnValueOnce(undefined);
+    mockGetAttachmentFile.mockResolvedValueOnce(undefined);
     const req = makeReq({ params: { id: "att1" } });
     const result = await getAttachmentRoute.callback(req);
     expect((result as ApiResponse<unknown>).status).toBe("failed");
   });
 
-  it("returns attachment buffer when found", async () => {
+  it("streams the stored file without reading it into memory", async () => {
     const { getAttachmentRoute } = await import("./get-attachment");
-    const fakeBuffer = Buffer.from("file content");
-    mockMailsTableQueryOne.mockResolvedValueOnce({ id: "m1" });
-    mockGetAttachment.mockReturnValueOnce(fakeBuffer);
-    const req = makeReq({ params: { id: "att1" } });
-    const result = await getAttachmentRoute.callback(req);
-    expect(result).toBe(fakeBuffer);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "get-attachment-"));
+    const filePath = path.join(dir, "att1");
+    const content = Buffer.alloc(300_000);
+    for (let i = 0; i < content.length; i += 1) content[i] = (i * 13) % 251;
+    fs.writeFileSync(filePath, content);
+    try {
+      const file = Bun.file(filePath);
+      mockMailsTableQueryOne.mockResolvedValueOnce({ id: "m1" });
+      mockGetAttachmentFile.mockResolvedValueOnce(file);
+      const req = makeReq({ params: { id: "att1" } });
+      expect(await getAttachmentRoute.callback(req)).toBe(file);
+
+      mockMailsTableQueryOne.mockResolvedValueOnce({ id: "m1" });
+      mockGetAttachmentFile.mockResolvedValueOnce(file);
+      const response = await getAttachmentRoute.handler(req);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(response.headers.get("etag")).toBe(
+        `W/"${content.length.toString(16)}-${file.lastModified.toString(16)}"`
+      );
+      expect(Buffer.from(await response.arrayBuffer()).equals(content)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

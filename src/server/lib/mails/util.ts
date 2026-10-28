@@ -33,6 +33,12 @@ export const getAttachment = (id: string) => {
   return undefined;
 };
 
+/** The stored attachment as a file read lazily when sent, or undefined when it is missing. */
+export const getAttachmentFile = async (id: string) => {
+  const file = Bun.file(getAttachmentFilePath(id));
+  return (await file.exists()) ? file : undefined;
+};
+
 export const getText = (html: string) => {
   const text = htmlToPlainText(html);
 

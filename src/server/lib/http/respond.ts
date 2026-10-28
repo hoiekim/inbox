@@ -15,6 +15,18 @@ export const send = (
     headers: { "Content-Type": init.contentType, ETag: bodyEtag(body) },
   });
 
+/**
+ * A file streamed from disk rather than held in memory, so its `ETag` comes
+ * from its size and modification time instead of a hash of its bytes.
+ */
+export const sendFile = (file: Bun.BunFile, init: { contentType: string }): Response =>
+  new Response(file, {
+    headers: {
+      "Content-Type": init.contentType,
+      ETag: `W/"${file.size.toString(16)}-${file.lastModified.toString(16)}"`,
+    },
+  });
+
 export const json = (body: unknown, status = 200): Response =>
   send(JSON.stringify(body), { status, contentType: "application/json; charset=utf-8" });
 

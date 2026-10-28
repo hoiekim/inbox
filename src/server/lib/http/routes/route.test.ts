@@ -1,4 +1,7 @@
 import { describe, it, expect, mock, afterAll } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 mock.module("../../logger", () => ({
   logger: { debug: mock(() => {}), info: mock(() => {}), warn: mock(() => {}), error: mock(() => {}) },
@@ -85,14 +88,22 @@ describe("Route.handler", () => {
     expect(await res.text()).toBe("");
   });
 
-  it("sends a Buffer as the raw body", async () => {
-    const buf = Buffer.from("binary data");
-    const route = new Route("GET", "/bin", async () => buf);
+  it("streams a file as the raw body, validated by its size and mtime", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "route-file-"));
+    const filePath = path.join(dir, "bin");
+    fs.writeFileSync(filePath, "binary data");
+    try {
+      const file = Bun.file(filePath);
+      const route = new Route<Bun.BunFile>("GET", "/bin", async () => file);
 
-    const res = await route.handler(makeReq());
+      const res = await route.handler(makeReq());
 
-    expect(res.headers.get("content-type")).toBe("application/octet-stream");
-    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("binary data");
+      expect(res.headers.get("content-type")).toBe("application/octet-stream");
+      expect(res.headers.get("etag")).toBe(`W/"b-${file.lastModified.toString(16)}"`);
+      expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("binary data");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("returns 500 json on thrown error", async () => {
