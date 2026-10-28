@@ -1,5 +1,5 @@
 
-import { describe, it, expect, mock, afterAll } from "bun:test";
+import { describe, it, expect, mock, spyOn, afterAll } from "bun:test";
 import fs from "node:fs";
 import {
   ATTACHMENT_FOLDER,
@@ -1994,6 +1994,114 @@ describe("buildFetchResponsePart partial BODY[]<start.length> streams through se
     for (const f of ["text", "html"] as const) {
       expect(partialFields.has(f as FetchRequestedField)).toBe(false);
       expect(fullFields.has(f as FetchRequestedField)).toBe(false);
+    }
+  });
+});
+
+describe("partial BODY[] fetches into an attachment read only their window", () => {
+  const docId = "doc-attachment-partial";
+  const marker = `filename="a.bin"\r\n\r\n`;
+  const mailbox = "INBOX";
+  const mailWith = (id: string, size: number): Partial<MailType> => ({
+    uid: { account: 1, domain: 1 } as MailType["uid"],
+    messageId: "<attachment-partial@local>",
+    date: new Date("2026-10-28T00:00:00Z"),
+    from: { text: "alice@example.com", value: [] } as unknown as MailType["from"],
+    to: { text: "bob@example.com", value: [] } as unknown as MailType["to"],
+    subject: "attachment partial",
+    text: "see attached",
+    html: "",
+    attachments: [
+      {
+        filename: "a.bin",
+        contentType: "application/octet-stream",
+        size,
+        content: { data: TEST_ID_PREFIX + id }
+      }
+    ] as unknown as MailType["attachments"]
+  });
+
+  const drain = async (part: FetchResponsePart | null): Promise<Buffer> => {
+    if (part?.type !== "stream") throw new Error(`expected stream, got ${part?.type}`);
+    const chunks: Buffer[] = [];
+    for await (const chunk of part.stream) chunks.push(Buffer.from(chunk));
+    const out = Buffer.concat(chunks);
+    expect(out.byteLength).toBe(part.length);
+    return out;
+  };
+
+  const fetchRange = (mail: Partial<MailType>, section: BodySection, start?: number, length?: number) =>
+    buildFetchResponsePart(
+      mail,
+      {
+        type: "BODY",
+        peek: true,
+        section,
+        ...(start === undefined ? {} : { partial: { start, length: length! } })
+      },
+      docId,
+      mailbox
+    );
+
+  const original = Buffer.alloc(200_000);
+  for (let i = 0; i < original.length; i += 1) original[i] = (i * 7) % 253;
+
+  const sections: Array<[string, BodySection]> = [
+    ["BODY[]", { type: "FULL" }],
+    ["BODY[2]", { type: "MIME_PART", partNumber: "2" }]
+  ];
+
+  for (const [label, section] of sections) {
+    it(`${label}<start.length> equals the same range of the full ${label}, at every base64 alignment`, async () => {
+      const id = "att-partial-parity";
+      writeAttachment(id, original);
+      const mail = mailWith(id, original.length);
+      const whole = await drain(await fetchRange(mail, section));
+      const addressable = (await drain(await fetchRange(mail, section, 0, 1e9))).byteLength;
+      const encodedStart = label === "BODY[]" ? whole.indexOf(marker) + marker.length : 0;
+      const starts = [0, 1, 2, 3, encodedStart - 1, encodedStart, encodedStart + 1, encodedStart + 2,
+        encodedStart + 3, encodedStart + 65_536, encodedStart + 65_537, encodedStart + 150_001,
+        encodedStart + 266_665, addressable - 3, addressable - 1].filter((s) => s >= 0);
+      for (const start of starts) {
+        for (const length of [1, 5, 4_099, 65_537]) {
+          const got = await drain(await fetchRange(mail, section, start, length));
+          const want = whole.subarray(start, Math.min(start + length, addressable));
+          expect(got.equals(want), `${label}<${start}.${length}>`).toBe(true);
+        }
+      }
+    });
+  }
+
+  it("a window deep in the attachment never reads the file before it", async () => {
+    const id = "att-partial-seek";
+    writeAttachment(id, original);
+    const mail = mailWith(id, original.length);
+    const whole = await drain(await fetchRange(mail, { type: "FULL" }));
+    const encodedStart = whole.indexOf(marker) + marker.length;
+    const skip = 200_001;
+
+    const readSync = spyOn(fs, "readSync");
+    try {
+      const got = await drain(await fetchRange(mail, { type: "FULL" }, encodedStart + skip, 1_000));
+      expect(got.equals(whole.subarray(encodedStart + skip, encodedStart + skip + 1_000))).toBe(true);
+      const positions = readSync.mock.calls.map((call) => call[4] as number);
+      expect(positions.length).toBeGreaterThan(0);
+      expect(Math.min(...positions)).toBe((Math.floor(skip / 4) * 4 * 3) / 4);
+    } finally {
+      readSync.mockRestore();
+    }
+  });
+
+  it("a missing attachment file yields the same bytes partially as in full", async () => {
+    const mail = mailWith("att-partial-never-written", 90_000);
+    const whole = await drain(await fetchRange(mail, { type: "FULL" }));
+    const addressable = (await drain(await fetchRange(mail, { type: "FULL" }, 0, 1e9))).byteLength;
+    const encodedStart = whole.indexOf(marker) + marker.length;
+    for (const offset of [0, 1, 2, 3, 5, 33, 35]) {
+      const start = encodedStart + offset;
+      const got = await drain(await fetchRange(mail, { type: "FULL" }, start, 8));
+      const want = whole.subarray(start, Math.min(start + 8, addressable));
+      expect(got.toString("latin1"), `offset ${offset}`).toBe(want.toString("latin1"));
     }
   });
 });
