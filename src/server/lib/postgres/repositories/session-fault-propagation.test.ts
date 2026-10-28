@@ -28,6 +28,8 @@ let revokeMode: Mode = "ok";
 // The user row's password_version the fence reads; "missing" simulates a
 // deleted account row, "throw" a lookup fault.
 let userVersionMode: number | "missing" | "throw" = 1;
+let stampedVersion = 1;
+const insertValues: unknown[][] = [];
 
 const issuedSql: string[] = [];
 
@@ -60,7 +62,7 @@ const liveSessionRow = () => ({
   session_email: USER.email,
   session_is_read_only: null,
   session_authenticated_as: null,
-  session_password_version: 1,
+  session_password_version: stampedVersion,
   cookie_original_max_age: WEEK_MS,
   cookie_max_age: WEEK_MS,
   cookie_signed: null,
@@ -73,9 +75,10 @@ const liveSessionRow = () => ({
   updated: new Date().toISOString(),
 });
 
-const mockQuery = mock(async (sql: string) => {
+const mockQuery = mock(async (sql: string, values: unknown[] = []) => {
   issuedSql.push(sql);
   if (sql.startsWith("INSERT INTO sessions")) {
+    insertValues.push(values);
     if (writeMode === "throw") throw new Error("could not serialize session write");
     const rows = writeMode === "empty" ? [] : [liveSessionRow()];
     return { rows, rowCount: rows.length };
@@ -119,7 +122,9 @@ beforeEach(() => {
   purgeMode = "ok";
   revokeMode = "ok";
   userVersionMode = 1;
+  stampedVersion = 1;
   issuedSql.length = 0;
+  insertValues.length = 0;
   installQueryStub();
 });
 
@@ -236,6 +241,21 @@ describe("PostgresSessionStore.get credential-version fence", () => {
 
     expect(err).toBeNull();
     expect((session as { user: SignedUser }).user.id).toBe(USER.id);
+  });
+
+  it("a session read back and saved again keeps the version it was stamped with", async () => {
+    // Every request re-saves its session.
+    userVersionMode = 2;
+    stampedVersion = 2;
+
+    const { err, session } = await getResult(SESSION_ID);
+    expect(err).toBeNull();
+    expect((session as { user: SignedUser }).user.passwordVersion).toBe(2);
+
+    await store.set(SESSION_ID, session as never);
+    expect(insertValues).toHaveLength(1);
+    expect(insertValues[0]).toContain(2);
+    expect(insertValues[0]).not.toContain(1);
   });
 
   it("rejects when the version lookup raises", async () => {

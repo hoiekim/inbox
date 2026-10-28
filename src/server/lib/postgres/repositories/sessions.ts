@@ -220,6 +220,7 @@ export class PostgresSessionStore implements SessionStore {
     runtimeSession.user.id = sessionModel.session_user_id;
     runtimeSession.user.username = sessionModel.session_username;
     runtimeSession.user.email = sessionModel.session_email;
+    runtimeSession.user.passwordVersion = stampedVersion;
     if (sessionModel.session_is_read_only) {
       runtimeSession.user.isReadOnly = true;
       runtimeSession.user.authenticatedAs =
