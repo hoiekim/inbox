@@ -86,14 +86,25 @@ const EMPTY = Buffer.alloc(0);
 /** Header lines of one part, unfolded keys kept with their raw (folded) line. */
 type HeaderLines = { key: string; line: string }[];
 
+const withoutTrailingBreaks = (text: string): string => {
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === "\r" || text[end - 1] === "\n")) end--;
+  return text.slice(0, end);
+};
+
+/** Removes everything from the first `(` to the last `)`, as an RFC 5322 comment. */
+const withoutComment = (value: string): string => {
+  const open = value.indexOf("(");
+  const close = value.lastIndexOf(")");
+  return open !== -1 && close > open ? value.slice(0, open) + value.slice(close + 1) : value;
+};
+
 const splitHeaderBlock = (block: Buffer): HeaderLines => {
-  const lines = block.toString("latin1").replace(/[\r\n]+$/, "").split(/\r?\n/);
-  for (let i = lines.length - 1; i > 0; i--) {
-    const first = lines[i].charAt(0);
-    if (first === " " || first === "\t") {
-      lines[i - 1] += "\r\n" + lines[i];
-      lines.splice(i, 1);
-    }
+  const lines: string[] = [];
+  for (const line of withoutTrailingBreaks(block.toString("latin1")).split(/\r?\n/)) {
+    const first = line.charAt(0);
+    if (lines.length && (first === " " || first === "\t")) lines[lines.length - 1] += "\r\n" + line;
+    else lines.push(line);
   }
   if (lines.length && /^From /i.test(lines[0])) lines.shift();
   return lines
@@ -229,8 +240,7 @@ const readPartStructure = (part: Part): void => {
   }
   const contentType = parseHeaderValue(contentTypeHeader);
 
-  part.encoding = firstHeader(lines, "content-transfer-encoding")
-    .replace(/\(.*\)/g, "")
+  part.encoding = withoutComment(firstHeader(lines, "content-transfer-encoding"))
     .toLowerCase()
     .trim();
   part.contentType = contentType.value.toLowerCase().trim() || false;
@@ -341,19 +351,37 @@ class TextBody implements PartBody {
   }
 }
 
-/** Undoes RFC 3676 format=flowed soft breaks and space-stuffing. */
+/**
+ * Undoes RFC 3676 format=flowed soft breaks and space-stuffing. Each joined
+ * line is kept as pieces and concatenated once, so a long run of soft breaks
+ * costs linear time.
+ */
 const decodeFlowed = (text: string, delSp: boolean): string => {
   const result: string[] = [];
-  let buffer: string | null = null;
+  let pieces: string[] | null = null;
+  let length = 0;
+  const endsInSoftBreak = () => {
+    const last = pieces?.[pieces.length - 1];
+    if (!last?.endsWith(" ")) return false;
+    // RFC 3676 §4.3: the "-- " signature separator is never a soft break.
+    return !(length === 3 && pieces!.join("") === "-- ");
+  };
   for (const line of text.split(/\r?\n/)) {
-    const isSoftBreak = buffer !== null && / $/.test(buffer) && !/(^|\n)-- $/.test(buffer);
-    if (isSoftBreak) buffer = delSp ? buffer!.slice(0, -1) + line : buffer + line;
-    else {
-      if (buffer !== null) result.push(buffer);
-      buffer = line;
+    if (endsInSoftBreak()) {
+      if (delSp) {
+        const last = pieces!.pop()!.slice(0, -1);
+        length--;
+        if (last) pieces!.push(last);
+      }
+      if (line) pieces!.push(line);
+      length += line.length;
+    } else {
+      if (pieces !== null) result.push(pieces.join(""));
+      pieces = line ? [line] : [];
+      length = line.length;
     }
   }
-  if (buffer) result.push(buffer);
+  if (length) result.push(pieces!.join(""));
   return result.join("\n").replace(/^ /gm, "");
 };
 

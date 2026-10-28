@@ -30,6 +30,68 @@ const OPERATORS: Record<string, string> = {
   ";": ""
 };
 
+const AT = 0x40;
+
+const isWordChar = (code: number): boolean =>
+  (code >= 0x30 && code <= 0x39) ||
+  (code >= 0x41 && code <= 0x5a) ||
+  (code >= 0x61 && code <= 0x7a) ||
+  code === 0x5f;
+
+/** Whitespace as JavaScript's `\s` defines it. */
+const isSpace = (code: number): boolean =>
+  (code >= 0x09 && code <= 0x0d) ||
+  code === 0x20 ||
+  code === 0xa0 ||
+  code === 0x1680 ||
+  (code >= 0x2000 && code <= 0x200a) ||
+  code === 0x2028 ||
+  code === 0x2029 ||
+  code === 0x202f ||
+  code === 0x205f ||
+  code === 0x3000 ||
+  code === 0xfeff;
+
+/**
+ * The first `[start, end)` of `text` matching `\s*\b[^@\s]+@[^\s]+\b\s*` as a
+ * regex: an address written inside a display name, with the whitespace around
+ * it. Hand-written because the regex restarts at every character of a long
+ * run with no `@`, which is quadratic in the length of the header.
+ */
+const findAddressInText = (text: string): [number, number] | undefined => {
+  const code = (i: number) => text.charCodeAt(i);
+  const boundary = (i: number) =>
+    (i > 0 && isWordChar(code(i - 1))) !== (i < text.length && isWordChar(code(i)));
+  let i = 0;
+  while (i < text.length) {
+    if (code(i) === AT || isSpace(code(i))) {
+      i++;
+      continue;
+    }
+    const runStart = i;
+    let runEnd = i;
+    while (runEnd < text.length && code(runEnd) !== AT && !isSpace(code(runEnd))) runEnd++;
+    i = runEnd;
+    if (code(runEnd) !== AT) continue;
+
+    let local = runStart;
+    while (local < runEnd && !boundary(local)) local++;
+    if (local === runEnd) continue;
+
+    let domainEnd = runEnd + 1;
+    while (domainEnd < text.length && !isSpace(code(domainEnd))) domainEnd++;
+    let end = domainEnd;
+    while (end > runEnd + 1 && !boundary(end)) end--;
+    if (end === runEnd + 1) continue;
+
+    let start = local;
+    if (local === runStart) while (start > 0 && isSpace(code(start - 1))) start--;
+    if (end === domainEnd) while (end < text.length && isSpace(code(end))) end++;
+    return [start, end];
+  }
+  return undefined;
+};
+
 const tokenize = (input: string): Token[] => {
   const list: Token[] = [];
   let expecting = "";
@@ -159,14 +221,15 @@ const handleAddress = (tokens: Token[], depth: number): ParsedAddressValue[] => 
     if (!data.address.length) {
       for (let i = data.text.length - 1; i >= 0; i--) {
         if (textWasQuoted[i]) continue;
-        data.text[i] = data.text[i]
-          .replace(/\s*\b[^@\s]+@[^\s]+\b\s*/, (found) => {
-            if (data.address.length) return found;
-            data.address = [found.trim()];
-            return " ";
-          })
-          .trim();
-        if (data.address.length) break;
+        const text = data.text[i];
+        const found = findAddressInText(text);
+        if (!found) {
+          data.text[i] = text.trim();
+          continue;
+        }
+        data.address = [text.slice(found[0], found[1]).trim()];
+        data.text[i] = (text.slice(0, found[0]) + " " + text.slice(found[1])).trim();
+        break;
       }
     }
   }

@@ -165,6 +165,27 @@ describe("parseMessage bodies", () => {
     );
   });
 
+  it("renders a long plain line beside an HTML part in linear time", async () => {
+    const started = performance.now();
+    const parsed = await parse(
+      message(
+        'Content-Type: multipart/mixed; boundary="m"',
+        "",
+        "--m",
+        "Content-Type: text/html",
+        "",
+        "<p>hi</p>",
+        "--m",
+        "Content-Type: text/plain",
+        "",
+        "a".repeat(TEXT_BODY_BUDGET_BYTES - 1024),
+        "--m--"
+      )
+    );
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(parsed.html?.length).toBeGreaterThan(TEXT_BODY_BUDGET_BYTES - 1024);
+  });
+
   it("decodes text parts in their declared charset", async () => {
     const shiftJis = Buffer.from([0x82, 0xb1, 0x82, 0xf1]).toString("base64");
     const parsed = await parse(
@@ -433,6 +454,24 @@ describe("parseMessage attachments", () => {
     expect(parsed.attachments[0].filename).toBe("body.html");
     expect(parsed.attachments[0].contentType).toBe("text/html");
     expect(fs.readFileSync(parsed.attachments[0].path, "utf8")).toBe(html);
+  });
+});
+
+describe("parseMessage on adversarial input", () => {
+  it("stays linear on near-limit headers and bodies built to trip backtracking", async () => {
+    const inputs = [
+      "Subject: a" + "\r".repeat(900_000) + "b\r\n\r\nbody",
+      "Content-Transfer-Encoding: " + "(".repeat(900_000) + "\r\n\r\nbody",
+      "To: @@" + "a!".repeat(450_000) + "\r\n\r\nbody",
+      "Subject: a" + "\r\n b".repeat(225_000) + "\r\n\r\nbody",
+      "Content-Type: text/plain; format=flowed; delsp=yes\r\n\r\n" + "ab \r\n".repeat(400_000)
+    ];
+    for (const raw of inputs) {
+      const started = performance.now();
+      await parse(raw);
+      // Linear work here takes tens of milliseconds; quadratic takes minutes.
+      expect(performance.now() - started).toBeLessThan(2000);
+    }
   });
 });
 
