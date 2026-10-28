@@ -42,6 +42,32 @@ const isImplicitTlsHandshakeFailure = (server: SmtpServer, err: Error): boolean 
   server.options.secure === true &&
   (err as Error & { meta?: { stage?: string } }).meta?.stage === "connect";
 
+// Errors from the TLS layer carry library "SSL routines" and an ERR_SSL_* code
+// on both Node (OpenSSL) and Bun (BoringSSL). BoringSSL messages name no OpenSSL
+// function ("SSL routines:OPENSSL_internal:NO_SHARED_CIPHER"), so the function
+// names below never match there.
+const isTlsLayerError = (err: Error): boolean => {
+  const { library, code } = err as Error & { library?: string; code?: string };
+  return library === "SSL routines" || (typeof code === "string" && code.startsWith("ERR_SSL_"));
+};
+
+// A peer rejecting our certificate (expired, wrong hostname, unknown CA) is a
+// server-side defect even though it surfaces as a TLS-layer error, so it pages.
+const PEER_CERT_REJECTION_ALERTS = [
+  "ALERT_BAD_CERTIFICATE",
+  "ALERT_UNSUPPORTED_CERTIFICATE",
+  "ALERT_CERTIFICATE_REVOKED",
+  "ALERT_CERTIFICATE_EXPIRED",
+  "ALERT_CERTIFICATE_UNKNOWN",
+  "ALERT_UNKNOWN_CA"
+];
+
+const isPeerCertRejection = (err: Error): boolean => {
+  const { reason } = err as Error & { reason?: string };
+  const text = `${reason ?? ""} ${err.message ?? ""}`.toUpperCase().replace(/ /g, "_");
+  return PEER_CERT_REJECTION_ALERTS.some((alert) => text.includes(alert));
+};
+
 // A remote client dropping or stalling its connection. Matched by syscall and
 // errno code because the message differs by runtime ("read ETIMEDOUT" on Node,
 // "ETIMEDOUT: connection timed out, read" on Bun).
@@ -77,7 +103,9 @@ const registerListeners = (
     // - Plus a few connection-level strings for connection-drop cases.
     const msg = err.message ?? "";
     if (
-      isImplicitTlsHandshakeFailure(server, err) ||
+      !isPeerCertRejection(err) &&
+      (isImplicitTlsHandshakeFailure(server, err) ||
+      isTlsLayerError(err) ||
       isPeerDropError(err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
@@ -107,7 +135,7 @@ const registerListeners = (
       // dependent, not semantically different — both need suppressing.
       msg.includes("write ECONNRESET") ||
       msg.includes("write EPIPE") ||
-      msg.includes("TLS handshake timeout")                   // implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
+      msg.includes("TLS handshake timeout"))                  // implicit-TLS handshake timeout (port 465) — client connected but never completed the handshake
     ) {
       // Still logged (at warn, not error) so a real failure hiding in this
       // bucket leaves a trace — only the page to Discord is suppressed.
