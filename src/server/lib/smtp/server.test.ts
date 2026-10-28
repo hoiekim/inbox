@@ -338,6 +338,20 @@ describe("SMTP transaction", () => {
     expect(deliveries[0].data.toString()).toBe("Subject: partial\r\n\r\nsome of the bo");
   });
 
+  it("ends DATA only at CRLF.CRLF, delivering bare LF and CR dot lines as content", async () => {
+    const { port, deliveries } = await startServer();
+    const c = await transact(port);
+    const content =
+      "Subject: x\r\n\r\nA\n.\r\nMAIL FROM:<smuggled@x.org>\r\n" +
+      "B\r\n.\nRCPT TO:<smuggled@x.org>\r\nC\n.\nD\r.\rE\r\n";
+    c.write(content + ".\r\nNOOP\r\n");
+    expect(await c.reply()).toBe("250 OK: message queued");
+    expect(await c.reply()).toBe("250 OK");
+    expect(await c.reply(300)).toBe("<timeout>");
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0].data.toString()).toBe(content);
+  });
+
   it("holds the sender back while the DATA consumer is not reading", async () => {
     let stream!: Readable;
     const { port } = await startServer({
