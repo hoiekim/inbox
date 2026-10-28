@@ -57,9 +57,25 @@ const UTF16_LABEL = /^utf[-_]?16$/i;
 const UTF16BE = new TextDecoder("utf-16be");
 const UTF16LE = new TextDecoder("utf-16le");
 
-/** RFC 2781 §4.3: unmarked `utf-16` takes its byte order from a BOM, else big-endian. */
-const decodeUtf16 = (bytes: Uint8Array): string =>
-  (bytes[0] === 0xff && bytes[1] === 0xfe ? UTF16LE : UTF16BE).decode(bytes);
+const UTF16_SNIFF_UNITS = 100;
+
+/**
+ * Unmarked `utf-16` takes its byte order from a BOM, else from which half of
+ * each leading code unit is zero (ASCII-range text), else little-endian: mail
+ * in the wild is overwhelmingly little-endian despite RFC 2781's default.
+ */
+const decodeUtf16 = (bytes: Uint8Array): string => {
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return UTF16BE.decode(bytes);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return UTF16LE.decode(bytes);
+  let bigEndianVotes = 0;
+  let littleEndianVotes = 0;
+  const end = Math.min(bytes.length - 1, UTF16_SNIFF_UNITS * 2);
+  for (let i = 0; i < end; i += 2) {
+    if (bytes[i] === 0 && bytes[i + 1] !== 0) bigEndianVotes++;
+    else if (bytes[i] !== 0 && bytes[i + 1] === 0) littleEndianVotes++;
+  }
+  return (bigEndianVotes > littleEndianVotes ? UTF16BE : UTF16LE).decode(bytes);
+};
 
 /**
  * Decodes header bytes (an RFC 2047 encoded word) in `charset`. Unknown labels

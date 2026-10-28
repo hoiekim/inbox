@@ -15,10 +15,17 @@ describe("utf-16", () => {
     expect(decodeHeaderBytes(littleEndianBom, "utf16")).toBe("hi");
   });
 
-  it("reads unmarked text as big-endian", () => {
+  it("infers the byte order of unmarked text from its zero bytes", () => {
+    const unmarkedLittleEndian = bytes(0x68, 0x00, 0x69, 0x00);
     expect(decodeBodyBytes(unmarked, "utf-16")).toBe("hi");
     expect(decodeBodyBytes(unmarked, "utf_16")).toBe("hi");
     expect(decodeHeaderBytes(unmarked, "UTF-16")).toBe("hi");
+    expect(decodeBodyBytes(unmarkedLittleEndian, "utf-16")).toBe("hi");
+    expect(decodeHeaderBytes(unmarkedLittleEndian, "UTF-16")).toBe("hi");
+  });
+
+  it("reads unmarked text with no ASCII-range units as little-endian", () => {
+    expect(decodeBodyBytes(bytes(0x5c, 0xd5, 0x6d, 0xad), "utf-16")).toBe("한국");
   });
 
   it("keeps an explicitly labelled byte order", () => {
