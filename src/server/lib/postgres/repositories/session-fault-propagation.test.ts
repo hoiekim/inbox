@@ -244,8 +244,7 @@ describe("PostgresSessionStore.get credential-version fence", () => {
   });
 
   it("a session read back and saved again keeps the version it was stamped with", async () => {
-    // Every request re-saves its session, so a version dropped on the read
-    // would be written back as generation 1 and fail the fence next time.
+    // Every request re-saves its session.
     userVersionMode = 2;
     stampedVersion = 2;
 
