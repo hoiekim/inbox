@@ -526,11 +526,15 @@ export class ImapRequestHandler {
       if (over === paused) return;
       paused = over;
       if (over) {
-        logger.info("IMAP unread command text over cap; pausing socket", {
-          component: "imap",
-          bufferedBytes: buffer.length,
-          remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
-        });
+        // A spooled message pauses on every segment that outruns its write;
+        // only a pause over unread command text is worth a line.
+        if (spool === null) {
+          logger.info("IMAP unread command text over cap; pausing socket", {
+            component: "imap",
+            bufferedBytes: buffer.length,
+            remote: `${socket.remoteAddress ?? "?"}:${socket.remotePort ?? 0}`
+          });
+        }
         socket.pause();
       } else {
         socket.resume();

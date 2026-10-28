@@ -12,7 +12,7 @@ import { ImapRequestHandler } from "./handler";
 import { SessionBuffer } from "./session-buffer";
 import { shutdownImapSessions } from "./session-registry";
 import { ImapRequest } from "./types";
-import { INCOMING_ATTACHMENT_FOLDER } from "server";
+import { INCOMING_ATTACHMENT_FOLDER, logger } from "server";
 
 function makeMockSocket() {
   const socket = new EventEmitter() as EventEmitter & {
@@ -160,6 +160,34 @@ describe("IMAP APPEND literal spool", () => {
     // A few segments past the unread-text bound, not the 4 MiB message.
     expect(peakBuffered).toBeLessThan(256 * 1024);
     expect(socket.destroyed).toBe(false);
+  });
+
+  it("pauses for a spooled message without logging it as unread command text", async () => {
+    snapshot();
+    const { socket, dispatched } = makeHarness();
+    let pauses = 0;
+    const pause = socket.pause;
+    socket.pause = () => {
+      pauses++;
+      pause();
+    };
+    const info = spyOn(logger, "info");
+    try {
+      const message = Buffer.alloc(2 * 1024 * 1024, 0x61);
+      socket.emit("data", Buffer.from(`a1 APPEND INBOX {${message.length}+}\r\n`));
+      await settle();
+      // Whole-message segments, so each one outruns the write in flight.
+      await pump(socket, message, 512 * 1024);
+      socket.emit("data", Buffer.from("\r\n"));
+      await settle();
+
+      expect(dispatched).toHaveLength(1);
+      expect(pauses).toBeGreaterThan(0);
+      const pauseLines = info.mock.calls.filter(([line]) => String(line).includes("pausing socket"));
+      expect(pauseLines).toEqual([]);
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("keeps octets that are not valid UTF-8 intact", async () => {
