@@ -7,6 +7,8 @@
 import { describe, it, expect, spyOn, afterEach } from "bun:test";
 import { EventEmitter } from "events";
 import fs from "fs";
+import os from "os";
+import path from "path";
 import "../push";
 import { ImapRequestHandler } from "./handler";
 import { SessionBuffer } from "./session-buffer";
@@ -396,5 +398,21 @@ describe("IMAP APPEND literal spool", () => {
 
     expect(socket.destroyed).toBe(true);
     expect(dispatched).toEqual([]);
+  });
+});
+
+describe("removeMessageLiteral", () => {
+  it("leaves a directory that is not a transaction directory alone", async () => {
+    const { removeMessageLiteral } = await import("./literal-spool");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "not-a-spool-"));
+    const file = path.join(dir, "message");
+    fs.writeFileSync(file, "hello");
+    try {
+      await removeMessageLiteral({ path: file, size: 5 });
+
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

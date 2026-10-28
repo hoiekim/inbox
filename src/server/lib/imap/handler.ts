@@ -207,13 +207,12 @@ const MAX_PENDING_COMMAND_BYTES = MAX_APPEND_LITERAL_BYTES + 64 * 1024;
 // because the drain must stop reading, not just skip the declaration.
 type LiteralOutcome = "accepted" | "refused" | "closed";
 
-// Cap for the literal `commandText` is about to declare. Only an authenticated
-// session is offered the message-sized ceiling; before that every literal a
-// client can legitimately send is a command argument.
-const literalCapFor = (commandText: string, authenticated: boolean): number =>
-  authenticated && commandVerb(commandText) === "APPEND"
-    ? MAX_APPEND_LITERAL_BYTES
-    : MAX_LITERAL_BYTES;
+// Cap for a literal about to be declared. Only an APPEND's message argument, in
+// an authenticated session, is offered the message-sized ceiling: it is the one
+// literal spooled to disk. Every other literal is a command argument held in
+// memory, an APPEND's mailbox name included.
+const literalCapFor = (isMessage: boolean, authenticated: boolean): number =>
+  authenticated && isMessage ? MAX_APPEND_LITERAL_BYTES : MAX_LITERAL_BYTES;
 
 // Stands in for the literal `commandText` has just declared, so the parser can
 // say whether it is an APPEND's message argument rather than, say, a mailbox
@@ -427,13 +426,14 @@ export class ImapRequestHandler {
       commandText: string,
       declaredBytes: number,
       isSynchronizing: boolean,
+      isMessage: boolean,
       // What a chain has left before MAX_PENDING_COMMAND_BYTES. A granted
       // continuation may not carry the pending command past it, so the
       // per-literal cap is the smaller of the two.
       chainBudget = Infinity
     ): LiteralOutcome => {
       const cap = Math.min(
-        literalCapFor(commandText, session.isAuthenticated()),
+        literalCapFor(isMessage, session.isAuthenticated()),
         chainBudget
       );
       if (declaredBytes <= cap) return "accepted";
@@ -785,12 +785,17 @@ export class ImapRequestHandler {
                   session.close();
                   return;
                 }
+                const isMessage = declaresAppendMessage(
+                  pendingCommand + line.trimEnd(),
+                  pendingLiterals
+                );
                 // Cap-check before mutating any state: the verb and the tag both
                 // come off the command assembled so far, not off this tail line.
                 const outcome = refuseOversizedLiteral(
                   pendingCommand,
                   declaredBytes,
                   isSynchronizing,
+                  isMessage,
                   MAX_PENDING_COMMAND_BYTES - heldBytes
                 );
                 if (outcome === "closed") return;
@@ -798,9 +803,7 @@ export class ImapRequestHandler {
                 pendingCommand += line.trimEnd();
                 literalBytesNeeded = declaredBytes;
                 awaitingLiteral = true;
-                if (declaresAppendMessage(pendingCommand, pendingLiterals)) {
-                  spool = new LiteralSpool();
-                }
+                if (isMessage) spool = new LiteralSpool();
                 if (isSynchronizing) session.write("+ go ahead\r\n");
                 continue;
               }
@@ -877,10 +880,12 @@ export class ImapRequestHandler {
             // the continuation. Accumulate for any command, not just APPEND.
             const literalMatch = LITERAL_DECLARATION.exec(line);
             if (literalMatch) {
+              const isMessage = declaresAppendMessage(line.trimEnd(), []);
               const outcome = refuseOversizedLiteral(
                 line,
                 parseInt(literalMatch[1], 10),
-                !literalMatch[2]
+                !literalMatch[2],
+                isMessage
               );
               if (outcome === "closed") return;
               if (outcome === "refused") continue;
@@ -889,9 +894,7 @@ export class ImapRequestHandler {
               pendingLiteralBytes = 0;
               literalBytesNeeded = parseInt(literalMatch[1], 10);
               awaitingLiteral = true;
-              if (declaresAppendMessage(pendingCommand, pendingLiterals)) {
-                spool = new LiteralSpool();
-              }
+              if (isMessage) spool = new LiteralSpool();
               // Synchronizing literals {N} (without +) require a continuation
               // response before the client will send the literal data.
               // Non-synchronizing literals {N+} (LITERAL+) do not.

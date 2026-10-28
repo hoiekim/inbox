@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { newTransactionDir, removeTransactionDir } from "server";
+import { INCOMING_ATTACHMENT_FOLDER, newTransactionDir, removeTransactionDir } from "server";
 import { Literal, MessageLiteral } from "./types";
 
 const MESSAGE_FILE = "message";
@@ -8,9 +8,15 @@ const MESSAGE_FILE = "message";
 export const isMessageLiteral = (literal: Literal): literal is MessageLiteral =>
   typeof literal !== "string";
 
-/** Removes a spooled message literal and the directory it was written into. */
-export const removeMessageLiteral = (literal: MessageLiteral): Promise<void> =>
-  removeTransactionDir(path.dirname(literal.path));
+/**
+ * Removes a spooled message literal and the directory it was written into. A
+ * literal whose directory is not a transaction directory is left alone.
+ */
+export const removeMessageLiteral = async (literal: MessageLiteral): Promise<void> => {
+  const dir = path.dirname(path.resolve(literal.path));
+  if (path.dirname(dir) !== path.resolve(INCOMING_ATTACHMENT_FOLDER)) return;
+  await removeTransactionDir(dir);
+};
 
 /** Removes every spooled message literal among `literals`. */
 export const removeMessageLiterals = async (literals: readonly Literal[]): Promise<void> => {

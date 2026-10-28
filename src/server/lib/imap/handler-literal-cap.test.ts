@@ -117,6 +117,11 @@ const settle = async () => {
   for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
 };
 
+// A message at the APPEND cap is written to disk before the drain reads on.
+const settleSpool = async () => {
+  for (let i = 0; i < 100; i++) await new Promise((r) => setTimeout(r, 5));
+};
+
 // Mirrors the constants in handler.ts. Deliberately re-stated rather than
 // imported: a test that reads the same symbol it is checking cannot catch a
 // cap being widened, which is the change these tests exist to gate.
@@ -593,6 +598,32 @@ describe("IMAP literal ceiling", () => {
     expect(dispatched).toEqual([]);
   });
 
+  it("holds an authenticated APPEND's mailbox-name literal to the small-argument ceiling", async () => {
+    const { socket, dispatched } = makeHarness(undefined, true);
+
+    // Only the message is spooled to disk; a mailbox name sent as a literal is
+    // decoded in memory, so it takes the cap every other argument does.
+    socket.emit("data", Buffer.from(`a1 APPEND {${SMALL_CAP + 1}}\r\n`));
+    await settle();
+
+    expect(socket.writes).toEqual([
+      `a1 NO [TOOBIG] Literal exceeds ${SMALL_CAP} octets\r\n`
+    ]);
+    expect(dispatched).toEqual([]);
+  });
+
+  it("holds a literal chained after an APPEND's message to the small-argument ceiling", async () => {
+    const { socket, dispatched } = makeHarness(undefined, true);
+
+    socket.emit("data", Buffer.from(`a1 APPEND INBOX {5+}\r\nhello {${SMALL_CAP + 1}}\r\n`));
+    await settle();
+
+    expect(socket.writes).toEqual([
+      `a1 NO [TOOBIG] Literal exceeds ${SMALL_CAP} octets\r\n`
+    ]);
+    expect(dispatched).toEqual([]);
+  });
+
   it("caps the second literal of a chain on the command's own verb and tag", async () => {
     const { socket, dispatched } = makeHarness();
 
@@ -903,46 +934,58 @@ describe("IMAP literal-chain ceiling", () => {
     expect(dispatched).toEqual([]);
   });
 
+  // Only the message itself is offered the APPEND cap, so the one way a chain
+  // reaches the byte ceiling is a message at that cap with small literals
+  // chained behind it. Each declaration rides in its payload's last segment, so
+  // the buffer is never empty when the payload is consumed and the command is
+  // never dispatched as complete.
+  const message = Buffer.alloc(APPEND_CAP, 0x79);
+  const link = Buffer.alloc(SMALL_CAP, 0x7a);
+  const plusLink = Buffer.from(` {${SMALL_CAP}+}\r\n`);
+  // Links that fit beside the message under the byte ceiling: the 64 KiB above
+  // the APPEND cap, less the command text the markers add.
+  const linksBesideMessage = 7;
+
+  const sendMessageAndLinks = async (socket: ReturnType<typeof makeMockSocket>) => {
+    socket.emit("data", Buffer.from(`a1 APPEND INBOX {${message.length}+}\r\n`));
+    await settle();
+    socket.emit("data", Buffer.concat([message, plusLink]));
+    await settleSpool();
+    for (let i = 1; i < linksBesideMessage; i++) {
+      socket.emit("data", Buffer.concat([link, plusLink]));
+      await settle();
+    }
+  };
+
   it("withholds a continuation the chain has no room left for", async () => {
     const { socket, dispatched } = makeHarness(undefined, true);
 
-    // The other half of the same ordering: a synchronizing declaration under
-    // its own per-literal cap that would still carry the chain past the byte
-    // ceiling. Not counting it as held is only safe because the continuation
-    // is granted within what the chain has left, so the ceiling still binds —
-    // as a refusal the session survives rather than a teardown.
-    const payload = Buffer.alloc(8 * 1024 * 1024, 0x79);
-    const plusDeclaration = Buffer.from(` {${payload.length}+}\r\n`);
+    // A synchronizing declaration under its own per-literal cap that would
+    // still carry the chain past the byte ceiling. Not counting it as held is
+    // only safe because the continuation is granted within what the chain has
+    // left, so the ceiling still binds — as a refusal the session survives
+    // rather than a teardown.
+    await sendMessageAndLinks(socket);
 
-    socket.emit("data", Buffer.from(`a1 APPEND INBOX {${payload.length}+}\r\n`));
-    await settle();
-    for (let i = 0; i < 3; i++) {
-      socket.emit("data", Buffer.concat([payload, plusDeclaration]));
-      await settle();
-    }
-
-    // 32 MiB held: under the ceiling, and every link under the APPEND cap, so
-    // nothing has been refused on its own size and the session is untouched.
+    // Under the ceiling, and every link under its own cap, so nothing has been
+    // refused on its own size and the session is untouched.
     expect(socket.writes).toEqual([]);
     expect(socket.destroyed).toBe(false);
 
-    socket.emit(
-      "data",
-      Buffer.concat([payload, Buffer.from(` {${payload.length}}\r\n`)])
-    );
+    socket.emit("data", Buffer.concat([link, Buffer.from(` {${SMALL_CAP}}\r\n`)]));
     await settle();
 
     expect(socket.writes.length).toBe(1);
     // The cap named is what the chain has left, not the per-literal cap the
     // declaration clears — an unbounded grant writes `+ go ahead` here and
-    // holds 40 MiB against a ceiling of 35 MiB + 64 KiB.
+    // holds more than the ceiling.
     const refusal = /^a1 NO \[TOOBIG\] Literal exceeds (\d+) octets\r\n$/.exec(
       socket.writes[0]
     );
     expect(refusal).not.toBeNull();
     const namedCap = parseInt(refusal![1], 10);
     expect(namedCap).toBeGreaterThan(0);
-    expect(namedCap).toBeLessThan(payload.length);
+    expect(namedCap).toBeLessThan(SMALL_CAP);
     expect(socket.destroyed).toBe(false);
     expect(dispatched).toEqual([]);
   });
@@ -952,29 +995,14 @@ describe("IMAP literal-chain ceiling", () => {
 
     // The chain cap counts links, so a chain of tiny literals returns the same
     // verdict whether or not the BYTE ceiling is armed. This drives the shape
-    // only the byte ceiling can catch: payloads large enough that the session
-    // has to die while the link count is still single digits.
-    const payload = Buffer.alloc(8 * 1024 * 1024, 0x79);
-    const declaration = Buffer.from(` {${payload.length}+}\r\n`);
+    // only the byte ceiling can catch: the session has to die while the link
+    // count is still single digits.
+    expect(linksBesideMessage + 1).toBeLessThan(CHAIN_CAP);
+    await sendMessageAndLinks(socket);
+    expect(socket.destroyed).toBe(false);
 
-    socket.emit("data", Buffer.from(`a1 APPEND INBOX {${payload.length}+}\r\n`));
+    socket.emit("data", Buffer.concat([link, plusLink]));
     await settle();
-
-    // Sending only as many links as the byte ceiling can hold is what makes
-    // this fixture discriminate: the count cap cannot fire inside that many
-    // links, so a session still alive at the end is a session whose byte
-    // ceiling is inert.
-    const linksToCeiling = Math.ceil(PENDING_CAP / payload.length);
-    expect(linksToCeiling).toBeLessThan(CHAIN_CAP);
-
-    // Each declaration rides in its payload's last segment, so the buffer is
-    // never empty when the payload is consumed and the command is never
-    // dispatched as complete. The verb stays APPEND, so every link inherits
-    // the large per-literal cap and none of them is refused on its own size.
-    for (let i = 0; i < linksToCeiling && !socket.destroyed; i++) {
-      socket.emit("data", Buffer.concat([payload, declaration]));
-      await settle();
-    }
 
     expect(socket.writes).toEqual(["* BYE Command too long\r\n"]);
     expect(socket.destroyed).toBe(true);

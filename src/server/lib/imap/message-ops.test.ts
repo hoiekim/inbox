@@ -752,6 +752,15 @@ describe("appendMessage — MIME parse", () => {
     expect(response).toBe("a1 NO APPEND failed to store message\r\n");
   });
 
+  it("stores no html for a plain-text message", async () => {
+    const plain = "Subject: note\r\nContent-Type: text/plain\r\n\r\nline one\r\n<addr@example.com>\r\n";
+    const { mail } = await appendCapturing(spool(plain));
+    if (!mail) throw new Error("storeMail was never called");
+
+    expect(mail.html).toBe("");
+    expect(mail.text).toContain("<addr@example.com>");
+  });
+
   it("answers NO [TRYCREATE] without reading the message", async () => {
     // A path nothing can open: reading it would turn the answer into a failure.
     const missing = { path: path.join(spoolRoot, "never-written"), size: 10 };
