@@ -2240,6 +2240,30 @@ describe("registerListeners error handler", () => {
     expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(10);
   });
 
+  const bunErrno = (code: string, description: string, syscall: string) =>
+    Object.assign(new Error(`${code}: ${description}, ${syscall}`), { code, syscall });
+
+  it("suppresses the alarm for peer-drop errno codes in Bun's message format", async () => {
+    const server = await bootSingleServer();
+    server.emit("error", bunErrno("ETIMEDOUT", "connection timed out", "read"));
+    server.emit("error", bunErrno("ECONNRESET", "connection reset by peer", "read"));
+    server.emit("error", bunErrno("EPIPE", "broken pipe", "write"));
+    server.emit("error", bunErrno("ECONNRESET", "connection reset by peer", "write"));
+    server.emit("error", bunErrno("EPROTO", "protocol error", "write"));
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    const warnings = mockLogger.warn.mock.calls.map((c) => String(c[0]));
+    expect(warnings.filter((w) => w.includes("SMTP Server")).length).toBe(5);
+  });
+
+  it("still alarms on errno codes outside the peer-drop syscalls", async () => {
+    const server = await bootSingleServer();
+    server.emit("error", bunErrno("EMFILE", "too many open files", "accept"));
+    server.emit("error", bunErrno("EPROTO", "protocol error", "read"));
+
+    expect(mockLogger.error).toHaveBeenCalledTimes(2);
+  });
+
   const bootWithTls = async () => {
     const { writeFileSync, mkdtempSync, rmSync } = await import("fs");
     const { tmpdir } = await import("os");

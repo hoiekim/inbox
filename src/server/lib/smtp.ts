@@ -42,6 +42,21 @@ const isImplicitTlsHandshakeFailure = (server: SmtpServer, err: Error): boolean 
   server.options.secure === true &&
   (err as Error & { meta?: { stage?: string } }).meta?.stage === "connect";
 
+// A remote client dropping or stalling its connection. Matched by syscall and
+// errno code because the message differs by runtime ("read ETIMEDOUT" on Node,
+// "ETIMEDOUT: connection timed out, read" on Bun).
+const PEER_DROP_SYSCALL_ERRORS = new Set([
+  "read ECONNRESET",
+  "read ETIMEDOUT",
+  "write ECONNRESET",
+  "write EPIPE",
+  "write EPROTO"
+]);
+const isPeerDropError = (err: Error): boolean => {
+  const { syscall, code } = err as Error & { syscall?: string; code?: string };
+  return PEER_DROP_SYSCALL_ERRORS.has(`${syscall} ${code}`);
+};
+
 const registerListeners = (
   server: SmtpServer,
   port: number,
@@ -63,6 +78,7 @@ const registerListeners = (
     const msg = err.message ?? "";
     if (
       isImplicitTlsHandshakeFailure(server, err) ||
+      isPeerDropError(err) ||
       // All errors from TLS handshake/negotiation OpenSSL functions — these are
       // client-side incompatibilities, not server bugs. Matching by function name
       // covers all variants (unsupported protocol, version too low, no shared cipher,
