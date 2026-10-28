@@ -126,11 +126,13 @@ describe("parseMessage bodies", () => {
     expect(parsed.html).toBe("<p>HTML</p>");
   });
 
-  it("renders plain text for an HTML-only message", async () => {
-    const html = "<h1>Title</h1><p>Para <a href='https://x.org'>link</a></p>";
+  it("renders plain text for an HTML-only message, keeping link and image URLs", async () => {
+    const html =
+      "<h1>Title</h1>" +
+      "<p>Para <a href='https://bit.ly/3abc'>link</a> <img src='cid:a' alt='Logo'></p>";
     const parsed = await parse(message("Content-Type: text/html", "", html));
     expect(parsed.html).toBe(html + "\n");
-    expect(parsed.text).toBe("TITLE\n\nPara link");
+    expect(parsed.text).toBe("TITLE\n\nPara link [https://bit.ly/3abc] Logo [cid:a]");
   });
 
   it("adds a plain part outside the alternative to the HTML, with links", async () => {

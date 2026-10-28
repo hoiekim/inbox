@@ -781,7 +781,7 @@ class MimeParser {
           if (!alternative && this.hasHtml) html.push(textToHtml(content));
         } else if (part.contentType === "text/html") {
           if ((!alternative && this.hasText) || (part === this.root && !this.hasText)) {
-            text.push(htmlToPlainText(content.slice(0, HTML_TO_TEXT_INPUT_LIMIT)));
+            text.push(htmlToPlainText(content.slice(0, HTML_TO_TEXT_INPUT_LIMIT), { urls: true }));
           }
           html.push(content);
         }

@@ -1,10 +1,11 @@
-import { decodeEntities } from "./entities";
+import { decodeAttributeEntities, decodeEntities } from "./entities";
 
 /**
  * Plain-text rendering of mail HTML: block elements start new lines, text
  * wraps at 80 columns, headings are uppercased, list items get ` * ` or
  * `1. ` prefixes, quotes get `> `, links keep only their text, and images,
- * scripts, styles and comments are dropped.
+ * scripts, styles and comments are dropped. With `urls`, links and images
+ * also show their target in brackets.
  *
  * Markup is read the lenient way mail clients write it, with no attempt at
  * full HTML5 tree construction: a few elements close their open siblings
@@ -606,6 +607,8 @@ class TextBuilder {
   private block = new Block(null, 1, WORDWRAP);
   private transforms: Transform[] = [];
 
+  constructor(readonly showUrls: boolean) {}
+
   pushTransform(transform: Transform) {
     this.transforms.push(transform);
   }
@@ -623,7 +626,7 @@ class TextBuilder {
     this.block.lines.wordBreakOpportunity = true;
   }
 
-  addInline(text: string) {
+  addInline(text: string, { noWordTransform = false } = {}) {
     const block = this.block;
     if (block.isPre) {
       block.rawText += text;
@@ -632,14 +635,14 @@ class TextBuilder {
     if (!text.length) return;
     if (block.stashedLineBreaks && !HAS_WORD.test(text)) return;
     if (block.stashedLineBreaks) block.lines.startNewLine(block.stashedLineBreaks);
-    this.shrinkWrapAdd(text, block.lines);
+    this.shrinkWrapAdd(text, block.lines, noWordTransform);
     block.stashedLineBreaks = 0;
   }
 
   /** Collapses whitespace runs to single spaces while adding words. */
-  private shrinkWrapAdd(text: string, lines: LineBuilder) {
+  private shrinkWrapAdd(text: string, lines: LineBuilder, noWordTransform: boolean) {
     const transform = (word: string) =>
-      this.transforms.reduceRight((w, t) => t(w), word);
+      noWordTransform ? word : this.transforms.reduceRight((w, t) => t(w), word);
     const stashed = lines.stashedSpace;
     let any = false;
     WORD.lastIndex = 0;
@@ -752,6 +755,11 @@ const format = (el: Element, builder: TextBuilder) => {
   }
   switch (name) {
     case "img":
+      if (builder.showUrls) formatImage(el, builder);
+      return;
+    case "a":
+      if (builder.showUrls) formatAnchor(el, builder);
+      else walk(el.children, builder);
       return;
     case "br":
       builder.lineBreak();
@@ -813,6 +821,29 @@ const format = (el: Element, builder: TextBuilder) => {
   }
 };
 
+const formatImage = (el: Element, builder: TextBuilder) => {
+  const alt = decodeAttributeEntities(el.attribs.alt ?? "");
+  const src = decodeAttributeEntities(el.attribs.src ?? "");
+  builder.addInline(src ? (alt ? `${alt} [${src}]` : `[${src}]`) : alt, { noWordTransform: true });
+};
+
+/** Link text, then the target in brackets; a link with no text shows the bare target. */
+const formatAnchor = (el: Element, builder: TextBuilder) => {
+  const href = decodeAttributeEntities(el.attribs.href ?? "").replace(/^mailto:/, "");
+  if (!href || href.startsWith("#")) {
+    walk(el.children, builder);
+    return;
+  }
+  let text = "";
+  builder.pushTransform((word) => {
+    text += word;
+    return word;
+  });
+  walk(el.children, builder);
+  builder.popTransform();
+  builder.addInline(text ? ` [${href}]` : href, { noWordTransform: true });
+};
+
 const formatList = (el: Element, builder: TextBuilder, nextPrefix: () => string) => {
   const nested = el.parent?.name === "li";
   let maxPrefixLength = 0;
@@ -852,11 +883,16 @@ const findBodies = (nodes: DomNode[], found: Element[] = []) => {
 /** Longer input is cut off; the text of a 16 MiB mail is not worth more. */
 const MAX_INPUT_LENGTH = 1 << 24;
 
-export const htmlToPlainText = (html: string): string => {
+export interface PlainTextOptions {
+  /** Follow each link's text and each image's alt text with its URL in brackets. */
+  urls?: boolean;
+}
+
+export const htmlToPlainText = (html: string, { urls = false }: PlainTextOptions = {}): string => {
   const tree = new TreeBuilder();
   tokenize(html.length > MAX_INPUT_LENGTH ? html.substring(0, MAX_INPUT_LENGTH) : html, tree);
   const bodies = findBodies(tree.root.children);
-  const builder = new TextBuilder();
+  const builder = new TextBuilder(urls);
   walk(bodies.length ? bodies : tree.root.children, builder);
   return builder.toString();
 };
