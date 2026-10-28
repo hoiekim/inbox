@@ -3,6 +3,8 @@
  */
 
 import {
+  Literal,
+  MessageLiteral,
   ParseContext,
   ParseResult,
   SequenceSet,
@@ -118,13 +120,12 @@ export const parseFlag = (context: ParseContext): ParseResult<string> => {
  *
  * `N` counts OCTETS. `input` is a UTF-16 string, where one octet is not one
  * code unit, so the payload is NOT sliced out of `input` here: the handler has
- * already taken exactly N bytes off the socket buffer, decoded them, and
- * queued the result on `context.literals`. This consumes the marker and shifts
- * the matching payload. A marker with no queued payload means the caller built
- * the context by hand rather than through the handler — a bug, not a
- * recoverable input.
+ * already taken exactly N bytes off the socket buffer and queued the result on
+ * `context.literals`. This consumes the marker and shifts the matching
+ * payload. A marker with no queued payload means the caller built the context
+ * by hand rather than through the handler — a bug, not a recoverable input.
  */
-export const parseLiteral = (context: ParseContext): ParseResult<string> => {
+const takeLiteral = (context: ParseContext): ParseResult<Literal> => {
   const start = context.position;
 
   if (peek(context) !== "{") {
@@ -151,6 +152,34 @@ export const parseLiteral = (context: ParseContext): ParseResult<string> => {
     value: context.literals.shift(),
     consumed: context.position - start
   };
+};
+
+/** A literal argument decoded as text. */
+export const parseLiteral = (context: ParseContext): ParseResult<string> => {
+  const start = context.position;
+  const literal = takeLiteral(context);
+  if (!literal.success) return { success: false, error: literal.error, consumed: 0 };
+  if (typeof literal.value !== "string") {
+    context.position = start;
+    context.literals!.unshift(literal.value!);
+    return { success: false, error: "Unexpected message literal", consumed: 0 };
+  }
+  return { success: true, value: literal.value, consumed: literal.consumed };
+};
+
+/** An APPEND message literal, which the handler spools to a file rather than decoding. */
+export const parseMessageLiteral = (
+  context: ParseContext
+): ParseResult<MessageLiteral> => {
+  const start = context.position;
+  const literal = takeLiteral(context);
+  if (!literal.success) return { success: false, error: literal.error, consumed: 0 };
+  if (typeof literal.value === "string") {
+    context.position = start;
+    context.literals!.unshift(literal.value);
+    return { success: false, error: "Expected message literal", consumed: 0 };
+  }
+  return { success: true, value: literal.value, consumed: literal.consumed };
 };
 
 /**

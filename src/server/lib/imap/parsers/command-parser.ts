@@ -2,7 +2,7 @@
  * Main IMAP command parser entry point
  */
 
-import { ParseContext, ParseResult, ImapRequest } from "../types";
+import { Literal, ParseContext, ParseResult, ImapRequest } from "../types";
 import { parseAtom, skipWhitespace } from "./primitive-parsers";
 import { parseFetch } from "./fetch-parsers";
 import { parseLogin, parseAuthenticate } from "./auth-parsers";
@@ -32,7 +32,7 @@ const parseId = (context: ParseContext): ParseResult<ImapRequest> => {
  */
 export const parseCommand = (
   line: string,
-  literals?: string[]
+  literals?: Literal[]
 ): ParseResult<{ tag: string; request: ImapRequest }> => {
   // Only leading whitespace is framing. Literal payloads travel out-of-band on
   // `literals`, and a payload ending in whitespace is legal precisely because

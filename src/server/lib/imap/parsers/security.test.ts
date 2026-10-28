@@ -13,9 +13,15 @@ import { parseAppend } from "./append-parser";
 import { parseSelect, parseCreate, parseDelete, parseRename, parseList, parseStatus } from "./mailbox-parsers";
 import { parseLiteral, skipWhitespace } from "./primitive-parsers";
 import { parseCommand } from "./command-parser";
-import { ParseContext } from "../types";
+import { Literal, MessageLiteral, ParseContext } from "../types";
 
-const createContext = (input: string, literals?: string[]): ParseContext => ({
+// The handler spools a message literal to disk; the parser only routes it.
+const spooled = (message: string): MessageLiteral => ({
+  path: "/spool/message",
+  size: Buffer.byteLength(message)
+});
+
+const createContext = (input: string, literals?: Literal[]): ParseContext => ({
   input,
   position: 0,
   length: input.length,
@@ -131,19 +137,19 @@ describe("append-parser", () => {
   describe("parseAppend", () => {
     it("should parse APPEND with minimal args", () => {
       const message = "From: test@example.com\r\nSubject: Test\r\n\r\nBody";
-      const ctx = createContext(`INBOX {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.type).toBe("APPEND");
       expect(result.value?.data.mailbox).toBe("INBOX");
-      expect(result.value?.data.message).toBe(message);
+      expect(result.value?.data.message).toEqual(spooled(message));
       expect(result.value?.data.flags).toBeUndefined();
       expect(result.value?.data.date).toBeUndefined();
     });
 
     it("should parse APPEND with quoted mailbox", () => {
       const message = "Test message";
-      const ctx = createContext(`"Sent Items" {${message.length}}`, [message]);
+      const ctx = createContext(`"Sent Items" {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.mailbox).toBe("Sent Items");
@@ -155,7 +161,7 @@ describe("append-parser", () => {
     it("should parse APPEND with keyword flags (no backslash)", () => {
       // Keyword flags (without backslash) work
       const message = "Test";
-      const ctx = createContext(`INBOX (MyLabel Important) {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX (MyLabel Important) {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual(["MyLabel", "Important"]);
@@ -163,7 +169,7 @@ describe("append-parser", () => {
 
     it("should handle empty flags list", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX () {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX () {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual([]);
@@ -171,7 +177,7 @@ describe("append-parser", () => {
 
     it("should parse APPEND with date", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.date).toBe("25-Feb-2026 12:34:56 +0000");
@@ -179,7 +185,7 @@ describe("append-parser", () => {
 
     it("should parse APPEND with keyword flags and date", () => {
       const message = "Test";
-      const ctx = createContext(`INBOX (Important) "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX (Important) "25-Feb-2026 12:34:56 +0000" {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
       expect(result.value?.data.flags).toEqual(["Important"]);
@@ -217,17 +223,17 @@ describe("append-parser", () => {
     it("should handle large literal size safely", () => {
       // Test with reasonable size - should not crash
       const message = "X".repeat(1000);
-      const ctx = createContext(`INBOX {${message.length}}`, [message]);
+      const ctx = createContext(`INBOX {${message.length}}`, [spooled(message)]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
-      expect(result.value?.data.message.length).toBe(1000);
+      expect(result.value?.data.message.size).toBe(1000);
     });
 
     it("should handle zero-length message", () => {
-      const ctx = createContext("INBOX {0}", [""]);
+      const ctx = createContext("INBOX {0}", [spooled("")]);
       const result = parseAppend(ctx);
       expect(result.success).toBe(true);
-      expect(result.value?.data.message).toBe("");
+      expect(result.value?.data.message).toEqual(spooled(""));
     });
   });
 });
@@ -545,7 +551,7 @@ describe("literals (RFC 3501 §4.3 / RFC 7888 LITERAL+)", () => {
       expect(parseCommand("A1 RENAME {7+}", ["Oldie\r\n"]).success).toBe(false);
       expect(parseCommand("A1 STATUS {5+}", ["INBOX"]).success).toBe(false);
       // …while a final literal completes it, CRLF-carrying payload included.
-      expect(parseCommand("a1 APPEND INBOX {13+}", ["Hello World\r\n"]).success).toBe(true);
+      expect(parseCommand("a1 APPEND INBOX {13+}", [spooled("Hello World\r\n")]).success).toBe(true);
       expect(parseCommand("A1 SELECT {5+}", ["café"]).success).toBe(true);
       expect(parseCommand("A1 LOGIN {5+} {8+}", ["admin", "password"]).success).toBe(true);
     });
@@ -577,15 +583,29 @@ describe("literals (RFC 3501 §4.3 / RFC 7888 LITERAL+)", () => {
 
     it("routes the APPEND message through the same literal path", () => {
       const result = parseCommand("a1 APPEND INBOX (\\Seen) {13}", [
-        "Subject: x\r\n\r\nbody\r\n"
+        spooled("Subject: x\r\n\r\nbody\r\n")
       ]);
       expect(result.success).toBe(true);
       if (result.value?.request.type !== "APPEND") throw new Error("Expected APPEND");
       expect(result.value.request.data.mailbox).toBe("INBOX");
       expect(result.value.request.data.flags).toEqual(["\\Seen"]);
-      // The payload keeps its own trailing CRLF: it travels out of band on
-      // `literals`, so no framing strip over the command text can reach it.
-      expect(result.value.request.data.message).toBe("Subject: x\r\n\r\nbody\r\n");
+      // The payload travels out of band on `literals`, so no framing strip
+      // over the command text can reach it.
+      expect(result.value.request.data.message).toEqual(spooled("Subject: x\r\n\r\nbody\r\n"));
+    });
+
+    it("takes the message only as a spooled literal", () => {
+      // The handler spools the message argument and decodes every other one,
+      // so a decoded payload in the message position is a framing bug.
+      const decoded = parseCommand("a1 APPEND INBOX {5}", ["hello"]);
+      expect(decoded.success).toBe(false);
+      expect(decoded.error).toContain("Expected message literal");
+    });
+
+    it("refuses a spooled literal where an argument is text", () => {
+      const result = parseCommand("a1 APPEND {5} {5}", [spooled("hello"), spooled("hello")]);
+      expect(result.success).toBe(false);
+      expect(parseCommand("A1 SELECT {5}", [spooled("INBOX")]).success).toBe(false);
     });
 
     it("rejects an APPEND whose literal payload never arrived", () => {

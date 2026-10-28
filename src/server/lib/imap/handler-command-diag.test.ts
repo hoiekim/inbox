@@ -83,7 +83,7 @@ describe("describeImapCommand", () => {
   it("APPEND reports the message size (identifies giant uploads without leaking body)", () => {
     const req: ImapRequest = {
       type: "APPEND",
-      data: { mailbox: "Drafts", message: "a".repeat(4096) },
+      data: { mailbox: "Drafts", message: { path: "/spool/message", size: 4096 } },
     } as ImapRequest;
     expect(describeImapCommand(req)).toBe("APPEND Drafts 4096B");
   });
@@ -112,7 +112,7 @@ describe("describeImapCommand", () => {
     ["LIST long pattern", { type: "LIST", data: { reference: "", pattern: "*".repeat(10_000) } }],
     ["LSUB long pattern", { type: "LSUB", data: { reference: "", pattern: "*".repeat(10_000) } }],
     ["STATUS long mailbox", { type: "STATUS", data: { mailbox: "m".repeat(10_000), items: ["UIDNEXT"] } }],
-    ["APPEND long mailbox", { type: "APPEND", data: { mailbox: "m".repeat(10_000), message: "" } }],
+    ["APPEND long mailbox", { type: "APPEND", data: { mailbox: "m".repeat(10_000), message: { path: "", size: 0 } } }],
     ["CREATE long mailbox", { type: "CREATE", data: { mailbox: "m".repeat(10_000) } }],
     ["ENABLE long capability list", { type: "ENABLE", data: { capabilities: ["CAP".repeat(5000)] } }],
     ["AUTHENTICATE long mechanism", { type: "AUTHENTICATE", data: { mechanism: "X".repeat(10_000) } }],

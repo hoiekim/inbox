@@ -126,6 +126,26 @@ export class SessionBuffer {
     return this.block.toString("utf8", this.cursor + start, this.cursor + end);
   }
 
+  /**
+   * Up to `max` unread octets from the front, as a view of the first held
+   * segment rather than a join of all of them, so a payload streamed out
+   * segment by segment is never copied. Does not consume them; the view stays
+   * valid after `consume`, since a block is replaced and never written into.
+   */
+  head(max: number): Uint8Array {
+    if (this.block.length === this.cursor && this.segments.length) {
+      this.block = this.segments.shift() as unknown as Buffer;
+      this.cursor = 0;
+      this.segmentBytes -= this.block.length;
+      this.mergedRuns = Math.max(0, this.mergedRuns - 1);
+      // The resume point indexed the list this just shortened.
+      this.scanIndex = 0;
+      this.scanBase = this.block.length;
+    }
+    const end = Math.min(this.block.length, this.cursor + max);
+    return this.block.subarray(this.cursor, end) as unknown as Uint8Array;
+  }
+
   consume(count: number): void {
     // Every read joins before it returns, so a consume that follows one stays
     // inside the block. The discard path consumes without reading, and it is

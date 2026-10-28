@@ -21,6 +21,7 @@
 
 import { describe, it, expect, spyOn } from "bun:test";
 import { EventEmitter } from "events";
+import fs from "fs";
 import "../push";
 import { ImapRequestHandler } from "./handler";
 import { ImapRequest } from "./types";
@@ -65,9 +66,18 @@ function makeMockSocket() {
 function makeHarness() {
   const handler = new ImapRequestHandler();
   const socket = makeMockSocket();
-  const dispatched: { tag: string; request: ImapRequest }[] = [];
+  // `message` is the spooled APPEND payload, read before dispatch returns and the
+  // handler removes the file.
+  const dispatched: { tag: string; request: ImapRequest; message?: string }[] = [];
   handler.handleRequest = async (tag, request) => {
-    dispatched.push({ tag, request });
+    dispatched.push({
+      tag,
+      request,
+      message:
+        request.type === "APPEND"
+          ? fs.readFileSync(request.data.message.path, "utf8")
+          : undefined
+    });
   };
   handler.setSocket(socket as never);
   return { socket, dispatched };
@@ -183,7 +193,7 @@ describe("IMAP literal continuation", () => {
     expect(dispatched[0].request.type).toBe("APPEND");
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
     expect(dispatched[0].request.data.mailbox).toBe("INBOX");
-    expect(dispatched[0].request.data.message).toBe("Hello World");
+    expect(dispatched[0].message).toBe("Hello World");
   });
 
   it("counts a literal in OCTETS, not UTF-16 code units", async () => {
@@ -240,7 +250,7 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe(message);
+    expect(dispatched[0].message).toBe(message);
   });
 
   it("dispatches when the payload consumed its own terminator instead of wedging", async () => {
@@ -254,7 +264,7 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe("Hello World\r\n");
+    expect(dispatched[0].message).toBe("Hello World\r\n");
   });
 
   it("accepts a zero-length literal", async () => {
@@ -265,7 +275,7 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe("");
+    expect(dispatched[0].message).toBe("");
   });
 
   it("does not read a trailing {N} inside an argument as a literal declaration", async () => {
@@ -376,7 +386,7 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched).toHaveLength(1);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe(message);
+    expect(dispatched[0].message).toBe(message);
   });
 
   it("waits for the tail when a non-final payload's own octets end in CRLF", async () => {
@@ -455,7 +465,7 @@ describe("IMAP literal continuation", () => {
 
     expect(dispatched.map((d) => d.tag)).toEqual(["a1", "a2"]);
     if (dispatched[0].request.type !== "APPEND") throw new Error("Expected APPEND");
-    expect(dispatched[0].request.data.message).toBe("Hello World\r\n");
+    expect(dispatched[0].message).toBe("Hello World\r\n");
     expect(dispatched[1].request.type).toBe("NOOP");
   });
 

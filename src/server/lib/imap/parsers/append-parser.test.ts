@@ -1,10 +1,17 @@
 import { parseCommand } from './index';
+import type { MessageLiteral } from '../types';
+
+// The handler spools a message literal to disk; the parser only routes it.
+const spooled = (message: string): MessageLiteral => ({
+  path: '/spool/message',
+  size: Buffer.byteLength(message)
+});
 
 describe('append-parser', () => {
   describe('parseAppend', () => {
     it('should parse APPEND with simple mailbox and message', () => {
       const message = 'From: test@example.com\r\nSubject: Test\r\n\r\nHello';
-      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.tag).toBe('A001');
       expect(result.value?.request.type).toBe('APPEND');
@@ -12,14 +19,14 @@ describe('append-parser', () => {
         throw new Error('Expected APPEND request type');
       }
       expect(result.value.request.data.mailbox).toBe('INBOX');
-      expect(result.value.request.data.message).toBe(message);
+      expect(result.value.request.data.message).toEqual(spooled(message));
       expect(result.value.request.data.flags).toBeUndefined();
       expect(result.value.request.data.date).toBeUndefined();
     });
 
     it('should parse APPEND with quoted mailbox name', () => {
       const message = 'Hello';
-      const result = parseCommand(`A001 APPEND "Sent Items" {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND "Sent Items" {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -30,7 +37,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with flags', () => {
       const message = 'Hello';
-      const result = parseCommand(`A001 APPEND INBOX (\\Seen \\Flagged) {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX (\\Seen \\Flagged) {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -41,7 +48,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with single flag', () => {
       const message = 'Hello';
-      const result = parseCommand(`A001 APPEND INBOX (\\Draft) {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX (\\Draft) {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -52,7 +59,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with date', () => {
       const message = 'Hello';
-      const result = parseCommand(`A001 APPEND INBOX "25-Feb-2026 10:30:00 -0800" {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX "25-Feb-2026 10:30:00 -0800" {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -63,7 +70,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with flags and date', () => {
       const message = 'Test message';
-      const result = parseCommand(`A001 APPEND INBOX (\\Seen) "25-Feb-2026 10:30:00 -0800" {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX (\\Seen) "25-Feb-2026 10:30:00 -0800" {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -71,12 +78,12 @@ describe('append-parser', () => {
       }
       expect(result.value.request.data.flags).toEqual(['\\Seen']);
       expect(result.value.request.data.date).toBe('25-Feb-2026 10:30:00 -0800');
-      expect(result.value.request.data.message).toBe(message);
+      expect(result.value.request.data.message).toEqual(spooled(message));
     });
 
     it('should parse APPEND with multiple flags', () => {
       const message = 'Hello';
-      const result = parseCommand(`A001 APPEND INBOX (\\Seen \\Answered \\Flagged \\Deleted) {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX (\\Seen \\Answered \\Flagged \\Deleted) {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -102,7 +109,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with hierarchical mailbox', () => {
       const message = 'Hi';
-      const result = parseCommand(`A001 APPEND "INBOX/Subfolder/Deep" {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND "INBOX/Subfolder/Deep" {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -113,7 +120,7 @@ describe('append-parser', () => {
 
     it('should parse APPEND with empty flags list', () => {
       const message = 'Test';
-      const result = parseCommand(`A001 APPEND INBOX () {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX () {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
@@ -124,34 +131,34 @@ describe('append-parser', () => {
 
     it('should parse APPEND with binary-like message content', () => {
       const message = 'Content with \x00 null bytes and \xFF high bytes';
-      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
         throw new Error('Expected APPEND request type');
       }
-      expect(result.value.request.data.message).toBe(message);
+      expect(result.value.request.data.message).toEqual(spooled(message));
     });
 
     it('should handle APPEND with exact literal size', () => {
       const message = 'Exactly this much';
-      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [message]);
+      const result = parseCommand(`A001 APPEND INBOX {${message.length}}`, [spooled(message)]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
         throw new Error('Expected APPEND request type');
       }
-      expect(result.value.request.data.message.length).toBe(message.length);
+      expect(result.value.request.data.message.size).toBe(Buffer.byteLength(message));
     });
 
     it('should parse APPEND with zero-length message', () => {
-      const result = parseCommand('A001 APPEND INBOX {0}', ['']);
+      const result = parseCommand('A001 APPEND INBOX {0}', [spooled('')]);
       expect(result.success).toBe(true);
       expect(result.value?.request.type).toBe('APPEND');
       if (result.value?.request.type !== 'APPEND') {
         throw new Error('Expected APPEND request type');
       }
-      expect(result.value.request.data.message).toBe('');
+      expect(result.value.request.data.message).toEqual(spooled(''));
     });
   });
 });

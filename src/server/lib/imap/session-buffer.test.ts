@@ -383,3 +383,52 @@ describe("SessionBuffer consumption", () => {
     expect(buffer.indexOfCrlf()).toBe(-1);
   });
 });
+
+describe("SessionBuffer head", () => {
+  it("streams held segments out one at a time without copying any", async () => {
+    const buffer = new SessionBuffer();
+    const segments = ["aaaa", "bbbb", "cccc"].map((s) => Buffer.from(s));
+    for (const segment of segments) buffer.push(segment);
+
+    const pieces: string[] = [];
+    const { bytes } = await accountCopies(() => {
+      while (buffer.length > 0) {
+        const piece = buffer.head(1024);
+        pieces.push(Buffer.from(piece).toString());
+        buffer.consume(piece.length);
+      }
+    });
+
+    expect(pieces).toEqual(["aaaa", "bbbb", "cccc"]);
+    expect(bytes).toBe(0);
+  });
+
+  it("stops at the requested length and leaves the rest readable as a command", () => {
+    const buffer = new SessionBuffer();
+    buffer.push(Buffer.from("payl"));
+    buffer.push(Buffer.from("oad"));
+    buffer.push(Buffer.from(" tail\r\nNEXT"));
+
+    const first = buffer.head(5);
+    expect(Buffer.from(first).toString()).toBe("payl");
+    buffer.consume(first.length);
+    const second = buffer.head(3);
+    expect(Buffer.from(second).toString()).toBe("oad");
+    buffer.consume(second.length);
+
+    const end = buffer.indexOfCrlf();
+    expect(buffer.decode(0, end)).toBe(" tail");
+    buffer.consume(end + 2);
+    expect(buffer.decode(0, buffer.length)).toBe("NEXT");
+  });
+
+  it("keeps a view valid after the octets behind it are consumed", () => {
+    const buffer = new SessionBuffer();
+    buffer.push(Buffer.from("hello world"));
+    const piece = buffer.head(5);
+    buffer.consume(5);
+    buffer.push(Buffer.from("!!!!!"));
+    buffer.consume(buffer.length);
+    expect(Buffer.from(piece).toString()).toBe("hello");
+  });
+});

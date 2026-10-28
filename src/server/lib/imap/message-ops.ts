@@ -2,7 +2,8 @@
  * Message operations: FETCH, SEARCH, STORE, COPY, APPEND, EXPUNGE.
  */
 
-import { MailType } from "common";
+import fs from "fs";
+import { Mail, MailType } from "common";
 import {
   markRead,
   getDomainUidNext,
@@ -10,7 +11,16 @@ import {
   getMailboxUidNext,
   getImapUidValidity,
   syncMailboxPivot,
+  getText,
+  newTransactionDir,
+  removeTransactionDir,
 } from "server";
+import {
+  convertAttachments,
+  convertMailAddress,
+  incomingMailFromParsed,
+} from "../mails/receive";
+import { parseMessage } from "../mime/parser";
 import { logger } from "server";
 import { Store } from "./store";
 import { StoreOperationType } from "../postgres/repositories/mails";
@@ -1141,6 +1151,37 @@ export async function moveMessageTyped(
 // APPEND
 // ---------------------------------------------------------------------------
 
+/**
+ * Builds the mail an APPEND stores from the message spooled at `path`, the way
+ * a received message is converted: parsed as MIME, its attachments stored as
+ * attachments. Text and HTML bodies are held to the parser's own budgets.
+ */
+const parseAppendedMessage = async (path: string): Promise<Mail> => {
+  const attachmentDir = newTransactionDir();
+  try {
+    const parsed = await parseMessage(fs.createReadStream(path), { attachmentDir });
+    const incoming = incomingMailFromParsed(parsed);
+    const html = incoming.html ?? "";
+    return new Mail({
+      // Bare, like the ids appended rows already carry: a re-append meets them on
+      // `(user_id, message_id)`.
+      messageId: incoming.messageId?.replace(/[<>]/g, ""),
+      subject: incoming.subject,
+      date: incoming.date,
+      from: convertMailAddress(incoming.from),
+      to: convertMailAddress(incoming.to),
+      cc: convertMailAddress(incoming.cc),
+      bcc: convertMailAddress(incoming.bcc),
+      replyTo: convertMailAddress(incoming.replyTo),
+      html,
+      text: incoming.text ?? getText(html),
+      attachments: await convertAttachments(incoming.attachments),
+    });
+  } finally {
+    await removeTransactionDir(attachmentDir);
+  }
+};
+
 export async function appendMessage(
   tag: string,
   appendRequest: AppendRequest,
@@ -1163,56 +1204,20 @@ export async function appendMessage(
     // it, and answers NO [TRYCREATE] so the client can CREATE and retry.
     // Gated ahead of the RFC822 parse so a rejected APPEND neither walks
     // the message nor burns a UID off the counters. (Framing is unaffected
-    // either way — `handler.ts` has already consumed the whole literal off
+    // either way — `handler.ts` has already spooled the whole literal off
     // the socket before this function is entered.)
     if (!(await store.mailboxExists(targetMailbox))) {
       write(`${tag} NO [TRYCREATE] Mailbox does not exist\r\n`);
       return;
     }
 
-    const messageLines = appendRequest.message.split("\r\n");
-    let headerEndIndex = messageLines.findIndex((line) => line === "");
-    if (headerEndIndex === -1) headerEndIndex = messageLines.length;
-
-    const headers = messageLines.slice(0, headerEndIndex).join("\r\n");
-    const body = messageLines.slice(headerEndIndex + 1).join("\r\n");
-
-    const subjectMatch = headers.match(/^Subject:\s*(.*)$/im);
-    const fromMatch = headers.match(/^From:\s*(.*)$/im);
-    const toMatch = headers.match(/^To:\s*(.*)$/im);
-    const dateMatch = headers.match(/^Date:\s*(.*)$/im);
-    const messageIdMatch = headers.match(/^Message-ID:\s*(.*)$/im);
-
-    const mail = new (await import("common")).Mail();
-
-    mail.subject = subjectMatch ? subjectMatch[1].trim() : "";
-    mail.text = body;
-    mail.html = body.includes("<") ? body : "";
-    mail.date = dateMatch
-      ? new Date(dateMatch[1]).toISOString()
-      : new Date().toISOString();
-    mail.messageId = messageIdMatch
-      ? messageIdMatch[1].trim().replace(/[<>]/g, "")
-      : mail.messageId;
+    const mail = await parseAppendedMessage(appendRequest.message.path);
 
     mail.draft = appendRequest.flags?.includes("\\Draft") || false;
     mail.read = appendRequest.flags?.includes("\\Seen") || false;
     mail.saved = appendRequest.flags?.includes("\\Flagged") || false;
     mail.deleted = appendRequest.flags?.includes("\\Deleted") || false;
     mail.answered = appendRequest.flags?.includes("\\Answered") || false;
-
-    if (fromMatch) {
-      mail.from = {
-        value: [{ address: fromMatch[1].trim(), name: "" }],
-        text: fromMatch[1].trim(),
-      };
-    }
-    if (toMatch) {
-      mail.to = {
-        value: [{ address: toMatch[1].trim(), name: "" }],
-        text: toMatch[1].trim(),
-      };
-    }
 
     const user = store.getUser();
     const account = boxToAccount(user.username, targetMailbox);
