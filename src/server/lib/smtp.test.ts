@@ -2324,6 +2324,24 @@ describe("initializeSmtp configuration", () => {
     process.env = originalEnv;
   });
 
+  it("removes every transaction directory a previous process left, before listening", async () => {
+    const leftover = path.join(INCOMING_ATTACHMENT_FOLDER, "crashed-seconds-ago");
+    fs.mkdirSync(leftover, { recursive: true });
+    fs.writeFileSync(path.join(leftover, "1"), "partial attachment");
+    let leftoverWhenListening: boolean | undefined;
+    const createServer = mockCreateSmtpServer.getMockImplementation()!;
+    mockCreateSmtpServer.mockImplementationOnce((opts) => {
+      leftoverWhenListening = fs.existsSync(leftover);
+      return createServer(opts);
+    });
+
+    const initializeSmtp = await loadInitializeSmtp();
+    await initializeSmtp();
+
+    expect(leftoverWhenListening).toBe(false);
+    expect(fs.existsSync(leftover)).toBe(false);
+  });
+
   it("starts one plaintext server when SSL is not configured", async () => {
     const initializeSmtp = await loadInitializeSmtp();
     const servers = await initializeSmtp();

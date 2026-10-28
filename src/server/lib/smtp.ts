@@ -568,28 +568,11 @@ const removeTransactionDir = (dir: string) =>
   });
 
 /**
- * A transaction directory older than this belongs to no live transaction: one
- * is bounded by the DATA idle ceiling and the save behind it.
+ * Removes the transaction directories a previous process left behind, crashed
+ * mid-DATA. Runs before any listener opens, so none can belong to a live
+ * transaction of this one.
  */
-const STALE_TRANSACTION_DIR_MS = 60 * 60 * 1000;
-
-/** Removes transaction directories a crashed process left behind. */
-const sweepStaleTransactionDirs = async () => {
-  let entries: string[];
-  try {
-    entries = await fs.promises.readdir(INCOMING_ATTACHMENT_FOLDER);
-  } catch {
-    return;
-  }
-  const cutoff = Date.now() - STALE_TRANSACTION_DIR_MS;
-  await Promise.all(
-    entries.map(async (entry) => {
-      const dir = path.join(INCOMING_ATTACHMENT_FOLDER, entry);
-      const stat = await fs.promises.stat(dir).catch(() => undefined);
-      if (stat && stat.mtimeMs < cutoff) await removeTransactionDir(dir);
-    })
-  );
-};
+const sweepLeftoverTransactionDirs = () => removeTransactionDir(INCOMING_ATTACHMENT_FOLDER);
 
 export const onData = (
   stream: Readable,
@@ -923,7 +906,7 @@ export const SMTP_CLOSE_TIMEOUT_MS = 5 * 1000;
 
 export const initializeSmtp = async () => {
   const servers: SmtpServer[] = [];
-  await sweepStaleTransactionDirs();
+  await sweepLeftoverTransactionDirs();
 
   const options: Omit<SmtpServerOptions, "secure"> = {
     onAuth,
