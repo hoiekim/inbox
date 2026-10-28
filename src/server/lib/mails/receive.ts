@@ -338,20 +338,35 @@ const convertAttachments = async (
 };
 
 const convertAttachment = async ({
-  content,
+  path,
   filename,
   contentType,
   size,
 }: IncomingAttachment) => {
-  const isDataExist = typeof content === "object" && "data" in content;
-  const data = isDataExist ? content.data : content;
-  const id = await saveBuffer(data);
+  const id = await saveFile(path);
   return new Attachment({
     filename,
     contentType,
     content: { data: id },
     size,
   });
+};
+
+/**
+ * Stores the file at `sourcePath` as a new attachment and answers its id. The
+ * source is left in place: it is hard-linked where the filesystem allows,
+ * which costs no copy, and copied otherwise.
+ */
+export const saveFile = async (sourcePath: string): Promise<string> => {
+  const id = getAttachmentId();
+  fs.mkdirSync(ATTACHMENT_FOLDER, { recursive: true });
+  const attachmentFilePath = getAttachmentFilePath(id);
+  try {
+    await fs.promises.link(sourcePath, attachmentFilePath);
+  } catch {
+    await fs.promises.copyFile(sourcePath, attachmentFilePath);
+  }
+  return id;
 };
 
 export const saveBuffer = async (buffer: Buffer | string): Promise<string> => {
