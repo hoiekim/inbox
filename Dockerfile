@@ -20,7 +20,7 @@ RUN bun run build
 
 # Same Bun release as the builder. 1.4 is the floor: earlier releases cannot
 # upgrade an accepted socket to TLS server-side (`new tls.TLSSocket(socket,
-# { isServer: true })`), which smtp-server needs for port 465 and STARTTLS and
+# { isServer: true })`), which the SMTP server needs for port 465 and STARTTLS and
 # the IMAP server needs for STARTTLS — the handshake hangs with no error.
 FROM oven/bun:1.4.4-slim
 

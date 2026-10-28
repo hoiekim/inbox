@@ -88,6 +88,18 @@ const legacyPrefix = (name: string, semicolon: boolean) => {
   return null;
 };
 
+/**
+ * Decodes an attribute value. Inside an attribute only references closed by a
+ * semicolon decode, so a query string's `&copy=2` stays as written.
+ */
+export const decodeAttributeEntities = (value: string): string =>
+  value.replace(REFERENCE, (match, hex?: string, decimal?: string, name?: string) => {
+    if (!match.endsWith(";")) return match;
+    if (hex) return fromCodePoint(parseInt(hex, 16));
+    if (decimal) return fromCodePoint(parseInt(decimal, 10));
+    return NAMED.get(name!) ?? match;
+  });
+
 export const decodeEntities = (text: string): string =>
   text.replace(REFERENCE, (match, hex?: string, decimal?: string, name?: string, semi?: string) => {
     if (hex) return fromCodePoint(parseInt(hex, 16));

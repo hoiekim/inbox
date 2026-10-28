@@ -1,11 +1,11 @@
 import { describe, expect, it, jest, mock, spyOn, beforeEach, afterEach, afterAll } from "bun:test";
-import type {
-  SMTPServer,
-  SMTPServerSession,
-  SMTPServerDataStream,
-  SMTPServerAuthentication
-} from "smtp-server";
+import fs from "fs";
+import path from "path";
 import { PassThrough, Readable } from "stream";
+import type { SmtpAuthRequest, SmtpSession } from "./smtp/types";
+import * as smtpServerModule from "./smtp/server";
+import type { SmtpServer } from "./smtp/server";
+import * as mimeParser from "./mime/parser";
 import * as authRateLimit from "./auth-rate-limit";
 import { MAX_MESSAGE_BYTES } from "./message-size";
 import { restoreLeaves } from "test-helpers";
@@ -47,7 +47,9 @@ mock.module("server", () => ({
   ADMIN_RO_USERNAME,
 }));
 
-const mockSimpleParser = mock(() =>
+// spyOn rather than mock.module: the parser has its own test files, and a
+// process-global module mock would hand them this stub. Restored in afterAll.
+const mockParseMessage = spyOn(mimeParser, "parseMessage").mockImplementation(() =>
   Promise.resolve({
     messageId: "<test@example.com>",
     from: { text: "sender@example.com", value: [{ address: "sender@example.com", name: "Sender" }] },
@@ -59,10 +61,6 @@ const mockSimpleParser = mock(() =>
     attachments: []
   })
 );
-
-mock.module("mailparser", () => ({
-  simpleParser: mockSimpleParser
-}));
 
 const realVerify = Bun.password.verify.bind(Bun.password);
 
@@ -112,7 +110,8 @@ import {
   onRcptTo,
   resolveOutgoingSender,
   splitEnvelopeRecipients,
-  DATA_IDLE_TIMEOUT_MS
+  DATA_IDLE_TIMEOUT_MS,
+  INCOMING_ATTACHMENT_FOLDER
 } from "./smtp";
 import {
   withSmtpDataBudget,
@@ -126,6 +125,8 @@ import {
 // restored for any test file that runs later (e.g. auth-rate-limit.test.ts).
 afterAll(() => {
   verifySpy.mockRestore();
+  mockParseMessage.mockRestore();
+  mockCreateSmtpServer.mockRestore();
   mockIsAuthRateLimited.mockRestore();
   mockRecordAuthFailure.mockRestore();
   mockResetAuthFailures.mockRestore();
@@ -166,8 +167,8 @@ describe("onAuth handler", () => {
   });
 
   it("returns existing session user without re-authenticating", async () => {
-    const session = { user: "existing-user" } as SMTPServerSession;
-    const auth = { username: "new-user", password: "password" } as SMTPServerAuthentication;
+    const session = { user: "existing-user" } as SmtpSession;
+    const auth = { username: "new-user", password: "password" } as SmtpAuthRequest;
 
     const result = await new Promise<{ user?: string }>((resolve) => {
       onAuth!(auth, session, (_err, data) => resolve(data || {}));
@@ -178,8 +179,8 @@ describe("onAuth handler", () => {
   });
 
   it("rejects auth when user does not exist", async () => {
-    const session = {} as SMTPServerSession;
-    const auth = { username: "nonexistent", password: "password" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "nonexistent", password: "password" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue(null);
 
     const result = await new Promise<{ user?: string }>((resolve) => {
@@ -194,8 +195,8 @@ describe("onAuth handler", () => {
   // outage is not a credential verdict, so it answers transiently and does not
   // charge the failure budget.
   it("answers a transient refusal when the credential lookup rejects", async () => {
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "password" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "password" } as SmtpAuthRequest;
     mockGetUser.mockRejectedValue(new Error("timeout exceeded when trying to connect"));
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
@@ -210,8 +211,8 @@ describe("onAuth handler", () => {
 
   it("rejects auth when password is empty", async () => {
     const hashedPw = await Bun.password.hash("correct", { algorithm: "bcrypt", cost: 10 });
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: "testuser" })
@@ -226,8 +227,8 @@ describe("onAuth handler", () => {
 
   it("rejects auth when password is wrong", async () => {
     const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "wrongpassword" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "wrongpassword" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: "testuser" })
@@ -242,8 +243,8 @@ describe("onAuth handler", () => {
 
   it("authenticates successfully with correct credentials", async () => {
     const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "correctpassword" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: "testuser" })
@@ -261,8 +262,8 @@ describe("onAuth handler", () => {
     // The revocation fence: the per-command gates compare this
     // stamp against the row's current version.
     const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "correctpassword" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       passwordVersion: 3,
@@ -274,15 +275,15 @@ describe("onAuth handler", () => {
     });
 
     expect(
-      (session as SMTPServerSession & { passwordVersion?: number })
+      (session as SmtpSession & { passwordVersion?: number })
         .passwordVersion
     ).toBe(3);
   });
 
   it("stamps version 1 when the credential row predates the fence", async () => {
     const hashedPw = await Bun.password.hash("correctpassword", { algorithm: "bcrypt", cost: 10 });
-    const session = {} as SMTPServerSession;
-    const auth = { username: "testuser", password: "correctpassword" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "testuser", password: "correctpassword" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: "testuser" })
@@ -293,15 +294,15 @@ describe("onAuth handler", () => {
     });
 
     expect(
-      (session as SMTPServerSession & { passwordVersion?: number })
+      (session as SmtpSession & { passwordVersion?: number })
         .passwordVersion
     ).toBe(1);
   });
 
   it("rejects auth when IP is rate-limited", async () => {
     mockIsAuthRateLimited.mockImplementation(() => true);
-    const session = { remoteAddress: "5.6.7.8" } as SMTPServerSession;
-    const auth = { username: "testuser", password: "anything" } as SMTPServerAuthentication;
+    const session = { remoteAddress: "5.6.7.8" } as SmtpSession;
+    const auth = { username: "testuser", password: "anything" } as SmtpAuthRequest;
 
     const err = await new Promise<Error | null>((resolve) => {
       onAuth!(auth, session, (e) => resolve(e || null));
@@ -314,8 +315,8 @@ describe("onAuth handler", () => {
   });
 
   it("falls back to 'unknown' IP when remoteAddress is missing", async () => {
-    const session = {} as SMTPServerSession;
-    const auth = { username: "nope", password: "x" } as SMTPServerAuthentication;
+    const session = {} as SmtpSession;
+    const auth = { username: "nope", password: "x" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue(null);
 
     await new Promise<{ user?: string }>((resolve) => {
@@ -327,8 +328,8 @@ describe("onAuth handler", () => {
   });
 
   it("records failure and rejects when getSigned returns falsy", async () => {
-    const session = { remoteAddress: "9.9.9.9" } as SMTPServerSession;
-    const auth = { username: "testuser", password: "anything" } as SMTPServerAuthentication;
+    const session = { remoteAddress: "9.9.9.9" } as SmtpSession;
+    const auth = { username: "testuser", password: "anything" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: "irrelevant",
       getSigned: () => null
@@ -344,8 +345,8 @@ describe("onAuth handler", () => {
 
   it("records failure on wrong-password path", async () => {
     const hashedPw = await Bun.password.hash("right", { algorithm: "bcrypt", cost: 10 });
-    const session = { remoteAddress: "1.1.1.1" } as SMTPServerSession;
-    const auth = { username: "testuser", password: "wrong" } as SMTPServerAuthentication;
+    const session = { remoteAddress: "1.1.1.1" } as SmtpSession;
+    const auth = { username: "testuser", password: "wrong" } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: "testuser" })
@@ -364,11 +365,11 @@ describe("onAuth handler", () => {
     // permitted so the session shape stays symmetric with HTTP/IMAP —
     // the refusal lives at MAIL FROM (below).
     const hashedPw = await Bun.password.hash("readonlypass", { algorithm: "bcrypt", cost: 10 });
-    const session = { remoteAddress: "10.0.0.1" } as SMTPServerSession;
+    const session = { remoteAddress: "10.0.0.1" } as SmtpSession;
     const auth = {
       username: ADMIN_RO_USERNAME,
       password: "readonlypass",
-    } as SMTPServerAuthentication;
+    } as SmtpAuthRequest;
     mockGetUser.mockResolvedValue({
       password: hashedPw,
       getSigned: () => ({ username: ADMIN_RO_USERNAME }),
@@ -403,8 +404,8 @@ describe("onAuth username enumeration resistance", () => {
 
   const drive = (username: string, password: string) =>
     new Promise<{ user?: string }>((resolve) => {
-      const auth = { username, password } as SMTPServerAuthentication;
-      onAuth!(auth, { remoteAddress: "203.0.113.7" } as SMTPServerSession, (_err, data) =>
+      const auth = { username, password } as SmtpAuthRequest;
+      onAuth!(auth, { remoteAddress: "203.0.113.7" } as SmtpSession, (_err, data) =>
         resolve(data || {})
       );
     });
@@ -480,7 +481,7 @@ describe("onMailFrom handler", () => {
     const session = {
       user: ADMIN_RO_USERNAME,
       remoteAddress: "10.0.0.1",
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
     const address = { address: "sender@test.com" } as never;
 
     const err = await new Promise<Error | null>((resolve) => {
@@ -502,7 +503,7 @@ describe("onMailFrom handler", () => {
     const session = {
       user: "alice",
       remoteAddress: "10.0.0.2",
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
     const address = { address: "alice@test.com" } as never;
 
     const err = await new Promise<Error | null>((resolve) => {
@@ -521,7 +522,7 @@ describe("onMailFrom handler", () => {
       user: "alice",
       passwordVersion: 1,
       remoteAddress: "10.0.0.3",
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
     const address = { address: "alice@test.com" } as never;
 
     const err = await new Promise<Error | null>((resolve) => {
@@ -543,7 +544,7 @@ describe("onMailFrom handler", () => {
       user: "alice",
       passwordVersion: 2,
       remoteAddress: "10.0.0.4",
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
     const address = { address: "alice@test.com" } as never;
 
     const err = await new Promise<Error | null>((resolve) => {
@@ -562,7 +563,7 @@ describe("onMailFrom handler", () => {
       user: "alice",
       passwordVersion: 1,
       remoteAddress: "10.0.0.5",
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
     const address = { address: "alice@test.com" } as never;
 
     const err = await new Promise<Error | null>((resolve) => {
@@ -581,7 +582,7 @@ describe("onRcptTo handler", () => {
 
   const rcpt = (address: string) =>
     new Promise<Error | null | undefined>((resolve) => {
-      const session = { remoteAddress: "1.2.3.4" } as unknown as SMTPServerSession;
+      const session = { remoteAddress: "1.2.3.4" } as unknown as SmtpSession;
       onRcptTo!({ address } as never, session, (e) => resolve(e));
     });
 
@@ -663,7 +664,7 @@ describe("onRcptTo handler", () => {
     expect(mockGetUser).not.toHaveBeenCalled();
   });
 
-  // `smtp-server` hands the command-loop continuation to `cb` and discards the
+  // The server hands the command-loop continuation to `cb` and discards the
   // promise, so a rejection that escapes wedges the session rather than the
   // command — the connection then holds one of `maxClients` until the socket
   // times out. The pool this lookup draws on is shared with HTTP and IMAP and
@@ -728,15 +729,15 @@ describe("onData handler", () => {
   const makeStream = () => {
     const stream = new PassThrough();
     stream.end();
-    return stream as unknown as SMTPServerDataStream;
+    return stream as unknown as Readable;
   };
 
   beforeEach(() => {
     mockSaveMailHandler.mockReset();
     mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
     mockSendMail.mockReset();
-    mockSimpleParser.mockReset();
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockReset();
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<test@example.com>",
         from: { text: "sender@example.com", value: [{ address: "sender@example.com" }] },
@@ -764,7 +765,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null>((resolve) => {
       onData(stream, session, (e) => resolve(e || null));
@@ -782,7 +783,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -802,7 +803,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
@@ -829,7 +830,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       passwordVersion: 2,
@@ -852,7 +853,7 @@ describe("onData handler", () => {
   });
 
   it("propagates parser failure on incoming path", async () => {
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.reject(new Error("malformed mail"))
     );
     const stream = makeStream();
@@ -862,7 +863,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -885,7 +886,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "victim@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -909,7 +910,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "alice@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -928,7 +929,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "alice@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -950,7 +951,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "ghost@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -970,10 +971,10 @@ describe("onData handler", () => {
         rcptTo: [{ address: "ghost@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const calls: (Error | null | undefined)[] = [];
-    onData(source as unknown as SMTPServerDataStream, session, (err) =>
+    onData(source as unknown as Readable, session, (err) =>
       calls.push(err)
     );
     source.end("x");
@@ -994,7 +995,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "alice@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -1013,7 +1014,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue(null);
 
@@ -1027,7 +1028,7 @@ describe("onData handler", () => {
   });
 
   it("propagates parser failure on outgoing path", async () => {
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.reject(new Error("outgoing parse failure"))
     );
     const stream = makeStream();
@@ -1038,7 +1039,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
@@ -1054,7 +1055,7 @@ describe("onData handler", () => {
   });
 
   it("wraps non-Error rejection in Error on outgoing path", async () => {
-    mockSimpleParser.mockImplementation(() => Promise.reject("plain string"));
+    mockParseMessage.mockImplementation(() => Promise.reject("plain string"));
     const stream = makeStream();
     const session = {
       user: "admin",
@@ -1063,7 +1064,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
@@ -1089,14 +1090,14 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
     });
 
     // Parser body returns from.text undefined → senderFullName falls back to sender ("admin")
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<o@example.com>",
         subject: "Hello",
@@ -1129,12 +1130,12 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }, { address: "sales@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
     });
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<dyn@example.com>",
         from: {
@@ -1178,12 +1179,12 @@ describe("onData handler", () => {
         rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
     });
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<addressed@example.com>",
         from: {
@@ -1224,12 +1225,12 @@ describe("onData handler", () => {
         rcptTo: [{ address: "bob@test.com" }, { address: "friend@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "admin" })
     });
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<group@example.com>",
         from: {
@@ -1270,7 +1271,7 @@ describe("onData handler", () => {
   });
 
   it("maps attachments through the parsed attachment array", async () => {
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<att@example.com>",
         from: { text: "external@other.com", value: [{ address: "external@other.com" }] },
@@ -1283,13 +1284,13 @@ describe("onData handler", () => {
           {
             filename: "receipt.pdf",
             contentType: "application/pdf",
-            content: Buffer.from("pdf"),
+            path: "/tmp/attachment-0",
             size: 3
           },
           {
             // missing filename → falls back to "attachment"
             contentType: "image/png",
-            content: Buffer.from("png"),
+            path: "/tmp/attachment-1",
             size: 3
           }
         ]
@@ -1302,7 +1303,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -1326,13 +1327,13 @@ describe("onData handler", () => {
         rcptTo: rcptTo.map((address) => ({ address }))
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   const parseAs = (headers: {
     to?: { address?: string; group?: { address: string }[] }[];
     cc?: { address?: string; group?: { address: string }[] }[];
   }) => {
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.resolve({
         messageId: "<test@example.com>",
         from: { text: "admin@test.com", value: [{ address: "admin@test.com" }] },
@@ -1347,7 +1348,7 @@ describe("onData handler", () => {
     );
   };
 
-  const driveOutgoing = async (session: SMTPServerSession) => {
+  const driveOutgoing = async (session: SmtpSession) => {
     mockGetUser.mockResolvedValue({ getSigned: () => ({ username: "admin" }) });
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(makeStream(), session, (e) => resolve(e));
@@ -1393,7 +1394,7 @@ describe("onData handler", () => {
   });
 
   it("reads addresses out of an RFC 5322 group in the To: header", async () => {
-    // `To: Team: a@x, b@x;` — mailparser nests the members under value[0].group
+    // `To: Team: a@x, b@x;` — the parser nests the members under value[0].group
     // and leaves value[0].address undefined.
     parseAs({
       to: [{ group: [{ address: "a@other.com" }, { address: "b@other.com" }] }]
@@ -1414,7 +1415,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "external@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const calls: (Error | null | undefined)[] = [];
     onData(stream, session, (err) => calls.push(err));
@@ -1437,7 +1438,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "anything@bob.test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const err = await new Promise<Error | null | undefined>((resolve) => {
       onData(stream, session, (e) => resolve(e));
@@ -1456,7 +1457,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "someone@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     mockGetUser.mockResolvedValue({
       getSigned: () => ({ username: "bob" })
@@ -1480,7 +1481,7 @@ describe("onData handler", () => {
           rcptTo: [{ address }]
         },
         remoteAddress: "1.2.3.4"
-      } as unknown as SMTPServerSession;
+      } as unknown as SmtpSession;
 
       const err = await new Promise<Error | null | undefined>((resolve) => {
         onData(makeStream(), session, (e) => resolve(e));
@@ -1504,12 +1505,12 @@ describe("onData handler", () => {
   };
 
   const answersOnceWhenRefusedMidAwait = async (
-    session: SMTPServerSession,
+    session: SmtpSession,
     awaited: { promise: Promise<void> }
   ) => {
     const source = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
-    onData(source as unknown as SMTPServerDataStream, session, (err) =>
+    onData(source as unknown as Readable, session, (err) =>
       calls.push(err)
     );
     source.write("x");
@@ -1529,7 +1530,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const pending = answersOnceWhenRefusedMidAwait(session, saving);
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1554,7 +1555,7 @@ describe("onData handler", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    } as unknown as SMTPServerSession;
+    } as unknown as SmtpSession;
 
     const pending = answersOnceWhenRefusedMidAwait(session, sending);
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -1578,10 +1579,10 @@ describe("onData message ceiling", () => {
   let parserStream: Readable | undefined;
 
   const parseAndCount = () =>
-    mockSimpleParser.mockImplementation(
-      (stream: NodeJS.ReadableStream) =>
+    mockParseMessage.mockImplementation(
+      (stream) =>
         new Promise((resolve) => {
-          parserStream = stream as unknown as Readable;
+          parserStream = stream as Readable;
           stream.on("data", (chunk: Buffer) => {
             parserBytes += chunk.length;
           });
@@ -1619,12 +1620,12 @@ describe("onData message ceiling", () => {
   };
 
   const drive = (
-    session: SMTPServerSession,
+    session: SmtpSession,
     totalBytes: number
   ): Promise<Error | null | undefined> => {
     const stream = new PassThrough();
     return new Promise((resolve) => {
-      onData(stream as unknown as SMTPServerDataStream, session, resolve);
+      onData(stream as unknown as Readable, session, resolve);
       feed(stream, totalBytes);
     });
   };
@@ -1636,7 +1637,7 @@ describe("onData message ceiling", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   const outgoingSession = () =>
     ({
@@ -1646,7 +1647,7 @@ describe("onData message ceiling", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   beforeEach(() => {
     parserBytes = 0;
@@ -1654,7 +1655,7 @@ describe("onData message ceiling", () => {
     mockSaveMailHandler.mockReset();
     mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
     mockSendMail.mockReset();
-    mockSimpleParser.mockReset();
+    mockParseMessage.mockReset();
     mockGetUser.mockReset();
     mockLogger.warn.mockReset();
     parseAndCount();
@@ -1721,7 +1722,7 @@ describe("onData message ceiling", () => {
     const stream = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
 
-    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+    onData(stream as unknown as Readable, incomingSession(), (err) =>
       calls.push(err)
     );
     stream.write(Buffer.alloc(1024, 0x61));
@@ -1734,7 +1735,7 @@ describe("onData message ceiling", () => {
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
   });
 
-  // The outgoing branch reaches `simpleParser` only after a user lookup, so a
+  // The outgoing branch reaches the parser only after a user lookup, so a
   // stream that fails during the lookup has no parser listening yet. Answering
   // through `cb` rather than through the stream is what keeps that from
   // becoming an unhandled 'error' event.
@@ -1758,7 +1759,7 @@ describe("onData message ceiling", () => {
     process.on("uncaughtException", onUncaught);
 
     try {
-      onData(stream as unknown as SMTPServerDataStream, outgoingSession(), (err) =>
+      onData(stream as unknown as Readable, outgoingSession(), (err) =>
         calls.push(err)
       );
       stream.write(Buffer.alloc(1024, 0x61));
@@ -1772,7 +1773,7 @@ describe("onData message ceiling", () => {
     }
 
     expect(uncaught).toEqual([]);
-    expect(mockSimpleParser).not.toHaveBeenCalled();
+    expect(mockParseMessage).not.toHaveBeenCalled();
     expect(calls.length).toBe(1);
     expect(calls[0]!.message).toBe("socket reset");
     expect(mockSendMail).not.toHaveBeenCalled();
@@ -1782,7 +1783,7 @@ describe("onData message ceiling", () => {
     const stream = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
 
-    onData(stream as unknown as SMTPServerDataStream, incomingSession(), (err) =>
+    onData(stream as unknown as Readable, incomingSession(), (err) =>
       calls.push(err)
     );
     feed(stream, MAX_MESSAGE_BYTES + 1024 * 1024);
@@ -1798,14 +1799,14 @@ describe("onData message ceiling", () => {
     expect(parserStream!.destroyed).toBe(true);
   });
 
-  // A destroyed stream is not a settled parser: `mailparser` settles on `end`
-  // or `error` and on neither `close` nor a bare `destroy()`, so a refusal that
-  // cuts silently holds everything the parser accumulated for the life of the
-  // connection.
+  // A destroyed stream is not a settled parser: a parser that settles on `end`
+  // or `error` and on neither `close` nor a bare `destroy()` would, after a
+  // refusal that cuts silently, hold the attachment file it was writing open
+  // for the life of the connection.
   it("settles the parser's promise when the ceiling refuses", async () => {
     let parserSettled = false;
-    mockSimpleParser.mockImplementation(
-      (stream: NodeJS.ReadableStream) =>
+    mockParseMessage.mockImplementation(
+      (stream) =>
         new Promise((resolve, reject) => {
           stream.on("data", () => {});
           stream.on("end", () => {
@@ -1832,7 +1833,7 @@ describe("onData message ceiling", () => {
         rcptTo: [{ address: "external@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   // Local envelope sender, foreign recipient, no auth: a relay attempt, which
   // is refused before the octets are read rather than at the submission branch.
@@ -1843,17 +1844,17 @@ describe("onData message ceiling", () => {
         rcptTo: [{ address: "recipient@other.com" }]
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   const driveAndDrain = async (
-    session: SMTPServerSession,
+    session: SmtpSession,
     totalBytes: number,
     waitMs = 300
   ) => {
     const stream = new PassThrough();
     const calls: (Error | null | undefined)[] = [];
 
-    onData(stream as unknown as SMTPServerDataStream, session, (err) =>
+    onData(stream as unknown as Readable, session, (err) =>
       calls.push(err)
     );
     feed(stream, totalBytes);
@@ -1874,7 +1875,7 @@ describe("onData message ceiling", () => {
     expect(calls.length).toBe(1);
     expect((calls[0] as Error & { responseCode?: number }).responseCode).toBe(550);
     expect(ended).toBe(true);
-    expect(mockSimpleParser).not.toHaveBeenCalled();
+    expect(mockParseMessage).not.toHaveBeenCalled();
   });
 
   it("reads out an unauthenticated relay attempt it refuses", async () => {
@@ -1899,7 +1900,7 @@ describe("onData message ceiling", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]!.message).toBe("Email service not configured");
     expect(ended).toBe(true);
-    expect(mockSimpleParser).not.toHaveBeenCalled();
+    expect(mockParseMessage).not.toHaveBeenCalled();
   });
 
   it("answers an unauthenticated relay attempt once when DATA runs past the ceiling", async () => {
@@ -1916,7 +1917,7 @@ describe("onData message ceiling", () => {
   });
 
   it("answers a parser failure once and reads the rest of DATA out", async () => {
-    mockSimpleParser.mockImplementation(() =>
+    mockParseMessage.mockImplementation(() =>
       Promise.reject(new Error("parse boom"))
     );
 
@@ -1937,6 +1938,152 @@ describe("onData message ceiling", () => {
     expect(calls[0]!.message).toBe("db down");
     expect(ended).toBe(true);
     expect(mockSendMail).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Attachments are decoded into a per-transaction directory, and nothing may
+ * be left there once the transaction is answered — whichever way it ends.
+ */
+describe("onData transaction files", () => {
+  const originalEnv = process.env;
+  let directories: string[];
+
+  // Stands in for the parser: writes one attachment file into the directory it
+  // is handed, as the real one does, then settles as `outcome` says.
+  const parseWritingAFile = (outcome: "resolve" | "reject" | "hang" = "resolve") =>
+    mockParseMessage.mockImplementation(async (stream, options) => {
+      directories.push(options.attachmentDir);
+      fs.mkdirSync(options.attachmentDir, { recursive: true });
+      const filePath = path.join(options.attachmentDir, "0");
+      fs.writeFileSync(filePath, "attachment bytes");
+      if (outcome === "hang") return new Promise(() => {});
+      for await (const _chunk of stream as Readable) {
+        // read the message out
+      }
+      if (outcome === "reject") throw new Error("malformed mail");
+      return {
+        subject: "with attachment",
+        attachments: [{ path: filePath, filename: "a.bin", contentType: "application/octet-stream", size: 16 }]
+      };
+    });
+
+  const incomingSession = () =>
+    ({
+      envelope: {
+        mailFrom: { address: "external@other.com" },
+        rcptTo: [{ address: "user@test.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    }) as unknown as SmtpSession;
+
+  const deliver = (session: SmtpSession, body: string | Buffer = "Subject: x\r\n\r\nbody\r\n") => {
+    const stream = new PassThrough();
+    const answered = new Promise<Error | null | undefined>((resolve) => onData(stream, session, resolve));
+    stream.end(body);
+    return answered;
+  };
+
+  /** The directory is removed after the answer, so give the removal a moment. */
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  beforeEach(() => {
+    directories = [];
+    _resetSmtpDataBudget();
+    mockSaveMailHandler.mockReset();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(1));
+    mockSendMail.mockReset();
+    mockGetUser.mockReset();
+    mockParseMessage.mockReset();
+    process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    directories.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true }));
+  });
+
+  it("works under the incoming attachment folder, one directory per transaction", async () => {
+    parseWritingAFile();
+    await deliver(incomingSession());
+    await deliver(incomingSession());
+    expect(directories).toHaveLength(2);
+    expect(new Set(directories).size).toBe(2);
+    directories.forEach((dir) => expect(path.dirname(dir)).toBe(INCOMING_ATTACHMENT_FOLDER));
+  });
+
+  it("hands the save the attachment's file and removes it once stored", async () => {
+    parseWritingAFile();
+    let seenWhileSaving: boolean | undefined;
+    mockSaveMailHandler.mockImplementation((...args: unknown[]) => {
+      const mail = args[1] as { attachments: { path: string; filename: string }[] };
+      seenWhileSaving = fs.existsSync(mail.attachments[0].path);
+      return Promise.resolve(1);
+    });
+    const err = await deliver(incomingSession());
+    await settled();
+    expect(err).toBeUndefined();
+    expect(seenWhileSaving).toBe(true);
+    expect(fs.existsSync(directories[0])).toBe(false);
+  });
+
+  it("removes the files when the parser fails", async () => {
+    parseWritingAFile("reject");
+    const err = await deliver(incomingSession());
+    await settled();
+    expect(err!.message).toBe("malformed mail");
+    expect(fs.existsSync(directories[0])).toBe(false);
+  });
+
+  it("removes the files when nothing was stored", async () => {
+    parseWritingAFile();
+    mockSaveMailHandler.mockImplementation(() => Promise.resolve(0));
+    const err = await deliver(incomingSession());
+    await settled();
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(451);
+    expect(fs.existsSync(directories[0])).toBe(false);
+  });
+
+  it("removes the files when the message runs past the ceiling", async () => {
+    parseWritingAFile();
+    const err = await deliver(incomingSession(), Buffer.alloc(MAX_MESSAGE_BYTES + 1, 0x61));
+    await settled();
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(552);
+    expect(fs.existsSync(directories[0])).toBe(false);
+  });
+
+  it("answers at once and removes the files when the connection drops mid-DATA", async () => {
+    parseWritingAFile();
+    const stream = new PassThrough();
+    const answered = new Promise<Error | null | undefined>((resolve) =>
+      onData(stream, incomingSession(), resolve)
+    );
+    stream.write("Subject: x\r\n\r\npartial");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stream.destroy();
+    const err = await answered;
+    await settled();
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    expect(smtpDataBudgetInFlight()).toBe(0);
+    expect(mockSaveMailHandler).not.toHaveBeenCalled();
+    expect(fs.existsSync(directories[0])).toBe(false);
+  });
+
+  it("removes the files of an outgoing submission", async () => {
+    parseWritingAFile();
+    mockGetUser.mockResolvedValue({ getSigned: () => ({ username: "admin" }) });
+    const err = await deliver({
+      user: "admin",
+      envelope: {
+        mailFrom: { address: "admin@test.com" },
+        rcptTo: [{ address: "recipient@other.com" }]
+      },
+      remoteAddress: "1.2.3.4"
+    } as unknown as SmtpSession);
+    await settled();
+    expect(err).toBeUndefined();
+    expect(mockSendMail).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(directories[0])).toBe(false);
   });
 });
 
@@ -1984,9 +2131,9 @@ describe("splitEnvelopeRecipients", () => {
 
 // ───────────────────────────────────────────────────────────────────────────
 // registerListeners is not exported, but its behavior is reachable by
-// driving initializeSmtp with a mocked SMTPServer constructor. We mock the
-// smtp-server module so each `new SMTPServer(...)` returns a controllable
-// EventEmitter-like stub, then replay the error/close events we care about.
+// driving initializeSmtp with a stubbed server factory. Each
+// `createSmtpServer(...)` returns a controllable EventEmitter-like stub, then
+// the tests replay the error/close events they care about.
 // ───────────────────────────────────────────────────────────────────────────
 
 type Listener = (...args: unknown[]) => void;
@@ -1996,7 +2143,7 @@ interface FakeServer {
   listen: (port: number, callback: () => void) => void;
   emit: (event: string, ...args: unknown[]) => void;
   listeners: Map<string, Listener[]>;
-  // The real SMTPServer tracks its live connections here; the eviction sweep
+  // The real SmtpServer tracks its live connections here; the eviction sweep
   // reads it, so the stub carries one too.
   connections: Set<unknown>;
   options: Record<string, unknown>;
@@ -2027,20 +2174,17 @@ const makeFakeServer = (): FakeServer => {
 
 const createdOptions: Record<string, unknown>[] = [];
 
-mock.module("smtp-server", () => ({
-  SMTPServer: class {
-    constructor(opts: Record<string, unknown>) {
-      const fake = makeFakeServer();
-      fake.options = opts;
-      createdServers.push(fake);
-      createdOptions.push(opts);
-      return fake as unknown as SMTPServer;
-    }
+const mockCreateSmtpServer = spyOn(smtpServerModule, "createSmtpServer").mockImplementation(
+  (opts) => {
+    const fake = makeFakeServer();
+    fake.options = opts as unknown as Record<string, unknown>;
+    createdServers.push(fake);
+    createdOptions.push(fake.options);
+    return fake as unknown as SmtpServer;
   }
-}));
+);
 
-// Lazy import — must come after the smtp-server mock above so initializeSmtp
-// sees the fake constructor.
+// Lazy import, so initializeSmtp is first called with the factory stubbed.
 const loadInitializeSmtp = async () => {
   const mod = await import("./smtp");
   return mod.initializeSmtp;
@@ -2180,6 +2324,24 @@ describe("initializeSmtp configuration", () => {
     process.env = originalEnv;
   });
 
+  it("removes every transaction directory a previous process left, before listening", async () => {
+    const leftover = path.join(INCOMING_ATTACHMENT_FOLDER, "crashed-seconds-ago");
+    fs.mkdirSync(leftover, { recursive: true });
+    fs.writeFileSync(path.join(leftover, "1"), "partial attachment");
+    let leftoverWhenListening: boolean | undefined;
+    const createServer = mockCreateSmtpServer.getMockImplementation()!;
+    mockCreateSmtpServer.mockImplementationOnce((opts) => {
+      leftoverWhenListening = fs.existsSync(leftover);
+      return createServer(opts);
+    });
+
+    const initializeSmtp = await loadInitializeSmtp();
+    await initializeSmtp();
+
+    expect(leftoverWhenListening).toBe(false);
+    expect(fs.existsSync(leftover)).toBe(false);
+  });
+
   it("starts one plaintext server when SSL is not configured", async () => {
     const initializeSmtp = await loadInitializeSmtp();
     const servers = await initializeSmtp();
@@ -2278,7 +2440,7 @@ describe("initializeSmtp configuration", () => {
     const err = await new Promise<Error | null | undefined>((resolve) => {
       registered(
         { address: "x@nosuchuser.test.com" } as never,
-        { remoteAddress: "1.2.3.4" } as unknown as SMTPServerSession,
+        { remoteAddress: "1.2.3.4" } as unknown as SmtpSession,
         (e) => resolve(e)
       );
     });
@@ -2577,7 +2739,7 @@ describe("onData DATA budget wiring", () => {
   const makeStream = () => {
     const stream = new PassThrough();
     stream.end();
-    return stream as unknown as SMTPServerDataStream;
+    return stream as unknown as Readable;
   };
 
   const incomingSession = () =>
@@ -2587,7 +2749,7 @@ describe("onData DATA budget wiring", () => {
         rcptTo: [{ address: "user@test.com" }]
       },
       remoteAddress: "1.2.3.4"
-    }) as unknown as SMTPServerSession;
+    }) as unknown as SmtpSession;
 
   const defer = () => {
     let resolve!: () => void;
@@ -2603,7 +2765,7 @@ describe("onData DATA budget wiring", () => {
     _resetSmtpDataBudget();
     mockSaveMailHandler.mockReset();
     mockSaveMailHandler.mockImplementation(() => Promise.resolve());
-    mockSimpleParser.mockReset();
+    mockParseMessage.mockReset();
     process.env = { ...originalEnv, EMAIL_DOMAIN: "test.com" };
   });
 
@@ -2616,7 +2778,7 @@ describe("onData DATA budget wiring", () => {
     const gates: Array<ReturnType<typeof defer>> = [];
     let parsing = 0;
     let peakParsing = 0;
-    mockSimpleParser.mockImplementation(() => {
+    mockParseMessage.mockImplementation(() => {
       parsing++;
       peakParsing = Math.max(peakParsing, parsing);
       const gate = defer();
@@ -2675,7 +2837,7 @@ describe("onData DATA budget wiring", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
-    // Without the drain `smtp-server` waits for an `end` the stream cannot
+    // Without the drain the server waits for an `end` the stream cannot
     // emit, and the peer reads nothing until its own socket timeout.
     expect(resumeSpy).toHaveBeenCalledTimes(1);
     expect(mockSaveMailHandler).not.toHaveBeenCalled();
@@ -2685,8 +2847,8 @@ describe("onData DATA budget wiring", () => {
   });
 
   it("frees the slot when a transaction fails, so the next one is admitted", async () => {
-    mockSimpleParser.mockImplementationOnce(() => Promise.reject(new Error("bad message")));
-    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    mockParseMessage.mockImplementationOnce(() => Promise.reject(new Error("bad message")));
+    mockParseMessage.mockImplementation(() => Promise.resolve({ attachments: [] }));
 
     const first = await new Promise<Error | null | undefined>((resolve) => {
       onData(makeStream(), incomingSession(), resolve);
@@ -2701,15 +2863,14 @@ describe("onData DATA budget wiring", () => {
     expect(mockSaveMailHandler).toHaveBeenCalledTimes(1);
   });
 
-  // `smtp-server` only unpipes and nulls its own stream reference on an
-  // abrupt RST mid-DATA — it never ends or errors the stream this module
-  // reads, so a stream that never fires `data`/`end`/`error` at all is the
+  // A sender that goes silent mid-DATA without closing its socket leaves a
+  // stream that fires none of `data`/`end`/`error`/`close`, so that is the
   // faithful repro, not a bug in the fixture.
   it("releases the slot when the connection is abandoned mid-DATA with no end/error ever firing", async () => {
-    // Stands in for a `simpleParser` call stuck reading a stream that will
+    // Stands in for a parser call stuck reading a stream that will
     // never end — the only path to settlement left is the idle watchdog.
-    mockSimpleParser.mockImplementation(() => new Promise(() => {}));
-    const abandonedStream = new PassThrough() as unknown as SMTPServerDataStream;
+    mockParseMessage.mockImplementation(() => new Promise(() => {}));
+    const abandonedStream = new PassThrough() as unknown as Readable;
 
     jest.useFakeTimers();
     let err: Error | null | undefined;
@@ -2735,10 +2896,10 @@ describe("onData DATA budget wiring", () => {
 
     // The slot is free again — without the watchdog this hangs forever. Under
     // real timers this arms a real 65s watchdog on the fresh transaction; the
-    // mocked `simpleParser` resolves independently of the stream, so without
+    // mocked parser resolves independently of the stream, so without
     // waiting for the stream's own `end` here too, that real timer can
     // outlive this test and fire a stray warning during a later one.
-    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    mockParseMessage.mockImplementation(() => Promise.resolve({ attachments: [] }));
     const secondStream = makeStream();
     const secondStreamEnded = new Promise<void>((resolve) => secondStream.once("end", resolve));
     const second = await new Promise<Error | null | undefined>((resolve) => {
@@ -2748,6 +2909,31 @@ describe("onData DATA budget wiring", () => {
     expect(second).toBeFalsy();
   });
 
+  it("releases the slot at once for a connection that dropped while queued for it", async () => {
+    mockParseMessage.mockImplementation(() => new Promise(() => {}));
+    const holders = Array.from({ length: CAP }, () => defer());
+    const held = holders.map((gate) => withSmtpDataBudget(() => gate.promise));
+    await nextTick();
+
+    const dropped = new PassThrough();
+    dropped.write("Subject: half a message\r\n");
+    const settled = new Promise<Error | null | undefined>((resolve) => {
+      onData(dropped as unknown as Readable, incomingSession(), resolve);
+    });
+    await nextTick();
+    dropped.destroy();
+    await nextTick();
+
+    holders[0].resolve();
+    const err = await Promise.race([settled, Bun.sleep(1000).then(() => "still holding")]);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error & { responseCode?: number }).responseCode).toBe(421);
+    expect(smtpDataBudgetInFlight()).toBe(CAP - 1);
+
+    holders.forEach((gate) => gate.resolve());
+    await Promise.all(held);
+  });
+
   it("re-arms the idle watchdog on every chunk, so a slow-but-live sender past the ceiling still completes", async () => {
     // Gated, not immediately-resolved: an unconditional mock would settle
     // `onDataIncoming`'s lane the instant `boundMessageSize` returns, before
@@ -2755,8 +2941,8 @@ describe("onData DATA budget wiring", () => {
     // exercise a transaction that already finished — vacuously green whether
     // or not the watchdog actually re-arms.
     const gate = defer();
-    mockSimpleParser.mockImplementation(() => gate.promise.then(() => ({ attachments: [] })));
-    const stream = new PassThrough() as unknown as SMTPServerDataStream;
+    mockParseMessage.mockImplementation(() => gate.promise.then(() => ({ attachments: [] })));
+    const stream = new PassThrough() as unknown as Readable;
     // Waited for explicitly below so this test's own watchdog timer is
     // guaranteed cleared before it ends — otherwise a real leftover timer
     // can outlive this test and fire a stray warning during a later one.
@@ -2796,7 +2982,7 @@ describe("onData DATA budget wiring", () => {
   });
 
   it("clears the idle watchdog on a normal completion, so a late tick never fires a spurious abandonment", async () => {
-    mockSimpleParser.mockImplementation(() => Promise.resolve({ attachments: [] }));
+    mockParseMessage.mockImplementation(() => Promise.resolve({ attachments: [] }));
     // Bun's `spyOn`/`mock.module` tracking on a shared singleton is
     // process-global and can attribute an earlier test's call to this one's
     // spy — swapping the plain object property directly sidesteps that.
@@ -2807,7 +2993,7 @@ describe("onData DATA budget wiring", () => {
     };
     const stream = makeStream();
     // `boundMessageSize`'s own `end` listener (which clears the watchdog) is
-    // a sibling on this same event, not something the mocked `simpleParser`'s
+    // a sibling on this same event, not something the mocked parser's
     // resolution depends on — wait for it explicitly, or the clock advance
     // below races it instead of following it.
     const streamEnded = new Promise<void>((resolve) => stream.once("end", resolve));
@@ -2836,17 +3022,17 @@ describe("onData DATA budget wiring", () => {
   });
 
   it("clears the idle watchdog on every other refusal too, not just a clean end", async () => {
-    // `onDataIncoming` calls `simpleParser` unconditionally as soon as
+    // `onDataIncoming` calls the parser unconditionally as soon as
     // `boundMessageSize` returns, independent of whether the byte ceiling
     // goes on to refuse the same message — needs an implementation or the
     // unmocked call throws before the ceiling ever gets a chance to run.
-    mockSimpleParser.mockImplementation(() => new Promise(() => {}));
+    mockParseMessage.mockImplementation(() => new Promise(() => {}));
     const originalWarn = logger.warn;
     const warnCalls: unknown[][] = [];
     logger.warn = (...args: unknown[]) => {
       warnCalls.push(args);
     };
-    const stream = new PassThrough() as unknown as SMTPServerDataStream;
+    const stream = new PassThrough() as unknown as Readable;
 
     jest.useFakeTimers();
     try {

@@ -224,7 +224,7 @@ export const saveMail = async (
     // would include it — SIZE ≠ {N}).
     //
     // Attachments are already on disk by the time saveMail is called
-    // (saveBuffer in receive.ts:355 completes before pgSaveMail), so
+    // (saveFile / saveBuffer complete before pgSaveMail), so
     // the internal `fs.statSync` per attachment works.
     const mailForSize: FetchMailInput = {
       messageId: input.message_id,
