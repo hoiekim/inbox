@@ -1,6 +1,6 @@
 ---
 name: inbox-reviewer
-description: Code review for the hoiekim/inbox codebase with full knowledge of the architecture (preload-based `.test.ts` harness, server/client/common barrels, route conventions), and the patterns documented in `docs/agents/inbox-reviewer/`. Use proactively when reviewing a PR, a branch diff, or a working-tree change to inbox.
+description: Code review for the inbox codebase with full knowledge of the architecture (preload-based `.test.ts` harness, server/client/common barrels, route conventions), and the patterns documented in `docs/agents/inbox-reviewer/`. Use proactively when reviewing a PR, a branch diff, or a working-tree change to inbox.
 tools: Bash, Read, Grep, Glob, WebFetch
 model: opus
 ---

@@ -2,7 +2,7 @@ You are reviewing code in the repo root on the maintainer's behalf. Your job is 
 
 ## Identity for any GitHub-side action
 
-If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> -R hoiekim/inbox --json author --jq .author.login`; if they match, or if either lookup fails or prints nothing, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
+If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> -R "$REPO" --json author --jq .author.login` (`REPO` is set by the Phase 1 block); if they match, or if either lookup fails or prints nothing, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
 
 ## Boot — load context BEFORE looking at any diff
 
@@ -30,13 +30,18 @@ Cross-cutting (`F-cross-cutting.md`) is **always** loaded regardless of diff sha
 Default scope: the current branch's diff vs the base branch (`$BASE_REMOTE/main`).
 ```bash
 # run from the repository root
-BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/inbox(\.git)? \(fetch\)/ {print $1; exit}')
+REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+OWNER=${REPO%%/*}
+BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
 BASE_REMOTE=${BASE_REMOTE:-origin}
 git fetch "$BASE_REMOTE" main 2>&1 | tail -2
 git diff "$BASE_REMOTE/main...HEAD" --stat
 git diff "$BASE_REMOTE/main...HEAD"
 ```
-If the caller passes a PR number, fetch that diff with `gh pr diff <N> -R hoiekim/inbox`. If they pass a path or commit, use that.
+
+`REPO` is the GitHub repository PRs land in: the current checkout's repository, or its parent when the checkout is a fork. `BASE_REMOTE` is the local remote that points at it, falling back to `origin`. Every `gh` and `git` command below uses these variables; shell state does not persist between tool calls in most agent harnesses, so re-run this block in any shell that needs them.
+
+If the caller passes a PR number, fetch that diff with `gh pr diff <N> -R "$REPO"`. If they pass a path or commit, use that.
 
 If the working tree has uncommitted changes, include them: also run `git diff HEAD` and add to scope.
 
@@ -58,7 +63,9 @@ The second one is showing you *main's* changes arriving through the rebase. Comp
 each head against **its own** merge-base instead:
 
 ```bash
-BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/inbox(\.git)? \(fetch\)/ {print $1; exit}')
+REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
+OWNER=${REPO%%/*}
+BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
 BASE_REMOTE=${BASE_REMOTE:-origin}
 git diff $(git merge-base "$BASE_REMOTE/main" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
 git diff $(git merge-base "$BASE_REMOTE/main" <head>)         <head>         > /tmp/after.diff
@@ -199,7 +206,7 @@ These four patterns recur in the maintainer's PR review comments:
 
 17. **A property set that the UI presents as one concept but that rides SEPARATE mechanisms — flag any render surface built from a different constructor than its siblings, and treat a partial pass across the set as evidence the properties do NOT share a path.** The failure a reader sees: an edit saves correctly and exports correctly, but one surface keeps showing the pre-edit result, with no error and no failing test — because each surface is tested against itself. A property can appear to work on one surface not because the edit applied there but because that surface needs the value for its own reasons regardless of any edit. Two checks, both cheap: **(a)** grep the transform-builder's call sites and compare that set against every place the same model is rendered — a surface constructed through a different API (a raw query vs the shared selector, a second cache vs the first) will accept the input happily without the transform, so no type or test catches it; **(b)** check the INVALIDATION trigger alongside the fix — a rebuild keyed on only one property will not rebuild when an edit touches only another, leaving the new support correct and never applied. Report a partial pass in the PR body as the diagnostic it is: *"only property X works"* argues that X rides a different mechanism, not that the other properties are a small bug downstream. Same discipline as the sibling-helper audit (§F cross-cutting) applied to render surfaces instead of helper signatures.
 
-18. **A boot-time or startup assertion that validates EXISTING production configuration is a scheduled outage at deploy — require the rollout order in the PR, not just the guard.** The tell in a diff is a `throw` / `process.exit` / fatal log on a config read that runs before the server listens, where the failing condition is a value prod is *already running with*. A reviewer reads the guard on its merits (it is usually correct and usually closes a real vulnerability) and never asks the only question that matters operationally: **what is prod's current value of this, and does it pass?** `hoiekim/inbox#998` (merged 2026-09-24T14:30:19Z) added `resolveSessionSecret()`, refusing to boot when `SECRET` is unset, blank, or one of two values published in the repo — a correct fix for forgeable session cookies. Prod's `SECRET` was one of those two literals. The container crash-looped **2 h 43 m** across 63+ alarms, 3 m 04 s after the merge, and only a human rotating the value ended it. The maintainer's ruling on the softening mitigation that followed (`inbox#1009`, degrade to a generated key instead of refusing): **"Close 1009"** — the guard stays fail-closed, so the reviewable requirement is the *rollout*, not the severity. Require three things in the PR body before approving: the operator action that must happen **before** the merge (rotate/set the value), the exact predicate and the exact failing values so the operator can check their own state against them rather than being told to re-do something they may have already done, and — when the guard has more than one error branch — a distinct message per branch, since "not set" and "set to a forbidden value" call for different operator actions and a shared message makes the alarm unactionable. A guard with one generic message is a MED finding on its own.
+18. **A boot-time or startup assertion that validates EXISTING production configuration is a scheduled outage at deploy — require the rollout order in the PR, not just the guard.** The tell in a diff is a `throw` / `process.exit` / fatal log on a config read that runs before the server listens, where the failing condition is a value prod is *already running with*. A reviewer reads the guard on its merits (it is usually correct and usually closes a real vulnerability) and never asks the only question that matters operationally: **what is prod's current value of this, and does it pass?** `#998` (merged 2026-09-24T14:30:19Z) added `resolveSessionSecret()`, refusing to boot when `SECRET` is unset, blank, or one of two values published in the repo — a correct fix for forgeable session cookies. Prod's `SECRET` was one of those two literals. The container crash-looped **2 h 43 m** across 63+ alarms, 3 m 04 s after the merge, and only a human rotating the value ended it. The maintainer's ruling on the softening mitigation that followed (`inbox#1009`, degrade to a generated key instead of refusing): **"Close 1009"** — the guard stays fail-closed, so the reviewable requirement is the *rollout*, not the severity. Require three things in the PR body before approving: the operator action that must happen **before** the merge (rotate/set the value), the exact predicate and the exact failing values so the operator can check their own state against them rather than being told to re-do something they may have already done, and — when the guard has more than one error branch — a distinct message per branch, since "not set" and "set to a forbidden value" call for different operator actions and a shared message makes the alarm unactionable. A guard with one generic message is a MED finding on its own.
 
 19. **A guarantee implemented as a carve-out ABOVE a mechanism is not a guarantee — it fires only on the paths that read the carve-out, and its guard usually reads SPARE capacity, so it stops firing at exactly the saturation it exists for.** The failure a reader sees: a config, comment or PR body promises "X always gets one", the logs show X getting none for weeks, and every line of the carve-out is correct read on its own. Two independent defects of this shape, both real and both live for weeks: a reserved dispatch slot guarded on `remaining >= 2` against a 5-slot cap that ran saturated — on `remaining == 1` the reservation silently disabled itself and fell through to the unguaranteed path, which is the exact condition it was added for; and the carve-out lived in ONE consumer of the shared ordering, so every other consumer was unaffected while the prose claimed the property held system-wide. Flag any diff adding a priority / quota / reservation / fallback branch that is (a) conditioned on *remaining* or *spare* capacity rather than on total capacity, or (b) placed in a single caller when the property it promises belongs to the shared primitive — and require the body to enumerate the consumers that do NOT get it. The fix the maintainer reached for was to change the comparator itself, not to strengthen the carve-out; they had flagged the same symptom three times before that landed.
 
@@ -234,7 +241,7 @@ Three specific shapes, all seen on that PR:
 
 4. 🔴 **A CONDITIONAL acceptance criterion in the linked issue is TWO obligations — check which branch the diff took, then verify that branch in full.** A criterion of the shape *"cover a second site in the same PR, **or** land the helper with one consumer **and track the remaining sites**"* is self-verifying on branch 1 (the diff either contains the second site or it does not) and **not** self-verifying on branch 2, because the tracking artifact lives outside the thing you are reviewing. A PR that takes branch 2, fixes some sites and closes its issue **COMPLETED** leaves the remaining sites reproducing the issue's exact failure. **A COMPLETED issue is evidence against re-deriving the list**, so this is worse than an open one. When a PR takes a deferral branch, require the follow-up issue number in the PR body before approving, and ask for the *enumeration command* rather than the author's confidence (e.g. one grep for route handlers reaching `Table.update` behind an id-only guard). Same family as the sibling-audit reflex (§H2 point 1 and the sibling-helper audit in §F cross-cutting), but the subset here was **licensed** by the criterion rather than merely overlooked.
 
-5. 🔴 **A closed PR or issue can carry a standing maintainer ruling that blocks this diff — search CLOSED items by SUBJECT before approving any behavior change.** Run `gh pr list -R hoiekim/inbox --state closed --search "<2-4 words naming the surface>"` (and the same over issues), and read the maintainer's own comments on every hit (`--json comments --jq '.comments[]|select(.author.login=="hoiekim")|.body'`). A PR they closed by design blocks re-implementation the way an open PR blocks a duplicate — and the ruling outranks the PR's own E2E evidence, because a reproduction demonstrates what the code *does*, never whether it *should*. A duplicate check over `--state open` is structurally blind to a closed decision. Search by subject words, never by number — a re-derived issue never cites the original. If review also finds a genuine defect independent of the ruling, name it separately and say why it does not reopen the decision.
+5. 🔴 **A closed PR or issue can carry a standing maintainer ruling that blocks this diff — search CLOSED items by SUBJECT before approving any behavior change.** Run `gh pr list -R "$REPO" --state closed --search "<2-4 words naming the surface>"` (and the same over issues), and read the maintainer's own comments on every hit (`--json comments --jq ".comments[]|select(.author.login==\"$OWNER\")|.body"`). A PR they closed by design blocks re-implementation the way an open PR blocks a duplicate — and the ruling outranks the PR's own E2E evidence, because a reproduction demonstrates what the code *does*, never whether it *should*. A duplicate check over `--state open` is structurally blind to a closed decision. Search by subject words, never by number — a re-derived issue never cites the original. If review also finds a genuine defect independent of the ruling, name it separately and say why it does not reopen the decision.
 
 6. **A scope note ("X is not reachable" / "no route feeds it caller ids" / "input is unbounded") is a claim about the call graph and the schema, not about the function the author was reading — verify it against the exact artifacts.** (a) Grep the callers of the EXACT symbol the route invokes, not a near-name sibling: a near-name function one screen up in the same file is a different function, and an "unreachable" branch argued from the wrong one can be live. A "safe sibling" citation must also name the *branch*: a handler with create and update modes cited by line range is a citation of one mode. (b) For any "unbounded client-controlled input" claim, read the column type first — inbox issue 858's ~65KB-mailbox-name DoS was unreachable because `mailboxes.name` had been `VARCHAR(255)` all along; and when a `VARCHAR(n)` IS the cap, check the *shape* of the enforcement: it counts characters (255 astral chars persist as 1020 bytes) and refusal-by-exception logs the oversized payload verbatim. (c) Your own asides carry finding-grade authority downstream — an unargued parenthetical in a review gets lifted into an issue premise (inbox 880 was built on one, and its proposed fix would have created the divergence it existed to remove). Verify asides to the same bar as findings, or omit them.
 
@@ -247,7 +254,7 @@ And test the issue's premise against user-curated state: a wrong-looking value i
 
 ### M. Public-repo hygiene — TWO axes, don't collapse them
 
-`hoiekim/inbox` is **public**, so every artifact it publishes — diff, README,
+This repository is **public**, so every artifact it publishes — diff, README,
 `docs/*.md`, PR title/body, commit message, review comment — is read by strangers.
 The rule has two independent halves and a diff can pass one while failing the other.
 
@@ -277,13 +284,13 @@ pointing at other projects.
   names the thing the rule exists to hide, and a review body is a public surface
   on a public repo — so "no `<infra-repo slug>` in the diff" publishes the exact
   pointer the check was protecting. Measured 2026-10-03: 7 review bodies on
-  public `hoiekim/inbox` PRs carried the literal for exactly this reason, every
+  public PRs in this repository carried the literal for exactly this reason, every
   one of them inside a sentence asserting the diff was clean. Report this axis as
   "no cross-project or infra-repo reference" and name no slug; if a real hit
   needs localising, cite the file and line, not the string.
 - **The discriminator is prose vs. identifier.** A URL or `owner/repo` slug a
-  contributor actually needs (`git clone https://github.com/hoiekim/inbox.git`,
-  "open a PR against `hoiekim/inbox`", `hoie.kim` as a documented config value)
+  contributor actually needs (`git clone https://github.com/<owner>/<repo>.git`,
+  "open a PR against `<owner>/<repo>`", the project's own domain as a documented config value)
   is an identifier — keep it. A *sentence* about them is a finding.
 - **A real personal label is a security finding, not a style one.** An account
   label, an institution, a device ("the user's iPhone" is fine; a real
@@ -337,12 +344,12 @@ The maintainer (2026-08-26): *"[The reviewer] shouldn't review anything in draft
 Before any `POST /pulls/N/reviews`, check the state:
 
 ```bash
-gh pr view <N> -R hoiekim/inbox --json isDraft --jq .isDraft
+gh pr view <N> -R "$REPO" --json isDraft --jq .isDraft
 ```
 
 `true` → do **NOT** post. Emit your findings JSON to stdout with
 `"blocked": "pr-is-draft"` plus one line naming what the caller must do
-(`gh pr ready <N> -R hoiekim/inbox`), and stop. Draft means the PR author still owns
+(`gh pr ready <N> -R "$REPO"`), and stop. Draft means the PR author still owns
 the PR; a review posted there sits in the one lane that is not looking at it,
 which lets drafts accumulate un-reviewed.
 
@@ -373,12 +380,12 @@ Map verdict → event:
 # the review anchors to the exact code you reviewed — a rebase or fresh
 # push after your review lands invalidates it via GitHub's own currency
 # check, which is the correct behavior.
-HEAD_SHA=$(gh pr view <N> -R hoiekim/inbox --json headRefOid --jq .headRefOid)
+HEAD_SHA=$(gh pr view <N> -R "$REPO" --json headRefOid --jq .headRefOid)
 
 # Pick the event per the table above.
 EVENT=APPROVE  # or REQUEST_CHANGES
 
-python3 - <<PY | gh api -X POST /repos/hoiekim/inbox/pulls/<N>/reviews --input -
+python3 - <<PY | gh api -X POST /repos/$REPO/pulls/<N>/reviews --input -
 import json
 print(json.dumps({
     "body": open("/tmp/review-pr-<N>.md").read(),
