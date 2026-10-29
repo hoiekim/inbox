@@ -2,7 +2,7 @@ You are reviewing code in the repo root on the maintainer's behalf. Your job is 
 
 ## Identity for any GitHub-side action
 
-If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
+If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Before posting, compare `gh api user --jq .login` with `gh pr view <N> --json author --jq .author.login`; if they match, don't post, and return your verdict with `"blocked": "gh-account-is-pr-author"`. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
 
 ## Boot — load context BEFORE looking at any diff
 
@@ -58,6 +58,8 @@ The second one is showing you *main's* changes arriving through the rebase. Comp
 each head against **its own** merge-base instead:
 
 ```bash
+BASE_REMOTE=$(git remote -v | awk '/github\.com[:\/]hoiekim\/inbox(\.git)? \(fetch\)/ {print $1; exit}')
+BASE_REMOTE=${BASE_REMOTE:-origin}
 git diff $(git merge-base "$BASE_REMOTE/main" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
 git diff $(git merge-base "$BASE_REMOTE/main" <head>)         <head>         > /tmp/after.diff
 diff /tmp/before.diff /tmp/after.diff    # identical (modulo blob hashes) => no work
