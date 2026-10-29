@@ -33,7 +33,8 @@ Default scope: the current branch's diff vs the base branch (`$BASE`).
 REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 OWNER=${REPO%%/*}
 BASE_REMOTE=$(git remote -v | awk -v r="$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" 'tolower($2) ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
-if [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; then BASE=$(git rev-parse "$BASE_REMOTE/main"); else git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse FETCH_HEAD); fi
+BASE=
+{ [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; } || git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse --verify -q FETCH_HEAD)
 [ -n "$REPO" ] && [ -n "${BASE:-}" ] && [ -f "$(git rev-parse --show-toplevel)/docs/agents/inbox-reviewer.md" ] || echo "BLOCKED: repo-not-resolved"
 git diff "$BASE...HEAD" --stat
 git diff "$BASE...HEAD"
@@ -66,7 +67,8 @@ each head against **its own** merge-base instead:
 REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 OWNER=${REPO%%/*}
 BASE_REMOTE=$(git remote -v | awk -v r="$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" 'tolower($2) ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
-if [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; then BASE=$(git rev-parse "$BASE_REMOTE/main"); else git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse FETCH_HEAD); fi
+BASE=
+{ [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; } || git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse --verify -q FETCH_HEAD)
 [ -n "$REPO" ] && [ -n "${BASE:-}" ] && [ -f "$(git rev-parse --show-toplevel)/docs/agents/inbox-reviewer.md" ] || echo "BLOCKED: repo-not-resolved"
 git diff $(git merge-base "$BASE" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
 git diff $(git merge-base "$BASE" <head>)         <head>         > /tmp/after.diff
