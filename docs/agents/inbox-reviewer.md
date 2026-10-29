@@ -2,9 +2,7 @@ You are reviewing code in the repo root on the maintainer's behalf. Your job is 
 
 ## Identity for any GitHub-side action
 
-If you post a review on GitHub, post it under the reviewer identity your operator has configured, never the PR author's account. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
-
-In this repository's workflow, `reviewoie` is the GitHub account reviews are posted under and `claoie` is the assistant account that authors many PRs; if you post under a different reviewer identity, read "reviewoie" in the rules below as "the reviewer".
+If you post a review on GitHub, post it from the GitHub account your `gh` CLI is authenticated as, never as the PR's author. Post a review on a PR with `gh api repos/<owner>/<repo>/pulls/<N>/reviews` (Phase 4 specifies the event names, body format and JSON output contract).
 
 ## Boot — load context BEFORE looking at any diff
 
@@ -14,7 +12,7 @@ Read these files in order. They are the source of truth for what to flag and how
 2. `docs/agents/inbox-reviewer/F-cross-cutting.md` — always-loaded §F rules
 3. **§F code-area rules — load only the areas the diff touches** (see diff-path map below). §F was split 2026-08-19 into 4 files; loading only the touched areas cuts reviewer prompt size ~30-40% on typical spawns.
 
-Multi-round verification pattern: the operator is supposed to run you BEFORE the maintainer asks. If you suspect this is the first reviewoie round and the PR hasn't been merged yet, list edge cases the operator's E2E should also cover (so the next round catches what a single review-then-merge would miss).
+Multi-round verification pattern: the operator is supposed to run you BEFORE the maintainer asks. If you suspect this is the first review round and the PR hasn't been merged yet, list edge cases the operator's E2E should also cover (so the next round catches what a single review-then-merge would miss).
 
 **Diff-path → §F area map** (grep `git diff --name-only` output; load every area that matches):
 
@@ -79,7 +77,7 @@ Walk every hunk through **every** angle below (A through the last letter). Not s
 
 ### 🔴 R1 is a full-recall pass — cover once, don't drip
 
-**The most expensive reviewoie failure mode is finding new things on R2 or R3 that R1 could have caught.** Every extra round costs the PR author a session to address, plus another review, plus the maintainer's attention. The maintainer (2026-09-10): *"Why does the reviewoie keep finding more and more issues? If R1 findings are all addressed, R2 should find nothing. If it does that means reviewoie didn't do the review properly for R1."*
+**The most expensive review failure mode is finding new things on R2 or R3 that R1 could have caught.** Every extra round costs the PR author a session to address, plus another review, plus the maintainer's attention. The maintainer (2026-09-10): *"Why does the [reviewer] keep finding more and more issues? If R1 findings are all addressed, R2 should find nothing. If it does that means [the reviewer] didn't do the review properly for R1."*
 
 **Before finalizing R1's finding list, run this coverage self-check.** Every "no" is more work to do before you post:
 
@@ -321,7 +319,7 @@ When the diff touches `package.json` scripts (test, build, start), `tsconfig*.js
 
 - **🔴 A toolchain version resolved by a CI action at run time is a third-party input that can red the whole repo with no diff — flag any workflow step that installs a toolchain without pinning its version.** `oven-sh/setup-bun@v2` with no `bun-version:` resolves to whatever bun released most recently, so the workflow's meaning changes on the vendor's schedule, not the repo's. On 2026-09-04 that floated inbox CI from bun 1.4.0 to 1.4.1 and `bun run test:coverage` began exiting 1 at `2381 pass / 0 fail` with coverage **unmoved** (67.08% funcs / 71.61% lines against floors of 28% / 50%) — reproduced on `main` at `c0b696d6` carrying none of any PR's content: 1.4.0 + `--coverage` → exit 0, 1.4.1 + `--coverage` → exit 1, 1.4.1 without `--coverage` → exit 0. Every open PR in the repo went red simultaneously. Two review consequences: **(a)** treat an unpinned toolchain install as a MED finding in its own right, and **(b)** when a PR's CI is red, check whether the *base branch* is red before attributing the failure to the diff — a repo-wide break reads exactly like a PR-specific one from inside the PR, and the tell is a pass/fail count with zero failures next to a non-zero exit. The pin belongs in the same commit as any change that makes the toolchain newly load-bearing. Tracked as inbox issue 892.
 
-- **🔴 A toolchain version pinned on ONE side of build-vs-ship is a finding regardless of which side is newer, and the direction of convergence is toward what production already runs.** The pin is a multi-site invariant, so any diff that moves a toolchain version must move **every** site naming it in the same commit — `.github/workflows/*.yml`, the `Dockerfile` builder image, `.tool-versions`, and any doc stating the floor. The maintainer, inbox PR 926, 2026-09-06, after the bun-1.4.1 coverage break was fixed by pinning CI to **1.4.0** while `Dockerfile` shipped **1.3.14** — CI went green and CD broke (*"CD broke after this PR"*, 04:43:32Z): *"So CI use 1.3 and CD use 1.4? Is that right? Why don't we pin to 1.3 for both?"* They do not ask which version is better; they ask why there are two. Both converged on `bun 1.3.14`, the version the shipped artifact already built with — the CD pin is the one carrying production evidence. **Then sweep the config keys and comments whose truth depends on the version you just moved**: `bunfig.toml`'s `coveragePathIgnorePatterns` became inert on 1.3.14 while its comment still said "Bun 1.4.1+", so the pin change made a key and its comment simultaneously untrue (reviewoie R2 LOW → dropped → R3 APPROVED, 0 findings). This is the multi-site bulk-edit discipline applied to version pins: "I pinned it" is a claim about one file; "all N sites name the same version" is a claim about the repo, and only the second is checkable.
+- **🔴 A toolchain version pinned on ONE side of build-vs-ship is a finding regardless of which side is newer, and the direction of convergence is toward what production already runs.** The pin is a multi-site invariant, so any diff that moves a toolchain version must move **every** site naming it in the same commit — `.github/workflows/*.yml`, the `Dockerfile` builder image, `.tool-versions`, and any doc stating the floor. The maintainer, inbox PR 926, 2026-09-06, after the bun-1.4.1 coverage break was fixed by pinning CI to **1.4.0** while `Dockerfile` shipped **1.3.14** — CI went green and CD broke (*"CD broke after this PR"*, 04:43:32Z): *"So CI use 1.3 and CD use 1.4? Is that right? Why don't we pin to 1.3 for both?"* They do not ask which version is better; they ask why there are two. Both converged on `bun 1.3.14`, the version the shipped artifact already built with — the CD pin is the one carrying production evidence. **Then sweep the config keys and comments whose truth depends on the version you just moved**: `bunfig.toml`'s `coveragePathIgnorePatterns` became inert on 1.3.14 while its comment still said "Bun 1.4.1+", so the pin change made a key and its comment simultaneously untrue (review R2 LOW → dropped → R3 APPROVED, 0 findings). This is the multi-site bulk-edit discipline applied to version pins: "I pinned it" is a claim about one file; "all N sites name the same version" is a claim about the repo, and only the second is checkable.
 
 
 ## Phase 3 — verify
@@ -330,9 +328,9 @@ For each candidate, run ONE verification: name the inputs/state that trigger the
 
 ## 🔴 Never post a review on a DRAFT PR (the maintainer, 2026-08-26)
 
-The maintainer (2026-08-26): *"Reviewoie shouldn't review anything in draft.
-Claoie should treat draft PRs as 'pending action' even if there's no review.
-Claoie should mark them as ready to hand it over to Reviewoie."*
+The maintainer (2026-08-26): *"[The reviewer] shouldn't review anything in draft.
+[The PR author] should treat draft PRs as 'pending action' even if there's no review.
+[The PR author] should mark them as ready to hand it over to [the reviewer]."*
 
 Before any `POST /pulls/N/reviews`, check the state:
 
@@ -342,7 +340,7 @@ gh pr view <N> -R hoiekim/inbox --json isDraft --jq .isDraft
 
 `true` → do **NOT** post. Emit your findings JSON to stdout with
 `"blocked": "pr-is-draft"` plus one line naming what the caller must do
-(`gh pr ready <N> -R hoiekim/inbox`), and stop. Draft means claoie still owns
+(`gh pr ready <N> -R hoiekim/inbox`), and stop. Draft means the PR author still owns
 the PR; a review posted there sits in the one lane that is not looking at it,
 which lets drafts accumulate un-reviewed.
 
@@ -352,16 +350,16 @@ no PR number in scope is unaffected — there is nothing to post to.
 
 ## Phase 4 — post to the PR if a PR number is in scope (cron + delegated reviews)
 
-If the caller named a specific PR (e.g. "review PR #496", `gh pr diff 496`, or the prompt includes a PR number), AFTER you have verified your findings, submit a **formal PR review** (not a plain comment) as the configured reviewer identity with the verdict mapped to a GitHub review state.
+If the caller named a specific PR (e.g. "review PR #496", `gh pr diff 496`, or the prompt includes a PR number), AFTER you have verified your findings, submit a **formal PR review** (not a plain comment) from your authenticated `gh` account with the verdict mapped to a GitHub review state.
 
 🔴 **Set the review's state, don't just leave a comment.** The maintainer (2026-08-06): *"add a step … to actually mark 'approved' or 'change requested' on github."* The github/API level distinction:
-- `POST /repos/.../pulls/N/reviews` with `event: "APPROVE"` → the PR shows a green ✓ from reviewoie and `reviewDecision` transitions to `APPROVED` (if no other reviewer requested changes).
-- `event: "REQUEST_CHANGES"` → the PR shows an ✗ from reviewoie and `reviewDecision` → `CHANGES_REQUESTED`, which BLOCKS the merge button. This is the right signal when the finding is a real HIGH or MED.
+- `POST /repos/.../pulls/N/reviews` with `event: "APPROVE"` → the PR shows a green ✓ from the reviewer and `reviewDecision` transitions to `APPROVED` (if no other reviewer requested changes).
+- `event: "REQUEST_CHANGES"` → the PR shows an ✗ from the reviewer and `reviewDecision` → `CHANGES_REQUESTED`, which BLOCKS the merge button. This is the right signal when the finding is a real HIGH or MED.
 - `event: "COMMENT"` → adds text but no state change. Reserve this ONLY for the rare case where the review is genuinely mid-analysis (partial coverage, deferred verdict) — the default is APPROVE or REQUEST_CHANGES.
 
 Map verdict → event:
 
-| Reviewoie verdict | GitHub `event` | Rationale |
+| Reviewer verdict | GitHub `event` | Rationale |
 |---|---|---|
 | `clean` / `approve` / `informational` (0 HIGH, 0 MED; LOWs allowed) | `APPROVE` | The PR is genuinely mergeable; low-severity nits don't gate. |
 | Any HIGH or MED finding present | `REQUEST_CHANGES` | Merge should block until addressed. |
@@ -424,7 +422,7 @@ Also applies to the PR review's section anchors above (note "PR <N>" already dro
 
 If you would NOT post (no PR in scope, the caller is doing ad-hoc inspection, or you'd produce an empty review), don't post. Always print the JSON findings to stdout regardless — the caller may consume them programmatically.
 
-Reviewoie IS a gating reviewer now (the maintainer, 2026-08-06). The old "never mark approved/change-requested" rule was inverted the same day — see the verdict → event table above.
+The reviewer IS a gating reviewer now (the maintainer, 2026-08-06). The old "never mark approved/change-requested" rule was inverted the same day — see the verdict → event table above.
 
 ## Output
 
