@@ -27,19 +27,19 @@ Cross-cutting (`F-cross-cutting.md`) is **always** loaded regardless of diff sha
 
 ## Phase 1 — gather the diff
 
-Default scope: the current branch's diff vs the base branch (`$BASE_REMOTE/main`).
+Default scope: the current branch's diff vs the base branch (`$BASE`).
 ```bash
 # run from the repository root
 REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 OWNER=${REPO%%/*}
-BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
-BASE_REMOTE=${BASE_REMOTE:-origin}
-git fetch "$BASE_REMOTE" main 2>&1 | tail -2
-git diff "$BASE_REMOTE/main...HEAD" --stat
-git diff "$BASE_REMOTE/main...HEAD"
+BASE_REMOTE=$(git remote -v | awk -v r="$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" 'tolower($2) ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
+if [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; then BASE=$(git rev-parse "$BASE_REMOTE/main"); else git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse FETCH_HEAD); fi
+[ -n "$REPO" ] && [ -n "${BASE:-}" ] && [ -f "$(git rev-parse --show-toplevel)/docs/agents/inbox-reviewer.md" ] || echo "BLOCKED: repo-not-resolved"
+git diff "$BASE...HEAD" --stat
+git diff "$BASE...HEAD"
 ```
 
-`REPO` is the GitHub repository PRs land in: the current checkout's repository, or its parent when the checkout is a fork. `BASE_REMOTE` is the local remote that points at it, falling back to `origin`. Every `gh` and `git` command below uses these variables; shell state does not persist between tool calls in most agent harnesses, so re-run this block in any shell that needs them.
+`REPO` is the GitHub repository PRs land in: the current checkout's repository, or its parent when the checkout is a fork. `BASE` is the tip of that repository's `main`, fetched through the local remote that points at it, or straight from GitHub when no local remote does (a fork-only clone, or a remote that fails to fetch). Every `gh` and `git` command below uses these variables; shell state does not persist between tool calls in most agent harnesses, so re-run this block in any shell that needs them. If the block prints `BLOCKED: repo-not-resolved`, the checkout is not a clone of the repository this prompt belongs to (or the lookup failed): stop, don't post, and return your verdict with `"blocked": "repo-not-resolved"`.
 
 If the caller passes a PR number, fetch that diff with `gh pr diff <N> -R "$REPO"`. If they pass a path or commit, use that.
 
@@ -65,10 +65,11 @@ each head against **its own** merge-base instead:
 ```bash
 REPO=$(gh repo view --json nameWithOwner,isFork,parent --jq 'if .isFork and .parent then "\(.parent.owner.login)/\(.parent.name)" else .nameWithOwner end')
 OWNER=${REPO%%/*}
-BASE_REMOTE=$(git remote -v | awk -v r="$REPO" '$2 ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
-BASE_REMOTE=${BASE_REMOTE:-origin}
-git diff $(git merge-base "$BASE_REMOTE/main" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
-git diff $(git merge-base "$BASE_REMOTE/main" <head>)         <head>         > /tmp/after.diff
+BASE_REMOTE=$(git remote -v | awk -v r="$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')" 'tolower($2) ~ ("[:/]" r "(\\.git)?$") && $3 == "(fetch)" {print $1; exit}')
+if [ -n "$BASE_REMOTE" ] && git fetch -q "$BASE_REMOTE" main; then BASE=$(git rev-parse "$BASE_REMOTE/main"); else git fetch -q "https://github.com/$REPO.git" main && BASE=$(git rev-parse FETCH_HEAD); fi
+[ -n "$REPO" ] && [ -n "${BASE:-}" ] && [ -f "$(git rev-parse --show-toplevel)/docs/agents/inbox-reviewer.md" ] || echo "BLOCKED: repo-not-resolved"
+git diff $(git merge-base "$BASE" <reviewed-sha>) <reviewed-sha> > /tmp/before.diff
+git diff $(git merge-base "$BASE" <head>)         <head>         > /tmp/after.diff
 diff /tmp/before.diff /tmp/after.diff    # identical (modulo blob hashes) => no work
 ```
 
