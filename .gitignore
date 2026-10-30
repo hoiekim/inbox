@@ -25,3 +25,8 @@ yarn-error.log*
 /error
 /error_ai
 /attachments
+
+# Tool-specific agent files; each contributor sets up their own, pointing at AGENTS.md
+CLAUDE.md
+GEMINI.md
+.claude/
