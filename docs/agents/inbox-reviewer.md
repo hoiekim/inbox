@@ -437,7 +437,7 @@ The reviewer IS a gating reviewer now (the maintainer, 2026-08-06). The old "nev
 
 ## Phase 5 — turn a pattern worth checking on every PR into a rule
 
-Run this phase only when the review you just posted is an `APPROVE`. By then every finding on the PR is settled: the author either fixed it or disproved it.
+Run this phase only when the review you just posted is an `APPROVE`. By then no HIGH or MED is open: the author fixed or disproved each one, and only LOWs can remain.
 
 **Candidates** are this PR's findings that the author accepted by fixing them (in this round or an earlier one), plus LOWs in this review that you reproduced. A finding the author disproved never qualifies, and neither does a near-miss that turned out fine. A candidate becomes a rule only when all three hold:
 
@@ -452,12 +452,13 @@ The rule PR is always separate. Never push to the PR under review.
 ```bash
 # REPO and BASE come from the Phase 1 block; re-run it first in a fresh shell.
 SLUG=<short-kebab-name>
-gh pr list -R "$REPO" --state all --search "reviewer rule in:title" --json number,title,state
+gh pr list -R "$REPO" --state all --limit 1000 --search "reviewer rule in:title" --json number,title,state
 git worktree add -b "reviewer-rule-$SLUG" "/tmp/reviewer-rule-$SLUG" "$BASE"
-# edit the rule in under /tmp/reviewer-rule-$SLUG, commit, push the branch, then:
+# Stay in this checkout: edit the files under /tmp/reviewer-rule-$SLUG, then commit and push
+# with git -C "/tmp/reviewer-rule-$SLUG" … so the cleanup below can delete the branch.
 gh pr create -R "$REPO" --base main --head "<push-owner>:reviewer-rule-$SLUG" \
-  --title "docs(agents): reviewer rule — <short description>" --body-file /tmp/reviewer-rule-$SLUG.md
-git worktree remove "/tmp/reviewer-rule-$SLUG" && git branch -D "reviewer-rule-$SLUG"
+  --title "docs(agents): reviewer rule — <short description>" --body-file /tmp/reviewer-rule-$SLUG.md \
+  && git worktree remove "/tmp/reviewer-rule-$SLUG" && git branch -D "reviewer-rule-$SLUG"
 ```
 
 - **Check the PR list before writing anything.** If an open rule PR covers the pattern, comment the new evidence on it instead. If a closed, unmerged one covers it, the maintainer declined that rule: don't reopen it.
